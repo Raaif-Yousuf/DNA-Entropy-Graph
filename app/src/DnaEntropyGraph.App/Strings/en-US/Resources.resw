@@ -2705,4 +2705,16 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
+  <data name="RunError_stockout_waited" xml:space="preserve">
+    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
+  </data>
+  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
+    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
+  </data>
+  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
+    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
+  </data>
+  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
+    <value>Wait for a graphics card</value>
+  </data>
 </root>

@@ -84,10 +84,12 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// of a class that aborts (billing, API off, permission, org policy) leaves here as an exception. A VM that is
     /// already stopped, gone or terminated is <see cref="BootOutcome.Lost"/>: the caller reads result.json and status.json.
     /// </summary>
-    public async Task<(BootOutcome Outcome, string? Reason)> WaitForBootAsync(CloudJobRequest request, string zone, CancellationToken cancellationToken)
+    public async Task<(BootOutcome Outcome, string? Reason)> WaitForBootAsync(CloudJobRequest request, string zone, bool adopted, CancellationToken cancellationToken)
     {
         var clockStart = settings.StartClock();
+        var waitStart = clockStart;
         string? lastTransient = null;
+        var granted = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -98,6 +100,21 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 if (vm is { Status: "RUNNING" })
                 {
                     return (BootOutcome.Running, null);
+                }
+
+                // Issue #92 (round 2 H1): a flex request adopted after the app was closed can still be queued (PROVISIONING). That is waiting by choice, not booting:
+                // BootTimeout starts only once the request is no longer queued, and the wait is bounded by the request's own window instead (its age on the platform's
+                // clock when it reports one, else from this look). THEORY (unverified, no live project): a queued flex instance reads PROVISIONING until it is granted.
+                // Round 3 (F2 iii): only for a request ADOPTED from an earlier run. One this run created and was granted that then hangs booting keeps the
+                // boot hang detector (BootTimeout), as any other VM does.
+                if (vm is not null && vm.Status != "PROVISIONING")
+                {
+                    granted = true;
+                }
+
+                if (adopted && request.Spec.FlexStart && vm is { Status: "PROVISIONING" } queued && QueuedWindowOpen(request.Spec, queued, waitStart))
+                {
+                    clockStart = settings.StartClock();
                 }
 
                 if (!VmFacts.IsBooting(vm))
@@ -111,6 +128,13 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
             {
                 lastTransient = ex.Message;
+
+                // Round 3 (F2 iv): a failed look cannot tell a queued adopted request from a dead one, so while the request may still be queued (never seen granted,
+                // inside its own window) it does not count toward BootTimeout. After the window the ordinary boot timeout applies.
+                if (adopted && request.Spec.FlexStart && !granted && QueuedWindowOpen(request.Spec, null, waitStart))
+                {
+                    clockStart = settings.StartClock();
+                }
             }
 
             if (settings.ElapsedSince(clockStart) >= settings.BootTimeout)
@@ -120,6 +144,22 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
             await settings.DelayAsync(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>True while a queued flex request is inside the window it asked Compute to wait for capacity (the spec's wait plus its margin).</summary>
+    private bool QueuedWindowOpen(VmSpec spec, VmDescriptor? vm, long waitStart)
+    {
+        var bound = spec.FlexStartCreateBound;
+
+        // Round 3 (F2 ii): the platform's CreatedAt is only ever compared with the PLATFORM's own clock (ServerNow); with no server time the window runs from this
+        // wait's start (the adoption) on the app's monotonic clock, never the app's wall clock minus a platform timestamp. The platform expires the request by itself
+        // (the VM then vanishes and the wait ends as a lost VM), so this window is only a backstop.
+        if (vm is { CreatedAt: { } created, ServerNow: { } now })
+        {
+            return now - created < bound;
+        }
+
+        return settings.ElapsedSince(waitStart) < bound;
     }
 
     /// <summary>

@@ -66,6 +66,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+        progress.VmAdopted = false;
         if (existing.Count > 0)
         {
             progress.VmMayExist = true;
@@ -79,6 +80,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             }
 
             progress.VmName = kept.Name;
+            progress.VmAdopted = true;
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -95,6 +97,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         // timeout must be the one that fires first (it records createTimedOut), and the poller's deadline is only the
         // backstop at the same instant.
         var plan = await PlanZonesAsync(request, spec, progress, cancellationToken).ConfigureAwait(false);
+        if (spec.FlexStart && plan.Zones.Count > 1)
+        {
+            // Issue #92: a queued request waits in the zone it was made in, so the ladder would sit in its first zone for the whole wait and never reach the rest.
+            // One zone (the best candidate) is asked; a wait that runs out is reported as the stockout it is.
+            plan = plan with { Zones = [plan.Zones[0]] };
+        }
+
         return await RunLadderAsync(request, spec, plan, progress, cancellationToken).ConfigureAwait(false);
     }
 
@@ -105,7 +114,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private async Task<ZoneAttempt> TryZoneAsync(CloudJobRequest request, VmSpec spec, AttemptState state, RunProgress progress, CancellationToken cancellationToken)
     {
         var zone = state.Zone;
-        var createTimeout = settings.CreateTimeout;
+        // Issue #92: a queued (flex-start) create is bounded by the wait it asked for plus a margin, never by the ordinary 30 s.
+        var createTimeout = spec.FlexStart ? spec.FlexStartCreateBound : settings.CreateTimeout;
         {
             // The kind the gateway (or the resilience pipeline in front of
             // it) already decided. Re-deriving it from the error text would
@@ -115,35 +125,70 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             var createTimedOut = false;
             Task<VmDescriptor>? createTask = null;
             progress.VmMayExist = true;
-            var outcome = await OperationPoller.PollAsync<VmDescriptor>(
-                async _ =>
+            if (spec.FlexStart)
+            {
+                // Issue #92 (M2): the pending request is remembered by its own name and zone, so a cancel can delete it directly and does not depend on a label listing seeing it.
+                _pendingFlex[(spec.VmName, zone)] = request.JobId;
+                NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpu);
+            }
+
+            OperationOutcome<VmDescriptor> outcome;
+            try
+            {
+                outcome = await OperationPoller.PollAsync<VmDescriptor>(
+                    async _ =>
+                    {
+                        try
+                        {
+                            // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
+                            // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
+                            // token (the same instant, so the poller's would win and hide the abandoned create).
+                            progress.VmStartMark = settings.StartClock();
+                            createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
+                            state.Create = createTask;
+                            var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
+                            return new OperationPoll<VmDescriptor>(true, vm, null);
+                        }
+                        catch (TimeoutException)
+                        {
+                            createTimedOut = true;
+                            thrownKind = CloudErrorKind.Network;
+                            return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
+                        }
+                        catch (CloudOperationException ex)
+                        {
+                            thrownKind = ex.Kind;
+                            return new OperationPoll<VmDescriptor>(true, null, ex.Error);
+                        }
+                    },
+                    createTimeout,
+                    cancellationToken,
+                    time: settings.TimeProvider).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (spec.FlexStart)
                 {
-                    try
-                    {
-                        // The create is bounded here by its own timeout (WaitAsync), which must stay the one that fires
-                        // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
-                        // token (the same instant, so the poller's would win and hide the abandoned create).
-                        progress.VmStartMark = settings.StartClock();
-                        createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
-                        state.Create = createTask;
-                        var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
-                        return new OperationPoll<VmDescriptor>(true, vm, null);
-                    }
-                    catch (TimeoutException)
-                    {
-                        createTimedOut = true;
-                        thrownKind = CloudErrorKind.Network;
-                        return new OperationPoll<VmDescriptor>(true, null, new CloudError(OperationPoller.TimeoutCode, null, "Creating the VM timed out."));
-                    }
-                    catch (CloudOperationException ex)
-                    {
-                        thrownKind = ex.Kind;
-                        return new OperationPoll<VmDescriptor>(true, null, ex.Error);
-                    }
-                },
-                createTimeout,
-                cancellationToken,
-                time: settings.TimeProvider).ConfigureAwait(false);
+                    // Round 2 (M3): the waiting line is withdrawn however the wait ends, a cancel or the app closing included.
+                    NotifyWaiting(request.JobId, RunNoticeKind.WaitingForGpuEnded);
+                }
+            }
+
+            if (spec.FlexStart)
+            {
+                if (!createTimedOut)
+                {
+                    // The create answered (a grant, an expiry or an error), so nothing is pending any more; a cancelled wait leaves the entry for the canceller.
+                    _pendingFlex.TryRemove((spec.VmName, zone), out _);
+                }
+
+                if (outcome.Success)
+                {
+                    // H1 (review): the run's own clock (the result limit) starts when the VM exists, not when the request was queued; Compute's maxRunDuration
+                    // likewise counts from the grant. THEORY (unverified, no live project): the platform clock for a flex VM starts at the grant (ToTest #92).
+                    progress.VmStartMark = settings.StartClock();
+                }
+            }
 
             if (createTimedOut)
             {
@@ -156,6 +201,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 {
                     return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote));
                 }
+
+                // Settled and deleted in this zone: nothing is pending any more.
+                _pendingFlex.TryRemove((spec.VmName, zone), out _);
             }
 
             if (outcome.Success)
@@ -204,6 +252,91 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // stockout after trying them all is the bug this guards against.
             return ZoneAttempt.Lost(zone, kind);
         }
+    }
+
+    /// <summary>
+    /// Issue #92: tells whoever shows the run that it is (or is no longer) waiting for a card. Off the run's own path: a handler that blocks or throws costs the run nothing.
+    /// </summary>
+    private void NotifyWaiting(string jobId, RunNoticeKind kind)
+    {
+        if (settings.OnNotice is not { } handler)
+        {
+            return;
+        }
+
+        // One chain PER JOB, so the waiting line is always withdrawn after it was shown, however slow the handler or fast the create, and a handler that
+        // blocks for one job never holds back another's. The chain is dropped once the job's Ended notice has been delivered.
+        lock (_noticeGate)
+        {
+            var tail = _noticeTails.TryGetValue(jobId, out var existing) ? existing : Task.CompletedTask;
+            Task? self = null;
+            self = tail.ContinueWith(
+                _ =>
+                {
+                    try
+                    {
+                        handler(new RunNotice(jobId, kind));
+                    }
+                    catch (Exception)
+                    {
+                        // A notice is advice for the screen; the run goes on without it.
+                    }
+
+                    if (kind == RunNoticeKind.WaitingForGpuEnded)
+                    {
+                        lock (_noticeGate)
+                        {
+                            if (_noticeTails.TryGetValue(jobId, out var current) && ReferenceEquals(current, self))
+                            {
+                                _noticeTails.Remove(jobId);
+                            }
+                        }
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+            _noticeTails[jobId] = self;
+        }
+    }
+
+    private readonly object _noticeGate = new();
+    private readonly Dictionary<string, Task> _noticeTails = new(StringComparer.Ordinal);
+
+    /// <summary>The queued flex requests this instance still remembers (tests: none may outlive a run that ended terminal).</summary>
+    internal int PendingFlexCount => _pendingFlex.Count;
+
+    /// <summary>Tests: how many per-job notice chains are still held (one is dropped once its job's Ended notice was delivered).</summary>
+    internal int NoticeChainCount
+    {
+        get
+        {
+            lock (_noticeGate)
+            {
+                return _noticeTails.Count;
+            }
+        }
+    }
+
+    /// <summary>Round 2 (L2): forgets the queued requests of a job whose run ended terminal; a cancel takes them with <see cref="TakePendingRequests"/> instead.</summary>
+    public void ForgetPendingRequests(string jobId) => TakePendingRequests(jobId);
+
+    /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), string> _pendingFlex = new();
+
+    /// <summary>Issue #92: takes (and forgets) the queued requests of <paramref name="jobId"/>, so a cancel can delete each by its own name and zone.</summary>
+    public IReadOnlyList<(string Name, string Zone)> TakePendingRequests(string jobId)
+    {
+        var taken = new List<(string Name, string Zone)>();
+        foreach (var (key, owner) in _pendingFlex)
+        {
+            if (owner == jobId && _pendingFlex.TryRemove(key, out _))
+            {
+                taken.Add(key);
+            }
+        }
+
+        return taken;
     }
 
     /// <summary>The zones to try, in order, and whether the quota read says there is none anywhere (#670).</summary>
@@ -543,7 +676,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     {
         // Issue #91: a stopped VM does not say whether it was created Spot, and a Spot run must start a Spot VM (and an on-demand one must not
         // start a Spot VM), so a Spot run never reuses one. THEORY (unverified): reuse of an on-demand VM by a later run after a Spot run left its own stopped VM is judged by machine type only.
-        if (jobIsFinished is null || spec.Spot)
+        if (jobIsFinished is null || spec.Spot || spec.FlexStart)
         {
             return null;
         }
