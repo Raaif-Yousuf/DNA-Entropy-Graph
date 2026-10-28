@@ -1,0 +1,2 @@
+- fix(tooling): prune_worktrees.py --remote keeps the base branch of any open PR, asks gh for open PRs only and refuses all remote deletion when that list hits its limit, deletes with a --force-with-lease on the sha it judged, ignores branches checked out in kept worktrees, and lets a --contained-in tip justify a remote delete only when origin has it at the same sha; the containment merge runs with attribute-driven merge drivers disabled; every deleted branch and removed worktree prints 
+ame@sha so it can be undone; a dry run says it did not fetch (#812)

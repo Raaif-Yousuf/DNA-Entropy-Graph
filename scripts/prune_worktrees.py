@@ -85,6 +85,7 @@ import land_wt as lw  # noqa: E402
 
 git = lw.git
 REMOTE_BASE = f"{lw.REMOTE}/{lw.BASE}"
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 EXIT_OK, EXIT_REFUSED, EXIT_USAGE = 0, 1, 2
 VENV_PREFIX = "worker/.venv"
 SKIP_TMP_DIRS = {lw.LOCK_DIR, "logs"}
@@ -121,6 +122,7 @@ class Decision:
     path: Path
     reason: str = ""
     branch: str | None = None
+    sha: str = ""  # what was deleted, so a delete can be undone with git branch <name> <sha>`n
 
 
 @dataclass
@@ -154,7 +156,9 @@ class Ctx:
     git: Callable[..., object] = lw.git  # injectable: tests spy on the calls
     _main_line: set[str] | None = field(default=None, init=False, repr=False)
     _targets: dict[str, str] | None = field(default=None, init=False, repr=False)  # ref -> sha: origin/main first, then the keep tips
-    _contained: dict[str, bool] = field(default_factory=dict, init=False, repr=False)
+    _contained: dict[tuple[str, bool], bool] = field(default_factory=dict, init=False, repr=False)
+    _remote_targets: dict[str, str] | None = field(default=None, init=False, repr=False)
+    _merge_neutralizers: list[str] | None = field(default=None, init=False, repr=False)
 
 
 def _text(proc: object) -> str:
@@ -241,6 +245,33 @@ def pr_states(ctx: Ctx) -> PrStates | None:
     return states
 
 
+def open_prs(ctx: Ctx) -> tuple[set[str], set[str]] | None:
+    """(head branches, base branches) of every OPEN PR, from one `gh pr list --state open`. Only open PRs are asked for, so
+    the list is small; if it still reaches --limit it may be truncated and None is returned (the caller refuses all remote
+    deletion rather than treat a missing entry as 'no open PR'). None, with a warning, when gh cannot answer."""
+    argv = [*ctx.gh, "pr", "list", "--state", "open", "--limit", str(ctx.gh_limit), "--json", "headRefName,baseRefName,state"]
+    try:
+        proc = lw.subprocess.run(argv, cwd=ctx.repo, capture_output=True, check=False)
+        data = json.loads(lw._text(proc.stdout)) if proc.returncode == 0 else None
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, list):
+        ctx.say("WARNING: remote branches skipped: `gh pr list` could not say which have an open PR. Run `gh auth status`, then retry")
+        return None
+    if len(data) >= ctx.gh_limit:
+        ctx.say(
+            f"WARNING: remote branches skipped: gh returned {len(data)} open PRs (--limit), so the list may be cut off. Close some, then retry"
+        )
+        return None
+    heads: set[str] = set()
+    bases: set[str] = set()
+    for item in data:
+        if isinstance(item, dict) and str(item.get("state", "OPEN")).upper() == "OPEN":
+            heads.add(str(item.get("headRefName", "")))
+            bases.add(str(item.get("baseRefName", "")))
+    return heads, bases
+
+
 def pr_merged_containing(ctx: Ctx, states: PrStates | None, branch: str | None, sha: str) -> bool:
     """A MERGED PR into main for the branch whose head commit contains `sha` (equal counts). A PR merged into
     another branch (a stacked PR) landed nothing on main."""
@@ -281,23 +312,61 @@ def keep_tip_shas(ctx: Ctx) -> set[str]:
     return {sha for ref, sha in content_targets(ctx).items() if ref != REMOTE_BASE}
 
 
-def content_contained(ctx: Ctx, sha: str) -> bool:
+def remote_targets(ctx: Ctx) -> dict[str, str]:
+    """The targets that may justify deleting a REMOTE branch: origin/main, and a --contained-in tip only when origin has it
+    at the same sha (a remote-tracking ref, or a local branch whose `origin/<name>` is the same commit). A local-only tip is
+    skipped with a warning: it can justify a local delete, but deleting a remote branch because of content that exists only
+    on this laptop could destroy the only pushed copy."""
+    if ctx._remote_targets is None:
+        out: dict[str, str] = {}
+        for ref, sha in content_targets(ctx).items():
+            if ref == REMOTE_BASE or ref.startswith(f"{lw.REMOTE}/") or _commit_of(ctx, f"{lw.REMOTE}/{ref}") == sha:
+                out[ref] = sha
+            else:
+                ctx.say(
+                    f"WARNING: --contained-in {ref} is not on origin at the same commit, so it cannot justify a remote delete. Push it first"
+                )
+        ctx._remote_targets = out
+    return ctx._remote_targets
+
+
+def merge_neutralizers(ctx: Ctx) -> list[str]:
+    """`git` options that stop attribute-driven merges (#812). A merge driver (`merge=ours`, or a configured custom driver such
+    as this repo's resw driver) can make a conflicting edit merge 'cleanly' to the target's own side, which would read as
+    'contained'. Attributes are read from the empty tree and no attributes file, and every configured merge driver is
+    replaced by one that fails, so a file that needs a driver is a conflict, i.e. not contained. Not covered: the builtin
+    `merge=union` set in $GIT_DIR/info/attributes (it is read even with --attr-source)."""
+    if ctx._merge_neutralizers is None:
+        opts = [f"--attr-source={EMPTY_TREE}", "-c", f"core.attributesFile={os.devnull}"]
+        proc = ctx.git(ctx.repo, "config", "--get-regexp", r"^merge\..*\.driver$", check=False)
+        if _rc(proc) == 0:
+            for line in _text(proc).splitlines():
+                key = line.split(None, 1)[0] if line.strip() else ""
+                if key.startswith("merge.") and key.endswith(".driver") and len(key) > len("merge..driver"):
+                    opts += ["-c", f"{key}=exit 1"]
+        ctx._merge_neutralizers = opts
+    return ctx._merge_neutralizers
+
+
+def content_contained(ctx: Ctx, sha: str, *, remote: bool = False) -> bool:
     """True when merging `sha` into origin/main (or a --contained-in tip) changes nothing: `git merge-tree --write-tree K sha`
     yields K's own tree (#812). Ancestry misses a superseded attempt whose content landed under another name. A tip that IS a
-    keep tip is never contained (it is the thing being kept); a conflict, an unrelated history or any git error is 'not contained'."""
+    keep tip is never contained (it is the thing being kept); a conflict, an unrelated history or any git error is 'not contained'.
+    remote=True judges only against targets origin also has (see remote_targets). The merge runs with attribute-driven merges
+    disabled (see merge_neutralizers)."""
     if not sha:
         return False
-    if sha in ctx._contained:
-        return ctx._contained[sha]
+    if (sha, remote) in ctx._contained:
+        return ctx._contained[(sha, remote)]
     result = False
     if sha not in keep_tip_shas(ctx):
-        for target in content_targets(ctx).values():
+        for target in (remote_targets(ctx) if remote else content_targets(ctx)).values():
             if target == sha:
                 continue
             if is_ancestor(ctx, sha, target):
                 result = True
                 break
-            merged = ctx.git(ctx.repo, "merge-tree", "--write-tree", target, sha, check=False)
+            merged = ctx.git(ctx.repo, *merge_neutralizers(ctx), "merge-tree", "--write-tree", target, sha, check=False)
             if _rc(merged) != 0:
                 continue
             tree = ctx.git(ctx.repo, "rev-parse", f"{target}^{{tree}}", check=False)
@@ -305,7 +374,7 @@ def content_contained(ctx: Ctx, sha: str) -> bool:
             if _rc(tree) == 0 and first and first[0].strip() == _text(tree):
                 result = True
                 break
-    ctx._contained[sha] = result
+    ctx._contained[(sha, remote)] = result
     return result
 
 
@@ -642,12 +711,12 @@ def sweep_orphans(ctx: Ctx, listed: set[str], report: Report) -> None:
         report.orphans_removed.append(Decision(d, "orphan: git no longer lists it"))
 
 
-def deletable_branches(ctx: Ctx, still_checked_out: set[str], states: PrStates | None) -> list[str]:
+def deletable_branches(ctx: Ctx, still_checked_out: set[str], states: PrStates | None) -> list[tuple[str, str]]:
     merged_proc = ctx.git(ctx.repo, "for-each-ref", "--merged", REMOTE_BASE, "--format=%(refname:short)", "refs/heads", check=False)
     merged = set(_text(merged_proc).splitlines()) if _rc(merged_proc) == 0 else set()
     refs = ctx.git(ctx.repo, "for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads", check=False)
     line_of_main = main_line(ctx)
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for line in _text(refs).splitlines():
         name, _, sha = line.partition("\t")
         if not name or name in still_checked_out or any(fnmatch.fnmatchcase(name, pat) for pat in PROTECTED_BRANCHES):
@@ -655,28 +724,30 @@ def deletable_branches(ctx: Ctx, still_checked_out: set[str], states: PrStates |
         # a tip ON main's first-parent history is a lane created from an older main, not a merged feature branch
         merged_feature = name in merged and sha not in line_of_main
         if merged_feature or pr_merged_containing(ctx, states, name, sha) or landed_by_content(ctx, sha):
-            out.append(name)
+            out.append((name, sha))
     return out
 
 
-def deletable_remote_branches(ctx: Ctx, states: PrStates) -> list[str]:
-    """origin branches whose content is already in origin/main or a kept tip, with no open PR. Never main/develop/release/*, never
-    a keep tip itself, never a branch sitting on main's first-parent line (a lane just started)."""
+def deletable_remote_branches(ctx: Ctx, open_heads: set[str], open_bases: set[str], still_checked_out: set[str]) -> list[tuple[str, str]]:
+    """(name, sha) of origin branches whose content is already in origin/main or a kept tip that origin also has, with no open
+    PR. Never main/develop/release/*, never a keep tip itself, never a branch sitting on main's first-parent line (a lane just
+    started), never the BASE of an open PR (deleting a base closes the PR stacked on it), never a branch checked out in a
+    kept worktree."""
     refs = ctx.git(ctx.repo, "for-each-ref", "--format=%(refname:short)%09%(objectname)", f"refs/remotes/{lw.REMOTE}", check=False)
     prefix = f"{lw.REMOTE}/"
     line_of_main = main_line(ctx)
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     for line in _text(refs).splitlines():
         ref, _, sha = line.partition("\t")
         name = ref.removeprefix(prefix)
         if not ref.startswith(prefix) or name in ("HEAD", "") or any(fnmatch.fnmatchcase(name, pat) for pat in PROTECTED_BRANCHES):
             continue
-        if sha in keep_tip_shas(ctx) or any(s == "OPEN" for s, _, _ in states.get(name, [])):
+        if sha in keep_tip_shas(ctx) or name in open_heads or name in open_bases or name in still_checked_out:
             continue
         if sha in line_of_main:
             continue
-        if is_ancestor(ctx, sha, REMOTE_BASE) or content_contained(ctx, sha):
-            out.append(name)
+        if is_ancestor(ctx, sha, REMOTE_BASE) or content_contained(ctx, sha, remote=True):
+            out.append((name, sha))
     return out
 
 
@@ -705,34 +776,38 @@ def prune(ctx: Ctx) -> Report:
             if failure is not None:
                 report.kept.append(Decision(wt.path, failure, wt.branch))
                 continue
-        report.removed.append(Decision(wt.path, "landed and clean", wt.branch))
+        report.removed.append(Decision(wt.path, "landed and clean", wt.branch, wt.head))
     sweep_orphans(ctx, {_norm(w.path) for w in worktrees}, report)
     if ctx.apply:
         ctx.git(ctx.repo, "worktree", "prune", check=False)
+    keep_out = {d.branch for d in report.kept if d.branch}
     if ctx.delete_merged_branches:
-        keep_out = {d.branch for d in report.kept if d.branch}
-        for name in deletable_branches(ctx, keep_out, states):
+        for name, sha in deletable_branches(ctx, keep_out, states):
             if ctx.apply and _rc(ctx.git(ctx.repo, "branch", "-D", name, check=False)) != 0:
                 continue
-            report.branches_deleted.append(Decision(ctx.repo, "landed, not checked out", name))
+            report.branches_deleted.append(Decision(ctx.repo, "landed, not checked out", name, sha))
         if ctx.apply:
             ctx.git(ctx.repo, "worktree", "prune", check=False)
     if ctx.remote:
-        remote_states = states if states is not None else pr_states(ctx)
-        if remote_states is None:
-            ctx.say("WARNING: remote branches skipped: gh could not say which have an open PR. Run `gh auth status`, then retry")
-        else:
-            for name in deletable_remote_branches(ctx, remote_states):
-                if ctx.apply and _rc(ctx.git(ctx.repo, "push", lw.REMOTE, "--delete", name, check=False)) != 0:
-                    ctx.say(f"WARNING: could not delete {lw.REMOTE}/{name}; leaving it")
-                    continue
-                report.remote_deleted.append(Decision(ctx.repo, "content already in main or a kept tip, no open PR", name))
+        opened = open_prs(ctx)
+        if opened is not None:
+            for name, sha in deletable_remote_branches(ctx, opened[0], opened[1], keep_out):
+                if ctx.apply:
+                    ref = f"refs/heads/{name}"
+                    # a lease on the sha we judged: if someone pushed to the branch meanwhile, git refuses
+                    push = ctx.git(ctx.repo, "push", lw.REMOTE, f"--force-with-lease={ref}:{sha}", "--delete", ref, check=False)
+                    if _rc(push) != 0:
+                        ctx.say(f"WARNING: could not delete {lw.REMOTE}/{name}@{sha} (it moved, or the push was refused); leaving it")
+                        continue
+                report.remote_deleted.append(Decision(ctx.repo, "content already in main or a kept tip, no open PR", name, sha))
     return report
 
 
 def print_report(ctx: Ctx, report: Report) -> None:
     say = ctx.say
     say(f"prune_worktrees: {'applied' if ctx.apply else 'DRY RUN (nothing changed; pass --apply to act)'}")
+    if not ctx.fetch:
+        say("note: origin not fetched; judged against the last fetched origin/main (--apply fetches first; pass --fetch for parity)")
     verb = "removed" if ctx.apply else "would remove"
     for title, rows, is_branch in (
         ("worktrees", report.removed, False),
@@ -742,7 +817,8 @@ def print_report(ctx: Ctx, report: Report) -> None:
     ):
         say(f"{verb} ({title}): {len(rows)}")
         for r in rows:
-            say(f"  {verb}  {r.branch if is_branch else r.path}")
+            what = r.branch if is_branch else r.path
+            say(f"  {verb}  {what}@{r.sha}" if r.sha else f"  {verb}  {what}")
     kept = report.kept + report.orphans_kept
     say(f"kept: {len(kept)}")
     for r in kept:
