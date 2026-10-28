@@ -58,11 +58,14 @@ public static class AuthErrorCodes
     /// <summary>A program on the network presented a certificate for Google that this PC does not trust (TLS inspection; issue #239). The stored sign-in is kept. Action: ask an administrator.</summary>
     public const string SigninCertificate = "SIGNIN_CERTIFICATE";
 
+    /// <summary>Google signed the user in but the cloud-platform scope was not granted (granular consent: the box was unticked), at sign-in or on a token refresh (issue #259). Nothing is kept. Action: Sign in again and allow access.</summary>
+    public const string ConsentIncomplete = "CONSENT_INCOMPLETE";
+
     /// <summary>Every code a sign-in can fail under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked, SigninProxy, SigninCertificate,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked, SigninProxy, SigninCertificate, ConsentIncomplete,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -85,6 +88,7 @@ public static class AuthErrorCodes
         AccountsFileLocked => "AuthError_ACCOUNTS_FILE_LOCKED",
         SigninProxy => "AuthError_SIGNIN_PROXY",
         SigninCertificate => "AuthError_SIGNIN_CERTIFICATE",
+        ConsentIncomplete => "AuthError_CONSENT_INCOMPLETE",
         _ => "AuthError_SIGNIN_FAILED",
     };
 
@@ -96,6 +100,7 @@ public static class AuthErrorCodes
     {
         SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound or BrowserUnavailable or LoopbackUnavailable or StorageFailed or AccountsFileUnreadable => "AuthAction_SignInAgain",
         NetworkUnavailable or ProjectSaveFailed or AccountsFileLocked => "AuthAction_TryAgain",
+        ConsentIncomplete => "AuthAction_AllowAccess",
         _ => null,
     };
 }

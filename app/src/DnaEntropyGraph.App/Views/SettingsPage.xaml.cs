@@ -27,6 +27,7 @@ public sealed partial class SettingsPage : Page
     public UpdateViewModel Updates { get; }
 
     public ProxySettingsViewModel Proxy { get; }
+    public TourViewModel Tour { get; }
 
     public SettingsPage()
     {
@@ -41,6 +42,7 @@ public sealed partial class SettingsPage : Page
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         Proxy = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ProxySettingsViewModel>();
+        Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();
         InitializeComponent();
     }
 

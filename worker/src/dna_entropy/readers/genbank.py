@@ -9,7 +9,9 @@ each record's sequence and maps its ``gene`` (or, failing that, ``CDS``) feature
 
 from __future__ import annotations
 
+import re
 import traceback
+import warnings
 from dataclasses import dataclass, field
 
 from ..annotators.base import GeneFeature
@@ -139,14 +141,131 @@ class GenBankRecord:
 
 def _feature_id(feature) -> str:
     """Pick a stable label for a feature from its qualifiers."""
-    for key in ("gene", "locus_tag", "product"):
+    # "label" last: SnapGene (issue #134) names a feature by its label, GenBank rarely carries one.
+    for key in ("gene", "locus_tag", "product", "label"):
         vals = feature.qualifiers.get(key)
         if vals:
             return str(vals[0])
     return feature.type
 
 
-def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
+_DROPPED_LOCATION_WARNING = "setting feature location to None"
+_DROPPED_SHOWN = 3  # how many dropped features a notice spells out before saying "and N more"
+_LOCATION_TEXT_MAX = 40  # a location text longer than this is cut in the notice
+
+
+def _location_text_of_warning(message: str) -> str | None:
+    """The quoted location text in one of Biopython's "setting feature location to None"
+    warnings (``Could not parse feature location 'abc'; ...``), ``""`` if it carries no quote, or
+    ``None`` when the message is some other warning. The text is the one quoted span (greedy, so an
+    apostrophe inside the location survives)."""
+    if _DROPPED_LOCATION_WARNING not in message:
+        return None
+    match = re.search(r"'(.*)'", message)
+    return match.group(1) if match else ""
+
+
+def _shown_location_text(text: str) -> str:
+    """The location text as it may appear in a notice: cut, then ``ascii()`` so a non-ASCII
+    character is escaped (Hard Rule 5: the notice reaches the console)."""
+    cut = text if len(text) <= _LOCATION_TEXT_MAX else text[: _LOCATION_TEXT_MAX - 3] + "..."
+    return ascii(cut)
+
+
+def _dropped_location_notice(
+    record, source: list, location_texts: list[str] | None, label: str, index: int
+) -> str | None:
+    """Issue #543: Biopython sets the location of a feature it cannot parse (``abc``, ``0..42``,
+    ``42..1`` on a non-circular record, ``1..?``) to ``None`` and only warns, so the feature used
+    to vanish from the exported tracks with no message.
+
+    One notice per record. It counts only the features in ``source``, the ones that would have
+    become genes (a record's ``gene`` features, else its ``CDS`` features), so a CDS that was never
+    going to be a gene is not reported as lost. ``location_texts`` are the warnings' quoted texts
+    in feature order, one per feature whose location is ``None`` anywhere in the record; they are
+    paired with the features only when the counts agree, otherwise the feature key alone is named
+    (a wrong text is worse than none)."""
+    unreadable = [f for f in record.features if f.location is None]
+    paired = location_texts if location_texts is not None and len(location_texts) == len(unreadable) else None
+    texts = {id(f): paired[i] for i, f in enumerate(unreadable)} if paired is not None else {}
+    dropped = [f for f in source if f.location is None]
+    if not dropped:
+        return None
+    named = [f"{f.type} {_shown_location_text(texts[id(f)])}" if id(f) in texts else f.type for f in dropped]
+    kinds = " and ".join(sorted({f.type for f in dropped}))
+    shown = ", ".join(named[:_DROPPED_SHOWN])
+    more = f", and {len(named) - _DROPPED_SHOWN} more" if len(named) > _DROPPED_SHOWN else ""
+    return (
+        f"{label} record {index}: {len(dropped)} {kinds} feature(s) were dropped because their "
+        f"location text could not be read ({shown}{more}). A gene with an unreadable location is "
+        "missing from the exported tracks. Correct the location in the source file (for example "
+        "1..42 or complement(85..126)) and run again."
+    )
+
+
+def parse_recording_dropped_locations(text: str, fmt: str):
+    """Parse ``text`` as ``fmt`` (``"genbank"`` or ``"embl"``) with Biopython, yielding
+    ``(record, location_texts)`` per record, where ``location_texts`` is the quoted location of
+    every "setting feature location to None" warning raised while that record was read, in feature
+    order (issue #543). Every OTHER warning is re-emitted unchanged, even when the record's parse
+    raises, so nothing else Biopython says is swallowed. Exceptions propagate to the caller."""
+    import io
+
+    from Bio import SeqIO
+
+    iterator = iter(SeqIO.parse(io.StringIO(text), fmt))
+    while True:
+        texts: list[str] = []
+        record = None
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                record = next(iterator, None)
+        finally:
+            for w in caught:
+                location_text = _location_text_of_warning(str(w.message))
+                if location_text is None:
+                    warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+                else:
+                    texts.append(location_text)
+        if record is None:
+            return
+        yield record, texts
+
+
+_MAX_COORDINATE = 2**63 - 1  # a position past this is not a coordinate, it is an overflow
+
+
+def _malformed_notice(
+    label: str, gene_id: str, parts, begin: int, end: int, record_id: str, seq_len: int
+) -> str:
+    """The notice for a feature whose coordinates do not fit its record (issue #331), worded for
+    what is actually wrong (issue #694): a between-bases site (``1^2``, Biopython reads it as a
+    zero-length span), a position too large to be a coordinate, or a span outside the sequence."""
+    if any(int(p.end) == int(p.start) for p in parts):
+        return (
+            f"{label} feature {gene_id!r} has a location between two bases (a site such as 1^2), "
+            "not a span of bases, so it has no bases to measure; dropped from the gene features. "
+            "Give it a span in the source file (for example 1..42) and run again."
+        )
+    if any(int(p.end) > _MAX_COORDINATE for p in parts):
+        return (
+            f"{label} feature {gene_id!r} has a position too large to be a real coordinate "
+            f"(more than {_MAX_COORDINATE}); dropped from the gene features. Correct the position "
+            "in the source file (for example 1..42) and run again."
+        )
+    return (
+        f"{label} feature {gene_id!r} has coordinates {begin}..{end}, which fall "
+        f"outside record {record_id!r}'s own sequence length of {seq_len} nt; "
+        "dropped from the gene features (not reported) rather than kept with a "
+        "wrong span. This means the file's feature table disagrees with its own "
+        "ORIGIN block; check the file was not truncated or hand-edited."
+    )
+
+
+def _features_of(
+    record, label: str = "GenBank", location_texts: list[str] | None = None, index: int = 1
+) -> tuple[list[GeneFeature], list[str]]:
     """Map a record's ``gene`` (preferred) or ``CDS`` features to :class:`GeneFeature`.
 
     Returns ``(features, notices)``. Issue #295: Biopython's ``CompoundLocation`` (a
@@ -165,13 +284,23 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
     cds_feats = [f for f in record.features if f.type == "CDS"]
     source = gene_feats or cds_feats
     seq_len = len(record.seq)
+    circular = record.annotations.get("topology") == "circular"
 
     features: list[GeneFeature] = []
     notices: list[str] = []
-    for f in source:
+    dropped_notice = _dropped_location_notice(record, source, location_texts, label, index)
+    if dropped_notice:
+        notices.append(dropped_notice)
+    # Issue #694: a gene feature that is dropped (unreadable or out-of-range location) is replaced
+    # by the CDS feature carrying the same gene id, per id, so one bad gene feature does not erase
+    # its gene while the others keep their own. Only when the record uses gene features at all.
+    fallback_ids: list[str] = []
+
+    def _map(f) -> bool:
+        """Map one source feature; False when it was dropped (with its notice, if it has one)."""
         loc = f.location
         if loc is None:
-            continue
+            return False  # reported by the notice above (issue #543), never silently
         begin = int(loc.start) + 1  # Biopython is 0-based half-open -> our 1-based inclusive
         end = int(loc.end)
         strand = "-" if loc.strand == -1 else "+"
@@ -201,15 +330,8 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
             not allow_end_overrun and any(int(p.end) > seq_len for p in parts)
         )
         if malformed:
-            notices.append(
-                f"GenBank feature {gene_id!r} has coordinates {begin}..{end}, which fall "
-                f"outside record {record.id!r}'s own sequence length of {seq_len} nt; "
-                "dropped from the gene features (not reported) rather than kept with a "
-                "wrong span. This means the file's feature table disagrees with its own "
-                "ORIGIN block; check the file was not truncated or hand-edited."
-            )
-            continue
-
+            notices.append(_malformed_notice(label, gene_id, parts, begin, end, record.id, seq_len))
+            return False
         segments: tuple[tuple[int, int], ...] = ()
         if is_compound:
             # Sorted ascending by genomic start, not transcript/part order (Biopython
@@ -219,19 +341,66 @@ def _features_of(record) -> tuple[list[GeneFeature], list[str]]:
             parts = sorted((int(p.start) + 1, int(p.end)) for p in loc.parts)
             segments = tuple(parts)  # issue #124: the gene table summarises these, not the outer span
             parts_desc = ", ".join(f"{a}..{b}" for a, b in parts)
-            notices.append(
-                f"GenBank feature {gene_id!r} has a compound (spliced) location with "
-                f"{len(parts)} segments ({parts_desc}). Its reported boundary "
-                f"{begin}..{end} is the OUTER SPAN and includes the intron sequence "
-                "between segments; a per-gene mean entropy computed over that span is "
-                "not exon-only. Use the segment coordinates above if exon-only entropy "
-                "is needed (docs/science_and_formats.md)."
+            # Same rule as analysis/gene_summary.py::_wraps_origin, which is what reads these
+            # segments: a circular record with one part ending at the last base and another
+            # starting at base 1 is a gene crossing the origin, not a spliced gene.
+            wraps = (
+                circular
+                and len(parts) > 1
+                and any(b == 1 for b, _ in parts)
+                and any(e == seq_len for _, e in parts)
             )
+            if wraps:
+                notices.append(
+                    f"{label} feature {gene_id!r} wraps the origin of this circular record, "
+                    f"in {len(parts)} segments ({parts_desc}). Its reported boundary "
+                    f"{begin}..{end} is the OUTER SPAN, the whole molecule; the gene table "
+                    "uses the segment coordinates above, so its length and mean entropy cover "
+                    "only the gene's own bases (docs/science_and_formats.md)."
+                )
+            else:
+                notices.append(
+                    f"{label} feature {gene_id!r} has a compound (spliced) location with "
+                    f"{len(parts)} segments ({parts_desc}). Its reported boundary "
+                    f"{begin}..{end} is the OUTER SPAN and includes the intron sequence "
+                    "between segments; a per-gene mean entropy computed over that span is "
+                    "not exon-only. Use the segment coordinates above if exon-only entropy "
+                    "is needed (docs/science_and_formats.md)."
+                )
         features.append(
             GeneFeature(
                 begin=begin, end=end, strand=strand, partial=partial, gene_id=gene_id, segments=segments
             )
         )
+        return True
+
+    dropped_gene_ids: list[str] = []
+    for f in source:
+        if not _map(f) and gene_feats:
+            gid = _feature_id(f)
+            if gid != f.type:  # a gene with no name of its own cannot be matched to a CDS
+                dropped_gene_ids.append(gid)
+    if dropped_gene_ids:
+        kept_ids = {g.gene_id for g in features}
+        wanted = set(dropped_gene_ids) - kept_ids
+        for cds in cds_feats:
+            gid = _feature_id(cds)
+            if gid in wanted and _map(cds):
+                wanted.discard(gid)  # one stand-in per gene id
+                fallback_ids.append(gid)
+        if fallback_ids:
+            shown = ", ".join(_shown_location_text(g) for g in fallback_ids[:_DROPPED_SHOWN])
+            more = (
+                f", and {len(fallback_ids) - _DROPPED_SHOWN} more"
+                if len(fallback_ids) > _DROPPED_SHOWN
+                else ""
+            )
+            notices.append(
+                f"{label} record {index}: {len(fallback_ids)} gene feature(s) could not be used, so the "
+                f"CDS feature with the same gene id was used instead ({shown}{more}). Its span is the "
+                "coding sequence, not the full gene. Correct the gene feature's location in the source "
+                "file to use the gene's own span."
+            )
     return features, notices
 
 
@@ -241,10 +410,6 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     Features are 1-based inclusive, sequence-relative (matching :class:`GeneFeature`).
     Records whose ORIGIN block is empty (no nucleotides) are skipped with a notice.
     """
-    import io
-
-    from Bio import SeqIO  # local import keeps import cost off unrelated paths
-
     # #330: decode through the same shared encoding.py as every other reader, rather
     # than letting Biopython open the path itself. MEASURED 2026-09-19: handing
     # Biopython a raw path makes it open the file with Python's default text-mode
@@ -263,6 +428,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     _refuse_non_ascii_origin(text)
     parsed: list = []
+    dropped_texts: list[list[str]] = []  # per parsed record, parallel to ``parsed`` (issue #543)
     try:
         # #349's own claim here ("every malformed-content failure this scanner raises for
         # GenBank/EMBL is documented and observed to be a ValueError") is DISPROVEN
@@ -283,8 +449,11 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
         # Iterated by hand (not list()) so the failing record's position is known: the
         # generator raises while reading record `len(parsed) + 1`. Named by INDEX, never by
         # id (issue #253: a record id is user free text).
-        for parsed_record in SeqIO.parse(io.StringIO(text), "genbank"):
+        # Issue #543: parse_recording_dropped_locations also returns each record's unreadable
+        # feature locations (Biopython only warns about them) so the notice can name them.
+        for parsed_record, location_texts in parse_recording_dropped_locations(text, "genbank"):
             parsed.append(parsed_record)
+            dropped_texts.append(location_texts)
     except (ValueError, AssertionError, IndexError) as exc:
         # readers/fasta.py never has this failure class at all (it is hand-rolled, no
         # third-party parser to escape from) -- this is GenBank agreeing with FASTA's
@@ -313,8 +482,17 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
             "file was not truncated or hand-edited, and that its ORIGIN block matches its own "
             "LOCUS/FEATURES."
         ) from exc
+    return records_from_parsed(parsed, "GenBank", dropped_texts)
+
+
+def records_from_parsed(
+    parsed: list, label: str, dropped_texts: list[list[str]] | None = None
+) -> tuple[list[GenBankRecord], list[str]]:
+    """Turn Biopython ``SeqRecord``s into ``(records, notices)``; shared by the GenBank, EMBL and
+    SnapGene readers (issue #134), so all three map features identically. ``label`` is the format
+    name used in user-facing text ("GenBank" keeps the original wording byte for byte)."""
     if not parsed:
-        raise GenBankReadError("No GenBank records found in the file.")
+        raise GenBankReadError(f"No {label} records found in the file.")
 
     notices: list[str] = []
     records: list[GenBankRecord] = []
@@ -326,10 +504,11 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
             # free text a user or their sequencing core chose, same privacy class as a
             # FASTA header or a file name.
             notices.append(
-                f"Skipped GenBank record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
+                f"Skipped {label} record {idx} (id {describe_len(str(rec.id))}): no nucleotide sequence."
             )
             continue
-        feats, feat_notices = _features_of(rec)
+        texts = dropped_texts[idx - 1] if dropped_texts is not None else None
+        feats, feat_notices = _features_of(rec, label, texts, idx)
         notices += feat_notices
         total_features += len(feats)
         records.append(
@@ -344,7 +523,7 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
 
     if not records:
         raise GenBankReadError(
-            "The GenBank file has no records with a nucleotide sequence (a truncated or "
+            f"The {label} file has no records with a nucleotide sequence (a truncated or "
             "sequence-less export). Re-export the file from the tool that made it, with its "
             "sequence included."
         )
@@ -354,6 +533,6 @@ def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
     # as broken English rather than the ordinary "0 gene feature(s)" it means.
     notices.append(
         f"Read {len(records)} record(s) with {total_features} gene feature(s) from the "
-        "GenBank (not re-annotated)."
+        f"{label} (not re-annotated)."
     )
     return records, notices

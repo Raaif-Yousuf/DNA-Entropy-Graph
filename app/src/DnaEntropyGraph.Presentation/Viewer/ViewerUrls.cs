@@ -14,6 +14,10 @@ public static class ViewerUrls
     public const string StartUrl = "https://viewer.deg/index.html";
     public const string RunBaseUrl = "https://run.deg/";
 
+    /// <summary>Serves the app-owned folder of generated <c>.fai</c> files (issue #497), so an index never has to sit beside the user's FASTA.</summary>
+    public const string IndexHost = "fai.deg";
+    public const string IndexBaseUrl = "https://fai.deg/";
+
     /// <summary>Microsoft's Evergreen WebView2 Runtime bootstrapper page (the named action when the runtime is missing).</summary>
     public const string RuntimeDownloadUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 

@@ -31,6 +31,28 @@ internal static class GoogleRestClient
         };
     }
 
+    /// <summary>
+    /// A plain <see cref="HttpClient"/> for an API that has no discovery client (Cloud Quotas, issue #99): the same replaceable handler as the discovery clients and the
+    /// same fresh bearer token on every request. Retry and token refresh stay in <see cref="CloudCallPipeline"/>.
+    /// </summary>
+    public static HttpClient CreateHttpClient(IGcpAccessTokenSource tokens, GoogleCloudOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        ArgumentNullException.ThrowIfNull(options);
+        HttpMessageHandler inner = options.HttpHandler is { } handler ? new NonDisposingHandler(handler) : new SocketsHttpHandler();
+        return new HttpClient(new BearerHandler(tokens, inner), disposeHandler: true);
+    }
+
+    private sealed class BearerHandler(IGcpAccessTokenSource tokens, HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var token = await tokens.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Puts <c>Authorization: Bearer &lt;token&gt;</c> on each request, reading the token fresh every time so a refreshed token is used by the replay.</summary>
     private sealed class BearerTokenInitializer(IGcpAccessTokenSource tokens) : IConfigurableHttpClientInitializer, IHttpExecuteInterceptor
     {

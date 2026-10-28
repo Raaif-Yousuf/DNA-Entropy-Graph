@@ -28,7 +28,8 @@ namespace DnaEntropyGraph.Cloud.Auth;
 /// </remarks>
 public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, ICloudTokenRefresher
 {
-    private static readonly string[] Scopes = ["openid", "email", "https://www.googleapis.com/auth/cloud-platform"];
+    private const string RequiredScope = "https://www.googleapis.com/auth/cloud-platform";
+    private static readonly string[] Scopes = ["openid", "email", RequiredScope];
 
     private readonly GoogleAccountOptions _options;
     private readonly DpapiTokenStore _store;
@@ -158,6 +159,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             if (claims is not { } identity || !DpapiTokenStore.IsSafeKey(identity.Sub))
             {
                 throw new AccountAuthException(AuthErrorCodes.SigninFailed, "the id token carried no usable subject");
+            }
+
+            // Granular consent (issue #259): a ticked-off box still signs the user in, so the answer is read, not assumed. Nothing is stored.
+            if (!GrantsRequiredScope(token.Scope, missingMeansGranted: false))
+            {
+                throw new AccountAuthException(AuthErrorCodes.ConsentIncomplete, "the granted scopes lack cloud-platform");
             }
 
             if (string.IsNullOrEmpty(token.RefreshToken))
@@ -323,10 +330,18 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 if (forceRefresh)
                 {
                     await credential.RefreshTokenAsync(cancellationToken).ConfigureAwait(false);
+                    await ThrowIfRefreshDroppedScopeAsync(active, credential.Token).ConfigureAwait(false);
                     return credential.Token.AccessToken;
                 }
 
-                return await credential.GetAccessTokenForRequestAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                var accessToken = await credential.GetAccessTokenForRequestAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                await ThrowIfRefreshDroppedScopeAsync(active, credential.Token).ConfigureAwait(false);
+                return accessToken;
+            }
+            catch (AccountAuthException)
+            {
+                expired = true; // ThrowIfRefreshDroppedScopeAsync marked the account first
+                throw;
             }
             catch (TokenResponseException ex) when (ex.Error?.Error == "invalid_grant")
             {
@@ -427,6 +442,25 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             DataStore = store,
             HttpClientFactory = _options.HttpHandler is { } handler ? new HandlerFactory(handler) : new Net.ProxyHttpClientFactory(_options.Proxy ?? DnaEntropyGraph.Core.Net.ProxyPolicy.SystemDefault),
         });
+
+    /// <summary>
+    /// Google reports the scopes a token grants in the <c>scope</c> field (MEASURED 2026-10-16, developers.google.com/identity/protocols/oauth2/native-app:
+    /// "The scopes of access granted by the access_token", and a user "may not grant your app access to all of them"). A sign-in answer must carry it;
+    /// a refresh answer that omits it keeps the stored grant (the library keeps the earlier value), one that names scopes without cloud-platform does not.
+    /// </summary>
+    private static bool GrantsRequiredScope(string? scope, bool missingMeansGranted)
+        => string.IsNullOrWhiteSpace(scope) ? missingMeansGranted : scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(RequiredScope, StringComparer.Ordinal);
+
+    private async Task ThrowIfRefreshDroppedScopeAsync(AccountRecord account, TokenResponse token)
+    {
+        if (GrantsRequiredScope(token.Scope, missingMeansGranted: true))
+        {
+            return;
+        }
+
+        await MarkExpiredAsync(account).ConfigureAwait(false);
+        throw new AccountAuthException(AuthErrorCodes.ConsentIncomplete, "a refreshed token no longer grants cloud-platform");
+    }
 
     private async Task MarkExpiredAsync(AccountRecord account)
     {

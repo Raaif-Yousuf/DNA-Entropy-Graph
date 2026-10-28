@@ -111,7 +111,25 @@ badge (#638) are separate, and all three can show together.
   not bundle it. The app checks when the viewer opens (`WebViewRuntimeDecision`, issue #117) and shows the runtime-missing card with one
   action, a link to Microsoft's Evergreen bootstrapper; a missing runtime never shows a blank pane. `vpk pack --framework webview2` would
   make Setup.exe install it up front: not set in `release.yml` today (that file is not part of this change), recorded as an option.
-- *Uninstall keeps the user's data by default.* The data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (history, settings, saved input copies,
+- *Portable mode (#144, #805).* An empty file named `portable.flag` makes `AppDataRoot.Resolve` use `<base>\data` for every piece of state
+  (settings, `app.db`, logs, run inputs, the WebView2 profile, sign-in files) and nothing under `%LOCALAPPDATA%`. `<base>` is the folder of the exe,
+  except in a Velopack install, where the exe runs from `<root>\current` and an update replaces that folder: there `<base>` is `<root>`, the folder
+  holding `Update.exe`, and a flag placed inside `current` is ignored (an update would delete it). Order: `--profile`, then `DEG_DATA_DIR`, then
+  `portable.flag`, then `%LOCALAPPDATA%\DNAEntropyGraph`. Portable is the real profile for that copy (no sandbox banner, no simulated cloud).
+  - Results: the default output folder is `<base>\outputs`, not the host PC's Downloads. Paths under `<base>` are stored in `app.db`
+    relative (`portable:outputs\run`, `DataPathMapper`, used by `RunRepository` for `Runs.OutputDir`) and expanded on read, so a stick that gets another drive
+    letter still opens its results; a folder the user chose outside `<base>` is stored as given. Only `Runs.OutputDir` is written by code today
+    (the `RunOutputs` and `RunInputs` tables are unused); a new path column must go through `DataPathMapper`.
+  - Database: `journal_mode=DELETE` instead of WAL in portable mode, and on any removable or network drive (`SqliteDatabase.ChooseJournalMode`), because WAL's
+    shared-memory file is unreliable on shares and leaves `-wal` files when a stick is pulled.
+  - Registry: Open with (file associations) is refused in portable mode (`FileAssociationRefusal.PortableMode`, Settings says why) so no entry points at
+    a stick. The notification registration (`AppNotificationManager.Register`) is a per-user registry entry that is needed for notifications to work;
+    it already lives only while the app runs (`Unregister` on window close, `App.xaml.cs`), so it is kept and a crash can leave one stale entry that the next
+    start overwrites. It names the exe path, so notification clicks only work for the copy that registered last.
+  - If the data folder cannot be written (a copy under Program Files) the launch stops with portable-specific text (move the folder, or delete
+    `portable.flag`) and never falls back to the real folder.
+  - Limitation: sign-in files are DPAPI-encrypted for one Windows user on one PC, so they do not travel; `DpapiTokenStore.GetAsync` treats bytes it
+    cannot decrypt as signed out and the user signs in again. History, settings and results (outputs on the stick) travel.- *Uninstall keeps the user's data by default.* The data folder is `%LOCALAPPDATA%\DNAEntropyGraph` (history, settings, saved input copies,
   logs, sign-in). Velopack's before-uninstall hook (`Program.OnBeforeUninstall`) now asks once, "Remove your data too?", default **No**
   (`UninstallDataPrompt`, a plain message box because the uninstaller has no window); only Yes deletes the folder
   (`UninstallDataCleanup`, tested with a fake prompt and delete). Result files in the output folder are never touched (Hard Rule 14).
@@ -282,13 +300,10 @@ Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) wee
 `docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
 update cadence (they already exist as of this session but the ecosystem entry itself is a
 separate, not-yet-filed follow-up). `dependency-review-action` on pull requests
-(deny-licenses matching Hard Rule 21's own list) cannot actually run yet for two
-independent, already-documented reasons: every workflow in this repo is
-`workflow_dispatch`-only (the owner's on-demand-CI decision, so there is no `pull_request`
-trigger for the job's `if:` condition to ever satisfy), and even a restored PR trigger
-would fail immediately because the repository's Dependency graph setting is off (issue
-#325, an owner-only action). Restoring the PR trigger before #325 is done would recreate a
-permanently red check.
+(deny-licenses matching Hard Rule 21's own list) would fail immediately today because the
+repository's Dependency graph setting is off (issue #325, an owner-only action), so it is
+not enabled. (The CI workflows do run on `pull_request`, MEASURED 2026-10-16, so #325 is the
+only blocker.) Enabling it before #325 is done would create a permanently red check.
 
 ### The packId (#712)
 

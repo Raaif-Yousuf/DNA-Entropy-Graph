@@ -73,6 +73,8 @@ public class CloudJobRunnerGuaranteesTests
 
         public Func<string, CancellationToken, Task<IReadOnlyList<VmDescriptor>>>? OnFind { get; set; }
 
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
         public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
 
         public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
@@ -93,6 +95,12 @@ public class CloudJobRunnerGuaranteesTests
             => inner.ListByInstallationAsync(installationId, cancellationToken);
 
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
     }
 
     // ---- M1: a gateway's own deadline (an OCE with the caller's token live) is not the caller cancelling ----
@@ -311,7 +319,9 @@ public class CloudJobRunnerGuaranteesTests
     {
         // Virtual time. The app was not looking (a closed laptop lid): the clock jumps past the VM's maxRunDuration between
         // two looks, the platform has deleted the VM, no result.json exists. The record must say the run hit its limit.
-        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"));
+        // Issue #691: the age of the last look is carried by the MONOTONIC clock, so the jump moves it too (THEORY (unverified): Windows's
+        // performance counter keeps counting through sleep; a monotonic clock that stopped in sleep would under-count here and read vm_unhealthy).
+        var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-02T08:00:00Z"), timestampFollowsClock: true);
         var gcp = new FakeGcp(time).WithWorker(FakeWorkerMode.Never).WithMaxRunDurationEnforced();
         var looks = 0;
         var compute = new ScriptedCompute(gcp)

@@ -25,6 +25,8 @@ public static class RunErrorCodes
     public const string RunTimeLimit = "run_time_limit";
     /// <summary>The worker stayed in one stage past that stage's deadline while its heartbeat may still tick (#90).</summary>
     public const string WorkerStageStuck = "worker_stage_stuck";
+    /// <summary>The worker's heartbeat ticks in the running stage but <c>windowsDone</c> and <c>lastProgressAt</c> have not moved for the progress bound: a wedged compute thread (#723, the app half of #522).</summary>
+    public const string WorkerProgressStalled = "worker_progress_stalled";
     public const string WorkerNoHeartbeat = "worker_no_heartbeat";
     public const string WorkerHeartbeatStale = "worker_heartbeat_stale";
     public const string WorkerFailed = "worker_failed";
@@ -48,6 +50,18 @@ public static class RunErrorCodes
     public const string InputNotUtf8 = "input_not_utf8";
     public const string InputEmpty = "input_empty";
     public const string InputTooLong = "input_too_long";
+
+    /// <summary>The typed NCBI accession or range is not valid (issue #684), found on this PC before any cloud resource existed.</summary>
+    public const string InputAccessionInvalid = "input_accession_invalid";
+
+    /// <summary>NCBI has no record for the accession, or none that covers the range (issue #684).</summary>
+    public const string InputAccessionNotFound = "input_accession_not_found";
+
+    /// <summary>The record (or the range asked for) is bigger than the worker reads (issue #684).</summary>
+    public const string InputAccessionTooLarge = "input_accession_too_large";
+
+    /// <summary>NCBI could not be asked from this PC (offline, slow, limiting or in trouble) before the run started (issue #684).</summary>
+    public const string InputAccessionUnreachable = "input_accession_unreachable";
 
     /// <summary>A This PC run was chosen but the local engine is not installed or did not pass its health check (issues #173, #174).</summary>
     public const string LocalEngineNotReady = "local_engine_not_ready";
@@ -94,16 +108,21 @@ public static class RunErrorCodes
     public const string ProxyBlocked = "proxy_blocked";
     /// <summary>A program on the network replaced Google's certificate with one this PC does not trust (issue #239). Action: ask an administrator.</summary>
     public const string NetworkCertificate = "network_certificate";
+    /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
+    public const string DeletedByCleanup = "cleanup_deleted";
+
+    /// <summary>The run was ended because its computer was stopped from the exit window (issue #113) while the run was still live: the row is Cancelled, never left Running.</summary>
+    public const string StoppedByCleanup = "cleanup_stopped";
     public const string Other = "other";
 
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
-        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
+        InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
         ProxyBlocked, NetworkCertificate,
     ];
@@ -183,7 +202,20 @@ public static class RunErrorCodes
     /// because docs/copy_catalog.md has no row, and so no user action, for them. A guard test fails when a code in the
     /// contract is neither mapped by <see cref="ForWorkerStatusCode"/> nor listed here, and when an entry here goes stale.
     /// </summary>
-    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN"];
+    public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN", "GPU_TESTS_FAILED"];
+
+    /// <summary>
+    /// Every code the worker may write as <c>error.code</c> (docs/contract/error-codes.json, generated from the worker's own
+    /// registry): the ones <see cref="ForWorkerStatusCode"/> maps plus <see cref="WorkerStatusCodesWithoutDedicatedCopy"/>.
+    /// The diagnostics bundle keeps no other <c>error.code</c> (#613), because a value outside this set did not come from
+    /// the worker's registry and could be free text. <c>WorkerContractGuardTests</c> pins this set equal to the contract.
+    /// </summary>
+    public static IReadOnlySet<string> WorkerErrorCodes { get; } = new HashSet<string>(
+        [
+            "GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED", "MANIFEST_INVALID", "WORKER_CRASH", "MODEL_NEEDS_HOPPER", "MODEL_OOM",
+            "BATCH_LIMIT_EXCEEDED", "INPUT_INVALID", "WORKER_VERSION_MISMATCH", "RUN_TIME_LIMIT", .. WorkerStatusCodesWithoutDedicatedCopy,
+        ],
+        StringComparer.Ordinal);
 
     /// <summary>The <c>Resources.resw</c> key for a code (plain, non-dotted: it is read from code, not through <c>x:Uid</c>). An unknown code gets the generic message.</summary>
     public static string ResourceKey(string? code) => code switch
@@ -199,6 +231,7 @@ public static class RunErrorCodes
         ResultTimeout => "RunError_result_timeout",
         RunTimeLimit => "RunError_run_time_limit",
         WorkerStageStuck => "RunError_worker_stage_stuck",
+        WorkerProgressStalled => "RunError_worker_progress_stalled",
         WorkerNoHeartbeat => "RunError_worker_no_heartbeat",
         WorkerHeartbeatStale => "RunError_worker_heartbeat_stale",
         WorkerFailed => "RunError_worker_failed",
@@ -222,6 +255,10 @@ public static class RunErrorCodes
         InputNotUtf8 => "RunError_input_not_utf8",
         InputEmpty => "RunError_input_empty",
         InputTooLong => "RunError_input_too_long",
+        InputAccessionInvalid => "RunError_input_accession_invalid",
+        InputAccessionNotFound => "RunError_input_accession_not_found",
+        InputAccessionTooLarge => "RunError_input_accession_too_large",
+        InputAccessionUnreachable => "RunError_input_accession_unreachable",
         InstallationIdUnusable => "RunError_installation_id_unusable",
         LocalEngineNotReady => "RunError_local_engine_not_ready",
         LocalGpuNotUsable => "RunError_local_gpu_not_usable",
@@ -235,6 +272,8 @@ public static class RunErrorCodes
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
+        DeletedByCleanup => "RunError_cleanup_deleted",
+        StoppedByCleanup => "RunError_cleanup_stopped",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",
