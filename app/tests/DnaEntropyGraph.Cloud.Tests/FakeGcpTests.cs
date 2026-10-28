@@ -21,6 +21,19 @@ public class FakeGcpTests
         TerminationAction: "DELETE");
 
     [Fact]
+    public async Task A_delete_that_lands_between_a_stops_read_and_write_leaves_the_vm_deleted_like_real_compute()
+    {
+        // Issue #875: a stop is a read-modify-write of the VM row. A delete interleaved there used to be overwritten, resurrecting a deleted VM as STOPPED.
+        var gcp = new FakeGcp();
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        gcp.BeforeStopWrite = () => gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
+
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+
+        (await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Created_vm_is_found_by_name_and_zone()
     {
         var gcp = new FakeGcp();

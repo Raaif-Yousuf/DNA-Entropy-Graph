@@ -1301,6 +1301,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
+    /// <summary>Test seam (#875): runs between a stop's read of the VM and its write, so a test can interleave a delete there deterministically.</summary>
+    internal Action? BeforeStopWrite { get; set; }
+
     private void StopCore(string vmName, string zone)
     {
         var key = (vmName, zone);
@@ -1314,14 +1317,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw Build(CloudErrorKind.Other, "FAILED_PRECONDITION", 400, $"The instance '{vmName}' is not running, so it cannot be stopped.");
         }
 
+        BeforeStopWrite?.Invoke();
         if (_stoppingPolls > 0)
         {
-            _vms[key] = vm with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
-            _stoppingPollsLeft[key] = _stoppingPolls;
+            // Compare-and-swap: a delete that landed since the read wins (real Compute deletes the instance and the stop operation then fails), it is never resurrected as STOPPED.
+            if (_vms.TryUpdate(key, vm with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }, vm))
+            {
+                _stoppingPollsLeft[key] = _stoppingPolls;
+            }
         }
         else
         {
-            _vms[key] = vm with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() };
+            _vms.TryUpdate(key, vm with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }, vm);
         }
     }
 
