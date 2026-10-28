@@ -295,4 +295,5 @@ public class GoogleStorageStreamingDownloadTests : IDisposable
         await Should.ThrowAsync<OperationCanceledException>(() => rig.Gateways.Storage.TryDownloadToFileAsync("deg-b", Key, Target, cts.Token));
 
         rig.Handler.To(HttpMethod.Get, ObjectPath).Count.ShouldBe(1, "a cancelled download must not be retried");
-    }}
+    }
+}
