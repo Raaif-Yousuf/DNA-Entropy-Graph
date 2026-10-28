@@ -193,28 +193,6 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return deleted;
     }
 
-    private Task DeleteObjectAsync(string bucket, string name, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync(
-            "Storage.DeleteObject",
-            async ct =>
-            {
-                try
-                {
-                    await _service.Objects.Delete(bucket, name).ExecuteAsync(ct).ConfigureAwait(false);
-                }
-                catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
-                {
-                    // Already gone is what a delete wants.
-                }
-                catch (GoogleApiException ex)
-                {
-                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-                }
-            },
-            cancellationToken,
-            bypassBreaker: true,
-            singleRequest: true);
-
     /// <summary>Every page of <c>objects.list</c> under <paramref name="prefix"/>. A repeated page token fails the listing (a short total must never read as complete).</summary>
     private async IAsyncEnumerable<StorageData.Objects> ListPagesAsync(string bucket, string prefix, string? delimiter, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
