@@ -1026,6 +1026,7 @@ def test_the_premerge_timeout_flag_reaches_the_real_premerge(world, monkeypatch)
 def _hook(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(f"#!/bin/sh\n{body}\n".encode())
+    path.chmod(0o755)  # git skips a hook that is not executable (Windows ignores the mode bit; Linux CI does not)
 
 
 def _land_with_push_timeout(world, branch):

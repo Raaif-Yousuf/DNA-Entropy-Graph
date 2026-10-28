@@ -1,0 +1,1 @@
+- Fix 3 Linux-CI failures in the landing tools: test hooks are now executable, pid_alive treats a zombie as dead (POSIX), and kill_pid_tree on POSIX now kills the descendants found via /proc, not just the pid.

@@ -130,15 +130,34 @@ def _taskkill_tree(pid: int) -> None:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
 
 
+def _posix_descendants(pid: int) -> list[int]:
+    """Every descendant of `pid` (children first-found, deepest last) from /proc/<n>/stat; [] where /proc is absent (macOS)."""
+    parents: dict[int, int] = {}
+    with contextlib.suppress(OSError):
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                with contextlib.suppress(OSError, ValueError, IndexError):
+                    # field 4 is the ppid; comm (field 2) may contain spaces, so split after its closing paren
+                    parents[int(entry)] = int(Path(f"/proc/{entry}/stat").read_text(errors="replace").rpartition(")")[2].split()[1])
+    found: list[int] = []
+    frontier = [pid]
+    while frontier:
+        nxt = [child for child, parent in parents.items() if parent in frontier and child not in found and child != pid]
+        found.extend(nxt)
+        frontier = nxt
+    return found
+
+
 def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
     """Kill an unrelated process (one we did not start, e.g. a stuck queue runner) and its descendants, then wait up to `wait`
     seconds for it to be gone. True when it is gone. The caller has verified pid + creation time first.
-    THEORY (unverified): on POSIX only the process itself is signalled (its group may be the user's shell), so its children can outlive it."""
+    On POSIX the descendants are found by walking /proc (the group may be the user's shell, so killpg is wrong) and signalled first."""
     if os.name == "nt":
         _taskkill_tree(pid)
     else:
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
+        for victim in [*_posix_descendants(pid), pid]:
+            with contextlib.suppress(OSError):
+                os.kill(victim, signal.SIGKILL)
     end = time.monotonic() + wait
     while pid_alive(pid):
         if time.monotonic() >= end:
@@ -285,7 +304,11 @@ def pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    try:  # a zombie (killed, not yet reaped by its parent) is not running; kill(pid, 0) still succeeds on it
+        state = Path(f"/proc/{pid}/stat").read_text(errors="replace").rpartition(")")[2].split()[0]
+    except (OSError, IndexError):
+        return True
+    return state not in ("Z", "X")
 
 
 def proc_start_time(pid: int) -> float | None:
