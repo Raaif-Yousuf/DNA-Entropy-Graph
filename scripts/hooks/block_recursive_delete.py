@@ -272,11 +272,11 @@ def _is_inside_repo(target: str) -> bool:
     which is the whole point. An absolute path is resolved and compared
     honestly, so the session scratchpad and system temp dirs stay allowed.
     """
-    if target:
-        target = _expand_env_vars(target)
-    if target is None:
+    expanded_vars = _expand_env_vars(target) if target else target
+    if expanded_vars is None:
         # An unset (or unparseable) variable cannot be resolved: unknown, so fail closed.
         return True
+    target = expanded_vars
     if not target or "*" in target or "?" in target:
         # A glob cannot be resolved here. Treat it as inside (it is almost
         # certainly repo-relative) unless it is anchored at an absolute path.
