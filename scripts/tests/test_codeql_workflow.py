@@ -44,11 +44,16 @@ def test_pull_request_and_push_to_main_are_path_filtered():
     assert re.search(r"^  push:\n(?:    .*\n)*?    branches: \[main\]", _on_block(), re.MULTILINE)
 
 
+def _steps(text: str) -> list[str]:
+    """The workflow's steps, one string each (a step starts at a six-space `- `); a plain split, so no regex can backtrack."""
+    return [chunk for chunk in re.split(r"(?m)^(?=      - )", text) if chunk.startswith("      - ")]
+
+
 def test_init_step_references_the_config_file():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(
-        r"codeql-action/init@[0-9a-f]{40}[^\n]*\n[ \t]+with:\n(?:[ \t]+[^\n]*\n)*?[ \t]+config-file: \./\.github/codeql/codeql-config\.yml", text
-    )
+    init = [s for s in _steps(text) if re.search(r"codeql-action/init@[0-9a-f]{40}", s)]
+    assert init, "no codeql-action/init step"
+    assert any("\n        with:\n" in s and "          config-file: ./.github/codeql/codeql-config.yml\n" in s for s in init)
 
 
 def test_config_ignores_the_legacy_trees():
@@ -90,7 +95,8 @@ def _csharp_filter_steps() -> str:
 def test_csharp_results_are_filtered_of_generated_code_before_upload():
     body = _csharp_filter_steps()
     # analyze for csharp must NOT upload on its own, and writes SARIF where the filter reads it.
-    assert re.search(r"if: matrix\.language == 'csharp'\n[ \t]+with:\n(?:[ \t]+[^\n]*\n)*?[ \t]+upload: failure-only", body)
+    analyze = [s for s in _steps(body) if re.search(r"codeql-action/analyze@[0-9a-f]{40}", s) and "if: matrix.language == 'csharp'" in s]
+    assert any("\n        with:\n" in s and "          upload: failure-only" in s for s in analyze)
     assert "output: sarif-results" in body
     assert re.search(r"advanced-security/filter-sarif@[0-9a-f]{40}", body)
     for pattern in ("-**/obj/**", "-**/bin/**"):
