@@ -80,6 +80,20 @@ public interface IComputeGateway
     Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Issue #113: <see cref="StopVmAsync"/> (<paramref name="delete"/> false) or <see cref="DeleteVmAsync"/> (true), but the caller learns WHEN GOOGLE ACCEPTED the request:
+    /// <paramref name="onAccepted"/> is called as soon as the Compute request (the operation insert) was accepted, or answered "already gone", and the task then goes on
+    /// to wait for the operation to finish (which for a GPU stop can take minutes) and throws what the operation ends with. It is never called for a request that was refused,
+    /// and a resilience layer that replays the request may call it more than once, so it must be idempotent. The other callers of stop and delete keep their
+    /// semantics (a task that ends when the work is done).
+    /// The default implementation has no earlier moment to report, so it reports acceptance when the work is done: a gateway that can do better MUST override it.
+    /// </summary>
+    async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    {
+        await (delete ? DeleteVmAsync(vmName, zone, cancellationToken) : StopVmAsync(vmName, zone, cancellationToken)).ConfigureAwait(false);
+        onAccepted?.Invoke();
+    }
+
+    /// <summary>
     /// Every VM labelled with this job id, across every zone - Hard Rule
     /// 9's "discovery is by label, never by a fixed name," and issue #257's
     /// retry-safety mechanism: a caller resuming after a crash calls this

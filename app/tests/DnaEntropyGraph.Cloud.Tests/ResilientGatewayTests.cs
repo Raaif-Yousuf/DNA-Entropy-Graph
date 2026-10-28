@@ -337,6 +337,16 @@ public class ResilientGatewayTests
             return new MemoryStream();
         }
 
+        if (type == typeof(bool))
+        {
+            return false;
+        }
+
+        if (type == typeof(Action))
+        {
+            return null; // EndVmAsync's optional acceptance callback
+        }
+
         if (type == typeof(IReadOnlyList<string>))
         {
             return new[] { "x" };

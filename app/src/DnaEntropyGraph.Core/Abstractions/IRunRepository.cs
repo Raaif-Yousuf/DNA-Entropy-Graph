@@ -25,6 +25,20 @@ public interface IRunRepository
     /// network call is made, not after.
     /// </summary>
     Task UpsertAsync(RunRecord run, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #113: the same full-record write as <see cref="UpsertAsync"/>, but ONLY when the stored phase of <paramref name="run"/>'s job is
+    /// <paramref name="expectedPhase"/> (the phase the writer read), checked and written as one atomic step. <c>null</c> means "there must be no
+    /// row yet". Returns false, and changes nothing, when the stored phase differs (another writer moved the row since the read) or the row is
+    /// gone; the caller re-reads and re-validates. This is what stops a writer that read Running from overwriting a Cancelled.
+    /// The default is NOT conditional (a plain <see cref="UpsertAsync"/> that reports true): it exists so a test double that has one writer keeps compiling, and a
+    /// repository that more than one writer can reach (the SQLite one) MUST override it (<c>RunRepositoryConditionalUpsertTests</c> goes red if the SQLite one stops doing so).
+    /// </summary>
+    async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
+    {
+        await UpsertAsync(run, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 }
 
 /// <summary>

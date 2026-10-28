@@ -37,6 +37,16 @@ public class WorkerContractGuardTests
     }
 
     [Fact]
+    public void The_known_worker_code_set_the_diagnostics_bundle_validates_against_equals_the_contracts_codes()
+    {
+        var codes = ContractCodes();
+        codes.Count.ShouldBeGreaterThanOrEqualTo(10, "vacuity: the contract lists the codes known today");
+
+        RunErrorCodes.WorkerErrorCodes.OrderBy(c => c, StringComparer.Ordinal)
+            .ShouldBe(codes.OrderBy(c => c, StringComparer.Ordinal), "a code added to the worker registry must be added to RunErrorCodes.WorkerErrorCodes, or the diagnostics bundle redacts it (#613)");
+    }
+
+    [Fact]
     public void The_generic_on_purpose_list_holds_only_codes_that_are_in_the_contract_and_really_unmapped()
     {
         var codes = ContractCodes();

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using DnaEntropyGraph.Core.Abstractions;
 
@@ -22,6 +23,14 @@ public enum CleanupOutcome
     Failed,
     NotVerified,
     Skipped,
+}
+
+/// <summary>What <see cref="InstallationCleanup.EndVmAsync"/> did: <see cref="Done"/> (request accepted, run ended), <see cref="Failed"/> (refused or never accepted), <see cref="AlreadyEnding"/> (another end for the same job is in flight).</summary>
+public enum VmEndResult
+{
+    Done,
+    Failed,
+    AlreadyEnding,
 }
 
 /// <summary>One thing the cleanup looked at. <paramref name="RecoverableForDays"/> is set on a deleted job folder in a bucket with soft delete on: Google keeps a recoverable copy (and bills it) that many days, so "deleted" is never the whole truth. <paramref name="Location"/> is the zone, or the bucket for job data; <paramref name="Detail"/> is a machine-readable code or note for the caller to turn into words.</summary>
@@ -71,12 +80,14 @@ public sealed class InstallationCleanup
     private readonly IStorageGateway _storage;
     private readonly RunRowStore? _rows;
     private readonly ActiveRuns? _active;
+    private readonly TimeProvider _clock;
 
     /// <param name="runs">When given, a run whose VM is deleted is ended as Cancelled (<see cref="RunErrorCodes.DeletedByCleanup"/>) instead of being left Running (Hard Rule 11).</param>
     /// <param name="activeRuns">When given, the run's driver is stopped before its VM is deleted, so it never writes over the row.</param>
     /// <param name="onPhaseChanged">Told after a row's phase is committed, like the runner's callback.</param>
-    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage, IRunRepository? runs = null, ActiveRuns? activeRuns = null, Action<string, JobPhase>? onPhaseChanged = null)
+    public InstallationCleanup(IComputeGateway compute, IStorageGateway storage, IRunRepository? runs = null, ActiveRuns? activeRuns = null, Action<string, JobPhase>? onPhaseChanged = null, TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _compute = compute;
         _storage = storage;
         _rows = runs is null ? null : new RunRowStore(runs, onPhaseChanged);
@@ -301,6 +312,349 @@ public sealed class InstallationCleanup
     /// <summary>The name of the <see cref="CleanupKind.Disk"/> item reported when the second disk listing failed (no disk could be looked at).</summary>
     public const string DiskListingName = "(disk listing)";
 
+    /// <summary>The longest <see cref="EndVmAsync"/> waits for a run's driver to stop once the request has been accepted, before it writes the run's end anyway.</summary>
+    public static readonly TimeSpan DriverStopWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Issue #113: stops or deletes ONE computer of this installation (the exit window's Stop / Delete). The Compute request is SENT FIRST and nothing else is touched until Google
+    /// has ACCEPTED it (<see cref="IComputeGateway.EndVmAsync"/> reports that moment, not the end of the operation): <paramref name="requestAccepted"/> is called then (the caller may
+    /// close the app and say it finishes on Google's side), and only then is the job's driver stopped, so a refused request (403, quota) leaves the run, its driver and its row as
+    /// they were. The run's end is written right after acceptance, with the driver wait bounded by <see cref="DriverStopWait"/> and neither the wait nor the write taking the caller's
+    /// token: a run whose computer is stopped or deleted is ended as Cancelled (<see cref="RunErrorCodes.DeletedByCleanup"/> for a delete, <see cref="RunErrorCodes.StoppedByCleanup"/>
+    /// for a stop), never left Running (Hard Rule 11). Refuses a computer not labelled for <paramref name="installationId"/> (<see cref="VmEndResult.Failed"/>, nothing sent).
+    /// An end already in flight for the same job that this cleanup started is joined: its outcome is awaited (bounded by <see cref="InFlightWait"/>, then <see cref="VmEndResult.Failed"/>),
+    /// reported as it was (accepted: <see cref="VmEndResult.Done"/>; refused: this call makes its own attempt), and a Delete asked behind an accepted Stop is sent. A cancel some other
+    /// code owns (the runner's, "Delete everything") is <see cref="VmEndResult.AlreadyEnding"/>. A failure of the operation AFTER it was accepted is <see cref="VmEndResult.Failed"/>
+    /// (the row already says the run ended). Never throws for a cloud failure.
+    /// </summary>
+    public async Task<VmEndResult> EndVmAsync(string installationId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
+    {
+        RequireInstallation(installationId);
+        if (!BelongsTo(vm, installationId))
+        {
+            return VmEndResult.Failed;
+        }
+
+        var jobId = vm.Labels is { } labels && labels.TryGetValue("job-id", out var id) ? id : null;
+        for (var attempt = 0; ; attempt++)
+        {
+            ActiveRuns.CancelScope? scope = null;
+            InFlightEnd? mine = null;
+            InFlightEnd? first = null;
+            if (_active is not null && jobId is not null)
+            {
+                // One step: look for an end of ours still in flight, and if there is none take the job and publish our own entry. A second caller therefore always
+                // finds either our entry or somebody else's cancel, never the gap between taking the job and registering.
+                lock (_endGate)
+                {
+                    if (!_ending.TryGetValue(jobId, out first))
+                    {
+                        scope = _active.TryBeginCancel(jobId);
+                        if (scope is not null)
+                        {
+                            mine = new InFlightEnd(delete);
+                            _ending[jobId] = mine;
+                        }
+                    }
+                }
+
+                if (first is null && scope is null)
+                {
+                    // A cancel some other code owns (the runner's, "Delete everything"): reported as such, not claimed.
+                    return VmEndResult.AlreadyEnding;
+                }
+            }
+
+            if (first is null)
+            {
+                return await EndOwnedAsync(scope, mine, jobId, vm, delete, requestAccepted, cancellationToken).ConfigureAwait(false);
+            }
+
+            // An end of ours for this job is in flight: its outcome is known (and awaited, bounded).
+            bool firstAccepted;
+            try
+            {
+                firstAccepted = await first.Accepted.Task.WaitAsync(InFlightWait, _clock, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Neither accepted nor refused in time: nothing is known to be finishing, so nothing is claimed.
+                return VmEndResult.Failed;
+            }
+
+            if (!firstAccepted)
+            {
+                // The first attempt was refused and has let go of the job (or is about to): make our own.
+                if (attempt >= MaxJoinAttempts)
+                {
+                    return VmEndResult.Failed;
+                }
+
+                await Task.Yield();
+                continue;
+            }
+
+            if (first.Delete || !delete)
+            {
+                Notify(requestAccepted); // what was asked is already accepted and on its way
+                return VmEndResult.Done;
+            }
+
+            return await DeleteBehindAcceptedStopAsync(jobId!, first, vm, requestAccepted, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private readonly object _endGate = new();
+
+    /// <summary>How many times an end that found another end in flight and saw it refused tries again by itself.</summary>
+    private const int MaxJoinAttempts = 3;
+
+    /// <summary>The longest an end waits to learn how the end already in flight for the same job went (accepted, or refused) before it says it does not know.</summary>
+    public static readonly TimeSpan InFlightWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>What an end in flight for one job has so far: whether Google accepted its request, and when the run row was written.</summary>
+    private sealed class InFlightEnd(bool delete)
+    {
+        public bool Delete { get; } = delete;
+
+        /// <summary>True when Google accepted the request, false when it was refused or failed first. Never faults.</summary>
+        public TaskCompletionSource<bool> Accepted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the run row's end has been written (or there was nothing to write). Never faults.</summary>
+        public TaskCompletionSource RowEnded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Set when a Delete was accepted behind this end (a Stop): that Delete's outcome, which this end reports if its own operation ends in error (the computer it was stopping is gone).</summary>
+        public volatile Task<VmEndResult>? Superseder;
+    }
+
+    private readonly ConcurrentDictionary<string, InFlightEnd> _ending = new();
+
+    private static void Notify(Action? callback)
+    {
+        try
+        {
+            callback?.Invoke();
+        }
+        catch (Exception)
+        {
+            // A callback that throws is the caller's problem, never the end's.
+        }
+    }
+
+    /// <summary>
+    /// Sends the Compute request and returns two tasks: whether Google ACCEPTED it (true as soon as the gateway says so, or when it finished without saying; false when it
+    /// failed first), and the whole call (which ends when the operation is done and carries what it ended with).
+    /// </summary>
+    private (Task<bool> Accepted, Task Operation) Send(VmDescriptor vm, bool delete, Action onAccepted, CancellationToken cancellationToken)
+    {
+        var accepted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task operation;
+        try
+        {
+            operation = _compute.EndVmAsync(vm.Name, vm.Zone, delete, () =>
+            {
+                onAccepted();
+                accepted.TrySetResult(true);
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            operation = Task.FromException(ex);
+        }
+
+        _ = operation.ContinueWith(
+            t => accepted.TrySetResult(t.Status == TaskStatus.RanToCompletion),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return (accepted.Task, operation);
+    }
+
+    /// <summary>
+    /// The end this call owns: the request goes out FIRST, and nothing else is touched until Google has accepted it. Only then is the job's driver stopped (a refused request
+    /// leaves the run, its driver and its row exactly as they were), the run's row ended (the driver wait is bounded, and neither the wait nor the write takes the caller's token:
+    /// once the request is accepted the run's end is recorded, Hard Rule 11), and the operation awaited to its end.
+    /// </summary>
+    private async Task<VmEndResult> EndOwnedAsync(ActiveRuns.CancelScope? scope, InFlightEnd? entry, string? jobId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
+    {
+        // The job (the cancel scope) is let go of as soon as the run's row is ended: a runner cancel, "Delete everything" or the reconciler must not be told "already ending" or wait
+        // out the operation, which for a GPU stop is minutes. The entry stays published until the operation is done, so a second end for this job still joins this one.
+        void Release() => scope?.Dispose();
+
+        void Forget()
+        {
+            if (entry is not null && jobId is not null)
+            {
+                lock (_endGate)
+                {
+                    _ending.TryRemove(new KeyValuePair<string, InFlightEnd>(jobId, entry));
+                }
+            }
+        }
+
+        try
+        {
+            var (acceptedTask, operation) = Send(vm, delete, () =>
+            {
+                Notify(requestAccepted);
+                entry?.Accepted.TrySetResult(true);
+            }, cancellationToken);
+
+            if (!await acceptedTask.ConfigureAwait(false))
+            {
+                // Refused (or cancelled) before Google accepted it: let go of the job BEFORE saying so, so whoever waits behind us can try for itself.
+                Release();
+                Forget();
+                entry?.Accepted.TrySetResult(false);
+                entry?.RowEnded.TrySetResult();
+                try
+                {
+                    await operation.ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Reported as Failed below; the class of the failure is the caller's to learn from the cloud log, not from here.
+                }
+
+                return VmEndResult.Failed;
+            }
+
+            if (jobId is not null)
+            {
+                var driver = scope?.StopDriverAsync() ?? Task.CompletedTask;
+                try
+                {
+                    await driver.WaitAsync(DriverStopWait, _clock, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // A driver that will not stop does not keep the run Running: its end is written below.
+                }
+
+                await EndRunRowAsync(jobId, delete ? RunErrorCodes.DeletedByCleanup : RunErrorCodes.StoppedByCleanup).ConfigureAwait(false);
+            }
+
+            entry?.RowEnded.TrySetResult();
+            Release();
+            try
+            {
+                await operation.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The caller stopped waiting for the operation to finish; Google accepted it and the run's end is recorded.
+            }
+            catch (Exception)
+            {
+                // A Delete accepted behind this end supersedes it: this operation (a Stop) ending in error is what deleting the computer under it does, so the Delete's outcome is reported.
+                if (entry?.Superseder is { } superseder)
+                {
+                    return await superseder.ConfigureAwait(false);
+                }
+
+                // THEORY (unverified): the operation failed after being accepted (nothing measured). The row already says the run ended and the VM may still be running:
+                // that is Failed, and the next scan finds a running computer with no live run and says so.
+                return VmEndResult.Failed;
+            }
+
+            return VmEndResult.Done;
+        }
+        finally
+        {
+            Release();
+            Forget();
+            entry?.Accepted.TrySetResult(false); // only reached unresolved when the call itself was abandoned by an exception
+            entry?.RowEnded.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A Stop of this job is accepted and still finishing while the user now wants a Delete: the Delete is sent, and once the first end has written the run's row the row's
+    /// error code is changed from the stop's to the delete's, so the history says what became of the computer.
+    /// </summary>
+    private async Task<VmEndResult> DeleteBehindAcceptedStopAsync(string jobId, InFlightEnd first, VmDescriptor vm, Action? requestAccepted, CancellationToken cancellationToken)
+    {
+        var outcome = new TaskCompletionSource<VmEndResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var result = await DeleteBehindCoreAsync(jobId, first, vm, outcome, requestAccepted, cancellationToken).ConfigureAwait(false);
+            outcome.TrySetResult(result);
+            return result;
+        }
+        finally
+        {
+            outcome.TrySetResult(VmEndResult.Failed);
+        }
+    }
+
+    private async Task<VmEndResult> DeleteBehindCoreAsync(string jobId, InFlightEnd first, VmDescriptor vm, TaskCompletionSource<VmEndResult> outcome, Action? requestAccepted, CancellationToken cancellationToken)
+    {
+        // The moment the Delete is accepted the Stop it supersedes is told: from then on that Stop's own error is not the computer's outcome, this Delete's is.
+        var (acceptedTask, operation) = Send(vm, true, () =>
+        {
+            first.Superseder = outcome.Task;
+            Notify(requestAccepted);
+        }, cancellationToken);
+        if (!await acceptedTask.ConfigureAwait(false))
+        {
+            try
+            {
+                await operation.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Reported as Failed below.
+            }
+
+            return VmEndResult.Failed;
+        }
+
+        try
+        {
+            await first.RowEnded.Task.WaitAsync(InFlightWait, _clock, CancellationToken.None).ConfigureAwait(false);
+            await RelabelStoppedRowAsync(jobId).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // The first end never wrote its row in time; the row keeps the stop's code.
+        }
+
+        try
+        {
+            await operation.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // See EndOwnedAsync.
+        }
+        catch (Exception)
+        {
+            return VmEndResult.Failed;
+        }
+
+        return VmEndResult.Done;
+    }
+
+    private async Task RelabelStoppedRowAsync(string jobId)
+    {
+        if (_rows is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _rows.UpdateRowAsync(
+                jobId,
+                row => row.Phase == JobPhase.Cancelled && row.ErrorCode == RunErrorCodes.StoppedByCleanup ? row with { ErrorCode = RunErrorCodes.DeletedByCleanup } : row,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // History text only; the VM is being deleted either way.
+        }
+    }
+
     /// <summary>
     /// Deletes one VM and reads it back, contained: a failed delete or read back is an item, never an exception. When the VM carries a <c>job-id</c> the
     /// work runs under <see cref="ActiveRuns.CancelAsync"/>, so the run's driver is stopped first and one writer owns the row; a VM verified gone then
@@ -352,7 +706,7 @@ public sealed class InstallationCleanup
     }
 
     /// <summary>Ends a non-terminal run row as Cancelled under <see cref="RunErrorCodes.DeletedByCleanup"/>. A row already terminal, or none, is left alone; a failed write is not the cleanup's failure (the VM is gone and the reconciler looks again).</summary>
-    private async Task EndRunRowAsync(string jobId)
+    private async Task EndRunRowAsync(string jobId, string errorCode = RunErrorCodes.DeletedByCleanup)
     {
         if (_rows is null)
         {
@@ -372,7 +726,7 @@ public sealed class InstallationCleanup
                 await _rows.SetPhaseAsync(jobId, JobPhase.Cancelling, CancellationToken.None).ConfigureAwait(false);
             }
 
-            await _rows.SetPhaseAsync(jobId, JobPhase.Cancelled, CancellationToken.None, RunErrorCodes.DeletedByCleanup).ConfigureAwait(false);
+            await _rows.SetPhaseAsync(jobId, JobPhase.Cancelled, CancellationToken.None, errorCode).ConfigureAwait(false);
         }
         catch (Exception)
         {

@@ -234,7 +234,8 @@ public sealed record VmDescriptor(
     string? MachineType = null,
     DateTimeOffset? StartedAt = null,
     DateTimeOffset? ServerNow = null,
-    ulong? InstanceId = null)
+    ulong? InstanceId = null,
+    TimeSpan? MaxRunDuration = null)
 {
     /// <summary>
     /// When the platform's <c>maxRunDuration</c> clock for this VM last started: its last start (<c>lastStartTimestamp</c>), which a reused VM

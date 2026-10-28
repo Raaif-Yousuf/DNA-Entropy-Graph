@@ -139,9 +139,10 @@ band at that base on each record; point at it to read what it means. A run that 
 seam shows no marker.
 
 Open it from a finished run with the **Open viewer** button on the run page. If the viewer
-says it could not draw the run, choose **Try again**. Sequences larger than 50 MB are too
-big for the built-in viewer; open the sequence file and the entropy track in IGV on your
-computer instead.
+says it could not draw the run, choose **Try again**. A sequence file larger than 50 MB takes a moment longer to open the first time, because
+the app builds a small lookup file for it (kept in the app's own folder, never next to your
+files). Sequences larger than 1 GB are too big for the built-in viewer; open the sequence
+file and the entropy track in IGV on your computer instead.
 
 **If the viewer says it needs a Microsoft component:** the viewer uses Microsoft's WebView2
 Runtime, which comes with Windows 11 and most up-to-date Windows 10 computers. If yours

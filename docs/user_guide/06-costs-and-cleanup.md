@@ -165,9 +165,19 @@ this app created.*
 - If someone else uses another copy of this app on the same Google project, their computers
   show up on your Cloud page tagged **Another computer**. You can see them (they cost money
   on the same bill) but not stop or delete them from here.
-- If you close the app while a computer is still running with no job attached to it, a
-  message tells you exactly how many minutes until it stops itself, and offers to stop or
-  delete it right then instead of waiting.
+- The app checks for leftovers when it starts and then every 5 minutes. If a rented computer of
+  this copy of the app is running and no run is using it, a message names it and tells you to
+  press Stop on the Cloud page.
+- If you close the app while a computer is still running, a window lists each one with the
+  minutes left before it ends itself at its time limit and what it costs per hour. Press
+  **Stop it** (keeps the disk, stops the computer's cost), **Delete it**, or **Leave it
+  running**. A computer left running is never left forever: it always ends itself at its time
+  limit, but you pay until then. The same window says how much the stopped disks cost each
+  month. If a computer is still being used by a run, the window says its results are not downloaded
+  yet, and Stop or Delete ends that run. If a stop or delete does not work, the app stays open
+  and says which computer; close the app again to retry, or use the Cloud page. If Google is
+  slow to answer, the app closes after a short wait and says the stop will finish on Google's
+  side.
 - In **Settings > Budget**, you can set a monthly spending warning (a friendly reminder,
   $50 a month by default) or a hard stop that disables the Run button once you reach it.
 
