@@ -4,7 +4,7 @@ using System.Text;
 namespace DnaEntropyGraph.Cloud.Tests.Rest;
 
 /// <summary>One request the real gateway sent: what a wired-to-nothing gateway would get wrong.</summary>
-internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body, string? ContentRange = null, string? UserProject = null);
+internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Authorization, string Body, string? ContentRange = null, string? UserProject = null, string? Range = null);
 
 /// <summary>
 /// The HTTP-level fake for the real Google gateways (no GCP access: nothing here ever leaves the process). A route is a
@@ -14,7 +14,9 @@ internal sealed record RecordedRequest(HttpMethod Method, Uri Uri, string? Autho
 /// </summary>
 internal sealed class ScriptedHttpHandler : HttpMessageHandler
 {
-    private readonly Dictionary<(string Method, string Path), Queue<Func<CancellationToken, Task<HttpResponseMessage>>>> _routes = new();
+    private readonly Dictionary<(string Method, string Path), Queue<Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>>> _routes = new();
+
+    private readonly Dictionary<(string Method, string Path), Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>> _standing = new();
 
     private readonly Dictionary<(string Method, string Path), Queue<int>> _midBodyFailures = new();
 
@@ -45,13 +47,26 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
     /// <summary>Queues a response the test computes: it can hang until the request is cancelled, throw, or cancel the caller mid-request.</summary>
     public ScriptedHttpHandler Calls(HttpMethod method, string absolutePath, Func<CancellationToken, Task<HttpResponseMessage>> respond)
     {
+        return Calls(method, absolutePath, (_, token) => respond(token));
+    }
+
+    /// <summary>Queues a response the test computes from the request itself (a Range header, say).</summary>
+    public ScriptedHttpHandler Calls(HttpMethod method, string absolutePath, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
+    {
         var key = (method.Method, absolutePath);
         if (!_routes.TryGetValue(key, out var queue))
         {
-            _routes[key] = queue = new Queue<Func<CancellationToken, Task<HttpResponseMessage>>>();
+            _routes[key] = queue = new Queue<Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>>();
         }
 
         queue.Enqueue(respond);
+        return this;
+    }
+
+    /// <summary>Answers every request to the route that has no queued response left (a chunked download sends many).</summary>
+    public ScriptedHttpHandler Always(HttpMethod method, string absolutePath, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
+    {
+        _standing[(method.Method, absolutePath)] = respond;
         return this;
     }
 
@@ -85,11 +100,16 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
         }
 
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString(), UserProject(request)));
+        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString(), UserProject(request), request.Headers.Range?.ToString()));
 
         if (_routes.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var queue) && queue.Count > 0)
         {
-            return await queue.Dequeue()(cancellationToken);
+            return await queue.Dequeue()(request, cancellationToken);
+        }
+
+        if (_standing.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var standing))
+        {
+            return await standing(request, cancellationToken);
         }
 
         return new HttpResponseMessage((HttpStatusCode)599)

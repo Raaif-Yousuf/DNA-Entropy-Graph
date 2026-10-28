@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
@@ -98,6 +99,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         var runFolder = await ResolveRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
         var runFolderFull = Path.GetFullPath(runFolder);
         var prefix = WorkerManifestBuilder.JobPrefix(request.JobId);
+        StalePartSweeper.Sweep(runFolderFull, settings.TimeProvider);
 
         // Every input that listed files, whatever its status: a failed or cancelled input's partial files are kept
         // (docs/job_contract.md sections 6 and 7). Messages name the input id and file number, never the path, because
@@ -130,18 +132,17 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
     private async Task DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, CancellationToken cancellationToken)
     {
-        var partial = destination + ".part";
+        var partial = StreamedDownload.TempPathFor(destination);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
 
-            // Issue #588: the gateway streams the object straight into the .part file (memory stays flat for a result of any size), then the file is verified below.
-            var found = await calls.CallAsync(token => storage.TryDownloadToFileAsync(bucket, objectKey, partial, token), cancellationToken, settings.DownloadTimeout).ConfigureAwait(false);
+            // Issue #588: the gateway streams the object straight into a unique .part file (memory stays flat for a result of any size) under a stall deadline, then the file is verified below.
+            var found = await StreamedDownload.RunAsync(storage, settings.TimeProvider, bucket, objectKey, partial, file.Bytes, settings.DownloadStallTimeout, cancellationToken).ConfigureAwait(false);
             if (!found)
             {
                 throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} is listed by the worker but is not in the bucket.");
             }
-
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long written = 0;
             await using (var downloaded = new FileStream(partial, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
@@ -160,12 +161,25 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadCorrupt, $"{label} is {written} bytes, the worker said {expectedBytes}.");
             }
 
-            if (file.Sha256 is { } expectedHash && !string.Equals(Convert.ToHexString(hash.GetHashAndReset()), expectedHash, StringComparison.OrdinalIgnoreCase))
+            var actualHash = Convert.ToHexString(hash.GetHashAndReset());
+            if (file.Sha256 is { } expectedHash && !string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
             {
                 throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadCorrupt, $"{label} does not match the checksum the worker reported.");
             }
 
-            File.Move(partial, destination, overwrite: true);
+            // Hard Rule 14: a resumed run finds its earlier files here, and the user may have edited one. Identical bytes are kept as they are; anything else is
+            // renamed aside ("name (changed time).ext") before the verified download takes its place, never overwritten.
+            if (File.Exists(destination))
+            {
+                if (new FileInfo(destination).Length == written && await FileSha256Async(destination, cancellationToken).ConfigureAwait(false) == actualHash)
+                {
+                    return;
+                }
+
+                ChangedFileAside.Move(destination, settings.TimeProvider, Mover);
+            }
+
+            Mover.Move(partial, destination);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -182,6 +196,14 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 // Nothing more to do for a leftover partial; it never carries the final name.
             }
         }
+    }
+
+    private static readonly DiskRunFileMover Mover = new();
+
+    private static async Task<string> FileSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>

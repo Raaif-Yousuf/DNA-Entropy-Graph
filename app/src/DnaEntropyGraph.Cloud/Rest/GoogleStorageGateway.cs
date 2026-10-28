@@ -650,7 +650,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken);
 
     /// <summary>
-    /// Issue #588: the object streamed from the network into <paramref name="destinationPath"/> (the Google client writes each chunk to the file as it arrives), so memory
+    /// Issue #588: the object streamed from the network into <paramref name="destinationPath"/> (the Google client copies the one response body to the file as it arrives), so memory
     /// stays flat however large the object is. A 404 is false with nothing on disk. Every failed attempt, a retry included, and a cancel deletes the file; a retry starts the
     /// file again from byte zero. Integrity is the caller's: it verifies the file's size and SHA-256 against <c>result.json</c>.
     /// </summary>

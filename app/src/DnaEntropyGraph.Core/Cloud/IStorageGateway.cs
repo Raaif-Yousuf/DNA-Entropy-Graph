@@ -49,7 +49,7 @@ public interface IStorageGateway
     }
 
     /// <summary>Deletes a leftover partial file; there is nothing more to do when that fails, and it never carries a final name.</summary>
-    static void DeleteQuietly(string path)
+    private static void DeleteQuietly(string path)
     {
         try
         {

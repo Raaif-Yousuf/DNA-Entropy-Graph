@@ -87,8 +87,8 @@ internal sealed class CloudRunSettings
 
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
-    /// <summary>One result file's whole download (issue #588: it streams to disk, so a large probability matrix gets longer than the 60 s <see cref="CallTimeout"/> that suited a small in-memory read).</summary>
-    public TimeSpan DownloadTimeout { get; set; } = TimeSpan.FromMinutes(30);
+    /// <summary>Issue #588: a result file download is cancelled when no bytes have landed for this long (a silent but connected socket). A slow link that keeps moving is never cut by it; the total cap is derived from the file size (<see cref="StreamedDownload.TotalCap"/>).</summary>
+    public TimeSpan DownloadStallTimeout { get; set; } = StreamedDownload.DefaultStall;
 
     /// <summary>
     /// The budget of the one gateway call that is a whole sequence, <see cref="IStorageGateway.EnsureBucketAsync"/> (project get, list, insert,

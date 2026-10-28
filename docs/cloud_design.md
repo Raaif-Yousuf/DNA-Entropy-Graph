@@ -1265,10 +1265,18 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
 - **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
   tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (manifests, `status.json` and `result.json`
   are small; the multi-GB weights cache is the worker's, #496). Result files (a probability matrix can be hundreds of MB) never go through them: issue #588 added
-  `TryDownloadToFileAsync(bucket, key, path)`, which the Google client writes chunk by chunk into the caller's `.part` file, so memory stays flat at any size
+  `TryDownloadToFileAsync(bucket, key, path)`, which the Google client copies (one range-less GET, MEASURED 2026-10-28 over the scripted handler) into the caller's `.part` file, so memory stays flat at any size
   (MEASURED 2026-10-28: a generated 256 MB body allocates under 32 MB, the in-memory path allocated 672 MB). It answers false for a 404, and every failure,
   retry attempt or cancel deletes the partial. The gateway checks no md5/crc32c; `RunTransfer` and `RunCloudResults` verify the finished `.part` file against the size and
-  SHA-256 `result.json` lists, then move it into place, so a corrupt or short file never carries the final name. There is no byte-range resume: a retry restarts the file. `TryDownloadAsync` answers null for a 404 only; every other failure
+  SHA-256 `result.json` lists, then move it into place, so a corrupt or short file never carries the final name. There is no byte-range resume: a retry restarts the file.
+  Both consumers go through `StreamedDownload.RunAsync`: a unique `<name>.<guid>.part` per attempt (two downloads of one file never share a temp file), a STALL
+  deadline (`CloudRunSettings.DownloadStallTimeout`, 90 s without a byte landing cancels the attempt, reported as `network`) plus a total cap derived from the size
+  (256 KiB/s floor, 5 minute minimum, 30 minutes when the size is unknown), so a silent socket cannot hang a run and a slow live link is not cut. On a timeout the inner
+  token is cancelled and the callee awaited (30 s grace) before the partial is deleted. `RunTransfer` never overwrites a file already on disk (Hard Rule 14): identical bytes
+  are kept, anything else is renamed `name (changed time).ext` first, as the History re-download does. `DiskRunFileMover.Move` retries a transient sharing violation (an
+  antivirus scan holding the new file) five times with a growing pause. `*.part` files older than a day in a run folder are swept before a download. Every `IStorageGateway`
+  in the Cloud assembly must declare its own `TryDownloadToFileAsync` (a Guards test), because the interface default buffers. `ResilientStorageGateway` wraps only `FakeGcp`; the real
+  gateway is never wrapped, so retries do not nest. `TryDownloadAsync` answers null for a 404 only; every other failure
   throws, so a transport error never reads as "the worker has not finished".
 - **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
   `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try
