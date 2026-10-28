@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.App;
 using DnaEntropyGraph.App.Startup;
 using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -82,11 +83,7 @@ public class ReattachCancelTests : IDisposable
 
     private static async Task WaitUntilActiveAsync(ActiveRuns registry, string jobId)
     {
-        var waited = 0;
-        while (!registry.IsActive(jobId) && waited++ < 500)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await registry.WhenActiveAsync(jobId);
 
         registry.IsActive(jobId).ShouldBeTrue("the reattached run must be registered where Cancel looks");
     }
@@ -134,10 +131,7 @@ public class ReattachCancelTests : IDisposable
 
         var launch = reconciler.ReattachAsync(TestContext.Current.CancellationToken);
         await WaitUntilActiveAsync(provider.GetRequiredService<ActiveRuns>(), jobId);
-        for (var waited = 0; gcp.HungCalls == 0 && waited < 500; waited++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await gcp.WhenHungAsync().WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken);
 
         gcp.HungCalls.ShouldBe(1, "precondition: the reattach is parked inside its look at the cloud");
         await provider.GetRequiredService<JobEngine>().CancelRunAsync(jobId, TestContext.Current.CancellationToken);

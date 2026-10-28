@@ -37,8 +37,9 @@ public static class JobStateMachine
         [JobPhase.Validating] = [JobPhase.Uploading, JobPhase.Failed, JobPhase.Cancelling],
         [JobPhase.Uploading] = [JobPhase.Provisioning, JobPhase.Failed, JobPhase.Cancelling],
         [JobPhase.Provisioning] = [JobPhase.Preparing, JobPhase.Failed, JobPhase.Cancelling],
-        [JobPhase.Preparing] = [JobPhase.Running, JobPhase.Failed, JobPhase.Cancelling],
-        [JobPhase.Running] = [JobPhase.Finalizing, JobPhase.Failed, JobPhase.Cancelling],
+        // Preparing/Running -> Provisioning is only the one automatic on-demand retry after a Spot preemption (issue #91, RunRowStore.RestartProvisioningAsync).
+        [JobPhase.Preparing] = [JobPhase.Running, JobPhase.Provisioning, JobPhase.Failed, JobPhase.Cancelling],
+        [JobPhase.Running] = [JobPhase.Finalizing, JobPhase.Provisioning, JobPhase.Failed, JobPhase.Cancelling],
         [JobPhase.Finalizing] = [JobPhase.Downloading, JobPhase.Failed, JobPhase.Cancelling],
         [JobPhase.Downloading] = [JobPhase.Completed, JobPhase.PartiallyCompleted, JobPhase.Failed, JobPhase.Cancelling],
         [JobPhase.Cancelling] = [JobPhase.Cancelled, JobPhase.Failed],

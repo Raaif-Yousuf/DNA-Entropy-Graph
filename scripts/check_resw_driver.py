@@ -38,7 +38,7 @@ def configured_script(repo: Path) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--repo", type=Path, default=SCRIPTS_DIR.parent)
     args = ap.parse_args(argv)
     script = configured_script(args.repo)

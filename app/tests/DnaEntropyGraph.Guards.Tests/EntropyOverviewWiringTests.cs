@@ -14,6 +14,7 @@ public sealed class EntropyOverviewWiringTests
     [Theory]
     [InlineData("Views/ResultsPage.xaml", "Contig=\"{x:Bind ViewModel.Overview, Mode=OneWay}\"")]
     [InlineData("Views/ResultsPage.xaml", "Command=\"{x:Bind ViewModel.ExportOverviewPngCommand}\"")]
+    [InlineData("Views/ResultsPage.xaml", "RangeSelectedCommand=\"{x:Bind ViewModel.SelectOverviewRangeCommand}\"")]
     [InlineData("Views/RunsPage.xaml", "Values=\"{x:Bind Sparkline, Mode=OneWay}\"")]
     [InlineData("Views/RunsPage.xaml", "Visibility=\"{x:Bind HasSparkline, Mode=OneWay}\"")]
     public void The_XAML_binds_the_overview_pieces(string file, string fragment)
