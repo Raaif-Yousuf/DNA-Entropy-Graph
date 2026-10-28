@@ -22,7 +22,9 @@ $0.00 this month`. Active runs show a badge on the **Runs** item so a user who n
 away never loses track of a job in progress. Keyboard: `Ctrl+N` new run, `Ctrl+O` add
 files, `Ctrl+Shift+V` paste sequence, `Ctrl+Enter` run, `Esc` cancel a dialog, `F5` refresh
 (Cloud/History), `Ctrl+,` Settings, `Ctrl+L` focus the locus box in the viewer, `Alt+Left`
-back.
+back. Viewer page keys (#247): Left/Right pan a quarter window, `+`/`-` zoom, `Home` or `1` whole record,
+`2`/`3` 10 kb / 1 kb about the centre, `Ctrl+L` focus the locus box. bridge.js only forwards the key
+(`{evt:"key"}`); `Viewer/ViewerKeyboard.cs` decides, so the rules are unit tested.
 
 Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 `PageTitle_<key>` string (`ShellViewModel.CurrentPageTitle`), never the page key; New run
@@ -211,6 +213,18 @@ to save the next person from repeating:
   `App/Converters/VisibilityHelper.FromBool(bool) -> Visibility`) referenced directly as
   `{x:Bind converters:VisibilityHelper.FromBool(ViewModel.SomeBool), Mode=OneWay}`. This
   needs no resource dictionary entry and builds clean.
+
+**Guard (issue #423).** `scripts/check_xaml_shapes.py` (run by `premerge.py`, tests in
+`scripts/tests/test_check_xaml_shapes.py`) finds these shapes by text before the compiler runs and prints
+`file:line: SHAPE: what to do instead`. MEASURED 2026-10-16 on Windows App SDK 1.8.250906003, each shape added
+to the otherwise-clean `MainWindow.xaml` and built with `dotnet build` of the App project: a clean tree built;
+`ExtendsContentIntoTitleBar="True"` on `<Window>`, a `Window.Resources` entry for a local `IValueConverter`,
+and `IsEnabled` on a `StackPanel` (which has no such property) each failed with `XamlCompiler.exe ... exited
+with code 1` (MSB3073) and no other message. A local converter in `Page.Resources` (scratch copy of
+`PlaceholderPage.xaml`) BUILT CLEAN, so the converter rule hard-fails only in `Window.Resources`; a local
+converter in any other scope, or a `*Converter` element that is not a local class, is a WARN that never fails
+the gate (THEORY (unverified): they crash too). Grid, Border, RelativePanel, Canvas, TextBlock and Image are
+also flagged for `IsEnabled`; THEORY (unverified): they fail the same way.
 
 If a future Windows App SDK bump fixes either of these upstream, this section (and the
 workaround it documents) should be removed in the same commit as the version bump, not

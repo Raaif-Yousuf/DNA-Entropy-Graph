@@ -300,13 +300,10 @@ Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) wee
 `docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
 update cadence (they already exist as of this session but the ecosystem entry itself is a
 separate, not-yet-filed follow-up). `dependency-review-action` on pull requests
-(deny-licenses matching Hard Rule 21's own list) cannot actually run yet for two
-independent, already-documented reasons: every workflow in this repo is
-`workflow_dispatch`-only (the owner's on-demand-CI decision, so there is no `pull_request`
-trigger for the job's `if:` condition to ever satisfy), and even a restored PR trigger
-would fail immediately because the repository's Dependency graph setting is off (issue
-#325, an owner-only action). Restoring the PR trigger before #325 is done would recreate a
-permanently red check.
+(deny-licenses matching Hard Rule 21's own list) would fail immediately today because the
+repository's Dependency graph setting is off (issue #325, an owner-only action), so it is
+not enabled. (The CI workflows do run on `pull_request`, MEASURED 2026-10-16, so #325 is the
+only blocker.) Enabling it before #325 is done would create a permanently red check.
 
 ### The packId (#712)
 
