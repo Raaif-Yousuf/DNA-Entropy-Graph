@@ -383,6 +383,7 @@ def run(
     for notice in result.notices:
         typer.secho(f"  - {notice}", fg=typer.colors.YELLOW)
     v = result.all_values
+    assert v is not None  # RunResult.__post_init__ always fills it; narrows the type only
     if result.contigs > 1:
         headline = (
             f"OK: {result.total_nt} nt across {result.contigs} sequences analyzed (predictor={predictor})."

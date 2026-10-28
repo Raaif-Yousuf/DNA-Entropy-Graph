@@ -386,8 +386,9 @@ class AnalysisSpec:
             smoothing_windows=smoothing_windows,
             gc_window=gc_window,
             region_threshold=region_threshold,
-            region_min_length=region_min_length,
-            region_merge_gap=region_merge_gap,
+            # whole numbers: _region_number(whole=True) already refused any other value
+            region_min_length=int(region_min_length),
+            region_merge_gap=int(region_merge_gap),
         )
 
 
@@ -518,7 +519,11 @@ class JobManifest:
         except json.JSONDecodeError as exc:
             raise ManifestError(f"manifest.json is not valid JSON: {exc}") from exc
 
-        schema = int(_require(d, "schema", where=""))
+        if not isinstance(d, dict):
+            raise ManifestError("manifest.json must be a JSON object")
+        schema = _require(d, "schema", where="")
+        if isinstance(schema, bool) or not isinstance(schema, int):
+            raise ManifestError(f"manifest.json 'schema' must be a whole number, got {schema!r}")
         if schema not in SUPPORTED_SCHEMA_VERSIONS:
             raise ManifestSchemaError(schema)
 
@@ -533,7 +538,10 @@ class JobManifest:
         outputs = [str(o) for o in d.get("outputs", [])]
         limits = Limits.from_dict(d.get("limits", {}))
         lifecycle = Lifecycle.from_dict(d.get("lifecycle", {}))
-        store = StoreSpec.from_dict(_require(d, "store", where=""))
+        store_raw = _require(d, "store", where="")
+        if not isinstance(store_raw, dict):
+            raise ManifestError(f"manifest.json 'store' must be an object, got {store_raw!r}")
+        store = StoreSpec.from_dict(store_raw)
         worker = WorkerRef.from_dict(d.get("worker", {}))
         preset = PresetSpec.from_dict(d["preset"]) if "preset" in d else None
 
