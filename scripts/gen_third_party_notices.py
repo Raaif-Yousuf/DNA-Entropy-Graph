@@ -721,7 +721,7 @@ def self_test() -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--app-root", type=Path, default=Path("app"), help="path to app/ (default: ./app)")
     ap.add_argument("--worker-root", type=Path, default=Path("worker"), help="path to worker/ (default: ./worker)")
     ap.add_argument("--repo-root", type=Path, default=None, help="repo root for vendored assets (default: parent of --app-root)")

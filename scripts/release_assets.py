@@ -96,7 +96,7 @@ def missing_assets(names: list[str], version: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     st = sub.add_parser("stage")
     st.add_argument("--dir", type=Path, required=True)

@@ -34,6 +34,7 @@
   <ItemGroup>
     <!-- One virtual clock for both test projects (issue #559 review): the file is Cloud.Tests's, linked here, not copied. -->
     <Compile Include="..\DnaEntropyGraph.Cloud.Tests\VirtualTimeProvider.cs" Link="VirtualTimeProvider.cs" />
+    <Compile Include="..\DnaEntropyGraph.Cloud.Tests\RunSignals.cs" Link="RunSignals.cs" />
   </ItemGroup>
 
   <ItemGroup>

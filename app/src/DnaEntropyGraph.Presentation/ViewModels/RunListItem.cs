@@ -115,6 +115,13 @@ public sealed partial class RunListItem : ObservableObject
     /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
     public string? PresetText { get; init; }
 
+    /// <summary>Issue #111: the run was found in the results bucket (made on another computer); only Download again and Remove from list act on it.</summary>
+    public bool IsImported { get; init; }
+
+    public string? ImportedText { get; init; }
+
+    public bool HasImportedText => ImportedText is not null;
+
     /// <summary>"Download again", or "Download partial results" for a cancelled run (issue #717: what the worker uploaded before it stopped).</summary>
     public string RedownloadLabel { get; init; } = string.Empty;
 

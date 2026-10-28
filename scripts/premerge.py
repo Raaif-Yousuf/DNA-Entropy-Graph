@@ -552,8 +552,10 @@ def run_all(
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "basetemp.txt").write_text(str(own_tmp) + "\n", encoding="utf-8", newline="\n")
 
-        def runner(gate: Gate) -> Result:  # noqa: F811 - the default runner closes over the basetemp root
+        def default_runner(gate: Gate) -> Result:  # closes over the basetemp root
             return run_gate(gate, basetemp_root=basetemp_root)
+
+        runner = default_runner
 
     results: list[Result] = []
     try:

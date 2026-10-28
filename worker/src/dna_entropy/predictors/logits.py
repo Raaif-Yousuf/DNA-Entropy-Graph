@@ -7,6 +7,8 @@ GPU-only model call lives in ``evo.py`` and feeds this function.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from .base import NUM_NUCLEOTIDES
@@ -52,7 +54,7 @@ def aligned_acgt_probs(nuc_logits: np.ndarray) -> np.ndarray:
     return aligned
 
 
-def normalize_model_output(raw: object) -> object:
+def normalize_model_output(raw: Any) -> Any:
     """Normalize a predictor's raw forward-pass output into a 2D ``(L, vocab)`` object.
 
     Holds the exact unwrap steps :meth:`~dna_entropy.predictors.evo.EvoPredictor._extract_logits`

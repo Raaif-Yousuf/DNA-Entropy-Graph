@@ -23,7 +23,8 @@ public class ResilienceRegressionTests
         {
             Gcp = gcp;
             Log = new CloudRetryLog();
-            Pipeline = new CloudCallPipeline(options, gcp, Log);
+            FirstRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Pipeline = new CloudCallPipeline(options, gcp, new SignallingObserver(Log, FirstRetry));
             Repo = new InMemoryRunRepository();
             Runner = new CloudJobRunner(
                 new ResilientComputeGateway(gcp, Pipeline),
@@ -38,11 +39,27 @@ public class ResilienceRegressionTests
 
         public CloudRetryLog Log { get; }
 
+        /// <summary>Completes when the pipeline reports its first retry: the call failed once and is about to wait. A signal instead of a poll of the log on a real clock.</summary>
+        public TaskCompletionSource FirstRetry { get; }
+
         public CloudCallPipeline Pipeline { get; }
 
         public InMemoryRunRepository Repo { get; }
 
         public CloudJobRunner Runner { get; }
+    }
+
+    private sealed class SignallingObserver(CloudRetryLog inner, TaskCompletionSource firstRetry) : ICloudCallObserver
+    {
+        public void OnRetry(CloudRetryEvent retry)
+        {
+            inner.OnRetry(retry);
+            firstRetry.TrySetResult();
+        }
+
+        public void OnTokenRefreshed(string operation) => inner.OnTokenRefreshed(operation);
+
+        public void OnConnectivityChanged(bool offline) => inner.OnConnectivityChanged(offline);
     }
 
     private static CloudRetryOptions Fast(int retries = 4) => new() { MaxRetryAttempts = retries, BaseDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero };
@@ -104,7 +121,8 @@ public class ResilienceRegressionTests
         using var cts = new CancellationTokenSource();
 
         var call = new ResilientComputeGateway(rig.Gcp, rig.Pipeline).GetVmAsync("v", "us-central1-a", cts.Token);
-        SpinWait.SpinUntil(() => rig.Log.Retries.Count == 1, TimeSpan.FromSeconds(5)).ShouldBeTrue("the first attempt should have failed and started waiting");
+        await rig.FirstRetry.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        rig.Log.Retries.Count.ShouldBe(1, "the first attempt should have failed and started waiting");
         await cts.CancelAsync();
 
         var ex = await Record.ExceptionAsync(async () => await call.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
