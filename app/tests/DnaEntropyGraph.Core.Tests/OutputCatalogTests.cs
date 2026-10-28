@@ -46,8 +46,8 @@ public sealed partial class OutputCatalogTests
     [Fact]
     public void Only_wig_and_the_probability_matrix_are_off_by_default()
     {
-        OutputCatalog.Entries.Where(e => !e.DefaultOn).Select(e => e.WireName).ShouldBe(["wig", "probs", "probs_npy"], "WIG is the alternative to the bedGraph track, not an addition: the worker writes one track format per run");
-        OutputCatalog.Defaults.ShouldBe(OutputCatalog.Everything & ~(OutputFileKinds.Wig | OutputFileKinds.Probs | OutputFileKinds.ProbsNpy));
+        OutputCatalog.Entries.Where(e => !e.DefaultOn).Select(e => e.WireName).ShouldBe(["wig", "probs", "probs_npy", "gc", "codons"], "GC and codon usage are opt-in like the matrix (the worker writes them only when named). WIG is the alternative to the bedGraph track, not an addition: the worker writes one track format per run");
+        OutputCatalog.Defaults.ShouldBe(OutputCatalog.Everything & ~(OutputFileKinds.Wig | OutputFileKinds.Probs | OutputFileKinds.ProbsNpy | OutputFileKinds.Gc | OutputFileKinds.Codons));
         new RunOptions { ModelId = "m", RunTarget = "Cloud" }.OutputFiles.ShouldBe(OutputCatalog.Defaults);
     }
 

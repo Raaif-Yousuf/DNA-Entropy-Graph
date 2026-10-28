@@ -19,4 +19,21 @@ public class FolderLauncherQuotingTests
         open.ShouldContain("ArgumentList");
         open.ShouldNotContain("\\\"{folderPath}");
     }
+
+    [Fact]
+    public void RevealFile_builds_its_switch_through_the_tested_helper_never_a_hand_quoted_interpolation()
+    {
+        // Issue #677: ExplorerCommandLine.Select is what the unit tests pin (spaces, trailing backslash, quotes).
+        var source = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Services", "FolderLauncher.cs"));
+        var reveal = source[source.IndexOf("public bool RevealFile", StringComparison.Ordinal)..];
+
+        reveal.ShouldContain("ExplorerCommandLine.Select");
+        reveal.ShouldNotContain("/select,\\\"{");
+
+        // Any other shape of the same mistake (a concatenation, string.Format, a Replace, another literal) needs the raw path inside the method body, and the only
+        // legal use of it there is the one call to the helper: take that call and the signature away and no mention of the path may be left.
+        var withoutHelperCall = reveal.Replace("ExplorerCommandLine.Select(filePath)", string.Empty, StringComparison.Ordinal).Replace("public bool RevealFile(string filePath)", string.Empty, StringComparison.Ordinal);
+        withoutHelperCall.ShouldNotContain("filePath", customMessage: "RevealFile must hand the path to ExplorerCommandLine.Select and use only what it returns");
+        withoutHelperCall.ShouldNotContain("/select", customMessage: "the Explorer switch is built in ExplorerCommandLine, nowhere else");
+    }
 }

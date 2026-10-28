@@ -42,6 +42,9 @@ public sealed partial class ShellViewModel : ObservableObject
     // CurrentPageTitle, which NavigateTo notifies.
     private string _currentPageKey = InitialPageKeyValue;
 
+    // The page that is really showing (issue #143), from the navigator: a nav click, Back and a deep link all end up here, unlike _currentPageKey.
+    private string _helpPageKey = InitialPageKeyValue;
+
     [ObservableProperty]
     private string _statusPillText;
 
@@ -54,10 +57,30 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null)
+    /// <summary>The first-launch tour (issue #143): the window's TeachingTips bind to it. Null only in tests that do not exercise it.</summary>
+    public TourViewModel? Tour { get; }
+
+    /// <summary>Called once the window and its first page are up: shows the first-launch tour on a profile that has not seen it (issue #143).</summary>
+    public Task OnWindowLoadedAsync() => Tour?.StartIfFirstLaunchAsync() ?? Task.CompletedTask;
+
+    /// <summary>NavigationViewDisplayMode.Minimal: the pane is hidden behind a button, so the tour's tips have nothing to point at.</summary>
+    public const int MinimalNavigationDisplayMode = 0;
+
+    /// <summary>The navigation pane changed layout (<c>NavigationViewDisplayMode</c> as a number, so Presentation has no WinUI type).</summary>
+    public void OnNavigationDisplayModeChanged(int displayMode) => Tour?.SetNavigationMinimal(displayMode == MinimalNavigationDisplayMode);
+
+    /// <summary>A tour tip was closed (<c>TeachingTipCloseReason</c> as a number).</summary>
+    public void OnTourTipClosed(int reason) => Tour?.OnTipClosed(reason);
+
+    /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
+    public Uri HelpUri => UserGuideLinks.UriFor(_helpPageKey, _build);
+
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, TourViewModel? tour = null)
     {
         _session = session;
         Updates = updates;
+        Tour = tour;
+        navigator.CurrentPageChanged += (_, _) => OnNavigatorPageChanged(navigator.CurrentPageKey);
         _build = build;
         _completion = completion;
         _dataRoot = dataRoot;
@@ -138,7 +161,9 @@ public sealed partial class ShellViewModel : ObservableObject
         _userNavigated = true;
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
+        _helpPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
+        OnPropertyChanged(nameof(HelpUri));
 
         // Issue #244: the first time the remembered page's parent is shown at startup, open the remembered run on top of it. Once only,
         // and only if the user has not already chosen another page (that choice replaced the pending restore).
@@ -194,6 +219,17 @@ public sealed partial class ShellViewModel : ObservableObject
 
         _pendingRestore = target;
         StartupNavKey = target?.NavKey ?? InitialPageKeyValue;
+    }
+
+    private void OnNavigatorPageChanged(string? pageKey)
+    {
+        if (pageKey is null)
+        {
+            return;
+        }
+
+        _helpPageKey = pageKey;
+        OnPropertyChanged(nameof(HelpUri));
     }
 
     /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>

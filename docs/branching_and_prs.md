@@ -66,10 +66,9 @@ one already there, and the next `git merge --ff-only` refuses with a conflict
 nobody can read. A merge commit keeps the branch commit as a parent, so the
 fast-forward afterwards is exact.
 
-**Nothing reliably gates the merge except you.** The owner's 2026-09-19 decision
-was on-demand CI; MEASURED 2026-10-02 the workflow files differ (see
-`dev_commands.md`, "CI triggers"), and `ci-app.yml` has no automatic trigger at all, so a PR with a
-green look has not been checked for `app/`. The step **before `gh pr create`** is one command:
+**CI checks every PR, but run the gate yourself first.** MEASURED 2026-10-16 `ci-app`, `ci-docs`,
+`ci-worker` and `ci-notices` all run on `pull_request` (see `dev_commands.md`, "CI triggers"); CI is slow
+feedback and a Windows test hang has cancelled runs before, so a check list is not a substitute for the local gate. The step **before `gh pr create`** is one command:
 
 ```powershell
 worker\.venv\Scripts\python.exe scripts\premerge.py --fast    # per lane, minutes
@@ -92,7 +91,7 @@ then `gh run watch`.
 From a shared checkout, `scripts/land_pr.py` (see `dev_commands.md`) does branch, explicit-path commit, push, PR,
 wait-for-green, merge and return-to-main in one call, and leaves every other lane's uncommitted edits untouched.
 Run `scripts/premerge.py --fast` first, in the working tree before the tool commits: `land_pr.py` refuses without a green
-stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create` hook cannot see the `gh` call the tool makes
+stamp on the current HEAD (`--no-premerge-check` overrides). The `gh pr create`/`gh pr merge` hook (`scripts/hooks/require_premerge_before_pr.py`, registered in `.claude/settings.json`) denies an agent's `gh pr create`/`merge` without a green stamp on HEAD; `land_wt.py` is exempt for create (child process) and records its PRs (with the head sha it verified) so `gh pr merge <n> --match-head-commit <sha>` of a landed PR is allowed for 72 hours. The `gh pr create` hook cannot see the `gh` call the tool makes
 internally, so the tool does the same check itself.
 
 GitHub registers no checks for a few seconds after `gh pr create` (MEASURED 2026-10-02, #472), so an empty check list

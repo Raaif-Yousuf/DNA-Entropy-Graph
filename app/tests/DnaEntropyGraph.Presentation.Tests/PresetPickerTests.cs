@@ -40,6 +40,7 @@ public sealed class PresetPickerTests : IDisposable
             estimates,
             new OutputSelectionStore(_settings),
             Substitute.For<IDiagnosticsLog>(),
+            TestGpu.Plan(),
             presets: picker);
     }
 

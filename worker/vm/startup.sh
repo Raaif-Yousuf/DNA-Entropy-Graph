@@ -44,6 +44,7 @@ IMAGE=$(meta instance/attributes/deg-worker-image)          # a full ref@sha256:
 EXPECT_GPU=$(meta instance/attributes/deg-expect-gpu)        # "true" | "false"
 LIFECYCLE=$(meta instance/attributes/deg-lifecycle)          # "stop" | "delete" | "keep"
 MAX_RUN_MIN=$(meta instance/attributes/deg-max-run-min)
+MODE=$(meta instance/attributes/deg-mode)                    # "" (a job) | "gpu-test" (issue #759: run `pytest -m gpu` in the image)
 NAME=$(meta instance/name)
 ZONE=$(basename "$(meta instance/zone)")
 PROJECT=$(meta project/project-id)
@@ -188,9 +189,136 @@ keep_hold() {
   cleanup "$after"
 }
 
+# gpu_test_early_fail CODE MESSAGE (issue #759): in gpu-test mode, a failure BEFORE the tests can start (GPU not visible, image pull
+# failed) still ends in gpu-test.log and, LAST, gpu-test-result.json, so scripts/cloud_gpu_test.ps1 stops polling at once instead of
+# waiting out its whole deadline. Outside gpu-test mode it does nothing (a job reports through status.json and result.json). exitCode 7
+# is the infrastructure failure; "error" carries the code. GPU_TEST_LOG / GPU_TEST_RESULT exist so a test can point the files elsewhere.
+gpu_test_early_fail() {
+  [ "$MODE" = "gpu-test" ] || return 0
+  local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
+  echo "ERROR: $1: $2" > "$log"
+  put_object "$log" "jobs/${JOB}/logs/gpu-test.log" || true
+  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":7,"timedOut":false,"error":"%s","image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
+    "$JOB" "$1" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
+  put_object "$result" "jobs/${JOB}/logs/gpu-test-result.json" || true
+}
+
+# The Hugging Face cache the container mounts (-v /var/cache/deg-hf:/hf-cache, HF_HOME): created and handed to the container's uid 10001 BEFORE any docker run, the
+# gpu-test run below included.
+mkdir -p /var/cache/deg-hf
+chown 10001:10001 /var/cache/deg-hf
+
+# gpu_test_run (issue #759, scripts/cloud_gpu_test.ps1): the whole of gpu-test mode. Runs `pytest -m gpu` inside the image (the
+# image must carry pytest and worker/tests, see Dockerfile.cuda), uploads the log and then, LAST, gpu-test-result.json (the file
+# the caller polls for, like result.json for a job), and applies the lifecycle. Returns pytest's exit code.
+#   - The deadline is counted from BOOT (/proc/uptime, like keep_hold: the GPU wait and the image pull already used part of
+#     maxRunDuration) and ends 10 minutes before maxRunDuration (at least 60 s), so a hung test is cut off before Compute Engine
+#     kills the VM.
+#   - The container runs under `--init` with a NAME. `timeout` signals the docker CLI, and with python as PID 1 (no SIGTERM handler)
+#     the signal never reached the tests; tini forwards it. `timeout -k 30` escalates to KILL, and on a timeout `docker kill <name>`
+#     stops the container itself. exit 124 is normalised for both timeout outcomes.
+#   - The tests are selected by COLLECTION (`pytest --collect-only -m gpu` per file inside the image), not by grepping file text: a
+#     file that only mentions the marker is not run and a marker set another way is not missed. A file that cannot be collected and
+#     carries a gpu marker FAILS the run (exit 6, error GPU_TEST_COLLECTION_ERROR); one that needs a dev-only dependency and has no
+#     marker is named in the log and left out.
+# GPU_TEST_LOG / GPU_TEST_RESULT / GPU_TEST_UPTIME_FILE exist so a test can point the files somewhere writable.
+gpu_test_run() {
+  local log="${GPU_TEST_LOG:-/var/log/deg-gpu-test.log}" result="${GPU_TEST_RESULT:-/tmp/deg-gpu-test-result.json}"
+  local cname="deg-gputest-${JOB}" up limit rc timed_out=false started=$SECONDS select_py err="" err_json=null tee_rc=0 rcs elapsed
+  up=$(cut -d. -f1 "${GPU_TEST_UPTIME_FILE:-/proc/uptime}" 2>/dev/null)
+  limit=$(( (MAX_RUN_MIN - 10) * 60 - ${up:-$SECONDS} ))
+  if [ "$limit" -lt 60 ]; then
+    limit=60
+  fi
+  select_py=$(cat <<'PY'
+import glob, re, subprocess, sys
+files, bad = [], []
+for f in sorted(glob.glob("tests/test_*.py")):
+    name = f.replace("\\", "/")
+    r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", "gpu", "-p", "no:cacheprovider", f],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        files.append(f)
+    elif r.returncode != 5:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            marked = re.search(r"mark\.gpu|pytestmark", fh.read())
+        if marked:
+            bad.append(name)
+            print("ERROR: gpu test file could not be collected:", name, flush=True)
+        else:
+            print("not collected (needs a dev-only dependency, carries no gpu marker):", name, flush=True)
+rc = 5
+if files:
+    rc = subprocess.call([sys.executable, "-m", "pytest", "-m", "gpu", "-p", "no:cacheprovider", "-q", "-ra", *files])
+elif not bad:
+    print("no gpu test files found", flush=True)
+if bad and rc in (0, 5):
+    rc = 6
+sys.exit(rc)
+PY
+)
+  status running
+  docker rm -f "$cname" >/dev/null 2>&1 || true  # a leftover of an earlier boot of this job would block --name
+  if timeout -k 30 "$limit" docker run --rm --init --name "$cname" \
+    "${GPU_FLAGS[@]}" --shm-size=8g \
+    -v /var/cache/deg-hf:/hf-cache \
+    -e HF_HOME=/hf-cache \
+    -w /opt/worker \
+    "$IMAGE" \
+    python -c "$select_py" 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rcs=("${PIPESTATUS[@]}")
+    rc=${rcs[0]}
+    tee_rc=${rcs[1]:-0}
+  fi
+  # A log that could not be written is not a pass: under pipefail a failing tee also lands in the else branch, but with docker's rc 0.
+  if [ "$rc" = "0" ] && { [ "$tee_rc" != "0" ] || [ ! -s "$log" ]; }; then
+    echo "ERROR: the test log could not be written (exit 8), so nothing can be shown to have passed."
+    rc=8
+    err=GPU_TEST_LOG_NOT_WRITTEN
+  fi
+  # 124: `timeout` ended it; 137 after the full limit: the -k KILL had to finish it. Either way stop the container by name.
+  # GPU_TEST_ELAPSED lets a test stand in for the time the tests took.
+  elapsed=${GPU_TEST_ELAPSED:-$(( SECONDS - started ))}
+  if [ "$rc" = "124" ] || { [ "$rc" = "137" ] && [ "$elapsed" -ge "$limit" ]; }; then
+    timed_out=true
+    rc=124
+    docker kill "$cname" || true
+  fi
+  # A skipped GPU test is not a pass: with torch or evo2 not importable every gpu test skips itself and pytest still exits 0.
+  # Exit code 6 says "the GPU tests did not really run".
+  if [ "$rc" = "0" ] && grep -Eq '[0-9]+ skipped|no tests ran' "$log"; then
+    echo "ERROR: pytest -m gpu skipped tests or ran none, so nothing was proven (exit 6): is the GPU stack importable in the image?"
+    rc=6
+  fi
+  # A gpu-marked file that could not be collected means a gpu test never ran: the run cannot pass on the other files.
+  if grep -q '^ERROR: gpu test file could not be collected' "$log" 2>/dev/null; then
+    err=GPU_TEST_COLLECTION_ERROR
+    if [ "$rc" = "0" ]; then
+      rc=6
+    fi
+  fi
+  if [ -n "$err" ]; then
+    err_json="\"$err\""
+  fi
+  put_object "$log" "jobs/${JOB}/logs/gpu-test.log" || true
+  printf '{"schema":1,"jobId":"%s","mode":"gpu-test","exitCode":%s,"timedOut":%s,"error":%s,"image":"%s","vm":{"name":"%s","zone":"%s"},"finishedAt":"%s"}\n' \
+    "$JOB" "$rc" "$timed_out" "$err_json" "$IMAGE" "$NAME" "$ZONE" "$(date -u +%FT%TZ)" > "$result"
+  if [ "$rc" = "0" ]; then
+    status "done"
+  else
+    status failed '{"code":"GPU_TESTS_FAILED","retriable":false}'
+  fi
+  put_object "$result" "jobs/${JOB}/logs/gpu-test-result.json" || true
+  cleanup "$LIFECYCLE"
+  return "$rc"
+}
+
 # Any uncaught error anywhere below this line reports WORKER_CRASH and applies the
 # configured lifecycle rather than leaving the VM to bill silently forever.
-trap 'status failed "{\"code\":\"WORKER_CRASH\",\"retriable\":false}"; cleanup "$LIFECYCLE"' ERR
+# In gpu-test mode the early-failure result is written too, so the caller does not wait out its deadline (a no-op for a job).
+trap 'status failed "{\"code\":\"WORKER_CRASH\",\"retriable\":false}"; gpu_test_early_fail WORKER_CRASH "an unexpected error stopped the boot steps"; cleanup "$LIFECYCLE"' ERR
 
 # Deadman: if nothing else ever calls cleanup (e.g. this script itself hangs before
 # reaching one), the guest shuts down MAX_RUN_MIN+15 minutes after boot. This is a LAST
@@ -203,7 +331,15 @@ shutdown -h "+$(( MAX_RUN_MIN + 15 ))" &
 # startup-script re-runs on every boot, including a restart after STOP. If a previous boot
 # already reached a terminal stage, do not repeat the whole install/run cycle — just apply
 # the lifecycle again (harmless if it already happened) and exit clean.
-if get_object "jobs/${JOB}/status.json" 2>/dev/null | grep -Eq '"stage":"(done|failed|cancelled)"'; then
+# gpu-test mode keys on its OWN result object: a reused job id can carry an old status.json=done from an earlier run, which must not
+# make a fresh VM skip the tests (the caller also refuses a job id whose result object already exists).
+if [ "$MODE" = "gpu-test" ]; then
+  gpu_done=$(get_object "jobs/${JOB}/logs/gpu-test-result.json" 2>/dev/null || true)
+  if [ -n "$gpu_done" ]; then
+    cleanup "$LIFECYCLE"
+    exit 0
+  fi
+elif get_object "jobs/${JOB}/status.json" 2>/dev/null | grep -Eq '"stage":"(done|failed|cancelled)"'; then
   cleanup "$LIFECYCLE"
   exit 0
 fi
@@ -223,6 +359,7 @@ if [ "$EXPECT_GPU" = "true" ]; then
   done
   if [ "$gpu_up" != true ]; then
     status failed '{"code":"GPU_NOT_VISIBLE","message":"GPU driver did not come up within 5 minutes","retriable":false}'
+    gpu_test_early_fail GPU_NOT_VISIBLE "GPU driver did not come up within 5 minutes"
     cleanup delete  # a box whose GPU never came up is not worth stopping-and-reusing
     exit 1
   fi
@@ -235,8 +372,22 @@ status installing
 # tag) so every VM in a batch, and every retry, runs byte-identical bits.
 if ! docker pull "$IMAGE"; then
   status failed '{"code":"IMAGE_PULL_FAILED","retriable":true}'
+  gpu_test_early_fail IMAGE_PULL_FAILED "docker pull of the worker image failed"
   cleanup "$LIFECYCLE"
   exit 1
+fi
+
+# `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
+GPU_FLAGS=()
+if [ "$EXPECT_GPU" = "true" ]; then
+  GPU_FLAGS=(--gpus all)
+fi
+
+# gpu-test mode (issue #759): no manifest, no job; run the GPU tests in the image and finish. `|| exit 1` (not a bare call) keeps
+# a failing pytest from tripping the ERR trap, which would overwrite the status and apply the lifecycle a second time.
+if [ "$MODE" = "gpu-test" ]; then
+  gpu_test_run || exit 1
+  exit 0
 fi
 
 mkdir -p /work
@@ -252,15 +403,9 @@ fi
 # container is handed off; it only interprets the container's own exit code below.
 # Issue #75: the worker image runs as uid 10001 (Dockerfile.cuda `USER worker`), so the
 # Hugging Face cache must be a folder that uid can write, and HF_HOME must point at it:
-# the old `/root/.cache/huggingface` mount was never read or written by that user.
+# the old `/root/.cache/huggingface` mount was never read or written by that user (the folder
+# is made, and GPU_FLAGS set, above the gpu-test branch because both modes need them).
 foreign_zone_exit  # last look before the worker container writes anything (#670)
-mkdir -p /var/cache/deg-hf
-chown 10001:10001 /var/cache/deg-hf
-# `--gpus all` only when a GPU is expected: the CPU smoke VM boots the same image with no GPU (issue #56), and docker run fails on it with the flag.
-GPU_FLAGS=()
-if [ "$EXPECT_GPU" = "true" ]; then
-  GPU_FLAGS=(--gpus all)
-fi
 docker run --rm \
   "${GPU_FLAGS[@]}" --shm-size=8g \
   -v /work:/work \
@@ -272,8 +417,12 @@ docker run --rm \
   -e DEG_ZONE="$ZONE" \
   -e DEG_PROJECT="$PROJECT" \
   "$IMAGE" \
-  dna-entropy-worker run --manifest /work/manifest.json --store gcs
-rc=$?
+  dna-entropy-worker run --manifest /work/manifest.json --store gcs \
+  && rc=0 || rc=$?
+# `&& ... || rc=$?` makes the non-zero exit a tested condition, so the ERR trap does not fire
+# on the worker's legitimate exit codes (2, 3, 10, 11): the trap used to overwrite the
+# worker's own terminal status.json with WORKER_CRASH and run cleanup a second time (#494,
+# MEASURED 2026-10-15 against the real trap line with a stub docker).
 
 # worker/src/dna_entropy/worker/cli.py's exit-code contract:
 #   0 done | 2 failed | 3 cancelled | 10 stopped-by-worker | 11 deleted-by-worker
@@ -285,6 +434,11 @@ rc=$?
 # backstop. With lifecycle=keep the 0/2/3 branch goes to keep_hold: DECISION (agent-made on
 # the owner's behalf, reversible): only rc 0 is held for the keep-alive window; rc 2 and 3
 # apply afterKeepAlive at once.
+# docker itself failed (125-127) or the container was killed (137, OOM): the worker never wrote
+# its own terminal state, so report the crash here, once.
+if [ "$rc" != 0 ] && [ "$rc" != 2 ] && [ "$rc" != 3 ] && [ "$rc" != 10 ] && [ "$rc" != 11 ]; then
+  status failed '{"code":"WORKER_CRASH","retriable":false}'
+fi
 case $rc in
   10|11)
     kill "$RELAY_PID" 2>/dev/null || true

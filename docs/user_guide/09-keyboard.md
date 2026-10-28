@@ -12,6 +12,11 @@ You can use the whole app without a mouse.
 | Ctrl+, | Go to **Settings**. |
 | Alt+Left | Go back to the page you were on. |
 | Esc | Close a question box without choosing. |
+| Left or Right arrow | Move along the sequence in the viewer by a quarter of what you see. |
+| + and - | Zoom in or out in the viewer. |
+| Home or 1 | Show the whole sequence record in the viewer. |
+| 2 or 3 | Show 10 kb or 1 kb around the middle of what you see in the viewer. |
+| Ctrl+L | Put the cursor in the viewer's position box, ready to type a place such as `chr1:100-500`. |
 | Alt, then N, R, C or S | Jump to New run, Runs, Cloud or Settings. Press Alt once and the letters show on the left menu. |
 
 If the clipboard has no text, the app says so and leaves the box as it was: copy your sequence and press Ctrl+Shift+V again.
