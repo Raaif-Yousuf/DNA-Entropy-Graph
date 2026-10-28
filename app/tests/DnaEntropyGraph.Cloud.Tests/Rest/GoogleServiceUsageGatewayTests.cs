@@ -12,6 +12,9 @@ namespace DnaEntropyGraph.Cloud.Tests.Rest;
 /// </summary>
 public class GoogleServiceUsageGatewayTests
 {
+    /// <summary>Real-time ceiling on a test whose subject is a hung call: it only turns a hang into a failure, it never decides a timing assertion.</summary>
+    private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(20);
+
     private const string Compute = "/v1/projects/my-lab/services/compute.googleapis.com";
     private const string Storage = "/v1/projects/my-lab/services/storage.googleapis.com";
     private const string Quotas = "/v1/projects/my-lab/services/cloudquotas.googleapis.com";
@@ -113,8 +116,8 @@ public class GoogleServiceUsageGatewayTests
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
         ex.Kind.ShouldBe(CloudErrorKind.Network);
-        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(9, 10);
+        // The clock stands still, so the POST costs the budget nothing and the waits add up to exactly the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(10);
     }
 
     [Fact]
@@ -229,8 +232,8 @@ public class GoogleServiceUsageGatewayTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
-        // The POST's own (tiny) wall time comes off the one budget, so the waits add up to just under the deadline.
-        rig.Delays.Sum(d => d.TotalSeconds).ShouldBeInRange(19, 20);
+        // The clock stands still, so the POST costs the budget nothing and the waits add up to exactly the deadline.
+        rig.Delays.Sum(d => d.TotalSeconds).ShouldBe(20);
     }
 
     [Fact]
@@ -279,11 +282,9 @@ public class GoogleServiceUsageGatewayTests
         var rig = new GoogleGatewayHarness(operationDeadline: TimeSpan.FromMilliseconds(300), retries: 3);
         rig.Handler.Returns(Post, BatchEnable, 200, OperationDone).Hangs(Get, Compute);
 
-        var started = System.Diagnostics.Stopwatch.StartNew();
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None).WaitAsync(Watchdog, TestContext.Current.CancellationToken));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
-        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30));
         rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
         rig.Handler.To(Get, Compute).Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();
@@ -296,15 +297,30 @@ public class GoogleServiceUsageGatewayTests
         // their own HTTP timeouts before the poll's clock starts.
         var deadline = TimeSpan.FromMilliseconds(600);
         var rig = new GoogleGatewayHarness(operationDeadline: deadline, retries: 3);
-        rig.Handler.Hangs(Post, BatchEnable);
+        // This test moves the clock itself, a sixth of the deadline at a time, once the POST is parked: the call must still be waiting
+        // before the deadline and must be cut when the clock reads it.
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Handler.Hangs(Post, BatchEnable).OnHang = () => parked.TrySetResult();
 
-        var started = System.Diagnostics.Stopwatch.StartNew();
+        var started = rig.Clock.GetTimestamp();
         var call = rig.Gateways.Services.EnableServicesAsync("my-lab", RequiredServices.Ids, CancellationToken.None);
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => call.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        await parked.Task.WaitAsync(Watchdog, TestContext.Current.CancellationToken);
+        var step = deadline / 6;
+        while (rig.Clock.GetElapsedTime(started) < deadline)
+        {
+            rig.Clock.Advance(step);
+            if (rig.Clock.GetElapsedTime(started) < deadline)
+            {
+                // Real time is kept on purpose: it can only let an early cut show itself, it never decides pass over fail on its own.
+                await Task.WhenAny(call, Task.Delay(50, TestContext.Current.CancellationToken));
+                call.IsCompleted.ShouldBeFalse($"the call was cut at {rig.Clock.GetElapsedTime(started).TotalMilliseconds:0} ms, before its {deadline.TotalMilliseconds:0} ms deadline");
+            }
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => call.WaitAsync(Watchdog, TestContext.Current.CancellationToken));
 
         ex.Error.Code.ShouldBe(OperationPoller.TimeoutCode);
-        started.Elapsed.ShouldBeGreaterThanOrEqualTo(deadline - TimeSpan.FromMilliseconds(100));
-        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
+        rig.Clock.GetElapsedTime(started).ShouldBe(deadline, "the hung POST was cut when the clock reached the deadline, and nothing moved it further");
         rig.Handler.To(Post, BatchEnable).Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();
     }
