@@ -59,13 +59,19 @@ def g2_and_disk() -> list[dict]:
     ]
 
 
+def resolve_ok(skus: list[dict], shipped: dict, as_of: str) -> dict:
+    doc = gen.resolve(skus, shipped, as_of)
+    assert doc is not None
+    return doc
+
+
 @pytest.fixture
 def shipped() -> dict:
     return json.loads(SHIPPED.read_text(encoding="utf-8"))
 
 
 def test_g2_standard_8_is_cores_plus_memory_plus_one_gpu_on_demand_and_spot(shipped):
-    doc = gen.resolve(g2_and_disk(), shipped, "2026-10-16")
+    doc = resolve_ok(g2_and_disk(), shipped, "2026-10-16")
 
     machine = doc["machines"]["g2-standard-8"]
     assert machine["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
@@ -75,7 +81,7 @@ def test_g2_standard_8_is_cores_plus_memory_plus_one_gpu_on_demand_and_spot(ship
 
 
 def test_machines_the_catalog_does_not_price_keep_the_previous_row_and_the_source_names_them(shipped):
-    doc = gen.resolve(g2_and_disk(), shipped, "2026-10-16")
+    doc = resolve_ok(g2_and_disk(), shipped, "2026-10-16")
 
     assert doc["machines"]["a2-highgpu-1g"] == shipped["machines"]["a2-highgpu-1g"]
     assert "a2-highgpu-1g" in doc["source"]
@@ -84,7 +90,7 @@ def test_machines_the_catalog_does_not_price_keep_the_previous_row_and_the_sourc
 def test_an_unresolved_spot_price_keeps_the_previous_spot_price_and_says_so(shipped):
     skus = [s for s in g2_and_disk() if s["category"]["usageType"] != "Preemptible"]
 
-    doc = gen.resolve(skus, shipped, "2026-10-16")
+    doc = resolve_ok(skus, shipped, "2026-10-16")
 
     assert doc["machines"]["g2-standard-8"]["spotUsdPerHour"] == shipped["machines"]["g2-standard-8"]["spotUsdPerHour"]
     assert "Spot price kept" in doc["source"] and "g2-standard-8" in doc["source"]
@@ -103,7 +109,7 @@ def test_the_pricing_entry_in_force_wins_whatever_the_order(shipped):
     now_entry["effectiveTime"] = "2026-10-01T00:00:00Z"
     core["pricingInfo"] = [now_entry, old, future]
 
-    doc = gen.resolve(skus, shipped, "2026-10-16")
+    doc = resolve_ok(skus, shipped, "2026-10-16")
 
     assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
 
@@ -120,7 +126,7 @@ def test_two_prices_for_one_component_is_not_resolved(shipped):
 
 
 def test_the_output_parses_as_a_price_list_of_the_apps_own_schema(shipped):
-    doc = gen.resolve(g2_and_disk(), shipped, "2026-10-16")
+    doc = resolve_ok(g2_and_disk(), shipped, "2026-10-16")
 
     assert doc["schema"] == 1 and doc["currency"] == "USD"
     assert all(m["onDemandUsdPerHour"] > 0 for m in doc["machines"].values())
@@ -168,6 +174,6 @@ def test_a_date_only_or_naive_effective_time_is_read_as_utc_and_never_raises(shi
     future["pricingExpression"]["tieredRates"][1]["unitPrice"]["nanos"] = 900_000_000
     skus[0]["pricingInfo"] = [naive, future, dated]
 
-    doc = gen.resolve(skus, shipped, "2026-10-16")
+    doc = resolve_ok(skus, shipped, "2026-10-16")
 
     assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)

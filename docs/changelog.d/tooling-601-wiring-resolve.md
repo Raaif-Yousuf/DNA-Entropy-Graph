@@ -1,0 +1,1 @@
+- check_app_wiring.py: UNREGISTERED-RESOLVE (#601) now reads generic `GetRequiredService<IOptions<X>>()`, every production file (not only ServiceRegistration.cs), and treats method-group and any-argument registrations as factories and a cast-bodied factory as registering its cast type. Real tree: 138 resolves checked, no new findings.

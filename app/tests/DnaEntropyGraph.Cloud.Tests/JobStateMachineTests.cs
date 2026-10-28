@@ -38,6 +38,21 @@ public class JobStateMachineTests
     }
 
     [Theory]
+    [InlineData(JobPhase.Preparing, JobPhase.Provisioning)]
+    [InlineData(JobPhase.Running, JobPhase.Provisioning)]
+    public void A_preempted_Spot_run_may_go_back_to_Provisioning_for_its_one_retry(JobPhase from, JobPhase to)
+    {
+        JobStateMachine.IsLegalTransition(from, to).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Only_a_run_with_a_VM_underway_may_go_back_to_Provisioning()
+    {
+        JobStateMachine.IsLegalTransition(JobPhase.Finalizing, JobPhase.Provisioning).ShouldBeFalse();
+        JobStateMachine.IsLegalTransition(JobPhase.Downloading, JobPhase.Provisioning).ShouldBeFalse();
+    }
+
+    [Theory]
     [InlineData(JobPhase.Draft, JobPhase.Running)]
     [InlineData(JobPhase.Completed, JobPhase.Running)]
     [InlineData(JobPhase.Running, JobPhase.Draft)]

@@ -177,6 +177,10 @@ the budget themselves or give you the Billing Account Costs Manager role, press 
 This alert only emails you; it does not stop anything from running. Use the spending cap in
 Settings to stop new runs.
 
+## Spot computers
+
+A Spot computer is a cheaper rented computer that Google can take back (Spot). It is off in this version and the New run page has no switch for it yet. When it is on and Google takes the computer back in the middle of a run, the app deletes it and starts the run again, once, on a normal computer, so the run still finishes; the run's history row records the one interruption.
+
 ## Related
 
 [03-run.md](03-run.md), where the live cost estimate appears before you press Run.

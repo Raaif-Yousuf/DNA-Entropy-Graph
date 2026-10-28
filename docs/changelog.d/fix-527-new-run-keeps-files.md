@@ -1,0 +1,1 @@
+- New run keeps its files, selection and pasted text when you open another page and come back, and empties itself once a run has started (#527).

@@ -541,7 +541,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// </summary>
     private async Task<ProvisionResult?> TryReuseAsync(CloudJobRequest request, VmSpec spec, RunProgress progress, CancellationToken cancellationToken)
     {
-        if (jobIsFinished is null)
+        // Issue #91: a stopped VM does not say whether it was created Spot, and a Spot run must start a Spot VM (and an on-demand one must not
+        // start a Spot VM), so a Spot run never reuses one. THEORY (unverified): reuse of an on-demand VM by a later run after a Spot run left its own stopped VM is judged by machine type only.
+        if (jobIsFinished is null || spec.Spot)
         {
             return null;
         }
