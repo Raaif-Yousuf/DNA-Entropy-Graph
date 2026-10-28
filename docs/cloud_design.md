@@ -451,8 +451,12 @@ this repo's redaction rules). Consequences this drives directly:
  `/proc/uptime` and capped 10 minutes before `maxRunDuration`, then applies
  `afterKeepAlive` (default stop). Only a successful run (exit 0) is held; a failed or
  cancelled run applies `afterKeepAlive` at once (DECISION, agent-made, reversible: an idle
- GPU after a run that produced nothing is pure cost). The app cannot send a window yet
- (#476), so today every keep run is held for 0 minutes.
+ GPU after a run that produced nothing is pure cost). The app sends the window:
+ `WorkerManifestBuilder` writes `lifecycle.afterTask/keepAliveMinutes/afterKeepAlive` from
+ `RunOptions` (issue #476), and `WorkerManifestParityFixtureTests` plus
+ `worker/tests/test_app_manifest_parity.py` prove the app-built manifests under
+ `tests/contract-fixtures/app_manifests/` validate against `manifest.schema.json` and parse
+ with the worker's `JobManifest.parse`.
 - A `shutdown -h +N` deadman is armed as a genuine last resort only, in case the API call
  itself is what failed.
 - The app **independently verifies** the VM reached its terminal state after
