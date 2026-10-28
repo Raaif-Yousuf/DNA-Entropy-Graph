@@ -296,9 +296,10 @@ laptop) - the honest state, not silently passed.
 for Python, GitHub Actions, and (added this session, now that `app/` exists per #61) C#,
 with an explicit `dotnet restore`/`build` step for the C# language rather than relying on
 `autobuild`'s heuristics against an unpackaged, central-package-managed WinUI 3 solution.
-The C# build is `src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj` only (#761, #653), not the
-solution: the App project references every `app/src` project, so the extractor sees all product
-code and no test project. MEASURED 2026-10-28: test stubs `IStringResourceProvider.GetString(key) => key`
+The C# build is the App project plus `tools/DnaEntropyGraph.CloudCli` (#761, #653), not the
+solution: the App project references every `app/src` project and CloudCli (not referenced by App)
+is built by name, so the extractor sees all product code and no test project
+(`test_codeql_workflow.py` checks both sets). MEASURED 2026-10-28: test stubs `IStringResourceProvider.GetString(key) => key`
 flowed into product `string.Format(..., GetString(Key), args)` calls and raised
 `cs/invalid-string-formatting` against correct sites (alerts 1383, 1417, 1466, 1467); the only
 product implementation (`ReswStringResourceProvider`) wraps `ResourceLoader`, which CodeQL cannot

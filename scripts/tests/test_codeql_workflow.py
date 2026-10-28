@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "codeql.yml"
 CONFIG = ROOT / ".github" / "codeql" / "codeql-config.yml"
 APP_PROJECT = "src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj"
+TOOLS_PROJECT = "tools/DnaEntropyGraph.CloudCli/DnaEntropyGraph.CloudCli.csproj"
 PATHS = ("app/**", "worker/**", "scripts/**", ".github/workflows/**")
 
 
@@ -123,18 +124,23 @@ def test_csharp_build_is_product_code_only_not_the_solution():
     assert APP_PROJECT in run
 
 
-def test_app_project_reaches_every_product_project_so_the_extractor_sees_all_product_code():
+def test_built_projects_reach_every_product_project_so_the_extractor_sees_all_product_code():
+    # app/src projects are reached through the App project; app/tools (CloudCli) is not referenced by
+    # App, so the workflow must build it by name. Tests are never in either set.
     def refs(csproj: Path) -> set[Path]:
         text = csproj.read_text(encoding="utf-8")
         return {(csproj.parent / r.replace("\\", "/")).resolve() for r in re.findall(r'ProjectReference Include="([^"]+)"', text)}
 
+    built = re.findall(r"dotnet build (\S+\.csproj)", _csharp_build_run())
+    assert APP_PROJECT in built and TOOLS_PROJECT in built, built
     seen: set[Path] = set()
-    todo = [(ROOT / "app" / APP_PROJECT).resolve()]
+    todo = [(ROOT / "app" / b).resolve() for b in built]
     while todo:
         cur = todo.pop()
         if cur not in seen:
             seen.add(cur)
             todo.extend(refs(cur))
-    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")}
-    assert len(product) >= 6, "vacuous: expected the six app/src projects"
-    assert product <= seen, f"not reachable from the App project, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"
+    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")} | {p.resolve() for p in (ROOT / "app" / "tools").glob("*/*.csproj")}
+    assert len(product) >= 7, "vacuous: expected the six app/src projects and CloudCli"
+    assert product <= seen, f"not built or referenced, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"
+    assert not any("tests" in p.parts[-3:] for p in seen), "a test project is in the CodeQL build"

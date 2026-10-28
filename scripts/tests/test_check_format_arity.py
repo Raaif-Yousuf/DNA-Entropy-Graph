@@ -13,6 +13,7 @@ import check_format_arity as cfa  # noqa: E402
 
 SCRIPT = SCRIPTS_DIR / "check_format_arity.py"
 REPO = SCRIPTS_DIR.parent
+VM = "app/src/DnaEntropyGraph.Presentation/Vm.cs"
 
 
 def _resw(**entries: str) -> str:
@@ -33,7 +34,7 @@ def _tree(tmp: Path, resw: str, cs: str, extra_cs: str = "") -> Path:
 
 
 def _codes(tmp: Path) -> list[tuple[str, str]]:
-    return [(f.code, f.key) for f in cfa.scan_repo(tmp).findings]
+    return [(f.code, f.key) for f in cfa.scan_repo(tmp, known_dynamic={}).findings]
 
 
 def test_matching_arity_is_clean(tmp_path):
@@ -74,7 +75,7 @@ def test_escaped_braces_are_not_placeholders(tmp_path):
 
 def test_dynamic_key_and_params_spread_are_skipped_and_counted(tmp_path):
     cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);\nvar t = string.Format(_strings.GetString("A"), args);'  # noqa: E501
-    result = cfa.scan_repo(_tree(tmp_path, _resw(A="{0}"), cs))
+    result = cfa.scan_repo(_tree(tmp_path, _resw(A="{0}"), cs), known_dynamic={VM: 2})
     assert result.findings == [] and result.checked == 0 and result.skipped == 2
 
 
@@ -103,3 +104,82 @@ def test_script_exits_one_on_a_planted_mismatch(tmp_path):
     root = _tree(tmp_path, _resw(A="x {0}"), 'var s = string.Format(_strings.GetString("A"), a, b);')
     p = subprocess.run([sys.executable, str(SCRIPT), "--root", str(root)], capture_output=True, text=True, check=False)
     assert p.returncode == 1 and "TOO-MANY-ARGS" in p.stderr
+
+
+def test_comments_of_every_form_are_ignored(tmp_path):
+    cs = (
+        '/// <summary>string.Format(_strings.GetString("A"), a, b)</summary>\n'
+        '/* string.Format(_strings.GetString("A"), a, b, c) */\n'
+        '// string.Format(_strings.GetString("A"), a, b)\n'
+        'var s = string.Format(_strings.GetString("A"), a);\n'
+    )
+    assert _codes(_tree(tmp_path, _resw(A="{0}"), cs)) == []
+
+
+def test_comment_markers_inside_strings_and_char_literals_do_not_hide_a_mismatch(tmp_path):
+    cs = 'var s = string.Format(_strings.GetString("A"), "http://x", \'"\', \'/\', "/* not a comment");'
+    assert _codes(_tree(tmp_path, _resw(A="{0}"), cs)) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_raw_string_argument_counts_as_one_argument(tmp_path):
+    cs = 'var s = string.Format(_strings.GetString("A"), """a, "b", c""", x);'
+    assert _codes(_tree(tmp_path, _resw(A="{0} {1}"), cs)) == []
+
+
+def test_new_object_array_argument_is_expanded(tmp_path):
+    cs = 'var s = string.Format(_strings.GetString("A"), new object[] { a, b, c });'
+    assert _codes(_tree(tmp_path, _resw(A="{0} {1}"), cs)) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_const_in_a_nested_type_and_static_readonly_keys_resolve(tmp_path):
+    copy = (
+        "static class Outer {\n"
+        '    public const string First = "K_First";\n'
+        '    public static class Inner { public const string Deep = "K_Deep"; }\n'
+        '    public static readonly string After = "K_After";\n'
+        "}\n"
+    )
+    cs = (
+        "var a = string.Format(_strings.GetString(Outer.Inner.Deep), x, y);\n"
+        "var b = string.Format(_strings.GetString(Outer.After), x, y);\n"
+        "var c = string.Format(_strings.GetString(Outer.First), x, y);\n"
+    )
+    root = _tree(tmp_path, _resw(K_First="{0}", K_Deep="{0}", K_After="{0}"), cs, copy)
+    assert _codes(root) == [("TOO-MANY-ARGS", "K_Deep"), ("TOO-MANY-ARGS", "K_After"), ("TOO-MANY-ARGS", "K_First")]
+
+
+def test_every_resw_is_read_not_only_the_first(tmp_path):
+    root = _tree(tmp_path, _resw(A="plain"), 'var s = string.Format(_strings.GetString("B"), a, b);')
+    other = root / "app" / "src" / "Other" / "Strings" / "en-US"
+    other.mkdir(parents=True)
+    (other / "Resources.resw").write_text(_resw(B="{0}"), encoding="utf-8", newline="\n")
+    assert _codes(root) == [("TOO-MANY-ARGS", "B")]
+
+
+def test_an_unlisted_dynamic_site_is_a_finding(tmp_path):
+    root = _tree(tmp_path, _resw(A="plain"), "var s = string.Format(_strings.GetString(key), a);")
+    assert _codes(root) == [("UNEXPECTED-DYNAMIC", "")]
+
+
+def test_a_stale_dynamic_allowlist_entry_is_a_finding(tmp_path):
+    root = _tree(tmp_path, _resw(A="{0}"), 'var s = string.Format(_strings.GetString("A"), a);')
+    codes = [f.code for f in cfa.scan_repo(root, known_dynamic={VM: 1}).findings]
+    assert codes == ["STALE-DYNAMIC-ALLOWLIST"]
+
+
+def test_the_real_allowlist_is_exact():
+    assert cfa.KNOWN_DYNAMIC, "the allowlist is empty: the wrappers it names moved or the scanner stopped seeing them"
+    assert sum(cfa.KNOWN_DYNAMIC.values()) == cfa.scan_repo(REPO).skipped
+
+
+def test_script_fails_when_it_checked_fewer_sites_than_the_floor(tmp_path):
+    root = _tree(tmp_path, _resw(A="{0}"), 'var s = string.Format(_strings.GetString("A"), a);')
+    p = subprocess.run([sys.executable, str(SCRIPT), "--root", str(root)], capture_output=True, text=True, check=False)
+    assert p.returncode == 1 and "floor" in p.stderr
+    ok = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), "--min-checked", "1", "--no-dynamic-check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stderr
