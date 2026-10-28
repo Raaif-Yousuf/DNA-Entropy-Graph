@@ -55,6 +55,11 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.DeleteVm", token => _inner.DeleteVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);
 
+    // Issue #113: stop/delete that says when the request was accepted. Like StopVm and DeleteVm it is cleanup that stops the meter, so it bypasses the breaker;
+    // a replayed attempt re-sends an idempotent stop or delete and may call onAccepted again (it must be idempotent).
+    public Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.EndVm", token => _inner.EndVmAsync(vmName, zone, delete, onAccepted, token), cancellationToken, bypassBreaker: true);
+
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.FindByJobId", token => _inner.FindByJobIdAsync(jobId, token), cancellationToken, bypassBreaker: true);
 

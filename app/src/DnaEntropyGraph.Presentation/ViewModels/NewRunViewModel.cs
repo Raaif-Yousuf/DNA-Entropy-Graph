@@ -20,14 +20,11 @@ namespace DnaEntropyGraph.Presentation.ViewModels;
 /// </summary>
 public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 {
-    // The model the New run page runs. There is no model picker on the page yet (a bigger model needs a confirmation
-    // and a cost estimate first), so this is the one model the app offers, not a property nothing binds.
+    // The model the page starts with, used where a default RunOptions is wanted (the boot disk and context length defaults). The model a run
+    // really uses comes from the linked pickers (Gpu, issue #87), which start on the first model the catalog offers: this one.
     private const string DefaultModelId = "evo2_7b";
 
-    // The tier and VM kind the page's Run uses (RunOptions defaults: the cheapest GPU, on-demand), so the estimate prices the
-    // machine a run on this page really starts. When a tier or Spot picker lands it must feed both StartRunAsync and the estimate.
-    private const GpuTier DefaultTier = GpuTier.CheapestAvailable;
-    private static readonly bool DefaultSpot = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.SpotVm;
+    // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
 
     // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
     private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
@@ -105,6 +102,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         ICostEstimateService estimates,
         OutputSelectionStore outputStore,
         IDiagnosticsLog log,
+        GpuPlanViewModel gpu,
         Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult>? validate = null,
         IInputFileSystem? files = null,
         NewRunIntake? intake = null,
@@ -116,6 +114,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IAccessionLookup? accessionLookup = null,
         RunTargetPickerViewModel? runTarget = null)
     {
+        // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
+        Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
+        Gpu.Changed += OnGpuPlanChanged;
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
         RunTarget = runTarget;
@@ -211,6 +212,15 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     partial void OnAccessionStartTextChanged(string value) => AccessionMessage = string.Empty;
 
     partial void OnAccessionEndTextChanged(string value) => AccessionMessage = string.Empty;
+
+    /// <summary>The linked model and graphics card pickers (issue #87): what a run uses, what it costs, and whether Run waits for a confirmation.</summary>
+    public GpuPlanViewModel Gpu { get; }
+
+    private void OnGpuPlanChanged()
+    {
+        StartRunCommand.NotifyCanExecuteChanged();
+        _ = RefreshEstimateAsync();
+    }
 
     /// <summary>The option preset picker (issue #136); null in a host that offers none.</summary>
     public PresetPickerViewModel? Presets { get; }
@@ -876,8 +886,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var outputs = _outputSelections[group];
         var options = new RunOptions
         {
-            ModelId = DefaultModelId,
+            ModelId = Gpu.ModelId,
             RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
+            GpuTier = Gpu.Tier,
+            SpotVm = Gpu.RequiresSpot,
             InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
             AnnotationPath = SelectedItem.AnnotationPath,
             Accession = SelectedItem.Accession,
@@ -934,7 +946,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && Gpu.IsRunnable;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -1072,7 +1084,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         string diskText;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(DefaultTier), DefaultSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), Gpu.RequiresSpot, bases, DefaultBootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))

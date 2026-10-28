@@ -4,6 +4,42 @@ namespace DnaEntropyGraph.Core.Inputs;
 internal sealed record GenBankTableFeature(string Key, string Location);
 
 /// <summary>
+/// What differs between the two scanners that share Biopython's <c>InsdcScanner.parse_features</c>: GenBank (<c>FEATURES</c>, columns of spaces)
+/// and EMBL (<c>FH</c> / <c>FT</c>, a <c>FT</c> prefix on every line, <c>XX</c> ending the table, #796).
+/// </summary>
+internal sealed record FeatureTableFormat(
+    string Label,
+    string[] StartMarkers,
+    string[] EndMarkers,
+    string[] SequenceHeaders,
+    int HeaderWidth,
+    string Spacer,
+    string Tail)
+{
+    private const int QualifierIndent = 21; // FEATURE_QUALIFIER_INDENT, the same in both scanners
+
+    /// <summary>Bio.GenBank.Scanner.GenBankScanner; the refusal action is the worker's genbank.py text.</summary>
+    public static FeatureTableFormat GenBank { get; } = new(
+        "GenBank",
+        ["FEATURES             Location/Qualifiers", "FEATURES"],
+        [],
+        ["CONTIG", "ORIGIN", "BASE COUNT", "WGS", "TSA", "TLS"],
+        12,
+        new string(' ', QualifierIndent),
+        ", and that its ORIGIN block matches its own LOCUS/FEATURES.");
+
+    /// <summary>Bio.GenBank.Scanner.EmblScanner; the refusal action is the worker's embl.py text.</summary>
+    public static FeatureTableFormat Embl { get; } = new(
+        "EMBL",
+        ["FH   Key             Location/Qualifiers", "FH"],
+        ["XX"],
+        ["SQ", "CO"],
+        5,
+        "FT" + new string(' ', QualifierIndent - 2),
+        ", or re-export it from the tool that made it.");
+}
+
+/// <summary>
 /// C# port of the feature-table REFUSALS of Biopython's <c>Bio.GenBank.Scanner.GenBankScanner</c>
 /// (<c>parse_features</c> and <c>parse_feature</c>), the parser behind the worker's
 /// <c>readers/genbank.py</c>. Hard Rule 2: a file the worker refuses must be refused here, before a VM
@@ -13,23 +49,31 @@ internal sealed record GenBankTableFeature(string Key, string Location);
 internal static class GenBankFeatureTable
 {
     private const int QualifierIndent = 21; // Scanner.FEATURE_QUALIFIER_INDENT
-    private const int HeaderWidth = 12; // Scanner.HEADER_WIDTH
-    private static readonly string Spacer = new(' ', QualifierIndent); // Scanner.FEATURE_QUALIFIER_SPACER
-    private static readonly string[] StartMarkers = ["FEATURES             Location/Qualifiers", "FEATURES"];
-    private static readonly string[] SequenceHeaders = ["CONTIG", "ORIGIN", "BASE COUNT", "WGS", "TSA", "TLS"];
 
     /// <summary>True for a line Biopython reads as the start of the feature table (<c>line.rstrip() in FEATURE_START_MARKERS</c>).</summary>
-    public static bool IsStartMarker(string line) => Array.IndexOf(StartMarkers, PythonText.TrimEnd(line)) >= 0;
+    public static bool IsStartMarker(string line, FeatureTableFormat? format = null) =>
+        Array.IndexOf((format ?? FeatureTableFormat.GenBank).StartMarkers, PythonText.TrimEnd(line)) >= 0;
 
-    /// <summary>True for a line Biopython reads as the start of the sequence block (<c>line[:12].rstrip() in SEQUENCE_HEADERS</c>).</summary>
-    public static bool IsSequenceHeader(string line) => Array.IndexOf(SequenceHeaders, PythonText.TrimEnd(Slice(line, 0, HeaderWidth))) >= 0;
+    /// <summary>True for a line Biopython reads as the start of the sequence block (<c>line[:HEADER_WIDTH].rstrip() in SEQUENCE_HEADERS</c>).</summary>
+    public static bool IsSequenceHeader(string line, FeatureTableFormat? format = null)
+    {
+        format ??= FeatureTableFormat.GenBank;
+        return Array.IndexOf(format.SequenceHeaders, PythonText.TrimEnd(Slice(line, 0, format.HeaderWidth))) >= 0;
+    }
 
     /// <summary>
     /// Walks the feature table that starts at <paramref name="start" /> (a start-marker line) and throws
     /// <see cref="GenBankReadException" /> where the scanner would raise. <paramref name="recordNumber" /> is the
     /// 1-based record being read (named by index, never by id: a record id is user free text).
     /// </summary>
-    public static List<GenBankTableFeature> Validate(IReadOnlyList<string> lines, int start, int recordNumber)
+    public static List<GenBankTableFeature> Validate(IReadOnlyList<string> lines, int start, int recordNumber) =>
+        Walk(FeatureTableFormat.GenBank, lines, start, recordNumber, out _);
+
+    /// <summary>
+    /// <see cref="Validate" /> for either scanner. <paramref name="end" /> is the index of the line that ended the table (the sequence
+    /// header, or EMBL's <c>XX</c>), not consumed.
+    /// </summary>
+    public static List<GenBankTableFeature> Walk(FeatureTableFormat format, IReadOnlyList<string> lines, int start, int recordNumber, out int end)
     {
         var features = new List<GenBankTableFeature>();
         var count = lines.Count > 0 && lines[^1].Length == 0 ? lines.Count - 1 : lines.Count; // the "" after a final newline is end of file
@@ -60,22 +104,36 @@ internal static class GenBankFeatureTable
         string? Raw(int i) => i < count ? Fold(lines[i]) : null;
 
         var index = start;
-        while (Raw(index) is { } marker && IsStartMarker(marker))
+        while (Raw(index) is { } marker && IsStartMarker(marker, format))
         {
             index++;
         }
 
         while (true)
         {
-            var raw = Raw(index) ?? throw Refuse(recordNumber, "the feature table ends before the sequence starts (a truncated file)");
-            if (IsSequenceHeader(raw))
+            var raw = Raw(index) ?? throw RefuseLikeWorker(recordNumber, "Premature end of line during features table", format);
+            if (IsSequenceHeader(raw, format))
             {
+                end = index;
                 return features;
             }
             var line = PythonText.TrimEnd(raw);
             if (line == "//")
             {
-                throw Refuse(recordNumber, "the feature table ends with the record terminator before the sequence starts");
+                throw RefuseLikeWorker(recordNumber, "Premature end of features table, marker '//' found", format);
+            }
+            if (Array.IndexOf(format.EndMarkers, line) >= 0)
+            {
+                // EmblScanner.parse_footer: the line AFTER the end marker must be the SQ / CO header, or the file is refused. The table walk
+                // above runs over a following record's ID and FH lines as if they were features, so a record that lacks its XX / SQ / //
+                // ends up here (MEASURED 2026-10-16: "Footer format unexpected"). The text the worker echoes is user text, so it is left out.
+                if (!IsSequenceHeader(Raw(index + 1) ?? string.Empty, format))
+                {
+                    throw RefuseLikeWorker(recordNumber, "Footer format unexpected", format);
+                }
+
+                end = index;
+                return features;
             }
             if (PythonText.Trim(Slice(line, 2, QualifierIndent)).Length == 0)
             {
@@ -90,7 +148,7 @@ internal static class GenBankFeatureTable
             if (line.Length == QualifierIndent)
             {
                 // Biopython reads line[21] of the right-stripped line: an IndexError, "string index out of range".
-                throw Refuse(recordNumber, "a feature-table line is shorter than the GenBank layout allows (a misaligned feature key or location)");
+                throw Refuse(recordNumber, "a feature-table line is shorter than the GenBank layout allows (a misaligned feature key or location)", format);
             }
 
             var featureLines = new List<string>();
@@ -102,7 +160,7 @@ internal static class GenBankFeatureTable
                 var cut = rest.ToList().FindIndex(PythonText.IsSpace);
                 if (cut < 0)
                 {
-                    throw Refuse(recordNumber, "a feature key has no location");
+                    throw Refuse(recordNumber, "a feature key has no location", format);
                 }
                 key = rest[..cut];
                 featureLines.Add(PythonText.TrimStart(rest[cut..]));
@@ -113,22 +171,22 @@ internal static class GenBankFeatureTable
                 featureLines.Add(line[QualifierIndent..]);
             }
             index++;
-            while (Raw(index) is { } next && (Slice(next, 0, QualifierIndent) == Spacer || PythonText.TrimEnd(next).Length == 0))
+            while (Raw(index) is { } next && (Slice(next, 0, QualifierIndent) == format.Spacer || PythonText.TrimEnd(next).Length == 0))
             {
                 featureLines.Add(PythonText.Trim(next.Length > QualifierIndent ? next[QualifierIndent..] : string.Empty));
                 index++; // a blank line in the middle of a feature belongs to it
             }
-            features.Add(new GenBankTableFeature(Unfold(key), Unfold(ParseFeature(featureLines, recordNumber))));
+            features.Add(new GenBankTableFeature(Unfold(key), Unfold(ParseFeature(featureLines, recordNumber, format))));
         }
     }
 
     // Scanner.parse_feature: the location (possibly wrapped over several lines), then the qualifiers. Returns the location text.
-    private static string ParseFeature(List<string> lines, int recordNumber)
+    private static string ParseFeature(List<string> lines, int recordNumber, FeatureTableFormat format)
     {
         var queue = new Queue<string>(lines.Where(l => l.Length > 0));
         string Next() => queue.Count > 0
             ? queue.Dequeue()
-            : throw Refuse(recordNumber, "a feature in the feature table is incomplete (a location or a quoted qualifier is not closed)");
+            : throw Refuse(recordNumber, "a feature in the feature table is incomplete (a location or a quoted qualifier is not closed)", format);
 
         var location = PythonText.Trim(Next());
         while (location.EndsWith(','))
@@ -151,7 +209,10 @@ internal static class GenBankFeatureTable
             var line = queue.Dequeue();
             if (iteration++ == 0 && line.StartsWith(')'))
             {
-                continue; // the location's closing parenthesis wrapped onto its own line
+                // Scanner.parse_feature: the location's closing parenthesis wrapped onto its own line is APPENDED to the location. When
+                // the location is already balanced the text is then "1..42)", which the location parser refuses (#611).
+                location += PythonText.Trim(line);
+                continue;
             }
             if (line[0] == '/')
             {
@@ -182,7 +243,7 @@ internal static class GenBankFeatureTable
             // A continuation line: it must extend an earlier qualifier that has a value.
             if (!hasQualifier || lastValueIsNull)
             {
-                throw Refuse(recordNumber, "a feature qualifier line is missing its leading slash (it should start with '/', for example /gene=\"name\")");
+                throw Refuse(recordNumber, "a feature qualifier line is missing its leading slash (it should start with '/', for example /gene=\"name\")", format);
             }
         }
 
@@ -195,9 +256,19 @@ internal static class GenBankFeatureTable
     private static string Slice(string s, int from, int to) => from >= s.Length ? string.Empty : s[from..Math.Min(to, s.Length)];
 
     /// <summary>The refusal for a feature location Biopython raises on (not one it drops with a warning): named by record index, never by text (a location is user free text).</summary>
-    public static GenBankReadException RefuseLocation(int recordNumber) =>
-        Refuse(recordNumber, "a feature location is not valid GenBank (it cannot be read as a position or a range)");
+    public static GenBankReadException RefuseLocation(int recordNumber, FeatureTableFormat? format = null) =>
+        Refuse(recordNumber, $"a feature location is not valid {(format ?? FeatureTableFormat.GenBank).Label} (it cannot be read as a position or a range)", format);
 
-    private static GenBankReadException Refuse(int recordNumber, string reason) =>
-        new($"Could not parse the GenBank file (record {recordNumber}): {reason}. Check the file was not truncated or hand-edited, then re-export it from the tool that made it.");
+    /// <summary>
+    /// A refusal for a shape Biopython's own scanner raises on with a fixed text (<paramref name="biopythonReason" />, MEASURED), worded
+    /// exactly as the worker's <c>read_genbank</c> / <c>read_embl</c> words it so a user who sees the app's text first and the worker's later
+    /// reads one message (#611).
+    /// </summary>
+    public static GenBankReadException RefuseLikeWorker(int recordNumber, string biopythonReason, FeatureTableFormat? format = null)
+    {
+        format ??= FeatureTableFormat.GenBank;
+        return new($"Could not parse the {format.Label} file (record {recordNumber}): {biopythonReason}. Check the file was not truncated or hand-edited{format.Tail}");
+    }
+
+    private static GenBankReadException Refuse(int recordNumber, string reason, FeatureTableFormat? format) => RefuseLikeWorker(recordNumber, reason, format);
 }

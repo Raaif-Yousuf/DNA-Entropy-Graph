@@ -246,6 +246,9 @@ public enum GpuTier
     A100_40,
     A100_80,
     H100,
+
+    /// <summary>Two H100 80 GB in one VM (<c>a3-highgpu-2g</c>): what evo2_40b needs (issue #87). Appended last so a stored run's tier name keeps its meaning.</summary>
+    H100x2,
 }
 
 /// <summary>Spec 4.3 "Model / Predictor" row. Wire name: <c>predictor.kind</c> ("evo" | "mock").</summary>

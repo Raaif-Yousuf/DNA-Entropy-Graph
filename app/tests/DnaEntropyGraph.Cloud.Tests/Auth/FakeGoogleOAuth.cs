@@ -53,6 +53,12 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
     /// <summary>When false the first token response has no <c>refresh_token</c>.</summary>
     public bool ReturnRefreshToken { get; set; } = true;
 
+    /// <summary>The <c>scope</c> the sign-in token response reports (a user who unticked cloud-platform under granular consent); null means everything asked for.</summary>
+    public string? SignInGrantedScope { get; set; }
+
+    /// <summary>The <c>scope</c> a refresh response reports; null leaves the field out, as the older fake did.</summary>
+    public string? RefreshGrantedScope { get; set; }
+
     public List<Dictionary<string, string>> AuthorizationRequests { get; } = [];
 
     public List<Dictionary<string, string>> TokenRequests { get; } = [];
@@ -196,7 +202,7 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
                         ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
                         ["expires_in"] = ExpiresInSeconds,
                         ["token_type"] = "Bearer",
-                        ["scope"] = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform",
+                        ["scope"] = SignInGrantedScope ?? "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/cloud-platform",
                     };
                     if (ReturnRefreshToken)
                     {
@@ -220,12 +226,18 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
                     }
 
                     // Google's refresh response carries no refresh_token: the client must keep the one it has.
-                    return Json(HttpStatusCode.OK, new Dictionary<string, object?>
+                    var refreshed = new Dictionary<string, object?>
                     {
                         ["access_token"] = "at-" + Interlocked.Increment(ref _counter),
                         ["expires_in"] = 3600,
                         ["token_type"] = "Bearer",
-                    });
+                    };
+                    if (RefreshGrantedScope is not null)
+                    {
+                        refreshed["scope"] = RefreshGrantedScope;
+                    }
+
+                    return Json(HttpStatusCode.OK, refreshed);
                 }
 
             default:

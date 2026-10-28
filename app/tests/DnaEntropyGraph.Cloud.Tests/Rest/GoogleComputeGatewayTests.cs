@@ -466,6 +466,69 @@ public class GoogleComputeGatewayTests
         rig.Handler.To(Delete, Instance).Count.ShouldBe(2);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task End_vm_reports_acceptance_when_the_insert_is_accepted_before_the_operation_is_polled(bool delete)
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(delete ? Delete : Post, delete ? Instance : Instance + "/stop", 200, Op("PENDING", delete ? "delete" : "stop"))
+            .Returns(Get, OperationPath, 200, Op("DONE", delete ? "delete" : "stop"));
+        var pollsWhenAccepted = -1;
+        var requestsWhenAccepted = -1;
+
+        await rig.Gateways.Compute.EndVmAsync("deg-job1", Zone, delete, () =>
+        {
+            pollsWhenAccepted = rig.Handler.To(Get, OperationPath).Count;
+            requestsWhenAccepted = rig.Handler.To(delete ? Delete : Post, delete ? Instance : Instance + "/stop").Count;
+        }, CancellationToken.None);
+
+        requestsWhenAccepted.ShouldBe(1);
+        pollsWhenAccepted.ShouldBe(0); // told BEFORE the slow part: the polling that waits for DONE
+        rig.Handler.To(Get, OperationPath).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task End_vm_does_not_report_acceptance_when_the_insert_is_refused()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Post, Instance + "/stop", 403, RpcError(403, "PERMISSION_DENIED", "denied"));
+        var accepted = false;
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.EndVmAsync("deg-job1", Zone, false, () => accepted = true, CancellationToken.None));
+
+        ex.Error.HttpStatus.ShouldBe(403);
+        accepted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task End_vm_of_a_vm_that_is_already_gone_reports_acceptance_and_is_not_an_error()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Delete, Instance, 404, RpcError(404, "NOT_FOUND", "not found"));
+        var accepted = false;
+
+        await rig.Gateways.Compute.EndVmAsync("deg-job1", Zone, true, () => accepted = true, CancellationToken.None);
+
+        accepted.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_operation_that_fails_after_acceptance_is_reported_accepted_and_then_throws()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, Instance + "/stop", 200, Op("PENDING", "stop"))
+            .Returns(Get, OperationPath, 200, Op("DONE", "stop", error: OpError("IAM_PERMISSION_DENIED", "Required permission"), http: 403));
+        var accepted = false;
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.EndVmAsync("deg-job1", Zone, false, () => accepted = true, CancellationToken.None));
+
+        accepted.ShouldBeTrue();
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+    }
+
     [Fact]
     public async Task A_delete_whose_operation_fails_for_another_reason_still_throws()
     {

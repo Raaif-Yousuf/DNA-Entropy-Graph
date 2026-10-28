@@ -22,7 +22,9 @@ $0.00 this month`. Active runs show a badge on the **Runs** item so a user who n
 away never loses track of a job in progress. Keyboard: `Ctrl+N` new run, `Ctrl+O` add
 files, `Ctrl+Shift+V` paste sequence, `Ctrl+Enter` run, `Esc` cancel a dialog, `F5` refresh
 (Cloud/History), `Ctrl+,` Settings, `Ctrl+L` focus the locus box in the viewer, `Alt+Left`
-back.
+back. Viewer page keys (#247): Left/Right pan a quarter window, `+`/`-` zoom, `Home` or `1` whole record,
+`2`/`3` 10 kb / 1 kb about the centre, `Ctrl+L` focus the locus box. bridge.js only forwards the key
+(`{evt:"key"}`); `Viewer/ViewerKeyboard.cs` decides, so the rules are unit tested.
 
 Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 `PageTitle_<key>` string (`ShellViewModel.CurrentPageTitle`), never the page key; New run
@@ -212,6 +214,18 @@ to save the next person from repeating:
   `{x:Bind converters:VisibilityHelper.FromBool(ViewModel.SomeBool), Mode=OneWay}`. This
   needs no resource dictionary entry and builds clean.
 
+**Guard (issue #423).** `scripts/check_xaml_shapes.py` (run by `premerge.py`, tests in
+`scripts/tests/test_check_xaml_shapes.py`) finds these shapes by text before the compiler runs and prints
+`file:line: SHAPE: what to do instead`. MEASURED 2026-10-16 on Windows App SDK 1.8.250906003, each shape added
+to the otherwise-clean `MainWindow.xaml` and built with `dotnet build` of the App project: a clean tree built;
+`ExtendsContentIntoTitleBar="True"` on `<Window>`, a `Window.Resources` entry for a local `IValueConverter`,
+and `IsEnabled` on a `StackPanel` (which has no such property) each failed with `XamlCompiler.exe ... exited
+with code 1` (MSB3073) and no other message. A local converter in `Page.Resources` (scratch copy of
+`PlaceholderPage.xaml`) BUILT CLEAN, so the converter rule hard-fails only in `Window.Resources`; a local
+converter in any other scope, or a `*Converter` element that is not a local class, is a WARN that never fails
+the gate (THEORY (unverified): they crash too). Grid, Border, RelativePanel, Canvas, TextBlock and Image are
+also flagged for `IsEnabled`; THEORY (unverified): they fail the same way.
+
 If a future Windows App SDK bump fixes either of these upstream, this section (and the
 workaround it documents) should be removed in the same commit as the version bump, not
 left as unnecessary caution.
@@ -251,6 +265,15 @@ left as unnecessary caution.
   a name box would promise something false. The XAML to restore is on #514.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
+- **Model and graphics card pickers (issue #87).** The "Model and graphics card (GPU)" expander is `GpuPlanViewModel`
+  (a thin shell over the pure `ModelGpuLinker`, over `GpuCatalog.Shipped`). Picking a model raises an unpinned card to
+  the cheapest offered one that runs it; picking a card moves an unpinned model to the largest offered one that fits;
+  each side has a **Lock** toggle that keeps it where it is. A card that cannot run the chosen model shows a lock icon
+  and the reason in the list but can still be picked (the override). A pair that will not run shows a warning and a
+  "Run anyway" tick, and **Run** waits for the tick; any later change withdraws it. What the linker moved on its own is
+  said in a line under the pickers (an in-page line, not a toast: the page has no toast host). The model picker is
+  hidden while the catalog offers one model (today). The row that proves the wiring: choose the A100 and the
+  `RunOptions.GpuTier` the page starts is `A100_40`, so the request names `a2-highgpu-1g` and the estimate is asked for it.
 ## 10. Settings page (issues #106, #104)
 
 `SettingsPage` has **no title of its own**: the shell's `NavigationView` header already shows "Settings" (#627), the same
