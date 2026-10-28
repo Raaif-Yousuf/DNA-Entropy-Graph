@@ -60,12 +60,36 @@ Prices are per hour in USD, for `us-central1` (Iowa) unless noted. THEORY (unver
 
 | Machine type | Accelerator | VRAM | Quota metric | On-demand $/h | Spot $/h | Notes |
 |---|---|---|---|---|---|---|
-| `g2-standard-8` | 1x NVIDIA L4 | 24 GB | `NVIDIA_L4_GPUS` | ~$0.85 (bundled machine+GPU; the machine-type-only component alone is ~$0.29, the GPU is billed as a separate line item on the real invoice that sums to the bundled figure) | ~$0.18 | Default tier. Matches the design spec's own recorded $0.85/~0.18-0.30 range closely. |
-| `a2-highgpu-1g` | 1x NVIDIA A100 40GB | 40 GB | `NVIDIA_A100_GPUS` | ~$3.67 | ~$0.43 | On-demand figure matches the spec's own recorded $3.67 exactly across every aggregator checked. **Spot figure does not match the spec**, see section 4. |
-| `a2-ultragpu-1g` | 1x NVIDIA A100 80GB | 80 GB | `NVIDIA_A100_80GB_GPUS` | ~$5.07 | ~$0.58 | Same pattern: on-demand matches the spec exactly, Spot does not, see section 4. |
+| `g2-standard-8` | 1x NVIDIA L4 | 24 GB | `NVIDIA_L4_GPUS` | ~$0.85 (bundled machine+GPU; the machine-type-only component alone is ~$0.29, the GPU is billed as a separate line item on the real invoice that sums to the bundled figure) | ~$0.18 (superseded: MEASURED 2026-10-16 $0.51, see 3a) | Default tier. Matches the design spec's own recorded $0.85/~0.18-0.30 range closely. |
+| `a2-highgpu-1g` | 1x NVIDIA A100 40GB | 40 GB | `NVIDIA_A100_GPUS` | ~$3.67 | ~$0.43 (superseded: MEASURED 2026-10-16 $2.20, see 3a) | On-demand figure matches the spec's own recorded $3.67 exactly across every aggregator checked. **Spot figure does not match the spec**, see section 4. |
+| `a2-ultragpu-1g` | 1x NVIDIA A100 80GB | 80 GB | `NVIDIA_A100_80GB_GPUS` | ~$5.07 | ~$0.58 (superseded: MEASURED 2026-10-16 $3.04, see 3a) | Same pattern: on-demand matches the spec exactly, Spot does not, see section 4. |
 | `a3-highgpu-2g` | 2x NVIDIA H100 80GB | 160 GB total (80 GB per GPU) | `NVIDIA_H100_GPUS` | **not offered as standard on-demand** for this shape, per two independent sources describing the A3 family; the spec's own table already says exactly this ("not offered on-demand for small A3 shapes") | not reliably found; one aggregator returned $0.29/h for the whole 2-GPU node, which does not pass a sanity check against the same family's larger `a3-highgpu-8g` node (~$10.98/h per GPU on-demand, ~$87.84/h for 8 GPUs, found from the same search pass) and is excluded as likely a data error rather than a real Spot price | Spot/Flex-start-only, exactly as the spec already assumes. A believable Spot estimate, extrapolated from the 8-GPU node's per-GPU on-demand rate and a typical 60-80% Spot discount, is roughly $4 to $9/h for the 2-GPU shape, but this is arithmetic on a lead, not a reading, and should not go into `pricing.json` as-is. |
 
+### 3a. MEASURED 2026-10-16: Google's own pages (#303)
+
+MEASURED 2026-10-16, fetched with a plain HTTP GET (not the rendered-page tool that failed on 2026-09-19) of
+`https://cloud.google.com/products/compute/pricing/accelerator-optimized` and
+`https://cloud.google.com/spot-vms/pricing`. The tables are server-rendered, with a region selector listing
+Iowa (us-central1) first; the on-demand column reads $3.673385 and $5.06879789, which equals the
+us-central1 figures every aggregator gave, so the displayed region is us-central1 (THEORY (unverified): the
+selector's default is read from the page text, not from a rendered screenshot).
+Columns on the A2 rows: on-demand, DWS Flex-start, DWS Calendar Mode, Current Spot, 1-year CUD, 3-year CUD.
+
+| Machine type | On-demand $/h | DWS Flex-start $/h | Current Spot $/h |
+|---|---|---|---|
+| `a2-highgpu-1g` (1x A100 40GB) | 3.673385 | 2.00 | **2.20401** |
+| `a2-ultragpu-1g` (1x A100 80GB) | 5.06879789 | 2.40 | **3.038823151** |
+| `g2-standard-8` (1x L4) | 0.853624312 | N/A | **0.510832** |
+
+Result: both earlier Spot readings were wrong. The spec's A100 ranges (~1.1 to 2.1, ~1.5 to 2.0) were too low,
+and the aggregator figures (~$0.43, ~$0.58) were 5x too low. The L4 Spot figure (~$0.18) was also too low by
+about 3x. Spot is "current" pricing and can move, so `pricing.json` records these as of 2026-10-16. A third-party
+mirror (`gcloud-compute.com`, a lead only) also shows $2.204 for `a2-highgpu-1g` Spot in us-central1.
+The A100 GPU-only Spot SKUs were not read separately: the bundled machine rows are what the app prices.
+
 ## 4. What this changes for us: two findings worth an issue
+
+> Resolved 2026-10-16 by section 3a above (issue #303). The text below is the original 2026-09-19 finding.
 
 1. **The g2-standard-8 "machine + GPU are separate line items that sum to the headline
    figure" shape** is worth a note for whoever builds `pricing.json` (#98/#214): every
