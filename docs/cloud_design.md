@@ -1486,7 +1486,7 @@ THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes bac
 - **Quota.** `QuotaMetrics.SpotRegionalMetric` (issue #718) decides which line a Spot L4 consumes (the standard one until a preemptible grant exists). The zone filter (`VmProvisioner.PlanZonesAsync`) still reads the standard metric for every run, which is right until a preemptible grant exists.
 - `FakeGcp.WithSpotPreemptions(n)` preempts the next n Spot creates and records the preemption operation for them; `WithOnDemandVmLosses(n)` loses on-demand VMs with no record; `WithPreemptionLookupFailure()`; `PreemptionLookups`; `CreatedSpecs[i].Spot` shows which attempt was Spot.
 
-## 19. Wait for a GPU: flex-start (issue #92)
+## 20. Wait for a GPU: flex-start (issue #92)
 
 `RunOptions.WaitForGpu` (off by default; `WaitForGpuMinutes`, default 120) becomes `VmSpec.FlexStart` plus `VmSpec.FlexStartWait` in `CloudJobRequestFactory.Create` (a flex run is never Spot: the factory turns Spot off). The Compute body (`ComputeVmShape`) then carries `scheduling.provisioningModel=FLEX_START` next to the unchanged Hard Rule 10 fields (`maxRunDuration`, `instanceTerminationAction=DELETE`, the six labels) and `params.requestValidForDuration` (the "relative deadline for waiting for capacity"). `VmSpec.EnsurePreconditions` refuses flex together with Spot, a wait of zero or over seven days, a `maxRunDuration` over seven days, and a wait without flex.
 
