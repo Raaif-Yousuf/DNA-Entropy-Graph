@@ -275,7 +275,11 @@ that taxonomy - the codes Python code under `dna_entropy` (or `worker/vm/startup
 actually raise - is generated into `docs/contract/error-codes.json`** from
 `dna_entropy.worker.errors.WORKER_ERROR_CODES`, the same generate-and-`--check` pattern as
 the manifest/status/result schemas (issue #39/#254), so the worker and a future C#
-`ErrorCatalog` cannot silently drift. As of this revision it names ten codes:
+`ErrorCatalog` cannot silently drift. **`error.code` is only ever one of those codes (#613):** the
+worker maps an exception whose own `.code` is not in the registry (an HTTP status, an errno, free
+text naming a path or a run) to `WORKER_CRASH`, and the diagnostics bundle keeps an `error.code`
+only when it is in that set (`RunErrorCodes.WorkerErrorCodes`, pinned equal to the contract by
+`WorkerContractGuardTests`). As of this revision it names ten codes:
 `MANIFEST_INVALID`, `WORKER_VERSION_MISMATCH`, `MODEL_NEEDS_HOPPER`, `MODEL_OOM`,
 `INPUT_INVALID`, `WORKER_CRASH`, `BATCH_LIMIT_EXCEEDED`, `GPU_NOT_VISIBLE`,
 `IMAGE_PULL_FAILED`, `RUN_TIME_LIMIT` - cross-checked against `docs/copy_catalog.md` section 3's error
