@@ -37,8 +37,31 @@ env:
   IMAGE_REPO: ghcr.io/raaif-yousuf/dna-entropy-worker
 
 jobs:
+  # The `choice` type is enforced only by the web UI; `gh workflow run -f variant=...` and the REST API accept any string. So the
+  # value is checked here, in shell, before it can reach a matrix or a tag.
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - name: validate variant and build the matrix
+        id: m
+        env:
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          case "$VARIANT" in
+            cuda) matrix='["cuda"]' ;;
+            cpu) matrix='["cpu"]' ;;
+            both) matrix='["cuda","cpu"]' ;;
+            *) echo "::error title=Bad variant::variant must be cuda, cpu or both. Re-run with one of those."; exit 1 ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   image:
     name: image ${{ matrix.variant }}
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -47,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(inputs.variant == 'both' && '["cuda","cpu"]' || format('["{0}"]', inputs.variant)) }}
+        variant: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,9 +95,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: short sha
+      # Tags are mutable, so the run id and attempt are in the name: a re-dispatch of the same commit never overwrites an earlier
+      # dev tag. The tag is a label for humans; ONLY the digest is ever used to run an image.
+      - name: tag
         id: sha
-        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=dev-${GITHUB_SHA::7}-r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: build and push
         id: build
@@ -82,26 +107,31 @@ jobs:
         with:
           context: worker
           file: worker/Dockerfile.${{ matrix.variant }}
-          tags: ${{ env.IMAGE_REPO }}:dev-${{ steps.sha.outputs.short }}-${{ matrix.variant }}
+          tags: ${{ env.IMAGE_REPO }}:${{ steps.sha.outputs.tag }}-${{ matrix.variant }}
           provenance: false
           sbom: false
           push: true
 
       - name: print the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VARIANT: ${{ matrix.variant }}
+          TAG: ${{ steps.sha.outputs.tag }}
         run: |
+          ref="${IMAGE_REPO}@${DIGEST}"
           {
-            echo "### dev worker image (${{ matrix.variant }})"
+            echo "### dev worker image ($VARIANT)"
             echo
-            echo "Commit: \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`"
+            echo "Commit: \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`, tag \`$TAG-$VARIANT\` (a label only; tags are mutable)"
             echo
-            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "Digest: \`$DIGEST\`"
             echo
-            echo "Use it (developer mode only):"
+            echo "Use ONLY the digest reference (developer mode only):"
             echo
             echo '```'
-            echo "scripts/cloud_gpu_test.ps1 -Apply -Image ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }} -Lifecycle delete"
+            echo "scripts/cloud_gpu_test.ps1 -Apply -Image $ref -Lifecycle delete"
             echo '```'
             echo
-            echo "First push of a new package is PRIVATE: set it to Public (Packages > dna-entropy-worker > Package settings > Danger Zone > Change visibility) or the VM cannot pull it."
+            echo "First push of a new package is PRIVATE. Before making it public, read docs/release_runbook.md section 6b: everything COPYed from worker/ becomes world-readable."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}"
+          echo "$ref"

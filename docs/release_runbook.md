@@ -180,6 +180,13 @@ app never sees it: `worker-images.json` is written only by `release.yml` and is 
    `docker pull`, so a private package fails with `IMAGE_PULL_FAILED`): github.com > your profile > Packages >
    `dna-entropy-worker` > Package settings > Danger Zone > Change visibility > Public. Check from a logged-out shell:
    `docker manifest inspect ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:<digest>`.
+   WARNING, read first: public is effectively one-way (GitHub only lets you flip a public package back to private in some
+   cases, and anyone may already have pulled it), it is visible to the whole internet and not just the org, and EVERY layer
+   of the image becomes world-readable, including everything the Dockerfile COPYs from `worker/`. Pre-check: the COPY lines
+   are `COPY pyproject.toml ...`, `COPY src ./src` and (cuda) `COPY tests ./tests`; confirm nothing secret is under them:
+   `git ls-files worker/src worker/tests worker/pyproject.toml | Select-String -Pattern '\.env|secret|key|token|credential|\.pem'`
+   must print nothing you did not expect, and `Select-String '^COPY' worker/Dockerfile.*` must show no new COPY. There is no
+   `.dockerignore`, but the three COPYs above name exact paths, so only those are sent into the image layers.
 5. Run the GPU tests on it: `pwsh scripts/cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Image
    ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:<digest> -Apply -Lifecycle delete` (dry run first, without `-Apply`).
    Always pass the lifecycle: CloudCli's own default is `test`, not `delete`. See `dev_commands.md`.
@@ -195,6 +202,14 @@ enough; if the build dies with "no space left on device", switch the job to a la
 workflow does not require a pinned base, so it works on `main` today; branch `feat/255-reproducible-image-r2` pins that exact
 digest in `Dockerfile.cuda` and adds hash-locked installs to `Dockerfile.cpu`, and will take effect in this workflow with no
 change to it. A dev image is not reproducible until then, and is never a release image.
+
+Tags: `dev-<shortsha>-r<run_id>-<attempt>-<variant>` is unique per run, so a re-dispatch never overwrites an earlier tag, but
+tags stay mutable in principle: only the `@sha256:` digest is ever passed to the app or the script. The app accepts only a
+digest reference: `PinnedWorkerImageProvider.Resolve` (`app/src/DnaEntropyGraph.App/Services/PinnedWorkerImageProvider.cs`
+:42-55) refuses anything outside the allowlist unless `developer_mode` is `true`, and even then requires
+`StartupMetadata.IsPinnedImageReference`. Tests: `PinnedWorkerImageProviderTests` (a tag or free text is refused in developer
+mode; an image outside the list is refused with developer mode off).
+
 ## 7. DONE notes (appended after, dated)
 
 *(Empty. The first real release should append a dated entry here: what in sections 0

@@ -73,12 +73,18 @@ def test_it_is_concurrency_limited_without_cancelling_a_push(text):
 
 def test_it_builds_the_two_dockerfiles_and_pushes_a_dev_tag_only(text):
     assert "worker/Dockerfile.${{ matrix.variant }}" in text
-    assert re.search(r"variant:.*cuda.*cpu", text, re.DOTALL)
+    assert "fromJSON(needs.plan.outputs.matrix)" in text
     assert "push: true" in text or "push=true" in text
     tags = re.findall(r"^\s*tags:\s*(.+)$", text, re.MULTILINE)
-    assert len(tags) == 1 and "dev-" in tags[0] and "${{ matrix.variant }}" in tags[0], tags
+    assert len(tags) == 1 and "steps.sha.outputs.tag" in tags[0] and "${{ matrix.variant }}" in tags[0], tags
+    assert "tag=dev-${GITHUB_SHA::7}-r" in text, "the tag step must produce a dev-<sha>-r<run> name"
     assert ":latest" not in text
     assert "github.ref_name" not in tags[0], "a tag named after the ref could collide with a release tag"
+    tag_step = re.search(r"- name: tag\n(?:.*\n)*?\s+run: (.+)\n", text)
+    assert tag_step, "no `tag` step"
+    assert "GITHUB_RUN_ID" in tag_step.group(1) and "GITHUB_RUN_ATTEMPT" in tag_step.group(1), (
+        "the tag must carry the run id and attempt so a re-dispatch of the same sha never overwrites an earlier tag"
+    )
 
 
 def test_it_frees_disk_before_the_base_is_pulled(text):
@@ -89,7 +95,8 @@ def test_it_frees_disk_before_the_base_is_pulled(text):
 def test_the_digest_is_printed_to_the_job_summary_with_the_image_argument(text):
     assert "steps.build.outputs.digest" in text
     assert "GITHUB_STEP_SUMMARY" in text
-    assert "-Image" in text and "@${{ steps.build.outputs.digest }}" in text
+    assert "-Image $ref" in text and "${IMAGE_REPO}@${DIGEST}" in text
+    assert "ONLY the digest" in text
 
 
 def test_every_action_is_pinned_by_commit_sha(text):
@@ -97,3 +104,22 @@ def test_every_action_is_pinned_by_commit_sha(text):
     assert len(uses) >= 4, f"vacuity guard: only {len(uses)} `uses:` lines found"
     for ref in uses:
         assert re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", ref), f"{ref} is not pinned to a commit SHA"
+
+
+def test_the_variant_input_is_validated_in_shell_before_the_matrix_and_never_interpolated_into_a_script(text):
+    plan = re.search(r"^  plan:\n((?:    .*\n|\n)+)", text, re.MULTILINE)
+    assert plan, "no plan job"
+    body = plan.group(1)
+    assert 'case "$VARIANT" in' in body and "cuda)" in body and "cpu)" in body and "both)" in body
+    assert re.search(r"\*\) .*exit 1", body), "the case has no failing default arm"
+    assert re.search(r"^  image:\n(?:    .*\n)*?    needs: plan$", text, re.MULTILINE), "image must need plan"
+    # The input is read once, through env:, so it is never spliced into shell text.
+    assert len(re.findall(r"inputs\.variant", text)) == 1
+    assert re.search(r"env:\n\s+VARIANT: \$\{\{ inputs\.variant \}\}", body)
+
+
+def test_no_expression_is_spliced_into_shell_text(text):
+    blocks = re.findall(r"^\s+run: \|\n((?:\s{10,}.*\n|\n)+)", text, re.MULTILINE)
+    assert len(blocks) >= 3, f"vacuity guard: only {len(blocks)} run blocks found"
+    for block in blocks:
+        assert "${{" not in block, f"a run: script interpolates an expression; pass it through env: {block.strip()[:80]!r}"
