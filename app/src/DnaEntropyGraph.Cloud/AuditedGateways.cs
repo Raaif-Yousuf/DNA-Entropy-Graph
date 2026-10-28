@@ -38,6 +38,12 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
     public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.DeleteVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.DeleteVmAsync(vmName, zone, cancellationToken), started: true);
 
+    // Issue #113 meets #245: IComputeGateway.EndVmAsync has a default body that only reports acceptance when the work is done, and says a gateway that can do better MUST override it.
+    // Without this override the audit decorator would use that default and hide the real gateway's earlier acceptance report from the caller. It is audited under the same operation
+    // names as the plain stop and delete, so the log reads the same whichever way the computer was ended.
+    public Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+        => auditor.RunAsync(delete ? "Compute.DeleteVm" : "Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.EndVmAsync(vmName, zone, delete, onAccepted, cancellationToken), started: delete);
+
     public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.StartVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StartVmAsync(vmName, zone, cancellationToken), started: true);
 

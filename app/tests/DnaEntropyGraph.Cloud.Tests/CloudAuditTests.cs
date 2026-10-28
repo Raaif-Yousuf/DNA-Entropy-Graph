@@ -91,6 +91,29 @@ public class CloudAuditTests
     }
 
     [Fact]
+    public async Task An_audited_EndVm_passes_the_acceptance_callback_to_the_real_gateway_and_is_recorded_as_the_stop_it_is()
+    {
+        // The interface default of EndVmAsync reports acceptance only when the work is done; the audit decorator must forward to the inner gateway's own, or a real
+        // gateway's earlier "accepted" moment (issue #113) is lost whenever the audit wraps it.
+        var log = new MemoryLog();
+        var inner = Substitute.For<IComputeGateway>();
+        var accepted = 0;
+        inner.EndVmAsync("deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            call.ArgAt<Action?>(3)?.Invoke();
+            return Task.CompletedTask;
+        });
+
+        await new AuditedComputeGateway(inner, new CloudAuditor(log, () => "i", TimeProvider.System)).EndVmAsync("deg-job-7", "z", delete: false, () => accepted++, CancellationToken.None);
+
+        accepted.ShouldBe(1);
+        await inner.Received(1).EndVmAsync("deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        var entry = log.Entries.Single();
+        entry.Operation.ShouldBe("Compute.StopVm");
+        entry.JobId.ShouldBe("job-7");
+    }
+
+    [Fact]
     public async Task A_failing_mutation_records_its_classifier_bucket_and_error_code()
     {
         var gcp = new FakeGcp().WithZoneStockout("us-central1-a");
@@ -167,6 +190,7 @@ public class CloudAuditTests
             [
                 ("CreateVmAsync", "Compute.CreateVm"), ("ReuseVmAsync", "Compute.ReuseVm"), ("StartVmAsync", "Compute.StartVm"),
                 ("StopVmAsync", "Compute.StopVm"), ("DeleteVmAsync", "Compute.DeleteVm"), ("DeleteDiskAsync", "Compute.DeleteDisk"),
+                ("EndVmAsync", "Compute.DeleteVm"), // ArgFor passes delete: true
             ],
             ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync"]),
         [typeof(IStorageGateway)] = (
@@ -204,6 +228,8 @@ public class CloudAuditTests
     private static object? ArgFor(Type type) => type switch
     {
         _ when type == typeof(CancellationToken) => CancellationToken.None,
+        _ when type == typeof(bool) => true,
+        _ when type == typeof(Action) => null,
         _ when type == typeof(string) => "jobs/job-9/in/x.gb",
         _ when type == typeof(Stream) => new MemoryStream(),
         _ when type == typeof(VmSpec) => Spec("job-9"),
