@@ -133,6 +133,29 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return children.ToList();
     }
 
+    /// <summary>Issue #91: deletes exactly one object by its exact name; one already gone (404) counts as deleted. One HTTP request through the pipeline.</summary>
+    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            "Storage.DeleteObject",
+            async ct =>
+            {
+                try
+                {
+                    await _service.Objects.Delete(bucket, objectKey).ExecuteAsync(ct).ConfigureAwait(false);
+                }
+                catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
+                {
+                    // Already gone is what a delete wants.
+                }
+                catch (GoogleApiException ex)
+                {
+                    throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                }
+            },
+            cancellationToken,
+            bypassBreaker: true,
+            singleRequest: true);
+
     /// <summary>
     /// Lists the objects under the prefix (one page at a time) and deletes each by its exact name; one already gone (404) counts as deleted. A prefix that is
     /// not a folder path is refused before any request (<see cref="StoragePrefixes.RequireDeletable"/>), so a typo can never empty the bucket. Each delete is one
