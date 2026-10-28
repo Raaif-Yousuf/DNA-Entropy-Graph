@@ -157,16 +157,21 @@ def _proc_table() -> dict[int, tuple[int, int]]:
     return table
 
 
-def _kill_if_same(pid: int, start: int, sig: int | None = None) -> bool:
+def _kill_if_same(pid: int, start: int, sig: int | None = None) -> bool | None:
     """Signal `pid` only if it is still the process recorded at scan time (same start time): a pid recycled since the scan is
-    skipped. The recheck-then-kill window is microseconds (no pidfd on every kernel); stopped victims cannot exit on their own,
-    so it is only open for a victim that died anyway, and a pid reuse inside that window is vanishingly unlikely."""
+    skipped. True: signalled. False: not the recorded process (gone or recycled), nothing sent. None: it IS the recorded process
+    but the signal raised OSError (e.g. EPERM). The recheck-then-kill window is microseconds (no pidfd on every kernel); stopped
+    victims cannot exit on their own, so it is only open for a victim that died anyway, and a pid reuse inside it is vanishingly
+    unlikely."""
     if _proc_ident(pid) != start:
         return False
-    with contextlib.suppress(OSError):
+    try:
         os.kill(pid, signal.SIGKILL if sig is None else sig)
-        return True
-    return False
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return None
+    return True
 
 
 def _await_stopped(stopped: dict[int, int], timeout: float = 2.0) -> None:
@@ -184,38 +189,48 @@ def _await_stopped(stopped: dict[int, int], timeout: float = 2.0) -> None:
 def _posix_kill_tree(pid: int) -> None:
     """SIGSTOP the root, then SIGSTOP every descendant found (confirming each stop landed), rescanning until none is new (a
     stopped process cannot fork, so nothing escapes by reparenting to init between the scan and the kill), then SIGKILL them all,
-    children before the root. A `finally` kills everything stopped so an exception never leaves a frozen tree. After the round
-    cap (a fork storm outrunning the stops) whatever was found is still killed; the rest is out of reach."""
+    children before the root. A `finally` kills everything registered so an exception never leaves a frozen tree. After the round
+    cap (a fork storm outrunning the stops) whatever was found is still killed; the rest is out of reach.
+    Every signal is identity-checked (pid + start time): a root that exited or whose pid was recycled is never signalled."""
     root = _proc_ident(pid)
-    if root is None:  # gone, or no /proc (macOS): the old behaviour, a plain kill of the pid
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
-        return
-    stopped: dict[int, int] = {}
+    if root is None:
+        if not os.path.isdir("/proc"):  # no /proc (macOS): nothing to identify or walk, the plain kill of the pid
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+        return  # /proc exists: None means gone (or a transient parse failure), never a blind kill
+    registered: dict[int, int] = {}  # everything we may have stopped, registered BEFORE the signal (a KeyboardInterrupt between
+    confirmed: dict[int, int] = {}  # the signal and the bookkeeping must not leave it frozen); confirmed: the stop was delivered
     try:
-        if _kill_if_same(pid, root, signal.SIGSTOP):
-            stopped[pid] = root
+        registered[pid] = root
+        sent = _kill_if_same(pid, root, signal.SIGSTOP)
+        if sent is False:  # exited or recycled between the record and the stop: not ours to touch
+            registered.clear()
+            return
+        if sent:
+            confirmed[pid] = root
         for _ in range(20):
-            _await_stopped(stopped)
-            tree = {pid, *stopped}  # the root's children are descendants even when its own stop failed
-            new = {c: start for c, (ppid, start) in _proc_table().items() if ppid in tree and c not in stopped and c != pid}
+            _await_stopped(confirmed)
+            new = {c: start for c, (ppid, start) in _proc_table().items() if ppid in registered and c not in registered}
             if not new:
                 break
             for child, start in new.items():
-                if _kill_if_same(child, start, signal.SIGSTOP):
-                    stopped[child] = start
+                registered[child] = start
+                sent = _kill_if_same(child, start, signal.SIGSTOP)
+                if sent is False:
+                    del registered[child]
+                elif sent:
+                    confirmed[child] = start
     finally:
-        for victim, start in reversed(list(stopped.items())):
+        for victim, start in reversed(list(registered.items())):
             _kill_if_same(victim, start)
-        if pid not in stopped:  # the root's stop failed or never ran: still end it
-            with contextlib.suppress(OSError):
-                os.kill(pid, signal.SIGKILL)
 
 
 def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
     """Kill an unrelated process (one we did not start, e.g. a stuck queue runner) and its descendants, then wait up to `wait`
     seconds for it to be gone. True when it is gone. The caller has verified pid + creation time first.
     On POSIX the tree is frozen with SIGSTOP and walked via /proc (the group may be the user's shell, so killpg is wrong), then killed."""
+    if pid <= 1:  # never signal a process group (0), everything (-1) or init (1)
+        return False
     if os.name == "nt":
         _taskkill_tree(pid)
     else:

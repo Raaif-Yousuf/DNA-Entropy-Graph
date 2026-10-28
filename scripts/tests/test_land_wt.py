@@ -1239,9 +1239,14 @@ def test_a_posix_kill_waits_for_a_late_stop_before_trusting_a_scan(monkeypatch):
     real = lw._kill_if_same
     states = []
 
-    def late_stop(pid, start, sig=None):  # SIGSTOP "returns" at once but only lands 0.4 s later
+    timers = []
+
+    def late_stop(pid, start, sig=None):  # SIGSTOP "returns" at once but only lands 0.15 s later
         if pid == victim.pid and sig == lw.signal.SIGSTOP:
-            threading.Timer(0.4, lambda: os.kill(pid, lw.signal.SIGSTOP)).start()
+            timer = threading.Timer(0.15, lambda: real(pid, start, sig))  # identity-checked, so never a recycled pid
+            timer.daemon = True
+            timers.append(timer)
+            timer.start()
             return True
         return real(pid, start, sig)
 
@@ -1258,6 +1263,8 @@ def test_a_posix_kill_waits_for_a_late_stop_before_trusting_a_scan(monkeypatch):
         assert lw.kill_pid_tree(victim.pid) is True
         assert states and set(states) == {"T"}  # the scan waited for the stop to land
     finally:
+        for timer in timers:
+            timer.cancel()
         victim.kill()
         victim.wait()
 
@@ -1265,10 +1272,75 @@ def test_a_posix_kill_waits_for_a_late_stop_before_trusting_a_scan(monkeypatch):
 @POSIX_ONLY
 def test_a_posix_kill_without_proc_still_kills_the_root(monkeypatch):
     victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)  # what macOS (no /proc) looks like
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)
+    monkeypatch.setattr(lw.os.path, "isdir", lambda p: False if p == "/proc" else real_isdir(p))  # what macOS looks like
     try:
         assert lw.kill_pid_tree(victim.pid, wait=3.0) is True
         assert victim.wait(timeout=10) != 0
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_with_proc_but_an_unreadable_root_does_not_blind_kill(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)  # /proc exists: None means gone (or a transient parse failure)
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=0.5) is False
+        assert victim.poll() is None
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_interrupted_right_after_the_stop_does_not_leave_it_frozen(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._kill_if_same
+
+    def stop_then_interrupt(pid, start, sig=None):
+        result = real(pid, start, sig)
+        if pid == victim.pid and sig == lw.signal.SIGSTOP:
+            raise KeyboardInterrupt  # between the signal and the caller's bookkeeping
+        return result
+
+    monkeypatch.setattr(lw, "_kill_if_same", stop_then_interrupt)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            lw.kill_pid_tree(victim.pid)
+        monkeypatch.undo()
+        assert victim.wait(timeout=10) != 0  # killed by the finally (it was registered before the stop), not left in state T
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_never_signals_a_process_group_or_everything(monkeypatch):
+    sent = []
+    monkeypatch.setattr(lw.os, "kill", lambda pid, sig: sent.append((pid, sig)))  # a real os.kill(0/-1) would be a disaster
+    for bad in (0, 1, -1):
+        assert lw.kill_pid_tree(bad, wait=0.1) is False
+    assert sent == []
+
+
+@POSIX_ONLY
+def test_a_posix_kill_leaves_a_recycled_root_alone(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._proc_ident
+    calls = []
+
+    def ident(pid):  # the first read (the caller's record of who the root was) predates a pid recycle
+        calls.append(pid)
+        value = real(pid)
+        return value + 1 if len(calls) == 1 and value is not None else value
+
+    monkeypatch.setattr(lw, "_proc_ident", ident)
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=0.5) is False
+        assert victim.poll() is None  # a different process than the one recorded: never signalled
     finally:
         victim.kill()
         victim.wait()
@@ -1283,7 +1355,7 @@ def test_a_posix_kill_whose_root_stop_failed_still_kills_the_descendants(tmp_pat
     real = lw._kill_if_same
 
     def fake(pid, start, sig=None):
-        return False if (pid == proc.pid and sig == lw.signal.SIGSTOP) else real(pid, start, sig)
+        return None if (pid == proc.pid and sig == lw.signal.SIGSTOP) else real(pid, start, sig)  # None: the stop raised OSError
 
     monkeypatch.setattr(lw, "_kill_if_same", fake)
     try:
