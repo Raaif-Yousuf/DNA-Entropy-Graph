@@ -54,6 +54,7 @@ DEFAULT_SLOTS = 2
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LANE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 DEFAULT_POLL = 1.0
+SLN_NAME = "DnaEntropyGraph.sln"
 DOTNET_VERBS = frozenset({"build", "test", "run", "pack", "publish"})
 
 IS_WINDOWS = sys.platform == "win32"
@@ -92,14 +93,25 @@ def repo_toplevel(cwd: str | os.PathLike[str] | None = None) -> Path | None:
 
 def default_artifacts_base(cwd: str | os.PathLike[str] | None = None) -> str:
     """`<repo>/app/.artifacts`, where <repo> is the git toplevel of the CWD (the checkout the command runs
-    in), falling back to this script's own repo when the CWD is not inside one. Worktree lanes run the
+    in), falling back (with a stderr warning naming both paths) to this script's own repo
+    when the CWD is not inside a repo that has app/DnaEntropyGraph.sln. Worktree lanes run the
     PRIMARY's heavy.py, so deriving it from __file__ put their build output under the primary's app/, and
     Guards.Tests then scanned the primary's tree (#874).
 
     Not %TEMP%: tests that find the repo by walking up from AppContext.BaseDirectory (Cloud.Tests
     FixturePaths, Core.Tests StartupMetadataTests) fail with the output outside the repo. Its bin/ obj/
     publish/ subfolders are gitignored by `app/**/bin/` etc."""
-    return str((repo_toplevel(cwd) or REPO_ROOT) / "app" / ".artifacts")
+    top = repo_toplevel(cwd)
+    if top is not None and (top / "app" / SLN_NAME).is_file():
+        return str(top / "app" / ".artifacts")
+    why = "the CWD is not inside a git repo" if top is None else f"{top} has no app/{SLN_NAME}"
+    print(
+        f"heavy: warning: {why}; building under heavy.py's own repo {REPO_ROOT} "
+        "(a worktree lane's build then lands in the wrong tree; run from inside your checkout)",
+        file=sys.stderr,
+        flush=True,
+    )
+    return str(REPO_ROOT / "app" / ".artifacts")
 
 
 def _positive_int(raw: str) -> int | None:

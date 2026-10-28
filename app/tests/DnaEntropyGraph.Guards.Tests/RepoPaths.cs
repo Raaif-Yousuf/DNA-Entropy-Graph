@@ -28,7 +28,11 @@ internal static class RepoPaths
             && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
         .ToArray();
 
-    // MEASURED 2026-10-28 (#874): a worktree lane running the primary's heavy.py got its binary under the PRIMARY's\n    // app/.artifacts, so walking up from BaseDirectory first scanned the primary's tree. The compile-time path of this\n    // file is the source tree actually built, so it goes first; BaseDirectory is only the fallback (a CI build whose\n    // sources moved, if any). Deterministic does not rewrite CallerFilePath (no PathMap anywhere; RepoPathsTests proves it).\n    // MEASURED 2026-10-02: under `dotnet test --artifacts-path <dir outside the repo>` (the per-lane
+    // MEASURED 2026-10-28 (#874): a worktree lane running the primary's heavy.py got its binary under the PRIMARY's
+    // app/.artifacts, so walking up from BaseDirectory first scanned the primary's tree. The compile-time path of this
+    // file is the source tree actually built, so it goes first; BaseDirectory is only the fallback (a CI build whose
+    // sources moved, if any). Deterministic does not rewrite CallerFilePath (no PathMap anywhere; RepoPathsTests proves it).
+    // MEASURED 2026-10-02: under `dotnet test --artifacts-path <dir outside the repo>` (the per-lane
     // convention for concurrent agents) the output directory is not under app/, so walking up from it
     // found nothing and 9 guards threw. The compile-time path of this source file is the fallback.
     public static string FindAppRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
