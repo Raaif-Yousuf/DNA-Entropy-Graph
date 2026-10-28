@@ -29,6 +29,12 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         for (var index = 0; index < request.Inputs.Count; index++)
         {
             var input = request.Inputs[index];
+            if (input.IsAccession)
+            {
+                // Issue #684: the worker fetches an accession itself; there is no local file to upload, the manifest names it.
+                continue;
+            }
+
             FileStream content;
             try
             {
@@ -214,7 +220,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         string folder;
         try
         {
-            folder = RunOutputFolders.CreateUnique(request.OutputFolder, Path.GetFileNameWithoutExtension(request.Inputs[0].FileName));
+            folder = RunOutputFolders.CreateUnique(request.OutputFolder, request.Inputs[0].OutputStem);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

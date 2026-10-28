@@ -18,12 +18,6 @@
   <data name="ShellTitle.Text" xml:space="preserve">
     <value>DNA Entropy Graph</value>
   </data>
-  <data name="ConfirmDeleteResource_Title" xml:space="preserve">
-    <value>Delete this cloud resource?</value>
-  </data>
-  <data name="ConfirmDeleteResource_Body" xml:space="preserve">
-    <value>This stops billing for it. This cannot be undone.</value>
-  </data>
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
@@ -356,7 +350,7 @@
     <value>This sequence is too large for the built-in viewer</value>
   </data>
   <data name="ViewerSequenceTooLarge_Body" xml:space="preserve">
-    <value>The sequence file is larger than 50 MB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
+    <value>The sequence file is larger than {0}, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
@@ -777,9 +771,6 @@
   </data>
   <data name="RunsRerunButton.Content" xml:space="preserve">
     <value>Run again</value>
-  </data>
-  <data name="RunsRedownloadButton.Content" xml:space="preserve">
-    <value>Download again</value>
   </data>
   <data name="RunsDeleteCloudButton.Content" xml:space="preserve">
     <value>Delete cloud copy</value>
@@ -1531,7 +1522,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>This puts every setting back to its starting value. Your runs, results and input files are not touched. Choose Continue to reset, or Cancel to keep your settings.</value>
   </data>
   <data name="AdvancedResetDone" xml:space="preserve">
-    <value>Settings were reset. Close the app and open it again to finish.</value>
+    <value>Settings were reset to their starting values. The Settings page shows them now.</value>
   </data>
   <data name="AdvancedNotSaved" xml:space="preserve">
     <value>This could not be saved because another copy of the app has the settings file open. Close the other copies, then try again.</value>
@@ -2239,5 +2230,549 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
     <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
+  </data>
+  <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
+    <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
+  </data>
+  <data name="AuthAction_AllowAccess" xml:space="preserve">
+    <value>Sign in again and allow access</value>
+  </data>
+  <data name="CloudPageHeading.Text" xml:space="preserve">
+    <value>What this app has in your Google Cloud project</value>
+  </data>
+  <data name="CloudRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="CloudEmptyText.Text" xml:space="preserve">
+    <value>Nothing of this app is in your project right now, so nothing is costing you money.</value>
+  </data>
+  <data name="CloudVmsHeading.Text" xml:space="preserve">
+    <value>Rented computers (VMs)</value>
+  </data>
+  <data name="CloudDisksHeading.Text" xml:space="preserve">
+    <value>Disks</value>
+  </data>
+  <data name="CloudStopButton.Content" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="CloudStartButton.Content" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="CloudDeleteButton.Content" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="CloudDeleteAllButton.Content" xml:space="preserve">
+    <value>Delete everything this app created</value>
+  </data>
+  <data name="CloudPage_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
+  </data>
+  <data name="CloudPage_ListFailed" xml:space="preserve">
+    <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
+  </data>
+  <data name="CloudPage_ActionFailed" xml:space="preserve">
+    <value>Google would not do that to {0}. Press Refresh to see where it stands, then try again.</value>
+  </data>
+  <data name="CloudPage_DeleteAllFailed" xml:space="preserve">
+    <value>Google stopped the cleanup before it began, so nothing was deleted. Press Refresh, then try Delete everything again.</value>
+  </data>
+  <data name="CloudPage_RunningBanner" xml:space="preserve">
+    <value>{0} rented computer(s) running now and costing money. Press Stop on it below if you are not waiting for a result.</value>
+  </data>
+  <data name="CloudPage_Summary" xml:space="preserve">
+    <value>Results online: {0} job folder(s), {1}, in {2}. Shared download cache: {3}.</value>
+  </data>
+  <data name="CloudPage_SummaryNoBucket" xml:space="preserve">
+    <value>No results folder online yet. Shared download cache: {0}.</value>
+  </data>
+  <data name="CloudVm_Running" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="CloudVm_Stopped" xml:space="preserve">
+    <value>Stopped (its disk still costs a little)</value>
+  </data>
+  <data name="CloudVm_Changing" xml:space="preserve">
+    <value>Starting or stopping</value>
+  </data>
+  <data name="CloudVm_AnotherComputer" xml:space="preserve">
+    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. To end it, use the copy of the app that created it.</value>
+  </data>
+  <data name="CloudVm_CostRunning" xml:space="preserve">
+    <value>Up to about ${0} per hour while it runs.</value>
+  </data>
+  <data name="CloudVm_CostStopped" xml:space="preserve">
+    <value>About ${0} per day for its disk until you delete it.</value>
+  </data>
+  <data name="CloudDisk_Attached" xml:space="preserve">
+    <value>{0} GB, in use by a computer</value>
+  </data>
+  <data name="CloudDisk_Detached" xml:space="preserve">
+    <value>{0} GB, not in use</value>
+  </data>
+  <data name="CloudDisk_Cost" xml:space="preserve">
+    <value>About ${0} per day.</value>
+  </data>
+  <data name="CloudDeleteVm_Title" xml:space="preserve">
+    <value>Delete this rented computer?</value>
+  </data>
+  <data name="CloudDeleteVm_Body" xml:space="preserve">
+    <value>{0} and its disk will be deleted and billing for them stops. A run still using it ends as cancelled. This cannot be undone.</value>
+  </data>
+  <data name="CloudDeleteAll_Title" xml:space="preserve">
+    <value>Delete everything this app created?</value>
+  </data>
+  <data name="CloudDeleteAll_Body" xml:space="preserve">
+    <value>This deletes {0} rented computer(s), {1} disk(s) and {2} job folder(s) with their results online ({3}). Runs still going end as cancelled. Results already downloaded to this PC stay. Google may keep deleted job folders for a few days before they are gone for good. This cannot be undone.</value>
+  </data>
+  <data name="CloudSize_GB" xml:space="preserve">
+    <value>{0} GB</value>
+  </data>
+  <data name="CloudSize_MB" xml:space="preserve">
+    <value>{0} MB</value>
+  </data>
+  <data name="CloudSize_KB" xml:space="preserve">
+    <value>{0} KB</value>
+  </data>
+  <data name="CloudSize_B" xml:space="preserve">
+    <value>{0} bytes</value>
+  </data>
+  <data name="CloudPage_DeleteAllInterrupted" xml:space="preserve">
+    <value>The cleanup was interrupted, so some items may already be deleted. Press Refresh to see what is left, then press Delete everything again.</value>
+  </data>
+  <data name="CloudKind_Vm" xml:space="preserve">
+    <value>computer</value>
+  </data>
+  <data name="CloudKind_Disk" xml:space="preserve">
+    <value>disk</value>
+  </data>
+  <data name="CloudKind_JobData" xml:space="preserve">
+    <value>job folder</value>
+  </data>
+  <data name="CloudReport_Complete" xml:space="preserve">
+    <value>Done. Everything this app created in your project is deleted.</value>
+  </data>
+  <data name="CloudReport_Incomplete" xml:space="preserve">
+    <value>Some items are still there. Read the list below, then press Delete everything again.</value>
+  </data>
+  <data name="CloudReport_Deleted" xml:space="preserve">
+    <value>Deleted: {0}</value>
+  </data>
+  <data name="CloudReport_DeletedRecoverable" xml:space="preserve">
+    <value>Deleted: {0}. Google keeps a copy for {1} days in case you change your mind (ask Google to restore it in Google Cloud Console).</value>
+  </data>
+  <data name="CloudReport_Failed" xml:space="preserve">
+    <value>Could not delete: {0}. Press Delete everything again, or delete it in Google Cloud Console.</value>
+  </data>
+  <data name="CloudReport_NotVerified" xml:space="preserve">
+    <value>Asked Google to delete {0} but it is still listed. Press Refresh in a minute.</value>
+  </data>
+  <data name="CloudReport_Skipped" xml:space="preserve">
+    <value>Left alone: {0}. Press Refresh, then Delete everything again if it is still listed.</value>
+  </data>
+  <data name="RunNotice_UnknownStage" xml:space="preserve">
+    <value>the current step</value>
+  </data>
+  <data name="RunNotice_Slow" xml:space="preserve">
+    <value>{0} is taking longer than usual ({1} minutes so far). Nothing is wrong yet. Keep waiting, or press Cancel run if you would rather stop.</value>
+  </data>
+  <data name="RunNotice_Stalled" xml:space="preserve">
+    <value>The computer has stopped reporting progress during {0}. A window is asking what to do. Choose Stop, Delete or Keep waiting.</value>
+  </data>
+  <data name="StallDialog_Title" xml:space="preserve">
+    <value>This run looks stuck: {3}</value>
+  </data>
+  <data name="StallDialog_Body_Stuck" xml:space="preserve">
+    <value>The step {0} on the rented computer {2} has run far longer than it should (about {1} minutes). Stop keeps the rented computer so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_Stale" xml:space="preserve">
+    <value>The rented computer {2} has stopped reporting progress during {0} (about {1} minutes). Stop keeps it so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_NoHeartbeat" xml:space="preserve">
+    <value>The rented computer {2} never reported that it started working (about {1} minutes). Stop keeps it so you can look later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_RunLabel" xml:space="preserve">
+    <value>{0} (job {1})</value>
+  </data>
+  <data name="StallDialog_RunLabelNoName" xml:space="preserve">
+    <value>job {0}</value>
+  </data>
+  <data name="StallDialog_ThisComputer" xml:space="preserve">
+    <value>for this run</value>
+  </data>
+  <data name="StallConfirm_Title" xml:space="preserve">
+    <value>Delete the rented computer {2}?</value>
+  </data>
+  <data name="StallConfirm_Body" xml:space="preserve">
+    <value>The rented computer {2} and its disk will be deleted and billing for them stops. It belongs to {3}. Press Delete it to go ahead, or Keep waiting to leave it as it is. A deleted computer cannot be brought back.</value>
+  </data>
+  <data name="StallConfirm_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="StallDialog_Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="StallDialog_Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="StallDialog_KeepWaiting" xml:space="preserve">
+    <value>Keep waiting</value>
+  </data>
+  <data name="RunError_input_accession_invalid" xml:space="preserve">
+    <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_not_found" xml:space="preserve">
+    <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_too_large" xml:space="preserve">
+    <value>That NCBI record is larger than one run can read. Ask for a smaller range of it (the From base and To base boxes), then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_unreachable" xml:space="preserve">
+    <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
+  </data>
+  <data name="NewRunPillKind_Ncbi" xml:space="preserve">
+    <value>NCBI record</value>
+  </data>
+  <data name="NewRunPillAccessionSummary" xml:space="preserve">
+    <value>Fetched from NCBI on the rented computer when the run starts</value>
+  </data>
+  <data name="NewRunAccessionExpander.Header" xml:space="preserve">
+    <value>Fetch from NCBI</value>
+  </data>
+  <data name="NewRunAccessionBox.Header" xml:space="preserve">
+    <value>Accession</value>
+  </data>
+  <data name="NewRunAccessionBox.PlaceholderText" xml:space="preserve">
+    <value>For example NC_045512.2</value>
+  </data>
+  <data name="NewRunAccessionStart.Header" xml:space="preserve">
+    <value>From base (optional)</value>
+  </data>
+  <data name="NewRunAccessionEnd.Header" xml:space="preserve">
+    <value>To base (optional)</value>
+  </data>
+  <data name="NewRunAccessionAdd.Content" xml:space="preserve">
+    <value>Fetch record</value>
+  </data>
+  <data name="NewRunAccessionProblem_NotAnAccession" xml:space="preserve">
+    <value>That does not look like an NCBI accession. Check it for typos and type it again, for example NC_045512.2 or MN908947.3.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeIncomplete" xml:space="preserve">
+    <value>Fill in both ends of the range, or clear both to fetch the whole record.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeInvalid" xml:space="preserve">
+    <value>The range must be whole numbers from 1 up, with the first no bigger than the second. Correct the range and try again.</value>
+  </data>
+  <data name="NewRunAccessionAlreadyAdded" xml:space="preserve">
+    <value>That record is already in the list. Choose it there, or type a different accession.</value>
+  </data>
+  <data name="NewRunAccessionLookup_NotFound" xml:space="preserve">
+    <value>NCBI has no record with that accession. Check it for typos and type it again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_RangeOutsideRecord" xml:space="preserve">
+    <value>That record is shorter than the range you asked for. Lower the From base, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_TooLarge" xml:space="preserve">
+    <value>That record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_RateLimited" xml:space="preserve">
+    <value>NCBI is limiting how fast it answers. Wait a minute, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_NcbiTrouble" xml:space="preserve">
+    <value>NCBI is having trouble right now. Try again in a few minutes.</value>
+  </data>
+  <data name="NewRunAccessionLookup_TimedOut" xml:space="preserve">
+    <value>NCBI did not answer in time. Check your internet connection, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_Unreachable" xml:space="preserve">
+    <value>We could not reach NCBI. Check your internet connection, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunPillAccessionLength" xml:space="preserve">
+    <value>{0} bases, fetched from NCBI on the rented computer when the run starts</value>
+  </data>
+  <data name="NewRunAccessionChecking.Text" xml:space="preserve">
+    <value>Asking NCBI whether that record exists...</value>
+  </data>
+  <data name="Runs_RedownloadAgain_Label" xml:space="preserve">
+    <value>Download again</value>
+  </data>
+  <data name="Runs_RedownloadPartial_Label" xml:space="preserve">
+    <value>Download partial results</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Title" xml:space="preserve">
+    <value>Partial results downloaded</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Body" xml:space="preserve">
+    <value>This run was cancelled, so the folder holds only what was finished before it stopped. Press Run again on the row to run it in full.</value>
+  </data>
+  <data name="OutputChoice_gc" xml:space="preserve">
+    <value>GC percent along the sequence, as a track (.gc.bedgraph). Shows where the DNA is rich in G and C next to the entropy. Off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_codons" xml:space="preserve">
+    <value>How often each codon is used by the genes, as a table (.codons.tsv). Needs genes, so it is empty for a sequence with none. Off unless you tick it.</value>
+  </data>
+  <data name="WizardGpuAskButton.Content" xml:space="preserve">
+    <value>Ask Google for a graphics card (GPU)</value>
+  </data>
+  <data name="WizardGpuAsk_Requested" xml:space="preserve">
+    <value>Your request is with Google. A decision can take a day or two, and Google emails the address of this account. Press Check again later, or Skip for now and run on the computer's own graphics card.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckAgain" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="WizardGpuAsk_NoBilling" xml:space="preserve">
+    <value>Google will not take a request until this project has a billing account. Press Check billing, then ask again.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckBilling" xml:space="preserve">
+    <value>Check billing</value>
+  </data>
+  <data name="WizardGpuAsk_NoHistory" xml:space="preserve">
+    <value>Google only lets a project ask for a graphics card (GPU) after it has some past use. Open Google&apos;s page for limits (quota) and ask there with a short note about your research, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_NotEligible" xml:space="preserve">
+    <value>Google would not let this app ask for a graphics card (GPU) on this project. Open Google&apos;s page for limits (quota) and ask there, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_OpenQuotaPage" xml:space="preserve">
+    <value>Open Google&apos;s page for limits (quota)</value>
+  </data>
+  <data name="WizardGpuAsk_Permission" xml:space="preserve">
+    <value>This account is not allowed to raise the project&apos;s limit on graphics cards (its quota), or the service that sets limits is switched off. Open Google&apos;s page for limits, or ask the owner of the project to do it.</value>
+  </data>
+  <data name="WizardGpuAsk_Failed" xml:space="preserve">
+    <value>Google did not answer the request. Press Try again.</value>
+  </data>
+  <data name="WizardGpuAsk_TryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
+  <data name="NewRunGpuExpander.Header" xml:space="preserve">
+    <value>Model and graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelCombo.Header" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="NewRunGpuCombo.Header" xml:space="preserve">
+    <value>Graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelLock.Content" xml:space="preserve">
+    <value>Lock model</value>
+  </data>
+  <data name="NewRunGpuLock.Content" xml:space="preserve">
+    <value>Lock graphics card</value>
+  </data>
+  <data name="NewRunGpuConfirm.Content" xml:space="preserve">
+    <value>Run anyway, I understand it will probably fail</value>
+  </data>
+  <data name="NewRunGpu_Auto" xml:space="preserve">
+    <value>Automatic (the cheapest that runs the model)</value>
+  </data>
+  <data name="NewRunGpuAuto" xml:space="preserve">
+    <value>Automatic: {0}</value>
+  </data>
+  <data name="NewRunGpu_L4" xml:space="preserve">
+    <value>L4, 24 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_40" xml:space="preserve">
+    <value>A100, 40 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_80" xml:space="preserve">
+    <value>A100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100" xml:space="preserve">
+    <value>H100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100x2" xml:space="preserve">
+    <value>Two H100, 80 GB each</value>
+  </data>
+  <data name="NewRunGpuLocked" xml:space="preserve">
+    <value>{0} (locked: {1})</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsHopper" xml:space="preserve">
+    <value>needs an H100 graphics card</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreGpus" xml:space="preserve">
+    <value>needs two graphics cards</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreMemory" xml:space="preserve">
+    <value>the card has too little memory for it</value>
+  </data>
+  <data name="NewRunGpuLock_NoOfferedGpu" xml:space="preserve">
+    <value>no graphics card this app offers can run it</value>
+  </data>
+  <data name="NewRunGpuMisfit" xml:space="preserve">
+    <value>{0} will not run on {1}: {2}. Choose another graphics card or model, or tick Run anyway below.</value>
+  </data>
+  <data name="NewRunGpuNoCard" xml:space="preserve">
+    <value>No graphics card this app offers can run {0}. Choose another model.</value>
+  </data>
+  <data name="NewRunGpuSwitchedNotice" xml:space="preserve">
+    <value>Switched the graphics card to {0} for {1}.</value>
+  </data>
+  <data name="NewRunModelSwitchedNotice" xml:space="preserve">
+    <value>Switched the model to {0} to fit {1}.</value>
+  </data>
+  <data name="NewRunModel_evo2_7b" xml:space="preserve">
+    <value>Evo 2 7B (standard)</value>
+  </data>
+  <data name="NewRunModel_evo2_7b_262k" xml:space="preserve">
+    <value>Evo 2 7B, 262k context</value>
+  </data>
+  <data name="NewRunModel_evo2_1b_base" xml:space="preserve">
+    <value>Evo 2 1B (needs an H100, not a cheap option)</value>
+  </data>
+  <data name="NewRunModel_evo2_20b" xml:space="preserve">
+    <value>Evo 2 20B (needs an H100)</value>
+  </data>
+  <data name="NewRunModel_evo2_40b" xml:space="preserve">
+    <value>Evo 2 40B (experimental, expensive, quota rarely granted)</value>
+  </data>
+  <data name="NewRunModel_Unknown" xml:space="preserve">
+    <value>Unknown model</value>
+  </data>
+  <data name="HelpButton.Content" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="TourStepNewRun.Title" xml:space="preserve">
+    <value>Start here</value>
+  </data>
+  <data name="TourStepNewRun.Subtitle" xml:space="preserve">
+    <value>Drop a GenBank or FASTA file, or paste a sequence, then press Run. The app checks your file first, so nothing is rented until it is ready.</value>
+  </data>
+  <data name="TourStepNewRun.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepNewRun.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepRuns.Title" xml:space="preserve">
+    <value>Your runs</value>
+  </data>
+  <data name="TourStepRuns.Subtitle" xml:space="preserve">
+    <value>Every run you start is listed here with how it is going. Open one to see its results or the genome viewer.</value>
+  </data>
+  <data name="TourStepRuns.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepRuns.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepCloud.Title" xml:space="preserve">
+    <value>Your cloud</value>
+  </data>
+  <data name="TourStepCloud.Subtitle" xml:space="preserve">
+    <value>This is where you see the rented computers (VMs) and storage this app made in your Google Cloud project, and stop or delete them so they do not keep costing money.</value>
+  </data>
+  <data name="TourStepCloud.ActionButtonContent" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="TourStepCloud.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="TourStepSettings.Title" xml:space="preserve">
+    <value>Settings and help</value>
+  </data>
+  <data name="TourStepSettings.Subtitle" xml:space="preserve">
+    <value>Choose where files go and how you are told a run is done. The Help button at the top right opens the guide page for the screen you are on, and you can show this tour again from Settings.</value>
+  </data>
+  <data name="TourStepSettings.ActionButtonContent" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="TourStepSettings.CloseButtonContent" xml:space="preserve">
+    <value>Skip tour</value>
+  </data>
+  <data name="SettingsHelpHeader.Text" xml:space="preserve">
+    <value>Help</value>
+  </data>
+  <data name="SettingsHelpExplainer.Text" xml:space="preserve">
+    <value>Walk through the main screens again, or read the guide in your web browser.</value>
+  </data>
+  <data name="ReplayTourButton.Content" xml:space="preserve">
+    <value>Show the tour again</value>
+  </data>
+  <data name="OpenUserGuideLink.Content" xml:space="preserve">
+    <value>Open the user guide</value>
+  </data>
+  <data name="RunError_cleanup_stopped" xml:space="preserve">
+    <value>This run ended because its rented computer was stopped when you closed the app, before the results were downloaded. Choose Run to start the run again.</value>
+  </data>
+  <data name="LeftRunning_ExitTitle" xml:space="preserve">
+    <value>A rented computer is still running</value>
+  </data>
+  <data name="LeftRunning_ExitBody" xml:space="preserve">
+    <value>These rented computers (VMs) are still running and costing money:
+
+{0}
+
+A computer that keeps running ends itself at its time limit, but you pay until then. Press Stop to keep its disk and stop the cost of the computer, or Delete to remove it completely. {1}</value>
+  </data>
+  <data name="LeftRunning_VmLine" xml:space="preserve">
+    <value>{0} in {1}: ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineLive" xml:space="preserve">
+    <value>{0} in {1}: a run is still using it and its results are not downloaded yet. Stop it or Delete it ends that run and you lose those results. Otherwise it ends itself in about {2} minutes. {3}</value>
+  </data>
+  <data name="LeftRunning_VmLineNoLimit" xml:space="preserve">
+    <value>{0} in {1}: its time limit could not be read. Open the Cloud page to check it. {2}</value>
+  </data>
+  <data name="LeftRunning_CostPerHour" xml:space="preserve">
+    <value>Up to about ${0} per hour.</value>
+  </data>
+  <data name="LeftRunning_CostUnknown" xml:space="preserve">
+    <value>The price list could not be read.</value>
+  </data>
+  <data name="LeftRunning_DiskNote" xml:space="preserve">
+    <value>{0} stopped disk(s) also cost about ${1} per month until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_DiskNoteNoPrice" xml:space="preserve">
+    <value>{0} stopped disk(s) also keep costing money until you delete them on the Cloud page.</value>
+  </data>
+  <data name="LeftRunning_Stop" xml:space="preserve">
+    <value>Stop it</value>
+  </data>
+  <data name="LeftRunning_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="LeftRunning_Leave" xml:space="preserve">
+    <value>Leave it running</value>
+  </data>
+  <data name="LeftRunning_StopFailedTitle" xml:space="preserve">
+    <value>A computer could not be stopped</value>
+  </data>
+  <data name="LeftRunning_StopFailedBody" xml:space="preserve">
+    <value>Could not stop {0}. Close the app again to retry, or open the Cloud page and press Stop on it.</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedTitle" xml:space="preserve">
+    <value>A computer could not be deleted</value>
+  </data>
+  <data name="LeftRunning_DeleteFailedBody" xml:space="preserve">
+    <value>Could not delete {0}. Close the app again to retry, or open the Cloud page and press Delete on it.</value>
+  </data>
+  <data name="LeftRunning_ToastTitle" xml:space="preserve">
+    <value>A rented computer is running with no run attached</value>
+  </data>
+  <data name="LeftRunning_ToastBody" xml:space="preserve">
+    <value>{0} in {1} is running and costing money. Open the Cloud page and press Stop on it if you are not waiting for it.</value>
+  </data>
+  <data name="LeftRunning_StillEndingTitle" xml:space="preserve">
+    <value>A computer is still being ended</value>
+  </data>
+  <data name="LeftRunning_StillEndingBody" xml:space="preserve">
+    <value>{0} is still being ended and will finish on Google's side. Open the Cloud page next time you start the app to check that it is gone.</value>
+  </data>
+  <data name="LeftRunning_ToastBodyMany" xml:space="preserve">
+    <value>{0} rented computers are running and costing money: {1}. Open the Cloud page and press Stop on each one you are not waiting for.</value>
+  </data>
+  <data name="LeftRunning_ToastMore" xml:space="preserve">
+    <value>and {0} more</value>
   </data>
 </root>

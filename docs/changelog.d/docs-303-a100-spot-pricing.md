@@ -1,0 +1,1 @@
+- Cost: Spot prices in `pricing.json` read from Google's own pricing pages (MEASURED 2026-10-16): L4 0.51, A100 40GB 2.20, A100 80GB 3.04 USD/h (were 0.18 and unknown); research note section 3a and the Appendix B table corrected. #303.

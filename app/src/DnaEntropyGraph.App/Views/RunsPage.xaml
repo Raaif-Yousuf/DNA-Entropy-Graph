@@ -82,7 +82,7 @@
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
                                                     <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />
-                                                    <Button x:Uid="RunsRedownloadButton" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" />
+                                                    <Button Content="{x:Bind RedownloadLabel}" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" />
                                                     <Button x:Uid="RunsDeleteCloudButton" Command="{x:Bind DeleteCloudCommand}" IsEnabled="{x:Bind CanDeleteCloud}" ToolTipService.ToolTip="{x:Bind DeleteCloudHint}" />
                                                     <Button x:Uid="RunsDeleteLocalButton" Command="{x:Bind DeleteLocalCommand}" IsEnabled="{x:Bind CanDeleteLocal}" ToolTipService.ToolTip="{x:Bind DeleteLocalHint}" />
                                                     <Button x:Uid="RunsRemoveButton" Command="{x:Bind RemoveCommand}" IsEnabled="{x:Bind CanRemove}" />
