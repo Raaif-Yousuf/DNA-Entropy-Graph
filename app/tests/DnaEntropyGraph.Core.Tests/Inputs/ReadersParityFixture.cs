@@ -20,6 +20,8 @@ public static class ReadersParityFixture
 
     public static IEnumerable<object[]> GenBankCases() => Loaded.Value.GenBankCases.Select(c => new object[] { c });
 
+    public static IEnumerable<object[]> EmblCases() => Loaded.Value.EmblCases.Select(c => new object[] { c });
+
     public sealed class FixtureFile
     {
         [JsonPropertyName("fasta_cases")]
@@ -27,6 +29,9 @@ public static class ReadersParityFixture
 
         [JsonPropertyName("genbank_cases")]
         public List<ParityCase> GenBankCases { get; set; } = [];
+
+        [JsonPropertyName("embl_cases")]
+        public List<ParityCase> EmblCases { get; set; } = [];
     }
 
     public sealed class ParityCase

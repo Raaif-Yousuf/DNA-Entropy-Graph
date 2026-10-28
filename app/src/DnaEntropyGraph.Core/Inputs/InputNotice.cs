@@ -22,7 +22,7 @@ public enum InputNoticeCode
     /// <summary>A GenBank record had no sequence and was left out. Count is its 1-based position.</summary>
     GenBankRecordSkippedNoSequence,
 
-    /// <summary>A GenBank file was read. Count is the records, <see cref="InputNotice.Other"/> the gene and CDS features (the pill already shows both).</summary>
+    /// <summary>A GenBank file was read. Count is the records, <see cref="InputNotice.Other"/> the gene features, or the CDS features of a record with none, as the worker counts them (the pill already shows the number).</summary>
     GenBankRead,
 
     /// <summary>Genes (or CDS features, in a record with no gene features) whose location text cannot be read were left out, as the worker leaves them out (issues #543, #788). Count is how many, <see cref="InputNotice.Other"/> the 1-based record number.</summary>
