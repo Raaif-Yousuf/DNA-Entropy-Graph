@@ -8,6 +8,23 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings)
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _appRequestedEnds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Issue #91: this app itself is ending the job's VM (the run page's Stop or Delete, or a cancel). A VM that is gone after that is not a Spot preemption,
+    /// so the runner must not answer it with a paid on-demand retry. Remembered for the life of this runner.
+    /// </summary>
+    public void NoteAppRequestedEnd(string jobId) => _appRequestedEnds[jobId] = 0;
+
+    /// <summary>
+    /// Forgets the mark. The runner calls it just before it provisions a job's first VM: a Stop or Delete the person pressed on an earlier VM of this job (a kept-alive
+    /// one) says nothing about the VM about to exist, and must not silence its retry for the rest of the process. A Stop, Delete or cancel DURING the run sets it again.
+    /// </summary>
+    public void ClearAppRequestedEnd(string jobId) => _appRequestedEnds.TryRemove(jobId, out _);
+
+    /// <summary>True once <see cref="NoteAppRequestedEnd"/> was called for the job (and not cleared since).</summary>
+    public bool AppRequestedEnd(string jobId) => _appRequestedEnds.ContainsKey(jobId);
+
     /// <summary>
     /// Best effort, never throws: a run that failed or gave up must still end its VM (Hard Rule 11), by
     /// delete when the user chose delete and by stop otherwise. Returns null when the VM was confirmed
@@ -226,6 +243,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public async Task StopVmsAsync(string jobId, CancellationToken cancellationToken)
     {
+        NoteAppRequestedEnd(jobId);
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
         foreach (var vm in owned)
         {
@@ -242,6 +260,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// <summary>The run page's "Delete VM now"; same lookup and no-op rules as <see cref="StopVmsAsync"/>.</summary>
     public async Task DeleteVmsAsync(string jobId, CancellationToken cancellationToken)
     {
+        NoteAppRequestedEnd(jobId);
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
         foreach (var vm in owned)
         {

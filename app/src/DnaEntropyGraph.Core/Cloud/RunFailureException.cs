@@ -6,6 +6,12 @@ internal sealed class RunFailureException(CloudErrorKind kind, string code, stri
     public CloudErrorKind Kind { get; } = kind;
 
     public string Code { get; } = code;
+
+    /// <summary>
+    /// Issue #91: the lost VM was a Spot VM that Google took back (a preemption), not a failure of the worker. Internal on purpose: it is not a run
+    /// code, because the runner answers it with one automatic on-demand retry and a run is never recorded under it.
+    /// </summary>
+    public bool SpotPreempted { get; init; }
 }
 
 /// <summary>What the runner's guard needs to know about the VM, written by the steps as they learn it.</summary>

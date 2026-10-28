@@ -41,6 +41,14 @@ public interface IStorageGateway
     /// deleted; the caller reads back to verify (see <c>InstallationCleanup</c>).
     /// </summary>
     Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #91: deletes exactly one object (an object already gone is a success). The Spot retry uses it to clear the status and progress files the
+    /// preempted attempt left, so the new attempt's watcher never reads them. The default refuses, so a gateway that cannot delete one object fails the
+    /// retry loudly instead of letting stale files through.
+    /// </summary>
+    Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+        => throw new NotSupportedException("This storage gateway cannot delete a single object.");
 }
 
 /// <summary>

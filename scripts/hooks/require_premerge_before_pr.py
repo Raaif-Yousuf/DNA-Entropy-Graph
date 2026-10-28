@@ -376,8 +376,9 @@ def self_test() -> int:
             git(repo, "commit", "-q", "-m", "two")
             expect("a new commit denies again", verdict("gh pr merge 1", repo), True)
             expect("the inline bypass allows", verdict("DEG_SKIP_PREMERGE=hotfix gh pr create", repo), False)
-            log = stamp.stamp_path(repo).with_name("premerge-bypass.log")
-            if not log.is_file() or "hotfix" not in log.read_text(encoding="utf-8"):
+            stamp_file = stamp.stamp_path(repo)
+            log = stamp_file.with_name("premerge-bypass.log") if stamp_file is not None else None
+            if log is None or not log.is_file() or "hotfix" not in log.read_text(encoding="utf-8"):
                 failures += 1
                 print("self-test FAILED: a bypass must be logged", file=sys.stderr)
         with tempfile.TemporaryDirectory() as tmp:

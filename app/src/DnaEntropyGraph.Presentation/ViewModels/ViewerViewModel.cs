@@ -60,6 +60,10 @@ public sealed partial class ViewerViewModel : ObservableObject
     private ViewerLocus? _locus;
     private bool _keysOn;
 
+    // Issue #699: the locus the run was opened at (kept for a reload of the page), and the record it names.
+    private string? _targetLocus;
+    private string? _targetContig;
+
     // Status, ActionUrl and MapRunFolder are plain notifying properties, not [ObservableProperty]: no XAML
     // binds them (the page binds IsErrorVisible, ActionUri, HasLinkAction ...). Status feeds RetryCommand and
     // the tests, ActionUrl feeds ActionUri, and the host watches MapRunFolder through PropertyChanged.
@@ -224,6 +228,32 @@ public sealed partial class ViewerViewModel : ObservableObject
     /// <summary><see cref="ActionUrl"/> as a <see cref="Uri"/> (what a XAML <c>NavigateUri</c> binds to).</summary>
     public Uri? ActionUri => ActionUrl is null ? null : new Uri(ActionUrl);
 
+    /// <summary>
+    /// The page's one entry point (issue #699): the navigation parameter is a run folder string (as before) or a <see cref="ViewerRunTarget"/>
+    /// with a locus to show once the run is drawn. Anything else is "no run".
+    /// </summary>
+    public void OpenFromNavigation(object? parameter)
+    {
+        switch (parameter)
+        {
+            case ViewerRunTarget target:
+                _targetLocus = target.Locus;
+                _targetContig = target.Contig;
+                OpenRun(target.RunFolder);
+                break;
+            case string folder:
+                _targetLocus = null;
+                _targetContig = null;
+                OpenRun(folder);
+                break;
+            default:
+                _targetLocus = null;
+                _targetContig = null;
+                OpenRun(null);
+                break;
+        }
+    }
+
     /// <summary>Completes when the index of a long FASTA (issue #497) of the last <see cref="OpenRun"/> is built and applied; already complete when none was needed.</summary>
     public Task OpenReady { get; private set; } = Task.CompletedTask;
 
@@ -373,10 +403,14 @@ public sealed partial class ViewerViewModel : ObservableObject
             Contigs.Add(new ViewerContig(c.Name, c.Length, c.Seam));
         }
 
-        SelectWithoutGoto(Contigs.FirstOrDefault());
+        SelectWithoutGoto(InitialContig());
         HasContigs = Contigs.Count > 1;
         SendSeamsIfReady();
     }
+
+    // The record the run was opened at (issue #699), else the first one.
+    private ViewerContig? InitialContig()
+        => (_targetContig is null ? null : Contigs.FirstOrDefault(c => c.Name == _targetContig)) ?? Contigs.FirstOrDefault();
 
     private void ClearContigs()
     {
@@ -461,8 +495,19 @@ public sealed partial class ViewerViewModel : ObservableObject
                     _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var first) ? first : null;
                     Status = ViewerStatus.Ready;
                     // A freshly drawn page shows the first record; keep the selector in step with it.
-                    SelectWithoutGoto(Contigs.FirstOrDefault());
+                    SelectWithoutGoto(InitialContig());
                     SendSeamsIfReady();
+                    if (_targetLocus is not null)
+                    {
+                        Send(new { cmd = "goto", locus = _targetLocus });
+
+                        // Once: a Retry or a reloaded page must not pull the user back to this range.
+                        _targetLocus = null;
+                        if (Contigs.Count > 0)
+                        {
+                            _targetContig = null;
+                        }
+                    }
                 }
 
                 break;
