@@ -1,0 +1,1 @@
+- Add .github/workflows/image-dev.yml, a workflow_dispatch-only build of the cuda and cpu worker images to ghcr.io as dev-<shortsha>-<variant> (GITHUB_TOKEN only, no signing secrets, digest in the job summary), with the dev flow in release_runbook.md section 6b; correct the stale cloud_gpu_test.ps1 header (-Image is supported).

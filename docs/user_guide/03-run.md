@@ -29,6 +29,8 @@ On the **New run** page, either:
   when the run starts. Its results go in a folder named after the accession, version and range
   (for example `NC_045512_2_100-500`). The Runs page search finds the run by its accession.
 
+The files you add stay on **New run** if you visit another page and come back. Once you press **Run**, the page is cleared (files, pasted text and messages), ready for the next run. Your chosen preset, ticked output files and run location are kept for the next run.
+
 You can add more than one file at once. For now each press of **Run** runs the file you
 have selected in the list (running several files together as one batch is not built yet),
 and the batch limits below describe where that work is heading. When it arrives it gives you

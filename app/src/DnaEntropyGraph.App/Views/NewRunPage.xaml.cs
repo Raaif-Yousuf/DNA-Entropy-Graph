@@ -23,8 +23,17 @@ public sealed partial class NewRunPage : Page
     }
 
     /// <summary>Files handed over by "Open with" (issue #108) arrive as the navigation parameter; the ViewModel decides whether it is one.</summary>
-    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ViewModel.ReceiveNavigationParameterCommand.Execute(e.Parameter);
+    /// <remarks>Issue #527: the mode goes along, because Back re-delivers the original parameter and only the ViewModel decides it is stale.</remarks>
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ViewModel.ReceiveNavigationParameterCommand.Execute(NavigationArrival.From(e.Parameter, (int)e.NavigationMode));
 
-    /// <summary>Leaving the page: later Open-with files must open a new New run page, not go to this one.</summary>
-    protected override void OnNavigatedFrom(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ViewModel.DetachFromIntake();
+    /// <summary>
+    /// Leaving the page: later Open-with files must open a new New run page, not go to this one. Issue #527: the ViewModel now outlives
+    /// the page, and the x:Bind bindings subscribe to its PropertyChanged and Items.CollectionChanged, so they are released here
+    /// rather than left to the Unloaded event (this page is not cached: a new instance is made on every visit).
+    /// </summary>
+    protected override void OnNavigatedFrom(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        ViewModel.DetachFromIntake();
+        Bindings.StopTracking();
+    }
 }

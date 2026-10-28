@@ -89,6 +89,9 @@ public sealed class CloudJobRunner
     /// <summary>How long to wait between looks for the worker's <c>result.json</c>.</summary>
     public TimeSpan ResultPollInterval { get => _settings.ResultPollInterval; init => _settings.ResultPollInterval = value; }
 
+    /// <summary>Issue #91: the wait between two looks for a recorded Spot preemption (three looks).</summary>
+    public TimeSpan PreemptionLookupInterval { get => _settings.PreemptionLookupInterval; init => _settings.PreemptionLookupInterval = value; }
+
     /// <summary>
     /// How long to wait for <c>result.json</c> after the VM is running. Null means <see cref="ResultWaitLimit"/>: the VM's own
     /// <c>maxRunDuration</c> less a short margin, measured from the VM's creation (its <c>maxRunDuration</c> clock), not from Running.
@@ -427,18 +430,50 @@ public sealed class CloudJobRunner
             }
         }
 
-        await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
-        var provisioned = await _provisioner.ProvisionAsync(request, token => CompleteSpecAsync(request, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
-        if (!provisioned.Success)
+        // Issue #91: a Spot VM Google takes back is answered with exactly one automatic retry on an on-demand VM; the second attempt is never Spot, so it cannot loop.
+        _terminator.ClearAppRequestedEnd(request.JobId);
+        var attempt = request;
+        while (true)
         {
-            return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
-        }
+            await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
+            var provisioned = await _provisioner.ProvisionAsync(attempt, token => CompleteSpecAsync(attempt, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
+            if (!provisioned.Success)
+            {
+                return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
+            }
 
-        progress.Zone = provisioned.Zone!;
-        progress.VmName = provisioned.VmName ?? progress.VmName;
-        // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
-        await RecordVmNameAsync(request.JobId, progress.VmName ?? request.Spec.VmName, cancellationToken).ConfigureAwait(false);
-        return await RunOnVmAsync(progress.Resolve(request), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
+            progress.Zone = provisioned.Zone!;
+            progress.VmName = provisioned.VmName ?? progress.VmName;
+            // No name from the provisioner or the progress means the run created the VM itself, under the planned name.
+            await RecordVmNameAsync(request.JobId, progress.VmName ?? attempt.Spec.VmName, cancellationToken).ConfigureAwait(false);
+            await RecordProvisioningModelAsync(request.JobId, attempt.Spec.Spot, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await RunOnVmAsync(progress.Resolve(attempt), bucket, progress.Zone, cancellationToken, progress.VmStartMark).ConfigureAwait(false);
+            }
+            catch (RunFailureException preempted) when (preempted.SpotPreempted && attempt.Spec.Spot && !_terminator.AppRequestedEnd(request.JobId))
+            {
+                // The lost VM was already deleted (and the delete confirmed: an unconfirmed end is never marked a preemption), so nothing bills and nothing is adopted below.
+                // The preempted attempt's status and progress files go first: attempt 2 writes the same keys, and its watcher must never read attempt 1's heartbeat, stage or GPU line.
+                var jobFolder = WorkerManifestBuilder.JobPrefix(request.JobId);
+                foreach (var stale in new[] { "status.json", "progress.jsonl" })
+                {
+                    await _calls.CallAsync(
+                        async token =>
+                        {
+                            await _storage.DeleteObjectAsync(bucket, jobFolder + stale, token).ConfigureAwait(false);
+                            return true;
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                await _rows.RestartProvisioningAsync(request.JobId, cancellationToken).ConfigureAwait(false);
+                attempt = attempt with { Spec = attempt.Spec with { Spot = false, ExistingVmName = null } };
+                progress.VmName = null;
+                progress.Zone = null;
+                progress.VmStartMark = null;
+            }
+        }
     }
 
     /// <summary>
@@ -463,6 +498,19 @@ public sealed class CloudJobRunner
             // The row keeps the planned name; nothing about the VM changes.
         }
     }
+    /// <summary>Issue #91: the run row says whether the VM this attempt is on is Spot (true, then false after the retry). A record, not a step: a failed write never abandons a live VM.</summary>
+    private async Task RecordProvisioningModelAsync(string jobId, bool spot, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _rows.UpdateRowAsync(jobId, row => row with { IsSpot = spot }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The row keeps what it had; nothing about the VM changes.
+        }
+    }
+
     /// <summary>
     /// Issue #606: the spec to create. The provisioner asks for it only when no VM exists for the job, so a run that adopts a VM
     /// never calls IAM. The worker identity (the account the VM runs as, which may delete itself and write the bucket) is ensured
