@@ -66,6 +66,21 @@ public interface IComputeGateway
 
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #476: the fence before the app ends a Keep-alive VM for an expired window. Reads the VM, and when it still carries <paramref name="jobId"/>
+    /// (a VM another run reused since is that run's) writes <see cref="VmEnding.LabelKey"/> on it WITH the label fingerprint just read, so a run that
+    /// relabels the VM after this read fails its claim and a write that loses the race fails here. Returns the VM as it then reads (with
+    /// <see cref="VmDescriptor.ServerNow"/>), or null when it is gone, another run's, or the fingerprint moved: the caller leaves it alone, and the next
+    /// sweep looks again. A VM already marked within <see cref="VmEnding.Window"/> is returned without a second write. Cleanup that stops the meter: a
+    /// resilience layer bypasses the offline breaker for it.
+    /// The default implementation has no fingerprint to write, so it only checks the job id: a gateway that can do better MUST override it.
+    /// </summary>
+    async Task<VmDescriptor?> MarkEndingAsync(string vmName, string zone, string jobId, CancellationToken cancellationToken)
+    {
+        var vm = await GetVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        return vm?.Labels is not null && vm.Labels.TryGetValue("job-id", out var owner) && owner == jobId ? vm : null;
+    }
+
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);

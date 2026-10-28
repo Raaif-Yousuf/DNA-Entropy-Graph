@@ -351,7 +351,8 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
-                log: sp.GetRequiredService<IDiagnosticsLog>());
+                log: sp.GetRequiredService<IDiagnosticsLog>(),
+                selectedProjectId: () => sp.GetRequiredService<IGcpAccount>().SelectedProjectId);
         });
         // Issue #476: while the app is open, a Keep-alive VM still running past its window is ended every few minutes (started by AppStartup).
         services.AddSingleton<KeepAliveSweeper>(sp =>

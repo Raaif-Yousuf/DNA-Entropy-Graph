@@ -103,6 +103,7 @@ public sealed class JobReconciler
     private static readonly TimeSpan CancelSettleMargin = TimeSpan.FromSeconds(30);
 
     private readonly CloudJobRunner _runner;
+    private readonly Func<string?>? _selectedProjectId;
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;
     private readonly IRunRepository _runs;
@@ -222,6 +223,7 @@ public sealed class JobReconciler
     /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
     /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
+    /// <param name="selectedProjectId">The project every gateway call goes to (issue #830 will carry each run's own). The Keep-alive sweep only looks at rows of this project; null means no such filter (tests).</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
         CloudJobRunner runner,
@@ -238,8 +240,10 @@ public sealed class JobReconciler
         TimeSpan? lookupTimeout = null,
         TimeSpan? mutationTimeout = null,
         IDiagnosticsLog? log = null,
-        TimeSpan? cancelSettleTimeout = null)
+        TimeSpan? cancelSettleTimeout = null,
+        Func<string?>? selectedProjectId = null)
     {
+        _selectedProjectId = selectedProjectId;
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
@@ -401,13 +405,15 @@ public sealed class JobReconciler
                         continue;
                     }
 
+                    var wasRunning = false;
                     if (noteEndedByApp)
                     {
-                        // Looked at again just before the end (issue #476): a VM a newer run has claimed since the label search must not lose its run.
+                        // Issue #476: fenced just before the end. The mark is written with the label fingerprint just read, so a VM a newer run has claimed since the
+                        // label search is neither marked nor ended, and a run that tries to reuse it after the mark is refused. The read also carries the platform's clock.
                         VmDescriptor? fresh;
                         try
                         {
-                            fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                            fresh = await Lookup(t => _compute.MarkEndingAsync(vm.Name, vm.Zone, row.JobId, t), linked.Token).ConfigureAwait(false);
                         }
                         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                         {
@@ -415,16 +421,29 @@ public sealed class JobReconciler
                             continue;
                         }
 
-                        if (fresh is null || WantedByLifecycle(row, fresh, options, installation, now) == VmWant.Leave)
+                        if (fresh is null)
                         {
                             continue;
                         }
 
+                        if (!KeepAliveClockAgrees(row, options, fresh))
+                        {
+                            LogSkippedOnce(row.JobId, "ClockSkew");
+                            continue;
+                        }
+
                         want = WantedByLifecycle(row, fresh, options, installation, now);
+                        if (want == VmWant.Leave)
+                        {
+                            continue;
+                        }
+
+                        wasRunning = fresh.Status == "RUNNING";
                     }
 
                     var ended = await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
-                    if (noteEndedByApp && ended)
+                    // Only a RUNNING VM the app's own call changed is "still running past its window": a stopped one the app only deleted, or one already gone, is not.
+                    if (noteEndedByApp && ended && wasRunning)
                     {
                         await NoteKeepAliveEndedAsync(row.JobId).ConfigureAwait(false);
                     }
@@ -595,6 +614,38 @@ public sealed class JobReconciler
         return applied;
     }
 
+    /// <summary>
+    /// How far the platform's clock (the read's server time) may differ from the laptop's before the sweep ends nothing: the app judges the window on the
+    /// laptop's clock and the worker on the VM's, so a laptop clock further off than this could end a VM early. THEORY (unverified): two minutes is well
+    /// inside the 5 minute grace and above normal NTP drift; not measured. An unknown platform time (no server time on the read) is treated as too skewed.
+    /// </summary>
+    private static readonly TimeSpan MaxKeepAliveClockSkew = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// The window is over on the PLATFORM's clock too (the issue #691 server time the read carried), and the laptop's clock is close enough to it to have been
+    /// trusted: a fast laptop clock must not end a VM before the worker would have. False when the server time is unknown, too far from the laptop's, or earlier than window plus grace.
+    /// </summary>
+    private bool KeepAliveClockAgrees(RunRecord row, RunOptions? options, VmDescriptor fresh)
+    {
+        if (options is null || fresh.ServerNow is not { } server || (server - _time.GetUtcNow()).Duration() > MaxKeepAliveClockSkew)
+        {
+            return false;
+        }
+
+        return server >= (row.FinishedAt ?? row.CreatedUtc).AddMinutes(options.KeepAliveMinutes) + KeepAliveGrace;
+    }
+
+    /// <summary>Jobs the sweep has already said it is skipping, by reason: one log line per row, not per tick.</summary>
+    private readonly ConcurrentDictionary<(string JobId, string Reason), byte> _keepAliveSkipLogged = new();
+
+    private void LogSkippedOnce(string jobId, string reason)
+    {
+        if (_keepAliveSkipLogged.TryAdd((jobId, reason), 0))
+        {
+            _log.Warning("keepalive-sweep-skipped", jobId, reason);
+        }
+    }
+
     /// <summary>The longest past a Keep-alive window the worker's own end of the VM (startup.sh keep_hold) gets before the app ends it. THEORY (unverified): five minutes covers the worker's own Compute call and its retries; not measured on a real VM.</summary>
     public static readonly TimeSpan KeepAliveGrace = TimeSpan.FromMinutes(5);
 
@@ -611,6 +662,12 @@ public sealed class JobReconciler
     public async Task<IReadOnlyList<LifecycleOutcome>> EnforceKeepAliveAsync(CancellationToken cancellationToken)
     {
         var outcomes = new List<LifecycleOutcome>();
+        var selectedProject = _selectedProjectId?.Invoke();
+        if (_selectedProjectId is not null && string.IsNullOrEmpty(selectedProject))
+        {
+            return outcomes; // signed out or no project chosen: nothing can be asked, and a tick every five minutes says nothing
+        }
+
         var installation = InstallationId.GetOrCreate(_settings);
         var now = _time.GetUtcNow();
         var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
@@ -622,9 +679,20 @@ public sealed class JobReconciler
                 && string.Equals(r.Target, "cloud", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(r.InstallationId, installation, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(r.ProjectId)
-                && r.FinishedAt is not null
                 && KeepAliveWindowEndedRecently(r, now))
             .ToList();
+        if (selectedProject is not null)
+        {
+            // #830 (not done yet): every gateway call asks the SELECTED project, so a row of another project would be looked up in the wrong one and never found.
+            // Left to the launch pass (which has the same limit) and said once per row.
+            foreach (var other in due.Where(r => !string.Equals(r.ProjectId, selectedProject, StringComparison.Ordinal)))
+            {
+                LogSkippedOnce(other.JobId, "ProjectNotSelected");
+            }
+
+            due = due.Where(r => string.Equals(r.ProjectId, selectedProject, StringComparison.Ordinal)).ToList();
+        }
+
         foreach (var row in due)
         {
             // The grace is held by the filter above (now >= window end + grace), so the expiry check inside is already met.
@@ -642,7 +710,7 @@ public sealed class JobReconciler
             return false;
         }
 
-        var expiry = row.FinishedAt!.Value.AddMinutes(options.KeepAliveMinutes);
+        var expiry = (row.FinishedAt ?? row.CreatedUtc).AddMinutes(options.KeepAliveMinutes); // like the launch pass
         return now >= expiry + KeepAliveGrace && now < expiry + KeepAliveSweepReach;
     }
 
@@ -654,7 +722,7 @@ public sealed class JobReconciler
             await _rows.UpdateRowAsync(
                 jobId,
                 row => string.IsNullOrWhiteSpace(row.ErrorCode)
-                    ? row with { ErrorCode = RunErrorCodes.KeepAliveEndedByApp, ErrorDetail = "The VM was still running after the keep-alive window and its grace, and the app ended it." }
+                    ? row with { ErrorCode = RunErrorCodes.KeepAliveEndedByApp }
                     : row,
                 CancellationToken.None).ConfigureAwait(false);
         }

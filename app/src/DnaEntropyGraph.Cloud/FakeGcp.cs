@@ -1125,6 +1125,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
         }
 
+        if (VmEnding.IsEnding(vm.Labels, _timeProvider.GetUtcNow()))
+        {
+            throw Build(CloudErrorKind.Other, "VM_ENDING", null, $"The VM '{existingVmName}' is being ended for an expired keep-alive window, so it was not reused.");
+        }
+
         var readFingerprint = _labelFingerprints.GetValueOrDefault(key);
         if (_reuseBarrier is { } barrier)
         {
@@ -1172,6 +1177,34 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         return vm;
     }
+    /// <summary>
+    /// Issue #476: the fence before the app ends a kept VM, as the real gateway does it: the job id is checked and the mark written in one step under the
+    /// claim lock, which moves the label fingerprint exactly as a real <c>setLabels</c> does (so a reuse that read the VM before the mark fails its claim with a 412).
+    /// </summary>
+    public Task<VmDescriptor?> MarkEndingAsync(string vmName, string zone, string jobId, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out var vm) || vm.Labels is null || !vm.Labels.TryGetValue("job-id", out var owner) || owner != jobId)
+            {
+                return Task.FromResult<VmDescriptor?>(null);
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            if (!VmEnding.IsEnding(vm.Labels, now))
+            {
+                var marked = new Dictionary<string, string>(vm.Labels) { [VmEnding.LabelKey] = VmEnding.Stamp(now) };
+                vm = vm with { Labels = marked };
+                _vms[key] = vm;
+                _labelFingerprints[key] = NextFingerprint();
+            }
+
+            return Task.FromResult<VmDescriptor?>(vm with { ServerNow = now });
+        }
+    }
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         if (ConsumeHang())

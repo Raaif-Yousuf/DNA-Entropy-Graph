@@ -35,11 +35,15 @@ public class JobReconcilerKeepAliveSweepTests
 
     private sealed class Rig
     {
-        public Rig()
+        public Rig(TimeSpan? laptopAhead = null)
         {
-            Clock = new MutableClock(Launch);
-            Env = new JobReconcilerTests.Env(new FakeGcp(Clock).WithWorker(FakeWorkerMode.Never));
+            PlatformClock = new MutableClock(Launch);
+            Clock = laptopAhead is { } ahead ? new MutableClock(Launch + ahead) : PlatformClock;
+            Env = new JobReconcilerTests.Env(new FakeGcp(PlatformClock).WithWorker(FakeWorkerMode.Never));
         }
+
+        /// <summary>The cloud's own clock (what the platform stamps on a read); the laptop's is <see cref="Clock"/>, the same unless a test skews it.</summary>
+        public MutableClock PlatformClock { get; }
 
         public MutableClock Clock { get; }
 
@@ -47,9 +51,16 @@ public class JobReconcilerKeepAliveSweepTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler() => Env.Reconciler(Clock);
+        public JobReconciler Reconciler(IComputeGateway? compute = null, Func<string?>? selectedProjectId = null) => Env.Reconciler(Clock, compute: compute, selectedProjectId: selectedProjectId ?? (() => Project));
 
-        public void AdvanceMinutes(int minutes) => Clock.Advance(TimeSpan.FromMinutes(minutes));
+        public void AdvanceMinutes(int minutes)
+        {
+            Clock.Advance(TimeSpan.FromMinutes(minutes));
+            if (!ReferenceEquals(Clock, PlatformClock))
+            {
+                PlatformClock.Advance(TimeSpan.FromMinutes(minutes));
+            }
+        }
 
         /// <summary>A Completed Keep-alive run that finished at launch (30 minute window) whose VM is up. The clock is advanced by each test.</summary>
         public async Task<CloudJobRequest> SeedAsync(string jobId, AfterKeepAliveAction after, JobPhase phase = JobPhase.Completed, Func<RunRecord, RunRecord>? tweak = null)
@@ -219,6 +230,239 @@ public class JobReconcilerKeepAliveSweepTests
         await driver!;
     }
 
+    // ---- round 2 of the cold review ----
+
+    [Fact]
+    public async Task A_run_of_another_project_than_the_selected_one_is_skipped_with_one_log_line_per_row_not_per_tick()
+    {
+        // #830: every gateway call goes to the SELECTED project, so a row of project X while Y is selected would be looked up in Y: never swept.
+        var rig = new Rig();
+        await rig.SeedAsync("job-x", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler(selectedProjectId: () => "some-other-project");
+
+        var first = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        var second = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        first.ShouldBeEmpty();
+        second.ShouldBeEmpty();
+        (await rig.StatusAsync("job-x")).ShouldBe("RUNNING", "left to the launch pass until #830 carries the run's project through the gateway");
+        rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.JobId == "job-x").ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task With_no_project_selected_or_signed_out_the_sweep_does_nothing_and_says_nothing(string? selected)
+    {
+        var rig = new Rig();
+        await rig.SeedAsync("job-so", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+
+        var outcomes = await rig.Reconciler(selectedProjectId: () => selected).EnforceKeepAliveAsync(CancellationToken.None);
+
+        outcomes.ShouldBeEmpty();
+        rig.Env.Log.Entries.ShouldBeEmpty("a sweep every five minutes must not log while signed out");
+        (await rig.StatusAsync("job-so")).ShouldBe("RUNNING");
+    }
+
+    [Fact]
+    public async Task A_VM_that_was_already_stopped_when_the_app_deletes_it_gets_no_still_running_note()
+    {
+        var rig = new Rig();
+        await rig.SeedAsync("job-sd", AfterKeepAliveAction.Delete);
+        var vm = (await rig.Gcp.FindByJobIdAsync("job-sd", CancellationToken.None)).Single();
+        await rig.Gcp.StopVmAsync(vm.Name, vm.Zone, CancellationToken.None);
+        rig.AdvanceMinutes(40);
+
+        var outcomes = await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+
+        (await rig.StatusAsync("job-sd")).ShouldBeNull("the user chose Delete");
+        outcomes.Single().Action.ShouldBe(LifecycleAction.VmDeleted);
+        rig.Env.Row("job-sd").ErrorCode.ShouldBeNull("it was not running: the note says it was");
+    }
+
+    [Fact]
+    public async Task The_note_carries_no_inline_English_detail()
+    {
+        var rig = new Rig();
+        await rig.SeedAsync("job-nd", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+
+        await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Env.Row("job-nd").ErrorCode.ShouldBe(RunErrorCodes.KeepAliveEndedByApp);
+        rig.Env.Row("job-nd").ErrorDetail.ShouldBeNull("Hard Rule 13: the words are the RunError_ resw key");
+    }
+
+    [Theory]
+    [InlineData(29, false)]
+    [InlineData(36, true)]
+    public async Task A_row_with_no_finish_time_counts_from_its_start_like_the_launch_pass(int minutes, bool ended)
+    {
+        // The seeded row was created five minutes before launch: window end = created + 30, then the 5 minute grace.
+        var rig = new Rig();
+        await rig.SeedAsync("job-nf", AfterKeepAliveAction.Stop, tweak: r => r with { FinishedAt = null });
+        rig.AdvanceMinutes(minutes);
+
+        await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+
+        (await rig.StatusAsync("job-nf")).ShouldBe(ended ? "STOPPED" : "RUNNING");
+    }
+
+    [Fact]
+    public async Task A_laptop_clock_an_hour_fast_does_not_end_a_VM_whose_window_has_not_run_on_the_platform_clock()
+    {
+        // M4: the laptop says the window ended; the platform's own clock (the read's server time) says it did not.
+        var rig = new Rig(laptopAhead: TimeSpan.FromHours(1));
+        await rig.SeedAsync("job-fast", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(10);
+
+        var outcomes = await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+
+        outcomes.ShouldBeEmpty();
+        (await rig.StatusAsync("job-fast")).ShouldBe("RUNNING", "a skewed laptop clock must not end a VM early");
+        rig.Env.Row("job-fast").ErrorCode.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_small_skew_does_not_hold_back_a_VM_that_really_is_past_its_window()
+    {
+        var rig = new Rig(laptopAhead: TimeSpan.FromMinutes(1));
+        await rig.SeedAsync("job-small", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+
+        await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+
+        (await rig.StatusAsync("job-small")).ShouldBe("STOPPED");
+    }
+
+    // ---- M2: a VM that run B claims between the sweep's look and its delete is B's ----
+
+    /// <summary>The fake behind a compute interface, with a hook after the label search and one before the end call, so a test can run another run's reuse at exactly that moment.</summary>
+    private sealed class RaceCompute(FakeGcp inner) : IComputeGateway
+    {
+        public Func<Task>? AfterFind { get; set; }
+
+        public Func<Task>? BeforeEnd { get; set; }
+
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        {
+            var found = await inner.FindByJobIdAsync(jobId, cancellationToken);
+            if (AfterFind is { } hook)
+            {
+                AfterFind = null;
+                await hook();
+            }
+
+            return found;
+        }
+
+        public Task<VmDescriptor?> MarkEndingAsync(string vmName, string zone, string jobId, CancellationToken cancellationToken) => inner.MarkEndingAsync(vmName, zone, jobId, cancellationToken);
+
+        public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            await RunBeforeEnd();
+            await inner.StopVmAsync(vmName, zone, cancellationToken);
+        }
+
+        public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            await RunBeforeEnd();
+            await inner.DeleteVmAsync(vmName, zone, cancellationToken);
+        }
+
+        private async Task RunBeforeEnd()
+        {
+            if (BeforeEnd is { } hook)
+            {
+                BeforeEnd = null;
+                await hook();
+            }
+        }
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+
+        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+    }
+
+    private static async Task<VmDescriptor> StoppedKeptVmAsync(Rig rig, string jobId)
+    {
+        await rig.SeedAsync(jobId, AfterKeepAliveAction.Delete);
+        var vm = (await rig.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).Single();
+        await rig.Gcp.StopVmAsync(vm.Name, vm.Zone, CancellationToken.None); // the worker stopped it; the user chose Delete, so the app has a delete to do
+        return vm;
+    }
+
+    [Fact]
+    public async Task A_VM_run_B_reuses_between_the_label_search_and_the_end_is_left_running_for_B()
+    {
+        var rig = new Rig();
+        var vm = await StoppedKeptVmAsync(rig, "job-ra");
+        rig.AdvanceMinutes(40);
+        var race = new RaceCompute(rig.Gcp)
+        {
+            AfterFind = async () => await rig.Gcp.ReuseVmAsync(SpecOf("job-rb"), vm.Name, vm.Zone, CancellationToken.None),
+        };
+
+        var outcomes = await rig.Reconciler(race).EnforceKeepAliveAsync(CancellationToken.None);
+
+        var now = await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None);
+        now.ShouldNotBeNull("run B's VM was deleted by run A's window");
+        now!.Status.ShouldBe("RUNNING");
+        now.Labels!["job-id"].ShouldBe("job-rb");
+        outcomes.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_reuse_attempted_after_the_sweep_marked_the_VM_for_ending_is_refused_and_changes_nothing()
+    {
+        var rig = new Rig();
+        var vm = await StoppedKeptVmAsync(rig, "job-rc");
+        rig.AdvanceMinutes(40);
+        Exception? refused = null;
+        var race = new RaceCompute(rig.Gcp)
+        {
+            BeforeEnd = async () =>
+            {
+                refused = await Should.ThrowAsync<CloudOperationException>(() => rig.Gcp.ReuseVmAsync(SpecOf("job-rd"), vm.Name, vm.Zone, CancellationToken.None));
+            },
+        };
+
+        await rig.Reconciler(race).EnforceKeepAliveAsync(CancellationToken.None);
+
+        refused.ShouldNotBeNull("the hook never ran: the sweep did not reach its end call (vacuous)");
+        ((CloudOperationException)refused!).Error.Code.ShouldBe("VM_ENDING");
+        (await rig.StatusAsync("job-rc")).ShouldBeNull("the delete went ahead");
+        (await rig.StatusAsync("job-rd")).ShouldBeNull("B got no VM");
+    }
+
+    [Fact]
+    public void A_recent_ending_mark_is_read_back_and_an_old_one_expires()
+    {
+        var now = Launch;
+        var labels = new Dictionary<string, string> { [VmEnding.LabelKey] = VmEnding.Stamp(now - TimeSpan.FromMinutes(2)) };
+
+        VmEnding.IsEnding(labels, now).ShouldBeTrue();
+        VmEnding.IsEnding(labels, now + VmEnding.Window + TimeSpan.FromMinutes(5)).ShouldBeFalse("a stale mark must not make a stopped VM unreusable for ever");
+        VmEnding.IsEnding(null, now).ShouldBeFalse();
+        VmEnding.IsEnding(new Dictionary<string, string> { [VmEnding.LabelKey] = "garbage" }, now).ShouldBeFalse();
+    }
+
     // ---- the periodic trigger ----
 
     private sealed class CapturingTimeProvider : TimeProvider
@@ -285,6 +529,21 @@ public class JobReconcilerKeepAliveSweepTests
 
         calls.ShouldBe(2);
         log.Entries.ShouldBe([("keepalive-sweep", null, nameof(TimeoutException)), ("keepalive-sweep", null, nameof(TimeoutException))]);
+    }
+
+    [Fact]
+    public void Disposing_twice_is_fine_and_a_start_after_it_throws()
+    {
+        var time = new CapturingTimeProvider();
+        var sweeper = new KeepAliveSweeper(_ => Task.CompletedTask, time);
+        sweeper.Start();
+
+        sweeper.Dispose();
+        sweeper.Dispose();
+
+        time.Timers[0].Timer.Disposed.ShouldBeTrue();
+        Should.Throw<ObjectDisposedException>(sweeper.Start);
+        time.Timers.Count.ShouldBe(1, "no timer was armed after dispose");
     }
 
     [Fact]

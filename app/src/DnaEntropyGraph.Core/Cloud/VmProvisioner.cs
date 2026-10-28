@@ -565,7 +565,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 || !vm.Labels.TryGetValue("app", out var app) || app != VmSpec.AppLabelValue
                 || !vm.Labels.TryGetValue("installation-id", out var owner) || owner != spec.InstallationId
                 || !vm.Labels.TryGetValue("model", out var vmModel) || vmModel != model
-                || !vm.Labels.TryGetValue("job-id", out var oldJob) || oldJob == request.JobId)
+                || !vm.Labels.TryGetValue("job-id", out var oldJob) || oldJob == request.JobId
+                || VmEnding.IsEnding(vm.Labels, settings.TimeProvider.GetUtcNow())) // issue #476: the app is ending it for an expired Keep-alive window
             {
                 continue;
             }

@@ -46,6 +46,11 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken);
 
+    // Issue #476: the fence before the app ends a kept VM. Cleanup that stops the meter and a sweep failure must not count against the live-run
+    // breaker, so it bypasses it like stop and delete; a replayed attempt that meets its own already-landed mark returns the VM without a second write.
+    public Task<VmDescriptor?> MarkEndingAsync(string vmName, string zone, string jobId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.MarkEnding", token => _inner.MarkEndingAsync(vmName, zone, jobId, token), cancellationToken, bypassBreaker: true);
+
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true);
 

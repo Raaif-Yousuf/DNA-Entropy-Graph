@@ -76,6 +76,22 @@ public class VmReuseTests
     }
 
     [Fact]
+    public async Task A_stopped_VM_the_app_has_marked_for_ending_is_not_picked_for_reuse_and_the_run_creates_its_own()
+    {
+        // Issue #476: a Keep-alive VM the app is ending for an expired window must not be handed to the next run.
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        await SeedIdleVmAsync(gcp, repo, "job-old");
+        await gcp.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None);
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-new", Spec("job-new")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Completed, result.FailureMessage);
+        gcp.ReuseAttempts.ShouldBe(0, "the marked VM was offered for reuse");
+        gcp.CreateAttempts.ShouldBe(2, "the seed and the run's own VM");
+    }
+
+    [Fact]
     public async Task A_start_that_fails_with_a_stockout_falls_back_to_creating_a_new_VM_and_the_stranded_one_is_deleted()
     {
         var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Stockout);

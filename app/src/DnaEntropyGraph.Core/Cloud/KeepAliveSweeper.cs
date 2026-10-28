@@ -20,6 +20,7 @@ public sealed class KeepAliveSweeper : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private ITimer? _timer;
     private bool _sweeping;
+    private bool _disposed;
 
     public KeepAliveSweeper(Func<CancellationToken, Task> sweep, TimeProvider? time = null, IDiagnosticsLog? log = null)
     {
@@ -36,6 +37,7 @@ public sealed class KeepAliveSweeper : IDisposable
     {
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_timer is not null)
             {
                 return;
@@ -49,7 +51,7 @@ public sealed class KeepAliveSweeper : IDisposable
     {
         lock (_gate)
         {
-            if (_sweeping)
+            if (_sweeping || _disposed)
             {
                 return;
             }
@@ -92,9 +94,17 @@ public sealed class KeepAliveSweeper : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             _timer?.Dispose();
+            _timer = null;
         }
 
         _stop.Cancel();
+        _stop.Dispose();
     }
 }

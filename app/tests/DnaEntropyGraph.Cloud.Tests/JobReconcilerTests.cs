@@ -121,9 +121,9 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<string?>? selectedProjectId = null) => new(
             Runner,
-            Gcp,
+            compute ?? Gcp,
             Gcp,
             Repo,
             Inputs,
@@ -135,7 +135,8 @@ public class JobReconcilerTests
             clock ?? new FixedClock(Launch),
             lookupTimeout,
             mutationTimeout,
-            log ?? Log);
+            log ?? Log,
+            selectedProjectId: selectedProjectId);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
