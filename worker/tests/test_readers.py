@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dna_entropy.config import RunConfig
 from dna_entropy.pipeline import load_and_validate
 from dna_entropy.readers import PasteReader, Reader
 from dna_entropy.readers.fasta import FastaReadError
 from dna_entropy.readers.genbank import GenBankReadError
+from dna_entropy.readers.input import load_input
 from dna_entropy.validation.validators import ValidationError
 
 
@@ -120,3 +123,17 @@ def test_worker_runners_actual_classifier_tuple_now_matches_both_read_errors() -
 
     assert isinstance(FastaReadError("boom"), runner_mod.ValidationError)
     assert isinstance(GenBankReadError("boom"), runner_mod.ValidationError)
+
+
+@pytest.mark.parametrize("informat", ["genbank", "fasta", "embl", "snapgene"])
+def test_file_informat_without_an_input_path_is_a_validation_error_not_a_typeerror(
+    tmp_path: Path, informat: str
+) -> None:
+    """pyright found `cfg.input_path` (str | None) passed to a reader that needs a str.
+
+    MEASURED 2026-10-28: `--informat fasta` with nothing to read (no --input, stdin) reached
+    `read_fasta(None)` and died with a raw TypeError instead of a message that names the action.
+    """
+    cfg = RunConfig(name="x", out_dir=str(tmp_path / "o"), informat=informat, input_path=None)
+    with pytest.raises(ValidationError, match="--input"):
+        load_input(cfg)
