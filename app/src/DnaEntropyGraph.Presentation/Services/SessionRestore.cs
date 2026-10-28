@@ -72,6 +72,14 @@ public sealed class RecordingNavigator(INavigator inner, SessionStore session) :
 {
     public bool CanGoBack => inner.CanGoBack;
 
+    public string? CurrentPageKey => inner.CurrentPageKey;
+
+    public event EventHandler? CurrentPageChanged
+    {
+        add => inner.CurrentPageChanged += value;
+        remove => inner.CurrentPageChanged -= value;
+    }
+
     public void GoBack() => inner.GoBack();
 
     public void NavigateTo(string pageKey, object? parameter = null)
