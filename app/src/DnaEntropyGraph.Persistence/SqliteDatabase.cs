@@ -115,6 +115,7 @@ public sealed class SqliteDatabase : IDisposable
     {
         DataSource = _databasePath,
         Mode = SqliteOpenMode.ReadWriteCreate,
+        DefaultTimeout = 5,
     }.ToString();
 
     private void ConfigurePragmas(SqliteConnection connection)
@@ -161,6 +162,11 @@ public sealed class SqliteDatabase : IDisposable
             reason = "";
             return true;
         }
+        catch (SqliteException ex) when (DatabaseStartupCheck.IsBusy(ex))
+        {
+            // Busy or locked is "in use", not "corrupt": the live file is never moved or deleted for it.
+            throw DatabaseStartupCheck.InUse(ex);
+        }
         catch (SqliteException ex)
         {
             reason = ex.Message;
@@ -177,13 +183,10 @@ public sealed class SqliteDatabase : IDisposable
             File.Move(_databasePath, quarantinePath, overwrite: false);
             RecoveredFromCorruptFileAt = quarantinePath;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            // Best effort. An app that cannot even rename the file aside
-            // must still be able to delete it and start fresh - hanging
-            // forever on a locked/corrupt file is worse than losing history.
-            File.Delete(_databasePath);
-            RecoveredFromCorruptFileAt = null;
+            // Never delete the user's history: if it cannot be moved aside, leave it and refuse (issue #842).
+            throw DatabaseStartupCheck.InUse(ex);
         }
 
         foreach (var strayExtension in new[] { "-wal", "-shm" })
@@ -232,24 +235,62 @@ internal static class SqliteMigrations
                 "A migration file that is not packed as an EmbeddedResource ships an app with no schema at all.");
         }
 
-        var migrations = new List<(long Version, string Sql)>();
+        var files = new List<(string FileName, string Sql)>();
         foreach (var name in names)
         {
-            var fileName = name[prefix.Length..];
-            var versionText = fileName.Split('_', 2)[0];
-            if (!long.TryParse(versionText, out var version))
-            {
-                throw new InvalidOperationException(
-                    $"Embedded migration '{name}' does not start with a numeric version (expected e.g. 0001_initial.sql).");
-            }
-
             using var stream = assembly.GetManifestResourceStream(name)
                 ?? throw new InvalidOperationException($"Embedded migration '{name}' could not be opened.");
             using var reader = new StreamReader(stream);
-            migrations.Add((version, reader.ReadToEnd()));
+            files.Add((name[prefix.Length..], reader.ReadToEnd()));
         }
 
-        return migrations;
+        return BuildSet(files);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex FileNamePattern =
+        new(@"^(\d{4})_[a-z0-9]+(_[a-z0-9]+)*\.sql$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Validates a migration file set (issue #842): names are
+    /// <c>NNNN_snake.sql</c>, numbers are unique, and versions are exactly
+    /// 1..N. A gap would let a later migration advance <c>user_version</c>
+    /// past an earlier one that then never runs on any install.
+    /// </summary>
+    internal static IReadOnlyList<(long Version, string Sql)> BuildSet(IEnumerable<(string FileName, string Sql)> files)
+    {
+        var parsed = new List<(long Version, string FileName, string Sql)>();
+        foreach (var (fileName, sql) in files)
+        {
+            var match = FileNamePattern.Match(fileName);
+            if (!match.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Embedded migration '{fileName}' is not named NNNN_snake.sql (four digits, then lowercase words joined by underscores, e.g. 0001_initial.sql). Rename the file.");
+            }
+
+            parsed.Add((long.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture), fileName, sql));
+        }
+
+        foreach (var group in parsed.GroupBy(m => m.Version).Where(g => g.Count() > 1))
+        {
+            throw new InvalidOperationException(
+                $"Duplicate migration number {group.Key:0000}: {string.Join(" and ", group.Select(m => m.FileName).Order(StringComparer.Ordinal))}. " +
+                "Two branches claimed the same number; renumber the one that landed second.");
+        }
+
+        var ordered = parsed.OrderBy(m => m.Version).ToList();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var expected = i + 1L;
+            if (ordered[i].Version != expected)
+            {
+                throw new InvalidOperationException(
+                    $"Migration numbering has a gap: expected {expected:0000} but found {ordered[i].FileName}. " +
+                    "Migrations must be exactly 0001..N with no gaps; renumber the new file.");
+            }
+        }
+
+        return ordered.Select(m => (m.Version, m.Sql)).ToList();
     }
 
     /// <summary>
@@ -263,6 +304,12 @@ internal static class SqliteMigrations
     public static void Apply(SqliteConnection connection, IReadOnlyList<(long Version, string Sql)> migrations)
     {
         var currentVersion = GetUserVersion(connection);
+        var latest = migrations.Count == 0 ? 0L : migrations.Max(m => m.Version);
+        if (currentVersion > latest)
+        {
+            throw new DatabaseNewerThanAppException(currentVersion, latest);
+        }
+
         foreach (var (version, sql) in migrations.OrderBy(m => m.Version))
         {
             if (version <= currentVersion)
