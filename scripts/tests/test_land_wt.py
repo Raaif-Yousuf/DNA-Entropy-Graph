@@ -7,6 +7,7 @@ the real venv are never touched.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -1116,52 +1117,101 @@ def test_kill_pid_tree_ends_a_process_and_its_child_and_reports_it(tmp_path):
 
 
 FORKER = """import subprocess, sys, time
-from pathlib import Path
-out = Path(sys.argv[1])
 end = time.time() + 20
 while time.time() < end:
-    c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    with out.open("a") as f:
-        f.write(str(c.pid) + "\\n")
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 """
 
+POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
 
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+
+def _session_members(sid: int) -> list[int]:
+    """Live (non-zombie) pids in session `sid`, from /proc itself rather than anything a process reports about itself."""
+    found = []
+    for entry in os.listdir("/proc"):
+        if entry.isdigit():
+            try:
+                rest = Path(f"/proc/{entry}/stat").read_text(errors="replace").rpartition(")")[2].split()
+            except OSError:
+                continue
+            if int(rest[3]) == sid and rest[0] not in ("Z", "X", "x"):
+                found.append(int(entry))
+    return found
+
+
+@POSIX_ONLY
 def test_kill_pid_tree_leaves_no_child_forked_while_it_was_scanning(tmp_path):
-    pidfile = tmp_path / "kids.txt"
     script = tmp_path / "forker.py"
     script.write_text(FORKER, encoding="utf-8", newline="\n")
-    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    proc = subprocess.Popen([sys.executable, str(script)], start_new_session=True)  # pid == sid: every descendant shares it
     try:
         end = time.time() + 10
-        while (not pidfile.exists() or len(pidfile.read_text().split()) < 3) and time.time() < end:
+        while len(_session_members(proc.pid)) < 4 and time.time() < end:
             time.sleep(0.05)
+        assert len(_session_members(proc.pid)) >= 4
         assert lw.kill_pid_tree(proc.pid) is True
         proc.wait()
-        kids = [int(x) for x in pidfile.read_text().split()]
-        assert len(kids) >= 3
-        assert [k for k in kids if not _pid_gone(k, 5)] == []
+        end = time.time() + 5
+        while _session_members(proc.pid) and time.time() < end:
+            time.sleep(0.1)
+        assert _session_members(proc.pid) == []
     finally:
         proc.kill()
         proc.wait()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
-def test_a_posix_kill_skips_a_pid_whose_start_time_changed(tmp_path):
+@POSIX_ONLY
+def test_a_posix_kill_skips_a_pid_whose_start_time_changed():
     victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
-        ident = lw._proc_ident(victim.pid)
-        assert ident is not None
-        assert lw._kill_if_same(victim.pid, (ident[0], ident[1] + 1)) is False  # a reused pid has a different start time
+        start = lw._proc_ident(victim.pid)
+        assert isinstance(start, int)
+        assert lw._kill_if_same(victim.pid, start + 1) is False  # a reused pid has a different start time
         assert victim.poll() is None
-        assert lw._kill_if_same(victim.pid, ident) is True
+        assert lw._kill_if_same(victim.pid, start) is True
         victim.wait(timeout=10)
     finally:
         victim.kill()
         victim.wait()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+ORPHANER = """import subprocess, sys, time
+from pathlib import Path
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+Path(sys.argv[1]).write_text(str(gc.pid))
+while not Path(sys.argv[2]).exists():
+    time.sleep(0.05)
+"""
+
+
+@POSIX_ONLY
+def test_a_posix_kill_still_reaches_a_victim_whose_parent_died_after_the_scan(tmp_path):
+    pidfile, gofile = tmp_path / "gc.pid", tmp_path / "go"
+    script = tmp_path / "orphaner.py"
+    script.write_text(ORPHANER, encoding="utf-8", newline="\n")
+    parent = subprocess.Popen([sys.executable, str(script), str(pidfile), str(gofile)])
+    gc = 0
+    try:
+        end = time.time() + 10
+        while not (pidfile.exists() and pidfile.read_text()) and time.time() < end:
+            time.sleep(0.05)
+        gc = int(pidfile.read_text())
+        start = lw._proc_ident(gc)  # recorded while the parent is alive, like a scan
+        assert start is not None
+        gofile.write_text("x")
+        parent.wait(timeout=10)  # the parent dies after the scan: gc is reparented to init
+        assert lw._proc_fields(gc)[1] != parent.pid
+        assert lw._kill_if_same(gc, start) is True  # identity is pid + start time only, never the ppid
+        assert _pid_gone(gc)
+    finally:
+        parent.kill()
+        parent.wait()
+        if gc:
+            with contextlib.suppress(OSError):
+                os.kill(gc, 9)
+
+
+@POSIX_ONLY
 def test_a_posix_kill_freezes_the_root_before_it_scans_for_descendants(monkeypatch):
     victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     states = []
@@ -1175,7 +1225,90 @@ def test_a_posix_kill_freezes_the_root_before_it_scans_for_descendants(monkeypat
     monkeypatch.setattr(lw, "_proc_table", spy)
     try:
         assert lw.kill_pid_tree(victim.pid) is True
-        assert states and states[0] == "T"  # stopped: it cannot fork a child that reparents to init after the scan
+        assert states and set(states) == {"T"}  # stopped (and the stop confirmed) at EVERY scan, so nothing can fork unseen
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_waits_for_a_late_stop_before_trusting_a_scan(monkeypatch):
+    import threading
+
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._kill_if_same
+    states = []
+
+    def late_stop(pid, start, sig=None):  # SIGSTOP "returns" at once but only lands 0.4 s later
+        if pid == victim.pid and sig == lw.signal.SIGSTOP:
+            threading.Timer(0.4, lambda: os.kill(pid, lw.signal.SIGSTOP)).start()
+            return True
+        return real(pid, start, sig)
+
+    real_table = lw._proc_table
+
+    def spy():
+        fields = lw._proc_fields(victim.pid)
+        states.append(fields[0] if fields else None)
+        return real_table()
+
+    monkeypatch.setattr(lw, "_kill_if_same", late_stop)
+    monkeypatch.setattr(lw, "_proc_table", spy)
+    try:
+        assert lw.kill_pid_tree(victim.pid) is True
+        assert states and set(states) == {"T"}  # the scan waited for the stop to land
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_without_proc_still_kills_the_root(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)  # what macOS (no /proc) looks like
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=3.0) is True
+        assert victim.wait(timeout=10) != 0
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_whose_root_stop_failed_still_kills_the_descendants(tmp_path, monkeypatch):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    real = lw._kill_if_same
+
+    def fake(pid, start, sig=None):
+        return False if (pid == proc.pid and sig == lw.signal.SIGSTOP) else real(pid, start, sig)
+
+    monkeypatch.setattr(lw, "_kill_if_same", fake)
+    try:
+        end = time.time() + 10
+        while not pidfile.exists() and time.time() < end:
+            time.sleep(0.1)
+        assert lw.kill_pid_tree(proc.pid) is True
+        assert _pid_gone(int(pidfile.read_text()))
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_that_hits_an_exception_does_not_leave_the_tree_stopped(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def boom():
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(lw, "_proc_table", boom)
+    try:
+        with pytest.raises(RuntimeError):
+            lw.kill_pid_tree(victim.pid)
+        victim.wait(timeout=10)  # killed by the finally, not left in state T
     finally:
         victim.kill()
         victim.wait()

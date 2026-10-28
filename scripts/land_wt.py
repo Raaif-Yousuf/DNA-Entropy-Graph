@@ -140,10 +140,11 @@ def _proc_fields(pid: int | str) -> tuple[str, int, int] | None:
         return None
 
 
-def _proc_ident(pid: int) -> tuple[int, int] | None:
-    """(ppid, start time): who this pid is. A recycled pid has a different start time."""
+def _proc_ident(pid: int) -> int | None:
+    """The process's start time in ticks: who this pid is (pid + start time). A recycled pid has a different start time. The
+    ppid is NOT part of the identity: a stopped victim whose parent dies is reparented and must still be killed."""
     fields = _proc_fields(pid)
-    return None if fields is None else (fields[1], fields[2])
+    return None if fields is None else fields[2]
 
 
 def _proc_table() -> dict[int, tuple[int, int]]:
@@ -151,16 +152,16 @@ def _proc_table() -> dict[int, tuple[int, int]]:
     table: dict[int, tuple[int, int]] = {}
     with contextlib.suppress(OSError):
         for entry in os.listdir("/proc"):
-            if entry.isdigit() and (ident := _proc_ident(int(entry))) is not None:
-                table[int(entry)] = ident
+            if entry.isdigit() and (fields := _proc_fields(entry)) is not None:
+                table[int(entry)] = (fields[1], fields[2])
     return table
 
 
-def _kill_if_same(pid: int, ident: tuple[int, int], sig: int | None = None) -> bool:
-    """Signal `pid` only if it is still the process recorded at scan time (same ppid and start time): a pid recycled since the
-    scan is skipped. The recheck-then-kill window is microseconds (no pidfd on every kernel); stopped victims cannot exit, so it is
-    only open for a victim that died on its own, and then a reuse inside that window is vanishingly unlikely."""
-    if _proc_ident(pid) != ident:
+def _kill_if_same(pid: int, start: int, sig: int | None = None) -> bool:
+    """Signal `pid` only if it is still the process recorded at scan time (same start time): a pid recycled since the scan is
+    skipped. The recheck-then-kill window is microseconds (no pidfd on every kernel); stopped victims cannot exit on their own,
+    so it is only open for a victim that died anyway, and a pid reuse inside that window is vanishingly unlikely."""
+    if _proc_ident(pid) != start:
         return False
     with contextlib.suppress(OSError):
         os.kill(pid, signal.SIGKILL if sig is None else sig)
@@ -168,28 +169,47 @@ def _kill_if_same(pid: int, ident: tuple[int, int], sig: int | None = None) -> b
     return False
 
 
+def _await_stopped(stopped: dict[int, int], timeout: float = 2.0) -> None:
+    """SIGSTOP is delivered asynchronously: poll until each victim shows state T (or is a zombie/gone), bounded. A scan taken
+    before the stop lands could miss a fork that is still in flight."""
+    end = time.monotonic() + timeout
+    for victim, start in stopped.items():
+        while time.monotonic() < end:
+            fields = _proc_fields(victim)
+            if fields is None or fields[2] != start or fields[0] in ("T", "t", "Z", "X", "x"):
+                break
+            time.sleep(0.005)
+
+
 def _posix_kill_tree(pid: int) -> None:
-    """SIGSTOP the root, then SIGSTOP every descendant found, rescanning until none is new (a stopped process cannot fork, so
-    nothing escapes by reparenting to init between the scan and the kill), then SIGKILL them all (children before the root)."""
+    """SIGSTOP the root, then SIGSTOP every descendant found (confirming each stop landed), rescanning until none is new (a
+    stopped process cannot fork, so nothing escapes by reparenting to init between the scan and the kill), then SIGKILL them all,
+    children before the root. A `finally` kills everything stopped so an exception never leaves a frozen tree. After the round
+    cap (a fork storm outrunning the stops) whatever was found is still killed; the rest is out of reach."""
     root = _proc_ident(pid)
-    if root is None:
-        return
-    stopped: dict[int, tuple[int, int]] = {}
-    if _kill_if_same(pid, root, signal.SIGSTOP):
-        stopped[pid] = root
-    for _ in range(20):  # bounded: a fork storm outrunning the stops must not spin forever
-        table = _proc_table()
-        new = {c: ident for c, ident in table.items() if ident[0] in stopped and c not in stopped}
-        if not new:
-            break
-        for child, ident in new.items():
-            if _kill_if_same(child, ident, signal.SIGSTOP):
-                stopped[child] = ident
-    for victim, ident in reversed(list(stopped.items())):
-        _kill_if_same(victim, ident)
-    if pid not in stopped:  # the stop failed (permission, or it was already gone): still try the kill
+    if root is None:  # gone, or no /proc (macOS): the old behaviour, a plain kill of the pid
         with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
+        return
+    stopped: dict[int, int] = {}
+    try:
+        if _kill_if_same(pid, root, signal.SIGSTOP):
+            stopped[pid] = root
+        for _ in range(20):
+            _await_stopped(stopped)
+            tree = {pid, *stopped}  # the root's children are descendants even when its own stop failed
+            new = {c: start for c, (ppid, start) in _proc_table().items() if ppid in tree and c not in stopped and c != pid}
+            if not new:
+                break
+            for child, start in new.items():
+                if _kill_if_same(child, start, signal.SIGSTOP):
+                    stopped[child] = start
+    finally:
+        for victim, start in reversed(list(stopped.items())):
+            _kill_if_same(victim, start)
+        if pid not in stopped:  # the root's stop failed or never ran: still end it
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
 
 
 def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
