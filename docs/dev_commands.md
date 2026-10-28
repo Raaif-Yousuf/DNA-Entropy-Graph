@@ -378,6 +378,7 @@ python scripts\check_em_dash.py              # no em dash in user-facing copy: d
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
+python scripts\check_format_arity.py          # string.Format(..., GetString("Key"), args) arity vs the Resources.resw template (#761); unreferenced placeholder templates
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
 python scripts\check_pyright.py               # static types: pinned uvx pyright==1.1.407 over worker/src, worker/tests and scripts; a per-file RATCHET (see below). Run with the worker venv's python
 python scripts\check_pyright.py --self-test    # plant each violation, no pyright needed

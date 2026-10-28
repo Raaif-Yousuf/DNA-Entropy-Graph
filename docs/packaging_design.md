@@ -296,6 +296,16 @@ laptop) - the honest state, not silently passed.
 for Python, GitHub Actions, and (added this session, now that `app/` exists per #61) C#,
 with an explicit `dotnet restore`/`build` step for the C# language rather than relying on
 `autobuild`'s heuristics against an unpackaged, central-package-managed WinUI 3 solution.
+The C# build is `src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj` only (#761, #653), not the
+solution: the App project references every `app/src` project, so the extractor sees all product
+code and no test project. MEASURED 2026-10-28: test stubs `IStringResourceProvider.GetString(key) => key`
+flowed into product `string.Format(..., GetString(Key), args)` calls and raised
+`cs/invalid-string-formatting` against correct sites (alerts 1383, 1417, 1466, 1467); the only
+product implementation (`ReswStringResourceProvider`) wraps `ResourceLoader`, which CodeQL cannot
+see through, so no query filter is needed. THEORY (unverified): the first CI run after this lands
+shows no new `cs/invalid-string-formatting`; if one fires from product-only flow, add a query-filter
+for that rule. `scripts/check_format_arity.py` is the real check (template placeholders vs argument
+count, plus unreferenced placeholder templates).
 Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) weekly; the
 `docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
 update cadence (they already exist as of this session but the ecosystem entry itself is a

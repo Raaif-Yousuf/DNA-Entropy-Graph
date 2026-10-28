@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "codeql.yml"
 CONFIG = ROOT / ".github" / "codeql" / "codeql-config.yml"
+APP_PROJECT = "src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj"
 PATHS = ("app/**", "worker/**", "scripts/**", ".github/workflows/**")
 
 
@@ -62,7 +63,7 @@ def test_config_ignores_the_legacy_trees():
 
 def test_csharp_build_step_is_intact():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "dotnet restore" in text and "dotnet build -c Release -p:Platform=x64 --no-restore" in text
+    assert f"dotnet restore {APP_PROJECT}" in text and f"dotnet build {APP_PROJECT} -c Release -p:Platform=x64 --no-restore" in text
     assert re.search(r"languages: \$\{\{ matrix\.language \}\}", text)
 
 
@@ -103,3 +104,37 @@ def test_csharp_results_are_filtered_of_generated_code_before_upload():
 def test_non_csharp_lanes_still_upload_from_analyze_directly():
     body = _csharp_filter_steps()
     assert re.search(r"if: matrix\.language != 'csharp'\n\s+with:\n\s+category:", body)
+
+
+def _csharp_build_run() -> str:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    m = re.search(r"- name: build \(csharp\)\n(?:        .*\n)*?        run: \|\n((?:          .*\n)+)", text)
+    assert m, "build (csharp) step not found"
+    return m.group(1)
+
+
+def test_csharp_build_is_product_code_only_not_the_solution():
+    # #761 / #653: the test projects hold stub IStringResourceProvider classes whose GetString(key) => key
+    # flowed into product string.Format calls (cs/invalid-string-formatting, alerts 1383/1417/1466/1467),
+    # and most cs/path-combine noise. Building only the App project (which references every app/src
+    # project) keeps tests out of the CodeQL database.
+    run = _csharp_build_run()
+    assert ".sln" not in run and "tests" not in run
+    assert APP_PROJECT in run
+
+
+def test_app_project_reaches_every_product_project_so_the_extractor_sees_all_product_code():
+    def refs(csproj: Path) -> set[Path]:
+        text = csproj.read_text(encoding="utf-8")
+        return {(csproj.parent / r.replace("\\", "/")).resolve() for r in re.findall(r'ProjectReference Include="([^"]+)"', text)}
+
+    seen: set[Path] = set()
+    todo = [(ROOT / "app" / APP_PROJECT).resolve()]
+    while todo:
+        cur = todo.pop()
+        if cur not in seen:
+            seen.add(cur)
+            todo.extend(refs(cur))
+    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")}
+    assert len(product) >= 6, "vacuous: expected the six app/src projects"
+    assert product <= seen, f"not reachable from the App project, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"

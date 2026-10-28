@@ -68,9 +68,14 @@ jobs:
       - name: build (csharp)
         if: matrix.language == 'csharp'
         working-directory: app
+        # Product code only (#761, #653): the App project references every app/src project, so the
+        # extractor sees all product code but no test project. Tests hold stub IStringResourceProvider
+        # classes (GetString(key) => key) that CodeQL dataflow routed into product string.Format calls
+        # (cs/invalid-string-formatting false positives), plus most of the cs/path-combine noise.
+        # scripts/check_format_arity.py is the real template-vs-arguments check.
         run: |
-          dotnet restore
-          dotnet build -c Release -p:Platform=x64 --no-restore
+          dotnet restore src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj
+          dotnet build src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj -c Release -p:Platform=x64 --no-restore
 
       - uses: github/codeql-action/autobuild@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
         if: matrix.language != 'csharp'

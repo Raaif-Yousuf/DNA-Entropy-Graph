@@ -144,7 +144,7 @@ public sealed class RunStallCoordinator
         var text = notice.Kind switch
         {
             RunNoticeKind.SlowStage => string.Format(CultureInfo.CurrentCulture, _strings.GetString("RunNotice_Slow"), stage, Math.Max(1, (int)Math.Round(notice.InStage.TotalMinutes))),
-            RunNoticeKind.StallDetected => string.Format(CultureInfo.CurrentCulture, _strings.GetString("RunNotice_Stalled"), stage, 0),
+            RunNoticeKind.StallDetected => string.Format(CultureInfo.CurrentCulture, _strings.GetString("RunNotice_Stalled"), stage),
             _ => string.Empty,
         };
         _messenger.Send(new RunNoticeMessage(notice.JobId, text));
