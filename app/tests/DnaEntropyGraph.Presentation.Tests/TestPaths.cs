@@ -16,7 +16,7 @@ internal static class TestPaths
 
     private static string FindRepoRoot([CallerFilePath] string thisFile = "")
     {
-        foreach (var start in new[] { AppContext.BaseDirectory, Path.GetDirectoryName(thisFile) })
+        foreach (var start in new[] { Path.GetDirectoryName(thisFile), AppContext.BaseDirectory })
         {
             var dir = string.IsNullOrEmpty(start) ? null : new DirectoryInfo(start);
             while (dir is not null)

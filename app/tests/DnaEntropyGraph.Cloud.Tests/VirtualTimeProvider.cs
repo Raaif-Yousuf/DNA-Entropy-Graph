@@ -15,6 +15,52 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
     private readonly object _gate = new();
     private readonly List<VirtualTimer> _timers = [];
     private long _ticks;
+    private int _timersCreated;
+    private readonly List<(int After, TaskCompletionSource Signal)> _createdWaiters = [];
+
+    /// <summary>
+    /// Completes once more than <paramref name="after"/> timers have been created (see <see cref="TimersCreated"/>): the signal that a caller has armed a deadline on this clock, so a test moves the clock
+    /// only once the deadline can fire. Already complete if the count is already past <paramref name="after"/>.
+    /// </summary>
+    public Task WhenTimerCreatedAsync(int after)
+    {
+        lock (_createdWaiters)
+        {
+            if (TimersCreated > after)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _createdWaiters.Add((after, signal));
+            return signal.Task;
+        }
+    }
+
+    /// <summary>
+    /// Completes once a timer armed with exactly <paramref name="due"/> as its due time has been created after the first <paramref name="after"/> timers: the signal that a caller has armed the one deadline a test is
+    /// about to move the clock past (not just any timer), or reached the one wait (a settle window of its own length) a test is waiting for.
+    /// </summary>
+    public Task WhenTimerCreatedAsync(int after, TimeSpan due)
+    {
+        lock (_createdWaiters)
+        {
+            if (_createdDues.Any(d => d.Seq > after && d.Due == due))
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _dueWaiters.Add((after, due, signal));
+            return signal.Task;
+        }
+    }
+
+    private readonly List<(int Seq, TimeSpan Due)> _createdDues = [];
+    private readonly List<(int After, TimeSpan Due, TaskCompletionSource Signal)> _dueWaiters = [];
+
+    /// <summary>How many timers this clock has ever created (disposals do not lower it): a test waits on this rising to know a caller has started waiting on a deadline.</summary>
+    public int TimersCreated => Volatile.Read(ref _timersCreated);
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -26,6 +72,32 @@ internal sealed class VirtualTimeProvider(bool autoAdvance = false) : TimeProvid
     {
         var timer = new VirtualTimer(this, callback, state);
         timer.Change(dueTime, period);
+        lock (_createdWaiters)
+        {
+            var created = Interlocked.Increment(ref _timersCreated);
+            _createdDues.Add((created, dueTime));
+            _dueWaiters.RemoveAll(w =>
+            {
+                if (created <= w.After || w.Due != dueTime)
+                {
+                    return false;
+                }
+
+                w.Signal.TrySetResult();
+                return true;
+            });
+            _createdWaiters.RemoveAll(w =>
+            {
+                if (created <= w.After)
+                {
+                    return false;
+                }
+
+                w.Signal.TrySetResult();
+                return true;
+            });
+        }
+
         return timer;
     }
 
