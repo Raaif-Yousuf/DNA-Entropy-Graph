@@ -50,6 +50,12 @@ Nine findings, each with its own code so the allowlist can be specific:
     member is used, but `[RelayCommand]`/`[ObservableProperty]` is the wrong
     tool for something no view binds to.
 
+`UNBOUND-DISPLAY-PROPERTY` (#568)
+    A public `string` property (or positional-record string parameter) of a type a view binds against (an
+    `x:DataType` of a DataTemplate, or a page's ViewModel) that no `{x:Bind}`/`{Binding}` in any .xaml names. C# and
+    test references do NOT count as use: the user never sees them (MEASURED 2026-10-03, #459: ReasonText). State
+    flags, enums, models and identifier-like names (`Id`, `Path`, `Url`, `Value`...) are out of scope on purpose.
+
 `MISSING-UID-RESOURCE`
     An `x:Uid="Foo"` in XAML with no matching `.resw` entry (`Foo` itself, or
     any `Foo.<property>`). MEASURED and written into `docs/ToTest.md`: this
@@ -724,6 +730,86 @@ def _check_members(scan: Scan) -> list[Finding]:
     return findings
 
 
+# A plain public instance property: `public string Foo { get; ... }` or `public string Foo => ...`.
+_PLAIN_PROPERTY = re.compile(
+    r"(?<![\w.])public\s+(?P<mods>(?:(?:static|virtual|override|new|required|abstract|sealed|readonly|const)\s+)*)"
+    r"(?P<type>[\w\.\?<>\[\], ]+?)\s+(?P<name>\w+)\s*(?:\{\s*(?:\[[^\]]*\]\s*)*(?:get|set|init)\b|=>)"
+)
+
+
+# Text a user reads is a `string`. State flags, enums and models (`Status`, `Run`, `IsOk`) are read by logic and are
+# legitimately unbound, so only string-typed properties are held to a binding; a name that is an identifier or a
+# location rather than copy (`JobId`, `Path`, `ActionUrl`, `WireName`) is not display text either.
+_STRING_TYPE = re.compile(r"^(?:System\.)?[sS]tring\??$")
+_IDENTIFIER_NAME = re.compile(r"(?:Id|Path|Url|Uri|Folder|WireName|Key)$|^Value$")
+
+
+def _is_display_property(type_text: str, name: str) -> bool:
+    return bool(_STRING_TYPE.match(type_text.strip())) and not _IDENTIFIER_NAME.search(name)
+
+
+def _display_properties(text: str, type_name: str) -> list[str]:
+    """Public instance string properties a view could bind on `type_name`: its plain properties and, for a positional
+    record, its parameters. Commands are the UNBOUND-COMMAND check's business, not this one's."""
+    parameters, body = _type_body(text, type_name)
+    names: list[str] = []
+    for match in _PLAIN_PROPERTY.finditer(body):
+        mods = match.group("mods").split()
+        if {"static", "override", "const"} & set(mods) or not _is_display_property(match.group("type"), match.group("name")):
+            continue
+        names.append(match.group("name"))
+    declaration = _type_declaration(text, type_name)
+    if declaration is not None and declaration.group(0).lstrip().startswith("record"):
+        for token in _split_top_level(parameters):
+            declared, _ = _cut_default(token)
+            declared = re.sub(r"^(?:\[[^\]]*\]\s*)+", "", declared.strip())
+            pieces = declared.rsplit(None, 1)
+            if len(pieces) == 2 and _is_display_property(pieces[0], pieces[1]):
+                names.append(pieces[1])
+    return list(dict.fromkeys(names))
+
+
+def _display_property_candidates(scan: Scan) -> list[tuple[str, str, Path]]:
+    """(type, property, declaring file) for every type a view binds against: each `x:DataType` of a DataTemplate and
+    each page's ViewModel (by the naming convention). A type the tree does not declare is skipped (reported by DANGLING-BINDING)."""
+    types: set[str] = set()
+    for text in scan.xaml_files.values():
+        types.update(cls for _s, _e, cls in _template_spans(text) if cls)
+    for xaml_path in scan.xaml_files:
+        resolved = _viewmodel_for(xaml_path, scan)
+        if resolved is not None:
+            types.add(resolved[0])
+    candidates: list[tuple[str, str, Path]] = []
+    for type_name in sorted(types):
+        for path, text in scan.cs_files.items():
+            if _is_test_path(path) or not re.search(rf"\b(?:class|record)\s+{re.escape(type_name)}\b", text):
+                continue
+            candidates.extend((type_name, prop, path) for prop in _display_properties(text, type_name))
+            break
+    return candidates
+
+
+def _check_display_properties(scan: Scan) -> list[Finding]:
+    """UNBOUND-DISPLAY-PROPERTY (#568): a public property of a bound type that no `{x:Bind}`/`{Binding}` in any .xaml
+    names. C# and test references do NOT count as use: a property the ViewModel computes and no view shows is the
+    wired-to-nothing bug with every gate green (MEASURED 2026-10-03, #459: ReasonText)."""
+    bound = {word for text in scan.xaml_files.values() for match in _MARKUP.finditer(text) for word in re.findall(r"\w+", match.group(2))}
+    findings: list[Finding] = []
+    for type_name, prop, path in _display_property_candidates(scan):
+        if prop in bound:
+            continue
+        findings.append(
+            Finding(
+                "UNBOUND-DISPLAY-PROPERTY",
+                f"{type_name}.{prop}",
+                f"No {{x:Bind}} or {{Binding}} in any .xaml names this public property of {type_name}, a type a view binds "
+                f"against. C# and test references do not count: the user never sees it.",
+                str(path),
+            )
+        )
+    return findings
+
+
 def _check_resources(scan: Scan) -> list[Finding]:
     findings: list[Finding] = []
 
@@ -975,7 +1061,7 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
 def collect_findings(root: Path) -> tuple[list[Finding], Scan, list[str]]:
     scan = read_tree(root)
     binding_findings, binding_skips = _check_bindings(scan)
-    findings = _check_members(scan) + _check_resources(scan) + _check_di(scan) + binding_findings
+    findings = _check_members(scan) + _check_resources(scan) + _check_di(scan) + binding_findings + _check_display_properties(scan)
     findings.sort(key=lambda f: (f.code, f.symbol))
     return findings, scan, binding_skips
 
@@ -1246,6 +1332,16 @@ def self_test() -> int:
                     "src/Demo.App/Views/NewRunPage.xaml",
                     "{Binding SelectedInputPath}",
                     "{Binding TypoedPropertyName}",
+                ),
+            ),
+            (
+                "UNBOUND-DISPLAY-PROPERTY",
+                "a string property of a page ViewModel that no XAML binds",
+                lambda r: _patch(
+                    r,
+                    "src/Demo.Presentation/ViewModels/NewRunViewModel.cs",
+                    "    [RelayCommand]",
+                    '    public string Summary => "";\n\n    [RelayCommand]',
                 ),
             ),
             (
