@@ -17,7 +17,7 @@ namespace DnaEntropyGraph.Core.Tests.Inputs;
 ///
 /// Direction of safety: this validator is a pre-flight filter. Accepting something the worker
 /// later refuses costs one wasted VM; refusing something the worker accepts blocks a
-/// legitimate run. Both are listed explicitly in <see cref="Divergences" />, never hidden.
+/// legitimate run. Neither is allowed to hide: a fixture whose verdict differs is a failing row (#611).
 /// </summary>
 public sealed class InputFileValidatorWorkerParityTests
 {
@@ -65,6 +65,10 @@ public sealed class InputFileValidatorWorkerParityTests
         ["malformed/genbank_qualifier_missing_slash.gb"] = new(false, InputProblemCode.NoRecords),
         ["malformed/genbank_feature_line_shorter_than_qualifier_indent.gb"] = new(false, InputProblemCode.NoRecords),
         ["malformed/genbank_truncated_mid_feature_table.gb"] = new(false, InputProblemCode.NoRecords),
+        // #611: Biopython's consumer asserts on a lone closing parenthesis line (it joins it onto the location), and its header
+        // reader refuses a '//' in a later record's header.
+        ["malformed/genbank_stray_close_paren_line.gb"] = new(false, InputProblemCode.NoRecords),
+        ["malformed/genbank_second_record_terminator_in_header.gb"] = new(false, InputProblemCode.NoRecords),
 
         // refused: a bad base, same code and same 1-based position as Python's message
         ["malformed/fasta_mixed_garbage_bases.fasta"] = new(false, InputProblemCode.InvalidCharacter, 5),
@@ -75,19 +79,6 @@ public sealed class InputFileValidatorWorkerParityTests
         // Biopython folds the second LOCUS line into the first record's ORIGIN data (it only ends a
         // record at "//"): "Invalid character 'E' at position 7". GenBankLite now does the same.
         ["malformed/genbank_two_locus_no_separator.gb"] = new(false, InputProblemCode.InvalidCharacter, 7),
-    };
-
-    /// <summary>
-    /// Python refuses, C# ACCEPTS (a false accept: the worker still catches it, at the cost of a
-    /// VM). These files are NOT in <see cref="Table" />; <c>Known_false_accepts_are_still_accepted_here</c>
-    /// asserts the C# side so it goes red the day someone closes the gap.
-    /// </summary>
-    private static readonly Dictionary<string, string> FalseAccepts = new()
-    {
-        ["malformed/genbank_stray_close_paren_line.gb"] =
-            "#611: Biopython's consumer asserts on a lone closing parenthesis line after a location; GenBankLite does not parse locations.",
-        ["malformed/genbank_second_record_terminator_in_header.gb"] =
-            "#611: Biopython refuses a '//' in a later record's header; GenBankLite skips that empty record and keeps the others.",
     };
 
     private static string WorkerData(string relative) =>
@@ -108,19 +99,7 @@ public sealed class InputFileValidatorWorkerParityTests
             .ToList();
 
         onDisk.Count.ShouldBeGreaterThanOrEqualTo(30);
-        onDisk.ShouldBe(Table.Keys.Concat(FalseAccepts.Keys), ignoreOrder: true, "a new/removed worker fixture needs its verdict re-measured and added here");
-    }
-
-    [Fact]
-    public void Known_false_accepts_are_still_accepted_here_and_each_has_a_reason()
-    {
-        FalseAccepts.Keys.ShouldNotBeEmpty();
-        foreach (var (relative, reason) in FalseAccepts)
-        {
-            reason.Length.ShouldBeGreaterThan(20);
-            var result = InputFileValidator.Validate(WorkerData(relative), InputFormat.Auto, AmbiguityPolicy.Keep, treatAsRna: false);
-            result.IsValid.ShouldBeTrue($"{relative} is now refused here: delete it from FalseAccepts and add it to Table with the code");
-        }
+        onDisk.ShouldBe(Table.Keys, ignoreOrder: true, "a new/removed worker fixture needs its verdict re-measured and added here");
     }
 
     [Theory]

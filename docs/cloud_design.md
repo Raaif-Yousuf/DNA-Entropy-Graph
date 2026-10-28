@@ -526,7 +526,7 @@ exercise.
  New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
  base count, always labelled an estimate. The shipped prices are THEORY (unverified):
  gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
- Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Catalog (#214, #303); the Spot prices were read from Google's own pricing pages on 2026-10-16 (#303, MEASURED).
  Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
  the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
@@ -1054,6 +1054,13 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
   `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Granted scopes (issue #259).** Under granular consent a user can untick `cloud-platform` and still be signed in. MEASURED 2026-10-16
+  (https://developers.google.com/identity/protocols/oauth2/native-app): the token response `scope` field lists what the token grants,
+  a user `may not grant your app access to all` requested scopes, and `Incremental authorization is not supported for installed apps`,
+  so `include_granted_scopes` is not used; the re-ask is the same flow with `prompt=select_account consent`. At sign-in a `scope` without
+  `cloud-platform` (or none) fails `CONSENT_INCOMPLETE` before anything is stored; on a refresh a `scope` that names scopes without it
+  deletes the token file, sets `needsSignIn` and fails the same way (a refresh answer with no `scope` keeps the stored grant). The action
+  is **Sign in again and allow access**, which is the ordinary sign-in command. Decision #18 (single `cloud-platform` scope) is what makes this one check enough.
 - **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
   and the account entry whatever Google said, and makes the next remaining account current.
 - **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists

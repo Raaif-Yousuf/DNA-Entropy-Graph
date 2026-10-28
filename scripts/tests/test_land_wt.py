@@ -192,6 +192,15 @@ def test_green_landing_pushes_one_branch_opens_one_pr_and_leaves_the_venv_and_no
     assert not wt.exists()
 
 
+def test_green_landing_records_the_pr_for_the_merge_hook(world):
+    import premerge_stamp
+
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    landed = json.loads(premerge_stamp.landed_path(world.clone).read_text(encoding="utf-8"))
+    assert list(landed.values())[0]["head"] == sha
+
+
 def test_premerge_runs_inside_the_worktree_with_the_venv_junction_live_and_fast_by_default(world):
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
@@ -1118,3 +1127,15 @@ def test_a_pr_view_that_keeps_failing_gives_up_after_three_reads_without_merging
     rc, _ = _land_green(world, [[_check("a", "pass")]])
     assert rc == lw.EXIT_CHECKS_PENDING
     assert len(_calls(world, "view")) == 3 and _calls(world, "merge") == []
+
+
+def test_a_failing_record_landed_only_warns_and_the_landing_still_succeeds(world, monkeypatch, capsys):
+    import premerge_stamp
+
+    def boom(*_a, **_k):
+        raise PermissionError("held open")
+
+    monkeypatch.setattr(premerge_stamp, "record_landed", boom)
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    assert "WARNING: could not record the landed PR" in capsys.readouterr().out
