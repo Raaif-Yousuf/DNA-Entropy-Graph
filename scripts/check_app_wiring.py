@@ -164,6 +164,7 @@ import json
 import re
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1176,7 +1177,7 @@ def self_test() -> int:
         )
 
         # 3. Each finding fires on the tree broken in exactly that one way.
-        cases: list[tuple[str, str, object]] = [
+        cases: list[tuple[str, str, Callable[[Path], object]]] = [
             (
                 "UNBOUND-COMMAND",
                 "a [RelayCommand] no XAML binds",
@@ -1499,7 +1500,7 @@ def _add(root: Path, relative: str, content: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="tree to scan (default: <this repo>/app)")
     parser.add_argument("--allowlist", default=str(ALLOWLIST_PATH))
     parser.add_argument("--verbose", action="store_true")

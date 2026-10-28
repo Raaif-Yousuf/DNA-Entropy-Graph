@@ -317,6 +317,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     {
         var key = (vmName, zone);
         _vms[key] = new VmDescriptor(vmName, zone, status);
+        ResetVmDeleted(vmName);
         _alreadyExistingVmKeys.Add(key);
         return this;
     }
@@ -595,6 +596,67 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>How many calls have been parked by <see cref="WithHungCalls"/> so far: a test waits on this to know a caller is really inside the call.</summary>
     public int HungCalls => Volatile.Read(ref _hungCalls);
 
+    private readonly List<(int Count, TaskCompletionSource Signal)> _hungWaiters = [];
+    private readonly Dictionary<string, TaskCompletionSource> _deletedVms = [];
+
+    /// <summary>Completes once a delete has removed the VM named <paramref name="vmName"/> (already complete if one did before the call): a signal for a test, instead of polling the VM list on a real clock.</summary>
+    public Task WhenVmDeletedAsync(string vmName)
+    {
+        lock (_deletedVms)
+        {
+            if (!_deletedVms.TryGetValue(vmName, out var signal))
+            {
+                _deletedVms[vmName] = signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            return signal.Task;
+        }
+    }
+
+    /// <summary>A VM made under a name that an earlier delete already signalled is a new VM: its delete has not happened yet, so the old signal is dropped (a test waiting on the second delete must not be let through by the first).</summary>
+    private void ResetVmDeleted(string vmName)
+    {
+        lock (_deletedVms)
+        {
+            if (_deletedVms.TryGetValue(vmName, out var signal) && signal.Task.IsCompleted)
+            {
+                _deletedVms.Remove(vmName);
+            }
+        }
+    }
+
+    private void SignalVmDeleted(string vmName)
+    {
+        lock (_deletedVms)
+        {
+            if (!_deletedVms.TryGetValue(vmName, out var signal))
+            {
+                _deletedVms[vmName] = signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            signal.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Completes once <see cref="HungCalls"/> has reached <paramref name="count"/>: the signal a test awaits to know a caller is parked inside the call, instead of polling
+    /// <see cref="HungCalls"/> on a real clock. Already complete when the count was reached before the call.
+    /// </summary>
+    public Task WhenHungAsync(int count = 1)
+    {
+        lock (_hungWaiters)
+        {
+            if (HungCalls >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _hungWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
     private bool ConsumeHang()
     {
         while (true)
@@ -607,14 +669,51 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
             if (Interlocked.CompareExchange(ref _hangsRemaining, left - 1, left) == left)
             {
-                Interlocked.Increment(ref _hungCalls);
+                lock (_hungWaiters)
+                {
+                    var hung = Interlocked.Increment(ref _hungCalls);
+                    _hungWaiters.RemoveAll(w =>
+                    {
+                        if (hung < w.Count)
+                        {
+                            return false;
+                        }
+
+                        w.Signal.TrySetResult();
+                        return true;
+                    });
+                }
+
                 return true;
             }
         }
     }
 
+    /// <summary>What <see cref="OnCallParked"/> was told is parked.</summary>
+    public enum ParkedCall
+    {
+        /// <summary>A call that never answers (<see cref="WithHungCalls"/>).</summary>
+        Hang,
+
+        /// <summary>A create that answers after its delay (<see cref="WithCreateDelay"/>).</summary>
+        SlowCreate,
+
+        /// <summary>A create that ignores its token and never answers (<see cref="WithBlockedCreate"/>): its caller then waits out the settle window before giving up on it.</summary>
+        CreateThatNeverLands,
+    }
+
+    /// <summary>
+    /// Called, synchronously and before the call parks, whenever a scripted call is about to wait without answering: a hung call
+    /// (<see cref="WithHungCalls"/>, span <see cref="Timeout.InfiniteTimeSpan"/>) or a slow create (<see cref="WithCreateDelay"/>,
+    /// its delay). A test that runs the caller on a virtual clock (#567) moves that clock from here, so a deadline fires because
+    /// a call the test itself scripted is known to be parked, never because a machine was slow: a healthy call never calls this,
+    /// so time cannot pass under it. Null in production, where nothing sets it.
+    /// </summary>
+    public Action<ParkedCall, TimeSpan>? OnCallParked { get; set; }
+
     private async Task<T> HangAsync<T>(CancellationToken cancellationToken)
     {
+        OnCallParked?.Invoke(ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         // A callee that ignores its token is what a stuck socket under a library that never checks it looks like.
         await Task.Delay(Timeout.Infinite, _hangsIgnoreCancellation ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
         return default!;
@@ -865,13 +964,40 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private async Task<VmDescriptor> CreateAfterDelayAsync(VmSpec spec, string zone)
     {
-        await Task.Delay(_createDelay).ConfigureAwait(false);
-        return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
+        var landing = Task.Delay(_createDelay, _timeProvider);
+        OnCallParked?.Invoke(ParkedCall.SlowCreate, _createDelay);
+        await landing.ConfigureAwait(false);
+        if (CreateLandingGate is { } gate)
+        {
+            await gate.ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await CreateVmCore(spec, zone, CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            _delayedCreateLanded.TrySetResult();
+        }
     }
+
+    private readonly TaskCompletionSource _delayedCreateLanded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// When set, a create made slow by <see cref="WithCreateDelay"/> answers only once this task completes, after its delay: a test holds
+    /// the landing until the caller has given up on the create, so "lands after the deadline" is a fact of ordering and not of a few
+    /// virtual milliseconds (#567).
+    /// </summary>
+    public Task? CreateLandingGate { get; set; }
+
+    /// <summary>Completes once a create made slow by <see cref="WithCreateDelay"/> has landed (or failed): the signal that a late landing has happened, so a test can look for what it left behind.</summary>
+    public Task WhenDelayedCreateLandedAsync() => _delayedCreateLanded.Task;
 
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         gate.Entered.TrySetResult();
+        OnCallParked?.Invoke(gate.IgnoreCancellation ? ParkedCall.CreateThatNeverLands : ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         if (gate.IgnoreCancellation)
         {
             await gate.Release.Task.ConfigureAwait(false);
@@ -959,6 +1085,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             RunSimulatedWorker(spec, zone);
         }
         _vms[key] = vm;
+        ResetVmDeleted(spec.VmName);
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
         if (_bootPolls > 0)
@@ -1327,6 +1454,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         if (existed)
         {
             DetachDisksOf(vmName);
+            SignalVmDeleted(vmName);
         }
 
         _labelFingerprints.TryRemove((vmName, zone), out _);

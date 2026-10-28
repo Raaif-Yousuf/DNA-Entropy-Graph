@@ -80,13 +80,21 @@ jobs:
       # It runs in .github/workflows/ci-notices.yml instead (windows-latest, dotnet SDK plus the
       # locked worker venv; issue #416), and locally via scripts/premerge.py in full mode. This
       # exclusion stays: this ubuntu job still cannot run it.
-      - name: Run every scripts/check_*.py that exists (except third-party-notices, see above)
+      #
+      # scripts/check_pyright.py is EXCLUDED here too: it needs uvx (the pinned pyright) and the worker venv
+      # (numpy), neither of which this bare job has. It runs in ci-worker.yml's types job, which syncs the
+      # locked worker venv, and locally via scripts/premerge.py (fast mode).
+      - name: Run every scripts/check_*.py that exists (except third-party-notices and pyright, see above)
         run: |
           shopt -s nullglob
           found=0
           for script in scripts/check_*.py; do
             if [ "$script" = "scripts/check_third_party_notices.py" ]; then
               echo "::notice title=skipped check_third_party_notices.py::needs dotnet + worker/.venv, not set up on this job (issue filed; see this step's own comment in ci-docs.yml)."
+              continue
+            fi
+            if [ "$script" = "scripts/check_pyright.py" ]; then
+              echo "::notice title=skipped check_pyright.py::needs uvx + the worker venv; it runs in ci-worker.yml (types job)."
               continue
             fi
             found=1

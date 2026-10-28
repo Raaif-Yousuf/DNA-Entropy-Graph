@@ -82,12 +82,89 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
         }
     }
 
+    private readonly List<(int Count, TaskCompletionSource Signal)> _launchWaiters = [];
+
+    /// <summary>Completes once the browser has been asked to open <paramref name="count"/> sign-in pages in all (the service is then waiting on the browser): a signal instead of a sleep.</summary>
+    public Task WhenLaunchedAsync(int count)
+    {
+        lock (_gate)
+        {
+            if (AuthorizationRequests.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _launchWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
+    private readonly List<(int Count, TaskCompletionSource Signal)> _waitingWaiters = [];
+    private int _waiting;
+
+    /// <summary>
+    /// Completes once <paramref name="count"/> sign-ins that the browser never answers (<see cref="BrowserBehaviour.Hang"/>) are in all parked on
+    /// the browser: the app's loopback listener has answered a stray request, so it is accepting and the sign-in is awaiting the redirect. Being
+    /// launched is not that: the launch returns before the service starts to wait.
+    /// </summary>
+    public Task WhenWaitingOnBrowserAsync(int count)
+    {
+        lock (_gate)
+        {
+            if (_waiting >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _waitingWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
+    private void SignalWaiting(Exception? failure)
+    {
+        lock (_gate)
+        {
+            _waiting++;
+            _waitingWaiters.RemoveAll(w =>
+            {
+                if (failure is null && _waiting < w.Count)
+                {
+                    return false;
+                }
+
+                if (failure is null)
+                {
+                    w.Signal.TrySetResult();
+                }
+                else
+                {
+                    w.Signal.TrySetException(failure);
+                }
+
+                return true;
+            });
+        }
+    }
+
     public Task LaunchAsync(Uri authorizationUrl, CancellationToken cancellationToken)
     {
         var query = ParseQuery(authorizationUrl.Query);
         lock (_gate)
         {
             AuthorizationRequests.Add(query);
+            _launchWaiters.RemoveAll(w =>
+            {
+                if (AuthorizationRequests.Count < w.Count)
+                {
+                    return false;
+                }
+
+                w.Signal.TrySetResult();
+                return true;
+            });
         }
 
         // Run on another thread: the app's listener answers this very call, and the app is still inside
@@ -96,6 +173,17 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
         {
             if (Behaviour == BrowserBehaviour.Hang)
             {
+                try
+                {
+                    // A request the service refuses (wrong state) and keeps waiting after: the answer proves its listener is up and waiting.
+                    using var probe = await new HttpClient().GetAsync($"{query["redirect_uri"]}?code=probe&state=attacker-chosen", CancellationToken.None);
+                    SignalWaiting(null);
+                }
+                catch (Exception ex)
+                {
+                    SignalWaiting(ex);
+                }
+
                 return;
             }
 
