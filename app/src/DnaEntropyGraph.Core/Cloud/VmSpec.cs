@@ -42,6 +42,13 @@ public sealed record VmSpec(
     /// </summary>
     public string? ServiceAccountEmail { get; init; }
 
+    /// <summary>
+    /// Issue #91: ask Compute Engine for a Spot VM (<c>scheduling.provisioningModel=SPOT</c>), a cheaper computer Google can take back.
+    /// It changes nothing about Hard Rule 10: a Spot VM still carries the six labels, a <c>maxRunDuration</c> and
+    /// <c>instanceTerminationAction=DELETE</c>. False (the default) is an on-demand VM; the runner's one automatic retry after a preemption is a spec with this off.
+    /// </summary>
+    public bool Spot { get; init; }
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
 
@@ -196,6 +203,13 @@ public sealed record VmSpec(
 }
 
 /// <summary>
+/// Issue #91: which VM a name meant. A VM name is reused (the retry creates <c>deg-&lt;jobId&gt;</c> again in the same zone) and Compute keeps old operations, so
+/// "was this VM preempted" must be asked about ONE incarnation: its numeric instance id (unique per incarnation, and form-free), or failing that the moment it was created.
+/// Both null means nothing bounds the question, and the answer is then "not confirmed".
+/// </summary>
+public sealed record VmIncarnation(ulong? InstanceId, DateTimeOffset? CreatedAt);
+
+/// <summary>
 /// A VM as a gateway reports it. <paramref name="CreatedAt"/> is when Compute Engine created the instance (the
 /// <c>creationTimestamp</c> of the real instance resource, which a real gateway MUST fill): the VM's own
 /// <c>maxRunDuration</c> clock starts there, so the runner measures its result deadline from it. Null means the gateway
@@ -205,6 +219,7 @@ public sealed record VmSpec(
 /// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle". <paramref name="MachineType"/> is the machine
 /// type's name (<c>g2-standard-8</c>) when the gateway read it; reuse (#94) needs it to match, and null never matches.
 /// <paramref name="StartedAt"/> is when the instance last started (the real instance's <c>lastStartTimestamp</c>); see <see cref="RunClockStart"/>.
+/// <paramref name="InstanceId"/> is the platform's numeric id of this incarnation of the instance (null when the gateway did not say).
 /// <paramref name="ServerNow"/> is the platform's own clock at the read (the HTTP <c>Date</c> header of the real gateway's answer; issue #691): the app's clock is wrong by an
 /// unknown skew, so a VM's age against its run limit is judged as <c>ServerNow - RunClockStart</c>, never as the laptop's now minus a platform timestamp. Null means unknown.
 /// </summary>
@@ -219,6 +234,7 @@ public sealed record VmDescriptor(
     string? MachineType = null,
     DateTimeOffset? StartedAt = null,
     DateTimeOffset? ServerNow = null,
+    ulong? InstanceId = null,
     TimeSpan? MaxRunDuration = null)
 {
     /// <summary>

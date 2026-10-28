@@ -163,6 +163,54 @@ verification discipline.
   `packaging_design.md` section 6); a bad worker image is fixed by a new tag and a new
   digest, never by overwriting the old one.
 
+## 6b. Dev worker image (a branch build, no release)
+
+A first real GPU run cannot wait for a signed release (`release.yml` needs a `v*` tag and eight signing and OAuth
+secrets). `.github/workflows/image-dev.yml` is the small, separate path: `workflow_dispatch` only, `GITHUB_TOKEN` with
+`packages: write` only, no signing, no environment, no Trivy or attestation (those stay `release.yml`'s gate). It builds
+`worker/Dockerfile.cuda` and/or `.cpu` and pushes `ghcr.io/raaif-yousuf/dna-entropy-worker:dev-<shortsha>-<variant>`. A released
+app never sees it: `worker-images.json` is written only by `release.yml` and is `{"images": []}` today.
+
+1. Merge the workflow to `main` (a workflow cannot be dispatched until its file is on the default branch).
+2. Actions > `image-dev` > Run workflow, pick the branch and `variant` (`cuda` default, `cpu`, or `both`), or
+   `gh workflow run image-dev.yml --ref <branch> -f variant=cuda`. Runs are serialised (`concurrency: image-dev`).
+   Expect 20 to 40 minutes for `cuda`; `Dockerfile.cuda` has never been built (#37), so the first run can fail in
+   `pip install ".[genes,evo]"`. Read the log, fix, re-run.
+3. The digest is in the job summary ("Digest: `sha256:...`") and the last log line is the full `name@sha256:...` reference.
+4. Make the package public, once (the first push of a new package is PRIVATE and the VM pulls anonymously, `startup.sh`
+   `docker pull`, so a private package fails with `IMAGE_PULL_FAILED`): github.com > your profile > Packages >
+   `dna-entropy-worker` > Package settings > Danger Zone > Change visibility > Public. Check from a logged-out shell:
+   `docker manifest inspect ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:<digest>`.
+   WARNING, read first: public is effectively one-way (GitHub only lets you flip a public package back to private in some
+   cases, and anyone may already have pulled it), it is visible to the whole internet and not just the org, and EVERY layer
+   of the image becomes world-readable, including everything the Dockerfile COPYs from `worker/`. Pre-check: the COPY lines
+   are `COPY pyproject.toml ...`, `COPY src ./src` and (cuda) `COPY tests ./tests`; confirm nothing secret is under them:
+   `git ls-files worker/src worker/tests worker/pyproject.toml | Select-String -Pattern '\.env|secret|key|token|credential|\.pem'`
+   must print nothing you did not expect, and `Select-String '^COPY' worker/Dockerfile.*` must show no new COPY. There is no
+   `.dockerignore`, but the three COPYs above name exact paths, so only those are sent into the image layers.
+5. Run the GPU tests on it: `pwsh scripts/cloud_gpu_test.ps1 -ProjectId <id> -ServiceAccount <worker sa email> -Image
+   ghcr.io/raaif-yousuf/dna-entropy-worker@sha256:<digest> -Apply -Lifecycle delete` (dry run first, without `-Apply`).
+   Always pass the lifecycle: CloudCli's own default is `test`, not `delete`. See `dev_commands.md`.
+6. To run it from the app instead: in `%LOCALAPPDATA%\DNAEntropyGraph\settings.json` set `developer_mode` to `true` and
+   `worker_image` to the same `name@sha256:...` reference (`PinnedWorkerImageProvider`). Outside developer mode the app
+   refuses any digest not in the allowlist.
+
+Disk: `ubuntu-latest` has about 14 GB free; the NGC PyTorch base is larger, so the workflow runs the same free-disk step as
+`release.yml` (removes dotnet, Android, ghc, CodeQL) and prunes docker images before building. THEORY (unverified): that is
+enough; if the build dies with "no space left on device", switch the job to a larger runner. The base is
+`nvcr.io/nvidia/pytorch:25.06-py3`; MEASURED 2026-10-28: its manifest-list digest is
+`sha256:025d9b102b5436d4af8af58f12c6a46b7e5d16f19543b1d2cc4446bf2650b4f1` (public manifest HEAD against nvcr.io). The
+workflow does not require a pinned base, so it works on `main` today; branch `feat/255-reproducible-image-r2` pins that exact
+digest in `Dockerfile.cuda` and adds hash-locked installs to `Dockerfile.cpu`, and will take effect in this workflow with no
+change to it. A dev image is not reproducible until then, and is never a release image.
+
+Tags: `dev-<shortsha>-r<run_id>-<attempt>-<variant>` is unique per run, so a re-dispatch never overwrites an earlier tag, but
+tags stay mutable in principle: only the `@sha256:` digest is ever passed to the app or the script. The app accepts only a
+digest reference: `PinnedWorkerImageProvider.Resolve` (`app/src/DnaEntropyGraph.App/Services/PinnedWorkerImageProvider.cs`
+:42-55) refuses anything outside the allowlist unless `developer_mode` is `true`, and even then requires
+`StartupMetadata.IsPinnedImageReference`. Tests: `PinnedWorkerImageProviderTests` (a tag or free text is refused in developer
+mode; an image outside the list is refused with developer mode off).
+
 ## 7. DONE notes (appended after, dated)
 
 *(Empty. The first real release should append a dated entry here: what in sections 0

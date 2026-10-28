@@ -17,6 +17,12 @@ internal sealed class CloudRunSettings
 
     public TimeSpan ResultPollInterval { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>Issue #91: how many times a lost Spot VM is checked for a recorded preemption before it is called "not preempted" (Compute may record the operation a moment after the instance is gone).</summary>
+    public int PreemptionLookupAttempts { get; set; } = 3;
+
+    /// <summary>Issue #91: the wait between two of those looks.</summary>
+    public TimeSpan PreemptionLookupInterval { get; set; } = TimeSpan.FromSeconds(10);
+
     public TimeSpan? ResultTimeout { get; set; }
 
     /// <summary>The clock for every deadline, elapsed-time check and wait of the run (gateway call deadlines, the boot, result and lifecycle waits, poll sleeps). A test passes a clock it moves by hand, so a loaded machine cannot race a wall-clock deadline (#525).</summary>

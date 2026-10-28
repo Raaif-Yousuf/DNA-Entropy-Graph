@@ -50,6 +50,12 @@ Nine findings, each with its own code so the allowlist can be specific:
     member is used, but `[RelayCommand]`/`[ObservableProperty]` is the wrong
     tool for something no view binds to.
 
+`UNBOUND-DISPLAY-PROPERTY` (#568)
+    A public `string` property (or positional-record string parameter) of a type a view binds against (an
+    `x:DataType` of a DataTemplate, or a page's ViewModel) that no `{x:Bind}`/`{Binding}` in any .xaml names. C# and
+    test references do NOT count as use: the user never sees them (MEASURED 2026-10-03, #459: ReasonText). State
+    flags, enums, models and identifier-like names (`Id`, `Path`, `Url`, `Value`...) are out of scope on purpose.
+
 `MISSING-UID-RESOURCE`
     An `x:Uid="Foo"` in XAML with no matching `.resw` entry (`Foo` itself, or
     any `Foo.<property>`). MEASURED and written into `docs/ToTest.md`: this
@@ -70,9 +76,13 @@ Nine findings, each with its own code so the allowlist can be specific:
     page open, not at build (CLAUDE.md's DI row).
 
 `UNREGISTERED-RESOLVE`
-    A `GetRequiredService<T>()` inside `ServiceRegistration.cs` (typically a factory lambda)
-    whose `T` is never registered there. Factory-registered types skip the constructor check above, so this is the
-    check that covers what their lambda asks the container for.
+    A `GetRequiredService<T>()` in any production file (typically a factory lambda in `ServiceRegistration.cs`, or
+    `AppStartup.cs`) whose `T` is not registered in any production file. `T` may be generic (`IOptions<X>`); a bare
+    type parameter (`T`) is skipped. Factory-registered types skip the constructor check above (any argument counts
+    as a factory: a lambda, a method group, a variable; `AddSingleton(_ => (IFoo)new Foo())` registers `IFoo`), so
+    this is the check that covers what their lambda asks the container for (#601). Out of scope: a method group with
+    no type argument (`AddSingleton(CreateFoo)`) names no type, and a registration made through a helper
+    extension method this scanner cannot see.
 
 `DEAD-REGISTRATION`
     A type registered in `ServiceRegistration.cs` that is never a constructor
@@ -215,14 +225,31 @@ _ADD_SERVICE_OPEN = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*<")
 _ADD_SERVICE_INSTANCE = re.compile(r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*new\s+([\w.]+)")
 # A factory registration (#530): `AddSingleton<T>(sp => ...)`, `AddSingleton<I, T>((IServiceProvider _) => ...)`. The
 # container runs the lambda and never constructor-injects T, so T's constructor parameters are the lambda's business.
-_FACTORY_LAMBDA = re.compile(r"\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>")
-# The inferred-type factory form: `AddSingleton(_ => new SqliteDatabase(path))` registers the type the lambda news up.
+#
+# #601: ANY argument is a factory or an instance, not only a lambda: a method group (`AddSingleton<T>(CreateT)`) or a
+# variable is never constructor-injected either. Only the empty `AddSingleton<T>()` is constructor-checked.
+_FACTORY_ARGUMENT = re.compile(r"\s*\(\s*(?!\))")
+# The inferred-type factory form: `AddSingleton(_ => new SqliteDatabase(path))` registers the type the lambda news up,
+# or the cast type when the body is cast (`_ => (IFoo)new Foo()` registers IFoo: that is what the lambda returns).
+# A method group with no type argument (`AddSingleton(CreateFoo)`) names no type and stays out of scope.
 _ADD_SERVICE_INFERRED = re.compile(
-    r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>\s*new\s+([\w.]+)"
+    r"\.Add(?:Singleton|Transient|Scoped)\s*\(\s*(?:static\s+)?(?:async\s+)?(?:\w+|\((?:[^()]|\([^()]*\))*\))\s*=>\s*"
+    r"(?:\(\s*(?P<cast>[\w.<>?, ]+?)\s*\)\s*)?new\s+(?P<new>[\w.]+)"
 )
 _GET_SERVICE = re.compile(r"\.Get(?:Required)?Service\s*<\s*([\w\.]+)\s*>")
-# Only the required resolve throws on a missing registration; GetService<T> returns null by design.
-_GET_REQUIRED_SERVICE = re.compile(r"\.GetRequiredService\s*<\s*([\w\.]+)\s*>")
+# Only the required resolve throws on a missing registration; GetService<T> returns null by design. The type argument
+# is cut by balanced scanning (#601: `GetRequiredService<IOptions<X>>()` is one generic type, not a skipped match).
+_GET_REQUIRED_SERVICE_OPEN = re.compile(r"\.GetRequiredService\s*<")
+# A generic type parameter (`GetRequiredService<T>()` in a helper) names no concrete registration.
+# A generic argument list longer than this is not a type this guard reads (and bounds every scan, #601).
+_GENERIC_ARGUMENT_LIMIT = 400
+_TYPE_PARAMETER = re.compile(r"^T(?:[A-Z]?|Service|Impl\w*)$")
+
+
+def _inferred_registration(match: re.Match[str]) -> str:
+    """The type an inferred-type factory registers: the cast type when there is one, else the type it news up."""
+    return _normalise_type(match.group("cast") or match.group("new"))
+
 
 _X_UID = re.compile(r'x:Uid\s*=\s*"([^"]+)"')
 _RESW_DATA = re.compile(r'<data\s+name\s*=\s*"([^"]+)"')
@@ -538,14 +565,20 @@ def _cut_default(token: str) -> tuple[str, bool]:
     return token, False
 
 
-def _balanced_end(text: str, start: int, open_char: str, close_char: str) -> int | None:
+def _balanced_end(text: str, start: int, open_char: str, close_char: str, limit: int | None = None) -> int | None:
     """Index of the bracket that closes the one at `text[start]`, skipping string and char literals; None when it
-    never closes (#478: a regex `([^)]*)` stops at the first `)` of a default such as `= default(T)`)."""
+    never closes (#478: a regex `([^)]*)` stops at the first `)` of a default such as `= default(T)`).
+
+    `limit` caps how far past `start` the scan may go (linear per call, so a file full of unclosed `<` stays linear
+    overall, #601). A generic argument list never holds `;`, `{` or `}`, so for `<` the scan also ends at those."""
     depth = 0
     quote = ""
     index = start
-    while index < len(text):
+    end = len(text) if limit is None else min(len(text), start + limit)
+    while index < end:
         char = text[index]
+        if open_char == "<" and not quote and char in ";{}":
+            return None
         if quote:
             if char == "\\":
                 index += 1
@@ -578,13 +611,27 @@ def _add_service_calls(text: str) -> list[tuple[str, int]]:
     calls: list[tuple[str, int]] = []
     for match in _ADD_SERVICE_OPEN.finditer(text):
         open_at = match.end() - 1
-        close_at = _balanced_end(text, open_at, "<", ">")
+        close_at = _balanced_end(text, open_at, "<", ">", _GENERIC_ARGUMENT_LIMIT)
         if close_at is None:
             continue
         arguments = text[open_at + 1 : close_at]
         if ";" not in arguments:
             calls.append((arguments, close_at + 1))
     return calls
+
+
+def _required_resolves(text: str) -> list[tuple[str, int]]:
+    """Every `.GetRequiredService<T>()` as (T normalised, offset). T is cut by balanced scanning, so a generic such as
+    `IOptions<X>` is one type; `IServiceProvider` itself is not a registration."""
+    resolves: list[tuple[str, int]] = []
+    for match in _GET_REQUIRED_SERVICE_OPEN.finditer(text):
+        close_at = _balanced_end(text, match.end() - 1, "<", ">", _GENERIC_ARGUMENT_LIMIT)
+        if close_at is None:
+            continue
+        resolved = _normalise_type(text[match.end() : close_at])
+        if resolved and ";" not in resolved and resolved != "IServiceProvider":
+            resolves.append((resolved, match.start()))
+    return resolves
 
 
 def _constructor_parameters(text: str, class_name: str, skip_defaults: bool = False) -> list[str]:
@@ -622,9 +669,9 @@ def _factory_only_types(text: str) -> set[str]:
     plain: set[str] = set()
     for arguments, end in _add_service_calls(text):
         names = {_normalise_type(t) for t in _split_top_level(arguments)}
-        (factory if _FACTORY_LAMBDA.match(text, end) else plain).update(names)
+        (factory if _FACTORY_ARGUMENT.match(text, end) else plain).update(names)
     for match in _ADD_SERVICE_INFERRED.finditer(text):
-        factory.add(match.group(1).split(".")[-1])
+        factory.add(_inferred_registration(match))
     return factory - plain
 
 
@@ -645,11 +692,11 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
             continue
         every.update(tokens)
         services.add(tokens[0])
-    for pattern in (_ADD_SERVICE_INSTANCE, _ADD_SERVICE_INFERRED):
-        for match in pattern.finditer(text):
-            name = match.group(1).split(".")[-1]
-            every.add(name)
-            services.add(name)
+    inferred = [match.group(1).split(".")[-1] for match in _ADD_SERVICE_INSTANCE.finditer(text)]
+    inferred += [_inferred_registration(match) for match in _ADD_SERVICE_INFERRED.finditer(text)]
+    for name in inferred:
+        every.add(name)
+        services.add(name)
     return every, services
 
 
@@ -721,6 +768,86 @@ def _check_members(scan: Scan) -> list[Finding]:
                         str(path),
                     )
                 )
+    return findings
+
+
+# A plain public instance property: `public string Foo { get; ... }` or `public string Foo => ...`.
+_PLAIN_PROPERTY = re.compile(
+    r"(?<![\w.])public\s+(?P<mods>(?:(?:static|virtual|override|new|required|abstract|sealed|readonly|const)\s+)*)"
+    r"(?P<type>[\w\.\?<>\[\], ]+?)\s+(?P<name>\w+)\s*(?:\{\s*(?:\[[^\]]*\]\s*)*(?:get|set|init)\b|=>)"
+)
+
+
+# Text a user reads is a `string`. State flags, enums and models (`Status`, `Run`, `IsOk`) are read by logic and are
+# legitimately unbound, so only string-typed properties are held to a binding; a name that is an identifier or a
+# location rather than copy (`JobId`, `Path`, `ActionUrl`, `WireName`) is not display text either.
+_STRING_TYPE = re.compile(r"^(?:System\.)?[sS]tring\??$")
+_IDENTIFIER_NAME = re.compile(r"(?:Id|Path|Url|Uri|Folder|WireName|Key)$|^Value$")
+
+
+def _is_display_property(type_text: str, name: str) -> bool:
+    return bool(_STRING_TYPE.match(type_text.strip())) and not _IDENTIFIER_NAME.search(name)
+
+
+def _display_properties(text: str, type_name: str) -> list[str]:
+    """Public instance string properties a view could bind on `type_name`: its plain properties and, for a positional
+    record, its parameters. Commands are the UNBOUND-COMMAND check's business, not this one's."""
+    parameters, body = _type_body(text, type_name)
+    names: list[str] = []
+    for match in _PLAIN_PROPERTY.finditer(body):
+        mods = match.group("mods").split()
+        if {"static", "override", "const"} & set(mods) or not _is_display_property(match.group("type"), match.group("name")):
+            continue
+        names.append(match.group("name"))
+    declaration = _type_declaration(text, type_name)
+    if declaration is not None and declaration.group(0).lstrip().startswith("record"):
+        for token in _split_top_level(parameters):
+            declared, _ = _cut_default(token)
+            declared = re.sub(r"^(?:\[[^\]]*\]\s*)+", "", declared.strip())
+            pieces = declared.rsplit(None, 1)
+            if len(pieces) == 2 and _is_display_property(pieces[0], pieces[1]):
+                names.append(pieces[1])
+    return list(dict.fromkeys(names))
+
+
+def _display_property_candidates(scan: Scan) -> list[tuple[str, str, Path]]:
+    """(type, property, declaring file) for every type a view binds against: each `x:DataType` of a DataTemplate and
+    each page's ViewModel (by the naming convention). A type the tree does not declare is skipped (reported by DANGLING-BINDING)."""
+    types: set[str] = set()
+    for text in scan.xaml_files.values():
+        types.update(cls for _s, _e, cls in _template_spans(text) if cls)
+    for xaml_path in scan.xaml_files:
+        resolved = _viewmodel_for(xaml_path, scan)
+        if resolved is not None:
+            types.add(resolved[0])
+    candidates: list[tuple[str, str, Path]] = []
+    for type_name in sorted(types):
+        for path, text in scan.cs_files.items():
+            if _is_test_path(path) or not re.search(rf"\b(?:class|record)\s+{re.escape(type_name)}\b", text):
+                continue
+            candidates.extend((type_name, prop, path) for prop in _display_properties(text, type_name))
+            break
+    return candidates
+
+
+def _check_display_properties(scan: Scan) -> list[Finding]:
+    """UNBOUND-DISPLAY-PROPERTY (#568): a public property of a bound type that no `{x:Bind}`/`{Binding}` in any .xaml
+    names. C# and test references do NOT count as use: a property the ViewModel computes and no view shows is the
+    wired-to-nothing bug with every gate green (MEASURED 2026-10-03, #459: ReasonText)."""
+    bound = {word for text in scan.xaml_files.values() for match in _MARKUP.finditer(text) for word in re.findall(r"\w+", match.group(2))}
+    findings: list[Finding] = []
+    for type_name, prop, path in _display_property_candidates(scan):
+        if prop in bound:
+            continue
+        findings.append(
+            Finding(
+                "UNBOUND-DISPLAY-PROPERTY",
+                f"{type_name}.{prop}",
+                f"No {{x:Bind}} or {{Binding}} in any .xaml names this public property of {type_name}, a type a view binds "
+                f"against. C# and test references do not count: the user never sees it.",
+                str(path),
+            )
+        )
     return findings
 
 
@@ -809,22 +936,27 @@ def _check_di(scan: Scan) -> list[Finding]:
                 )
             )
 
-    # Every `GetRequiredService<T>()` in the registration file names a registered type. Factory-built types are
-    # exempt from the constructor check above because their lambda supplies the arguments, so this is where a
-    # missing one is caught (#530).
-    for match in _GET_REQUIRED_SERVICE.finditer(reg_text):
-        resolved = match.group(1).split(".")[-1]
-        if resolved in service_types or resolved in _NON_SERVICE_PARAM_TYPES or resolved == "IServiceProvider":
-            continue
-        finding = Finding(
-            "UNREGISTERED-RESOLVE",
-            resolved,
-            f"'{resolved}' is resolved from the container inside ServiceRegistration.cs but never registered "
-            f"there. It throws on first resolve at runtime, not at build.",
-            str(registration),
-        )
-        if finding not in findings:
-            findings.append(finding)
+    # Every `GetRequiredService<T>()` in production code names a registered type. Factory-built types are exempt
+    # from the constructor check above because their lambda supplies the arguments, so this is where a missing one is
+    # caught (#530). It covers every production file, not only ServiceRegistration.cs (#601: AppStartup.cs and
+    # App.xaml.cs resolve too), and a type registered in any production file satisfies it.
+    production = {p: _strip_comments(x) for p, x in scan.cs_files.items() if not _is_test_path(p)}
+    resolvable = set(service_types)
+    for text in production.values():
+        resolvable |= _registered_types(text)[1]
+    for path, text in production.items():
+        for resolved, _at in _required_resolves(text):
+            if resolved in resolvable or resolved in _NON_SERVICE_PARAM_TYPES or _TYPE_PARAMETER.match(resolved):
+                continue
+            finding = Finding(
+                "UNREGISTERED-RESOLVE",
+                resolved,
+                f"'{resolved}' is resolved from the container in {path.name} but never registered "
+                f"in any production file. It throws on first resolve at runtime, not at build.",
+                str(path),
+            )
+            if finding not in findings:
+                findings.append(finding)
 
     # A registration nothing asks for.
     consumers: dict[str, set[str]] = {}
@@ -975,7 +1107,7 @@ def _check_bindings(scan: Scan) -> tuple[list[Finding], list[str]]:
 def collect_findings(root: Path) -> tuple[list[Finding], Scan, list[str]]:
     scan = read_tree(root)
     binding_findings, binding_skips = _check_bindings(scan)
-    findings = _check_members(scan) + _check_resources(scan) + _check_di(scan) + binding_findings
+    findings = _check_members(scan) + _check_resources(scan) + _check_di(scan) + binding_findings + _check_display_properties(scan)
     findings.sort(key=lambda f: (f.code, f.symbol))
     return findings, scan, binding_skips
 
@@ -1246,6 +1378,16 @@ def self_test() -> int:
                     "src/Demo.App/Views/NewRunPage.xaml",
                     "{Binding SelectedInputPath}",
                     "{Binding TypoedPropertyName}",
+                ),
+            ),
+            (
+                "UNBOUND-DISPLAY-PROPERTY",
+                "a string property of a page ViewModel that no XAML binds",
+                lambda r: _patch(
+                    r,
+                    "src/Demo.Presentation/ViewModels/NewRunViewModel.cs",
+                    "    [RelayCommand]",
+                    '    public string Summary => "";\n\n    [RelayCommand]',
                 ),
             ),
             (
