@@ -18,11 +18,23 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Button x:Uid="RunsRefreshButton" Grid.Row="0" HorizontalAlignment="Right" Command="{x:Bind ViewModel.RefreshCommand}">
-            <Button.KeyboardAccelerators>
-                <KeyboardAccelerator Key="F5" />
-            </Button.KeyboardAccelerators>
-        </Button>
+        <Grid Grid.Row="0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <!-- Issue #111: the result of the scan, or the one thing to do. -->
+            <TextBlock Text="{x:Bind ViewModel.ImportStatusText, Mode=OneWay}" VerticalAlignment="Center" TextWrapping="Wrap" />
+            <ProgressRing Grid.Column="1" Width="20" Height="20" IsActive="{x:Bind ViewModel.IsImporting, Mode=OneWay}" />
+            <Button x:Uid="RunsImportButton" Grid.Column="2" Command="{x:Bind ViewModel.ImportRunsCommand}" IsEnabled="{x:Bind ViewModel.CanImport}" />
+            <Button x:Uid="RunsRefreshButton" Grid.Column="3" Command="{x:Bind ViewModel.RefreshCommand}">
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Key="F5" />
+                </Button.KeyboardAccelerators>
+            </Button>
+        </Grid>
 
         <Grid Grid.Row="1" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
@@ -77,6 +89,7 @@
                                                     Values="{x:Bind Sparkline, Mode=OneWay}"
                                                     Visibility="{x:Bind HasSparkline, Mode=OneWay}" />
                                                 <TextBlock Text="{x:Bind ReasonText}" Visibility="{x:Bind HasReason}" TextWrapping="Wrap" />
+                                                <TextBlock Text="{x:Bind ImportedText}" Visibility="{x:Bind HasImportedText}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <TextBlock Text="{x:Bind PresetText}" Visibility="{x:Bind HasPreset}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <Button x:Uid="RunsCopyOwnerRequestButton" Command="{x:Bind CopyOwnerRequestCommand}" Visibility="{x:Bind HasOwnerRequest}" HorizontalAlignment="Left" />
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
