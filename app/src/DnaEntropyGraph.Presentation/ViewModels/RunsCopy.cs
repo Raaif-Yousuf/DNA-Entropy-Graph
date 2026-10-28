@@ -57,6 +57,10 @@ public static class RunsCopy
         ? Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body_One", ToastSeverity.Info)
         : Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body", ToastSeverity.Info);
 
+    public const string RedownloadAgainLabel = "Runs_RedownloadAgain_Label";
+    public const string RedownloadPartialLabel = "Runs_RedownloadPartial_Label";
+    public static readonly RunsMessage RedownloadCancelledPartial = Pair("Runs_Redownload_CancelledPartial_Title", "Runs_Redownload_CancelledPartial_Body", ToastSeverity.Info);
+
     public static RunsMessage Redownload(CloudResultsStatus status) => status switch
     {
         CloudResultsStatus.Done => Pair("Runs_Redownload_Done_Title", "Runs_Redownload_Done_Body", ToastSeverity.Success),
@@ -94,6 +98,7 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),

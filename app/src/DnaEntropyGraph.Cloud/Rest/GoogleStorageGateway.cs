@@ -101,6 +101,122 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     public async Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
 
+    // ------------------------------------------------------------------ issue #105: usage and cleanup of a prefix
+
+    public async Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    {
+        var count = 0;
+        long bytes = 0;
+        await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items ?? [])
+            {
+                count++;
+                bytes += (long)(item.Size ?? 0);
+            }
+        }
+
+        return new PrefixUsage(count, bytes);
+    }
+
+    public async Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    {
+        var children = new SortedSet<string>(StringComparer.Ordinal);
+        await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: "/", cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var child in page.Prefixes ?? [])
+            {
+                children.Add(child);
+            }
+        }
+
+        return children.ToList();
+    }
+
+    /// <summary>
+    /// Lists the objects under the prefix (one page at a time) and deletes each by its exact name; one already gone (404) counts as deleted. A prefix that is
+    /// not a folder path is refused before any request (<see cref="StoragePrefixes.RequireDeletable"/>), so a typo can never empty the bucket. Each delete is one
+    /// HTTP request through the pipeline; a failure stops the sweep and throws, leaving the rest in place for the caller's read-back to report.
+    /// </summary>
+    public async Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    {
+        StoragePrefixes.RequireDeletable(prefix);
+        var deleted = 0;
+        await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items ?? [])
+            {
+                var name = item.Name;
+                await _pipeline.ExecuteAsync(
+                    "Storage.DeleteObject",
+                    async ct =>
+                    {
+                        try
+                        {
+                            await _service.Objects.Delete(bucket, name).ExecuteAsync(ct).ConfigureAwait(false);
+                        }
+                        catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
+                        {
+                            // Already gone is what a delete wants.
+                        }
+                        catch (GoogleApiException ex)
+                        {
+                            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                        }
+                    },
+                    cancellationToken,
+                    bypassBreaker: true,
+                    singleRequest: true).ConfigureAwait(false);
+                deleted++;
+            }
+        }
+
+        return deleted;
+    }
+
+    /// <summary>Every page of <c>objects.list</c> under <paramref name="prefix"/>. A repeated page token fails the listing (a short total must never read as complete).</summary>
+    private async IAsyncEnumerable<StorageData.Objects> ListPagesAsync(string bucket, string prefix, string? delimiter, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            var requested = pageToken;
+            var page = await _pipeline.ExecuteAsync(
+                "Storage.ListObjects",
+                async ct =>
+                {
+                    var request = _service.Objects.List(bucket);
+                    request.Prefix = prefix;
+                    request.Delimiter = delimiter;
+                    request.PageToken = requested;
+                    try
+                    {
+                        return await request.ExecuteAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (GoogleApiException ex)
+                    {
+                        throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
+                    }
+                },
+                cancellationToken,
+                bypassBreaker: true,
+                singleRequest: true).ConfigureAwait(false);
+
+            yield return page;
+
+            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            if (next is not null && next == pageToken)
+            {
+                throw new CloudOperationException(
+                    new CloudError("LIST_PAGINATION_STUCK", null, "Cloud Storage returned the same page token twice, so the object list may be incomplete."),
+                    CloudErrorKind.Network);
+            }
+
+            pageToken = next;
+        }
+        while (pageToken is not null);
+    }
+
     // ------------------------------------------------------------------ discovery
 
     /// <summary>
@@ -125,7 +241,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return ours
             .OrderBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
             .ThenBy(b => b.Name, StringComparer.Ordinal)
-            .Select(b => new BucketDescriptor(b.Name, b.Location ?? string.Empty, new Dictionary<string, string>(b.Labels ?? new Dictionary<string, string>()), b.TimeCreatedDateTimeOffset))
+            .Select(b => new BucketDescriptor(b.Name, b.Location ?? string.Empty, new Dictionary<string, string>(b.Labels ?? new Dictionary<string, string>()), b.TimeCreatedDateTimeOffset, SoftDeleteDays(b)))
             .ToList();
     }
 
@@ -161,6 +277,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
         return ours;
     }
+
+    /// <summary>
+    /// The days a deleted object stays recoverable (and billed) in the bucket: <c>softDeletePolicy.retentionDurationSeconds</c> rounded up to whole days, 0 when soft delete
+    /// is off, null when the response carries no policy. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through
+    /// the JSON API, gets 7 days, and "soft-deleted objects continue to accrue storage charges". THEORY (unverified, ToTest #105): buckets.list returns the policy.
+    /// </summary>
+    internal static int? SoftDeleteDays(StorageData.Bucket bucket)
+        => bucket.SoftDeletePolicy?.RetentionDurationSeconds is { } seconds ? (int)Math.Ceiling(seconds / 86400d) : null;
 
     private static bool IsOurs(StorageData.Bucket bucket)
         => bucket.Labels is { } labels && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue;

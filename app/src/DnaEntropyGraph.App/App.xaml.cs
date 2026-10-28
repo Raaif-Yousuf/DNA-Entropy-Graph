@@ -42,7 +42,7 @@ public partial class App : Application
         Services.GetRequiredService<Services.WindowHandleProvider>().Hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         Services.GetRequiredService<DialogService>().Attach(window);
         window.Activate();
-        Services.GetRequiredService<Services.AppWindowService>().Attach(window);
+        Services.GetRequiredService<Services.AppWindowService>().Attach(window, Services.GetRequiredService<Presentation.Services.LeftRunningGuard>().ConfirmExitAsync);
         _window = window;
         window.Closed += (_, _) => Startup.DesktopActivation.Unregister();
         Startup.DesktopActivation.Register(Services);

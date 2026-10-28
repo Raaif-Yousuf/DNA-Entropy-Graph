@@ -25,6 +25,8 @@ public enum RunErrorAction
     CheckInternet,
     CopyOwnerRequest,
     RestoreFile,
+    CheckAccession,
+    NarrowRange,
 }
 
 /// <summary>
@@ -38,6 +40,11 @@ public static class RunErrorActions
         [RunErrorCodes.NoProject] = RunErrorAction.OpenSettings,
         [RunErrorCodes.TargetNotSupported] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.VmUnhealthy] = RunErrorAction.StartAgain,
+        [RunErrorCodes.RunTimeLimit] = RunErrorAction.StartAgain,
+        [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
+        [RunErrorCodes.StoppedByCleanup] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LifecycleUnverified] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.CancelFailed] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.InputMissing] = RunErrorAction.ChooseFile,
@@ -68,12 +75,18 @@ public static class RunErrorActions
         [RunErrorCodes.InputNotUtf8] = RunErrorAction.ChooseFile,
         [RunErrorCodes.InputEmpty] = RunErrorAction.ChooseFile,
         [RunErrorCodes.InputTooLong] = RunErrorAction.SplitInput,
+        [RunErrorCodes.InputAccessionInvalid] = RunErrorAction.CheckAccession,
+        [RunErrorCodes.InputAccessionNotFound] = RunErrorAction.CheckAccession,
+        [RunErrorCodes.InputAccessionTooLarge] = RunErrorAction.NarrowRange,
+        [RunErrorCodes.InputAccessionUnreachable] = RunErrorAction.CheckInternet,
         [RunErrorCodes.InstallationIdUnusable] = RunErrorAction.RestoreFile,
         [RunErrorCodes.WorkerDefaultAccount] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
+        [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
+        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LocalEngineNotReady] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalGpuNotUsable] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.LocalWorkerCrashed] = RunErrorAction.OpenSettings,
@@ -128,6 +141,8 @@ public static class RunErrorActions
         RunErrorAction.CheckInternet => ["internet connection"],
         RunErrorAction.CopyOwnerRequest => [resources["RunsCopyOwnerRequestButton.Content"]],
         RunErrorAction.RestoreFile => ["Restore the id"],
+        RunErrorAction.CheckAccession => ["Check the accession"],
+        RunErrorAction.NarrowRange => ["smaller range"],
         _ => [],
     };
 }

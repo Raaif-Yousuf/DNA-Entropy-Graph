@@ -174,6 +174,41 @@ per-region quota memory, persisted per project instead of the prototype's
 - Not built: the user-facing "other continents" toggle (the ladder walks every offered zone, the bucket's continent first), per-tier escalation on a click,
   and the last-good-zone memory (#210).
 
+### 3.1 The model and GPU catalog (issue #87)
+
+`GpuCatalog.Shipped` (`app/src/DnaEntropyGraph.Core/Cloud/GpuCatalog.cs`) is the one table of models and GPU tiers: per model the
+precision, size, card count, memory and whether it needs Hopper (copied from the worker's `hardware.py`
+`MODEL_REQUIREMENTS`, which refuses a run whose hardware disagrees); per tier the machine type, accelerator id, quota metric, card count,
+memory, Hopper, Spot-only and the 7B window ceiling. It is a Core table, not a JSON file: it needs no
+file, DI or load-failure path, a wrong row fails a test, and `CloudJobRequestFactory.MachineTypeFor` reads it, so the machine a run
+starts and the machine the pickers and the estimate name cannot drift apart. GPUs are listed cheapest first.
+
+- **Fit**: Hopper first, then card count, then memory (`GpuFit`). MEASURED (project memory, prototype): Evo 2 7B runs on an L4 and an A100
+  only; 1B, 20B and 40B need Hopper FP8 (H100), 40B two of them (`a3-highgpu-2g`, Spot or Flex-start only).
+- **Parity with the worker**: `WorkerContractGuardTests.The_gpu_catalog_agrees_with_the_workers_model_requirements` parses `hardware.py`
+  `MODEL_REQUIREMENTS` and fails when the model set, precision, Hopper need or card count differ; a second test mutates a copy of the text
+  (40B card count) and proves the check goes red.
+- **Spot-only tiers**: both A3 shapes (`a3-highgpu-1g` and `-2g`) are `SpotOnly`. Source: Appendix B section 4.1, "not offered on-demand for small
+  A3 shapes". THEORY (unverified against a real project): that wording covers the 1g shape too. A run on a SpotOnly tier carries
+  `RunOptions.SpotVm = true` and its estimate is asked for Spot (the price list has no A3 rows, so it says no estimate). Mapping `SpotVm` to the VM's
+  scheduling is issue #91's `VmSpec.Spot`; until it lands a SpotOnly tier would be requested on-demand, which is why no SpotOnly tier is offered today.
+- **Nothing fits**: when no offered card can run the chosen model the page says to choose another model, offers no "Run anyway", and Run stays off.
+- **Linking** (`ModelGpuLinker`, pure): a model pick raises an unpinned GPU to the cheapest offered tier that fits; a GPU pick moves an
+  unpinned model to the largest offered model that fits (a tie keeps the current one); a pinned side never moves, so the pair can be
+  infeasible, which the page warns about and asks the user to confirm. "Automatic" (`CheapestAvailable`) stays automatic in
+  `RunOptions.GpuTier` while the cheapest tier is the answer and names the tier otherwise, so a model that needs a bigger card never
+  starts on an L4.
+- **What is offered is issue #14's switch.** `Offered` per model and tier in the catalog is the only thing to change when #14 (ship
+  evo2_40b and evo2_1b_base, or hide them; an owner DECISION, open) is decided. MEASURED 2026-10-15: the app had offered only evo2_7b
+  (no model picker existed), so only evo2_7b and the L4, A100 40 and A100 80 tiers are offered, and the model picker is hidden while one
+  model is offered. `GpuCatalogTests.Today_only_the_standard_7b_model...` pins that state.
+- **Zone availability (not handled here)**: the zone ladder is `us-central1-a/b/c/f` for every tier, and an A100 80 GB or A3 machine type may not exist
+  in all of them; see the issue filed from the #87 cold review about how a "machine type not found in zone" error classifies.
+- **Accelerator and quota** per tier (`GpuEntry.Accelerator`, `QuotaMetric`) are what issue #414's accelerator-type field and the
+  preflight quota check can read instead of the `"gpu"` placeholder; this change does not wire them into `VmSpec`.
+- **Window ceiling**: `GpuEntry.ContextCeiling` is 8,192 for the L4 and null (unmeasured, never guessed) for the others; the clamp offer
+  of science_and_formats.md section 3 is not built on it yet.
+
 ## 4. Labels and naming
 
 Covered field-by-field in [`job_contract.md`](job_contract.md) section 2 (identifiers) -
@@ -298,6 +333,8 @@ THEORY (unverified, no live project): that `projects.get` lists `GPUS_ALL_REGION
 failed read, `GPUS_ALL_REGIONS_MISSING`, so the answer is `Unknown`). Switched on in production by #609. The request flow
 (`quotaInfos.get` eligibility, `quotaPreferences.create`) and the ineligible-account guidance are the sub-issues of #88 listed in the changelog.
 
+**Spot quota (issue #718).** MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): the Spot twin of the L4 line is `PREEMPTIBLE_NVIDIA_L4_GPUS` (name confirmed), but without a preemptible grant Spot VMs "consume standard quota", and once one is granted they "can only consume preemptible quota". `QuotaMetrics.SpotRegionalMetric` therefore reads the preemptible line only when the region reports it with a limit above zero, else the standard line. No production path reads it yet (the provisioner uses the on-demand metric); a Spot preflight must call it. THEORY (unverified): whether an ungranted region lists the preemptible line as 0 or omits it; both read as standard.
+
 ### 6.2 What preflight does with a quota it cannot read (issue #88)
 
 DECISION (agent-made, reversible): an unreadable quota is UNKNOWN, and unknown is not "none". `PreflightChecks` calls `GetGpuQuotaAsync` and:
@@ -312,6 +349,23 @@ The whole read has its own budget, `CloudRunSettings.QuotaReadTimeout` (5 minute
 requests (`regions.list` pages, `projects.get`) in one gateway method and the 60 s `CallTimeout` is sized for one. THEORY (unverified, sized from the
 pipeline's worst case, not measured): 5 minutes covers a slow but healthy read; one cut by it is a `network` failure and so UNKNOWN. Proven over
 `FakeGcp` by `CloudJobRunnerQuotaPreflightTests`; the real-project row is in `docs/ToTest.md`.
+
+### 6.x Asking for the quota (issue #99, the wizard's GPU step)
+
+`GpuQuotaRequester.RequestAsync(project, region, contactEmail)` asks Google for one more `NVIDIA_L4_GPUS` in the region and one more `GPUS_ALL_REGIONS`. Per quota, in
+this order: skip it when `ReadQuotaAsync` already shows at least one GPU free (limit minus usage); stop with `Failed` `QUOTA_READ_FAILED` when the read failed (the limit is unknown
+and a request built on it could ask for less than the project has: no request is created and the user retries); read eligibility
+(`IQuotaGateway.GetQuotaIncreaseEligibilityAsync`, the Cloud Quotas API's `quotaInfos.get` and its `quotaIncreaseEligibility`); only an explicit yes creates
+the request (`RequestQuotaIncreaseAsync`) for `max(1, limit + 1)`, one more than the project has now. An ineligible project gets the reason (`NoValidBillingAccount`, `NotEnoughUsageHistory`,
+`NotSupported`, `Other`), and an eligibility that says neither yes nor no is a `Failed` with `QUOTA_ELIGIBILITY_UNKNOWN`, never permission. One quota's failure never
+stops the other. The preference id is `deg-<metric-slug>[-<region>]` (no date). MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/reference/rest/v1/projects.locations.quotaPreferences): "There is only one QuotaPreference resource for a quota value targeting a unique set of dimensions", a preference cannot be deleted, an `etag` that no longer matches is rejected `ABORTED`, and the list `filter` covers state, type and time only. So the gateway lists the project's preferences (paged), matches on service, quota id and dimensions under ANY id (a Console request, an older app version), returns one that already asks for enough (`AlreadyExisted`, nothing written), raises a lower one in place with `PATCH` and its etag (one attempt: a replay meets a changed etag), and creates one only when there is none (a replayed create whose answer was lost meets its own id: `AlreadyExists`, read as `AlreadyRequested`).
+The outcomes are `AlreadyAvailable`, `Granted` (approved at once), `Requested` (with Google, review can take days), `AlreadyRequested`, `NotEligible`, `Failed`.
+**DECISION (agent-made, reversible):** raw REST over the same bearer-token HTTP stack, not a package: NuGet has no discovery client for this API
+(`Google.Apis.CloudQuotas.v1` does not exist) and the gRPC `Google.Cloud.CloudQuotas.V1` would bring its own transport and break the injectable HTTP handler every other
+gateway and test uses. Quota preferences are not billable and carry no labels, so Hard Rules 9 and 10 do not apply to them. The API itself (`cloudquotas.googleapis.com`)
+must be enabled in the project: while it is not, both calls fail `api_disabled`. The wizard's service step enables it: `RequiredServices.Ids` is `[compute, storage, cloudquotas]` (#705, `GoogleServiceUsageGatewayTests` asserts the batch), so the earlier note that it did not was stale (rc99 review, 2026-10-15).
+Quota ids, MEASURED 2026-10-15: the docs' own `CreateQuotaPreference` example for a GPU quota is `GPUS-PER-GPU-FAMILY-per-project-region` with a `region` dimension, and Compute's resource-usage page names the standard L4 quota `GPU_FAMILY:NVIDIA_L4`, so the L4 request is that quota id with dimensions `region` and `gpu_family=NVIDIA_L4` (the earlier guess `NVIDIA-L4-GPUS-per-project-region` is gone). THEORY (unverified, no live project): the `GPUS-ALL-REGIONS-per-project` id (the docs name the global quota only as "GPUs (all regions)"), the `gpu_family` dimension key, and that a fresh project is `isEligible: true` for them; a wrong id is a 404 read as unknown (nothing asked) and a wrong dimension a rejected create. Every Cloud Quotas call sends `X-Goog-User-Project: <selected project>`: MEASURED 2026-10-15 (docs.cloud.google.com/docs/quotas/set-quota-project) that a request to a client-based API can fail when the quota project cannot be identified and that for REST the `x-goog-user-project` header sets it; THEORY (unverified): the docs do not say the Cloud Quotas API is client-based, so the header may be unnecessary (it is harmless: it needs `serviceusage.services.use` on the project the user chose). **Spot:** no preemptible request is made. MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): Spot VMs consume the standard quota until a preemptible quota is requested, and after a request "the applicable resources can only consume preemptible quota"; asking for `PREEMPTIBLE_NVIDIA_L4_GPUS` would move the project off the quota this request raises, so `QuotaMetrics.QuotaIdFor` answers null for it. `FakeGcp`: `WithQuotaEligibility`, `WithQuotaEligibilityFailure`, `WithQuotaRequestFailure`, `WithQuotaAutoGrant` (moves the
+table `GetGpuQuotaAsync` reads), `QuotaCalls` (the order of reads and creates), `QuotaRequests`.
 
 ## 7. Least-privilege IAM for the worker service account
 
@@ -472,7 +526,7 @@ exercise.
  New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
  base count, always labelled an estimate. The shipped prices are THEORY (unverified):
  gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
- Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Catalog (#214, #303); the Spot prices were read from Google's own pricing pages on 2026-10-16 (#303, MEASURED).
  Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
  the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
@@ -589,7 +643,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   writer: the startup script's `booting`/`installing` count). A stage past its deadline (`booting` 8 min, `installing` 15, `restoring-cache` 15,
   `model-loading` 15, `uploading` 10; `CloudJobRunner.StageDeadlines` overrides them) ends the run as `worker_stage_stuck` and the VM per the
   user's choice, whatever the heartbeat says: this catches a hung main thread under a ticking heartbeat thread while it is in one of those
-  stages (#522's remaining case is a hang inside `running`). Numbers are the contract's (THEORY, unverified on a real VM).
+  stages (a hang inside `running` is the progress rule below). Numbers are the contract's (THEORY, unverified on a real VM).
+- **Forward progress (issue #723, app half of #522).** `WorkerStatusReader` reads `windowsDone` and `lastProgressAt`. In the `running` stage, when either field is present and
+  `(stage, windowsDone, lastProgressAt)` has not changed across looks for `ProgressStallTimeout` (default 20 min, job_contract.md section 5; compared between looks, never with the
+  app's clock) while the heartbeat keeps changing, the watch returns `worker_progress_stalled` (stop, via the same stall prompt). A status with neither field (an older worker) is never
+  judged by it. THEORY (unverified): 20 min is above any healthy L4 window; ToTest #522.
 - **RUNNING is not working: the runner reads the heartbeat (issue #498).** While it waits for `result.json`, `ResultWaiter`
   also reads `status.json` on every poll and feeds `HeartbeatWatch`, which judges only whether `heartbeatSeq`/`updatedAt`
   CHANGED between looks, on the app's own clock (never the worker's `updatedAt` against the app's wall clock: the two
@@ -836,6 +894,16 @@ quota check also uses a placeholder accelerator-type string (`"gpu"`), because `
 no accelerator-type field yet (only `MachineType`) - see this round's changelog fragment
 and issue tracker for the follow-up.
 
+### 11.x Slow stages and stalls: the notice and the three-way choice (issue #675)
+
+`CloudJobRunner.OnNotice` (`Action<RunNotice>`) is told `SlowStage` once per stage when it passes 75 percent of its deadline (`HeartbeatWatch.SlowFraction`, stage, time in stage,
+deadline), `StallDetected` when the heartbeat watch fires and a question is opened, and `StallCleared` when the worker recovers while it is open. `CloudJobRunner.OnStall`
+(`StallDecision`: `StallPrompt` in, `StallChoice` out: `Stop`, `Delete`, `KeepWaiting`) replaces "end the VM at once" for `worker_stage_stuck`, `worker_progress_stalled`, `worker_heartbeat_stale` and `worker_no_heartbeat`;
+null keeps the old behaviour. While the question is open `ResultWaiter` keeps polling `result.json` and does not repeat it; Stop and Delete end the run under the same code with the VM
+stopped or deleted whatever the run's own end choice was; `KeepWaiting` restarts every watch allowance (`HeartbeatWatch.Snooze`) so the question comes back after a fresh one; the result
+limit still applies, so waiting is never unbounded (Hard Rule 11); a handler that throws or is cancelled counts as no answer and the VM is ended the run's own way. A box with no GPU is never
+asked about. The question's token is cancelled on every exit. Graceful cancel: `docs/job_contract.md` section 6. `FakeGcp`: `WithWorkerIgnoringCancel`, `WithUploadFailure`.
+
 ## 12. Retry, token refresh and the offline breaker (issue #258)
 
 **Implemented**: `CloudCallPipeline` (`app/src/DnaEntropyGraph.Cloud/CloudCallPipeline.cs`,
@@ -986,6 +1054,13 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
   `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Granted scopes (issue #259).** Under granular consent a user can untick `cloud-platform` and still be signed in. MEASURED 2026-10-16
+  (https://developers.google.com/identity/protocols/oauth2/native-app): the token response `scope` field lists what the token grants,
+  a user `may not grant your app access to all` requested scopes, and `Incremental authorization is not supported for installed apps`,
+  so `include_granted_scopes` is not used; the re-ask is the same flow with `prompt=select_account consent`. At sign-in a `scope` without
+  `cloud-platform` (or none) fails `CONSENT_INCOMPLETE` before anything is stored; on a refresh a `scope` that names scopes without it
+  deletes the token file, sets `needsSignIn` and fails the same way (a refresh answer with no `scope` keeps the stored grant). The action
+  is **Sign in again and allow access**, which is the ordinary sign-in command. Decision #18 (single `cloud-platform` scope) is what makes this one check enough.
 - **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
   and the account entry whatever Google said, and makes the next remaining account current.
 - **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
@@ -1266,7 +1341,7 @@ the running app calls this class yet.
   Not built: the run page's "Starting your computer from yesterday" line (a run-page string, owned by the Presentation lane).
 - **THEORY (unverified, no live project):** that `maxRunDuration` is accepted on a standard-provisioning VM with these
   scheduling settings; that the `labels.job-id = "x"` filter syntax matches; that the DLVM image family boots and runs docker on a machine with no GPU;
-  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row.
+  the real label filter syntax and the shape of `unreachables`. `docs/ToTest.md` carries the cpu-vm row. The reuse (like a create) is registered as in flight immediately BEFORE the gateway call is made (`VmProvisioner.TrackInflightCreate`, a placeholder that completes with the real task), because the gateway's synchronous part runs before it returns its task: MEASURED 2026-10-16 (#784), a cancel that looked in that window settled nothing and the VM then landed RUNNING under a Cancelled record. A cancel that arrives earlier (between the claim and the start of the call) is not in flight yet; it is covered instead by the cancel's label lookup, which finds the claimed VM by its job-id label.
 
 ### The worker identity (issue #54)
 
@@ -1339,10 +1414,67 @@ account and a role and edits two policies, and a whole-method retry would replay
   `WithWorkerIdentityActAsDenied`) and adopts an existing account on a repeat call.
 - **Proven only by a real project:** `docs/ToTest.md`.
 
+### 16.x The Cloud page's gateway methods (issue #105)
+
+What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, `FakeGcp` and the `Resilient*` wrappers:
+
+- `IComputeGateway.StartVmAsync(vm, zone)`: `instances.start` on the VM as it is (no label, scheduling or metadata write: that is reuse, #94), polled
+  to `DONE`. A 404 is `VM_NOT_FOUND`; a stockout on the start is `stockout`. THEORY (unverified): a VM stopped past its `maxRunDuration` is accepted.
+- `IComputeGateway.ListDisksByInstallationAsync(installationId)`: `disks.aggregatedList` filtered on `labels.app` AND `labels.installation-id`
+  (`returnPartialSuccess=true`; an unreachable zone fails the listing as `ZONES_UNREACHABLE`, never a short list; every disk is re-checked for both
+  labels), returning `DiskDescriptor` (name, zone, size in GB, status, labels, creation time, the VMs holding it). `DeleteDiskAsync(disk, zone)`:
+  `disks.delete`, already gone is a success.
+- `IStorageGateway.GetPrefixUsageAsync`, `ListChildPrefixesAsync`, `DeletePrefixAsync`. The bucket has no per-installation prefix (objects live under
+  `jobs/<jobId>/`, one bucket per project shared by every installation), so an installation's footprint is the `jobs/<id>/` folders whose
+  `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
+  job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
+  `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
+  never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
+  every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
+  one failed delete never stops the others (`Failed` with the error kind), and every delete is read back: `Deleted` means gone, `NotVerified` means the
+  platform accepted the delete and the read still finds it. A disk still held by a VM that is not ours is `Skipped`. `CleanupReport.Complete` is true only
+  when every item is `Deleted`. The service role and the worker service account are not touched here.
+- Resilience: a start keeps the breaker; listing and deleting our disks and the bucket prefix calls bypass it (cleanup that stops the meter).
+  `FakeGcp`: `WithDisk`, `WithStartFailure(kind)`, `WithDeleteFailure(name, kind)`, `WithSilentNoOpDeletes()`.
 ## 17. Overrides in Settings (issue #644)
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
+## 18. The nothing-left-running scan (issue #113)
+
+`LeftRunningScanner` (Core) lists this installation's computers and disks by label through the same gateway calls the Cloud page uses
+(`ListByInstallationAsync`, `ListDisksByInstallationAsync`; Hard Rules 9 and 10, so another installation's computers are never reported or touched).
+A running computer reports its remaining time (`VmDescriptor.MaxRunDuration`, read from `scheduling.maxRunDuration`, against the run clock start and the platform's
+own clock when the read carried one), its hourly rate from the price list, and whether a non-terminal run row carries its job id. A disk no running computer holds is a
+"stopped disk" with its monthly cost (size times the price list's per-GB-month rate).
+
+`LeftRunningGuard` (Presentation) runs it three ways: at launch (`AppStartup.BeginAsync`), every 5 minutes on a `TimeProvider` timer (a running computer with no live
+run gets one warning toast, again only if it ended and came back), and on close (`AppWindowService` cancels `AppWindow.Closing` at once, asks asynchronously, then closes
+again; the UI thread is never blocked). The exit modal offers Stop, Delete or Leave running; Leave running is never indefinite because every computer carries a
+`maxRunDuration` (Hard Rule 11). A scan that cannot read Google, or a dialog that cannot be shown, never keeps the window open; a Stop or Delete that fails for some computer
+does (it names the action, and the next close asks again).
+
+Bounds (cold-review H1): the scan is abandoned after 10 s (``Task.WaitAsync`` on the ``TimeProvider``, so a listing that ignores its token cannot hold the close), the dialog waits at most 10 s for the window's one-dialog gate (``IChoiceDialogService.ChooseAsync`` with a gate timeout; null answer allows the close), and Stop / Delete wait at most 30 s each, in parallel: a call still unanswered is not a failure, the window closes and an Info toast says it finishes on Google's side. Stop and Delete go through ``InstallationCleanup.EndVmAsync`` (round 3, see below): the exit claims "finishing on Google's side" only for a request Google ACCEPTED; a request never accepted keeps the window open with the failure message. A computer whose run is still live ends that run's row as Cancelled (``cleanup_deleted`` for a delete, ``cleanup_stopped`` for a stop, each with its own ``RunError_`` text) instead of leaving it Running (Hard Rule 11); the modal warns that the results are not downloaded yet. The close decision (cancel at once, ask once, re-close without asking again) is ``CloseConfirmation``, tested without a window. Several computers found in one scan make one toast (the message bar holds one message). A computer whose limit could not be read gets a neutral line, not a claim that it ends itself.
+
+Round 3 (the end of one computer, `InstallationCleanup.EndVmAsync`):
+
+- **Accepted is the insert, not the end of the operation (H1).** `IComputeGateway.EndVmAsync(name, zone, delete, onAccepted, ct)` calls `onAccepted` as soon as the Compute request (the operation insert) was accepted (or answered "already gone"), then waits for the operation to reach DONE and throws what it ends with. `GoogleComputeGateway` and `ResilientComputeGateway` (through the pipeline, breaker bypassed like stop and delete; a replayed attempt may call `onAccepted` again) implement it; `StopVmAsync` and `DeleteVmAsync` keep their meaning for every other caller. `FakeGcp.HoldEndVmCompletion()` / `ReleaseEndVmCompletion()` script "accepted now, done later". A GPU stop that takes over 30 s therefore reads as "finishing on Google's side", not as Failed, and the run row is written at acceptance.
+- **The driver is stopped only after acceptance (M1).** A refused request (403, quota) leaves the run, its driver and its row exactly as they were.
+- **After acceptance nothing the caller's token can cancel decides the row (M3).** The driver wait (bounded by `DriverStopWait`) and the row write take no caller token, so a caller that gives up still gets the run's end recorded (Hard Rule 11). THEORY (unverified): an operation that fails AFTER it was accepted leaves the row Cancelled with the computer still running; the end then reports Failed and the next scan finds a running computer with no live run and warns.
+- **A second end for the same job reports what really happened (M2).** The first end publishes its outcome; the second waits for it (bounded by `InFlightWait` = 20 s, then Failed: nothing is known to be finishing, so nothing is claimed). Accepted: Done and nothing more is sent, except a Delete asked behind an accepted Stop, which is sent and then rewrites the row's code from `cleanup_stopped` to `cleanup_deleted`. Refused: the second makes its own attempt. A cancel some other code owns (the runner's, "Delete everything") is still `AlreadyEnding`.
+- **A run row phase write is atomic per job (H2).** `RunRowStore` takes one process-wide lock per job id for the read and the write, and writes through `IRunRepository.TryUpsertIfPhaseAsync(row, phaseThatWasRead)`, which the SQLite repository does as one `BEGIN IMMEDIATE` transaction (check and write, never resurrecting a removed row). A writer that lost the race re-reads and re-validates; a terminal phase is never left (`JobStateMachine` throws for any move out of one), so a late driver cannot overwrite the cleanup's Cancelled. The interface default is a plain upsert for single-writer test doubles; a repository other writers can reach must override it.
+- Logging: a fault the guard awaits is logged once by the awaiting code; only a call the timeout abandoned is observed for a late fault (with the job id when there is one).
+
+Round 4 (same method):
+
+- **The job is released once the row is ended, not when the operation is done (M1).** The cancel scope (`ActiveRuns.TryBeginCancel`) is disposed right after the run's row is Cancelled; a runner cancel, "Delete everything" and the reconciler no longer see `AlreadyEnding` or wait out a GPU stop. The end's entry stays published until the operation is done, so a second `EndVmAsync` for the job still joins it.
+- **Taking the job and publishing the entry are one step (L4)** under one lock, so a concurrent second call always finds either our entry or someone else's cancel.
+- **A superseding Delete owns the outcome (M2).** When a Delete is accepted behind an accepted Stop, the Stop's end reports the Delete's outcome if the Stop's own operation later ends in error (the computer was deleted under it). THEORY (unverified): that a real Stop operation errors when its computer is deleted; the guard never shows "stop failed" for a deleted computer either way.
+- **A caller token cancelled after acceptance is acceptance (L3)**: Done, row Cancelled, driver stopped. Cancelled before acceptance throws and touches nothing. Both are pinned by tests (the code already did this).
+- **Annotations are conditional too (L5)**: `RunRowStore.UpdateRowAsync` takes the same per-job lock and writes through `TryUpsertIfPhaseAsync`, re-reading and re-applying the change if it lost a race.
+
+THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
@@ -1351,3 +1483,31 @@ for when the in-app wizard cannot complete them), [`threat_model.md`](threat_mod
 (why the OAuth scope this whole design needs is a large ask, and what it does and does not
 expose), `docs/migration/2026-09-19-worker-migration-inventory.md` (the exhaustive,
 line-referenced prototype-behaviour inventory this doc summarizes for implementers).
+
+Review fixes (rc105, 2026-10-15):
+
+- Every step of `DeleteAllAsync` after the up-front listings is contained: a failed VM read back, second disk listing or prefix read back is an item (`NotVerified` / `Failed`
+  with the error kind) and the sweep goes on; only the caller's cancellation propagates. A job folder whose key is not a deletable folder path (`jobs/../`, which a
+  bucket writer can create) is `Failed` with `PREFIX_REFUSED` and never deleted. Ids are compared exactly (`ab` never matches `abc`).
+- Regional disks: the listing returns a region as the disk's scope, and `DeleteDiskAsync` sends a region (a name not ending in `-<letter>`) to `regionDisks.delete`;
+  the zonal call would 404, which reads as "already gone".
+- Soft delete. MEASURED 2026-10-15 (cloud.google.com/storage/docs/soft-delete): a bucket created without a setting, including through the JSON API, gets a 7 day soft delete
+  retention, "soft-deleted objects continue to accrue storage charges", and the only supported operations on them during retention are list and restore. So a deleted job folder
+  stays billed and recoverable for 7 days. `BucketDescriptor.SoftDeleteRetentionDays` carries the bucket's policy (null unknown, 0 off) and a deleted `JobData` item carries it as
+  `RecoverableForDays`: the Cloud page says "deleted; Google keeps a recoverable copy for N days" instead of a bare "deleted". **DECISION (agent-made, reversible):** the bucket is
+  NOT created with soft delete off. The same bucket holds the shared model cache (a multi-GB re-download if deleted by mistake) and recoverability is the safe default; the cost
+  is a week of storage for small outputs. Changing it is one field on the bucket insert if the owner wants the cleanup to stop billing at once.
+- A run whose VM the cleanup deletes is ended (Hard Rule 11): the VM carries `job-id`, the run's driver is stopped through `ActiveRuns.CancelAsync` first (one writer), and once
+  the VM reads back gone a non-terminal row becomes Cancelling then Cancelled with `RunErrorCodes.DeletedByCleanup` (`cleanup_deleted`, copy `RunError_cleanup_deleted`). A VM whose delete failed leaves its row alone.
+  A VM whose run has a user cancel in progress is `Skipped` (`CANCEL_IN_PROGRESS`).
+- `ResilientStorageGateway.DeletePrefixAsync` is one attempt at this layer (`replayable: false`): the real gateway already runs each list page and each object delete through the
+  pipeline with its own retries, 401 replay and per-attempt deadline, so a second retrying layer around the whole sweep multiplied retries and replayed whole sweeps.
+- `singleRequest:` on `CloudCallPipeline.ExecuteAsync` exists in this branch's base (`CloudCallPipeline.cs`, added before #105).
+- DI: `InstallationCleanup` is registered with the run repository, `ActiveRuns` and the phase callback in all three backends (`DiResolutionTests`); `IComputeGateway.StartVmAsync` resolves through the same registration.
+
+Review fixes (rc675, 2026-10-15):
+
+- A no-GPU verdict (`gpu_not_visible`, delete at once) while a stall question is open wins: the question is withdrawn (its token cancelled, `StallCleared`) and the VM is deleted in the same look, never swallowed because "the question is already open".
+- The stall question runs OFF the poll loop (`Task.Run`) and is cut at `StallAnswerTimeout` (default 10 minutes; null never cuts it): a handler that blocks its thread, never returns or throws is "no answer", and the run ends the way it chose (Hard Rule 11). Notices (`OnNotice`) are queued in order on the thread pool and the end of a wait lets the ones already given finish for at most 2 s, so a blocking notice handler costs a run at most that.
+- Production defaults in DI (`ServiceRegistration`): `OnStall = StallDecisions.EndAsRunChose` (answers at once with `StallChoice.EndAsRunChose`: nobody to ask, so a stall ends as it did before the question existed), `OnNotice` logs the job id and notice kind to the diagnostics log (never a sequence, file name or email), `CancelAckTimeout` stays 60 s. The app lane replaces the first two with real UI. `DiResolutionTests.The_production_runner_has_safe_stall_and_notice_defaults_that_need_no_UI`.
+- Cancel: the worker's explicit `cancelSeen` is the acknowledgement (see `job_contract.md` section 6); the graceful ask runs inside the delete-guaranteeing guard; an acknowledged cancel records the job folder on the row so partial outputs stay downloadable. The tests run the ack and finish windows on virtual time (`VirtualTimeProvider` plus a `PollDelay` that advances it), and `A_cancel_racing_a_driver_that_is_finishing_...` races a finishing `RunAsync` against `ActiveRuns.CancelAsync` over fifteen moments of the run. THEORY (unverified, ToTest #675): the stall tests that use `StuckRunner` / `StaleRunner` still measure their 60 to 80 ms windows on the real clock (not converted in this pass).

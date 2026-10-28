@@ -142,6 +142,25 @@ public sealed class HistoryViewModelTests
         vm.Groups.SelectMany(g => g.Items).Count().ShouldBe(4);
     }
 
+    [Theory]
+    [InlineData("NC_045512.2", "c3")]
+    [InlineData("nc_045512", "c3")]
+    [InlineData("045512.2", "c3")]
+    [InlineData("100-500", "c3")]
+    [InlineData("MN908947", "d4")]
+    public async Task Text_search_finds_an_accession_run_by_its_accession_or_range(string text, string expected)
+    {
+        // Issue #684: an accession run has no input file, so the file-name match alone could never find it.
+        var vm = await Loaded(
+            Row("c3", options: """{"Accession":"NC_045512.2","AccessionRange":"100-500","ModelId":"m","RunTarget":"cloud"}"""),
+            Row("d4", options: """{"Accession":"MN908947.3","ModelId":"m","RunTarget":"cloud"}"""),
+            Row("e5", options: """{"InputPath":"C:\\data\\Lambda.gb","ModelId":"m","RunTarget":"cloud"}"""));
+
+        vm.SearchText = text;
+
+        vm.Groups.SelectMany(g => g.Items).Select(i => i.JobId).ShouldBe([expected]);
+    }
+
     [Fact]
     public async Task Item_flags_reflect_local_folder_cloud_copy_and_phase()
     {
@@ -621,6 +640,19 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task Rerun_of_an_accession_run_starts_again_from_the_same_accession_with_no_input_file()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "NC_045512.2", AccessionRange = "100-500" };
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("new-job");
+        var vm = await Loaded(Row("a", options: RunOptionsJson.Serialize(recorded)));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").RerunCommand).ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(Arg.Is<RunOptions>(o => o.Accession == "NC_045512.2" && o.AccessionRange == "100-500" && o.InputPath == null), Arg.Any<CancellationToken>());
+        _navigator.Received(1).NavigateTo("RunProgress", "new-job");
+    }
+
+    [Fact]
     public async Task Rerun_of_a_paired_run_carries_the_gff3_the_app_kept()
     {
         var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.fasta", AnnotationPath = @"C:\gone\in.gff3" };
@@ -864,5 +896,39 @@ public sealed class HistoryViewModelTests
 
         Item(vm, "other").HasOwnerRequest.ShouldBeFalse();
         Item(vm, "other").CopyOwnerRequestCommand.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_cancelled_run_with_a_cloud_copy_offers_Download_partial_results_and_the_other_runs_keep_Download_again()
+    {
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled), Row("done"));
+
+        Item(vm, "stopped").CanRedownload.ShouldBeTrue();
+        Item(vm, "stopped").RedownloadLabel.ShouldBe("Runs_RedownloadPartial_Label");
+        Item(vm, "done").RedownloadLabel.ShouldBe("Runs_RedownloadAgain_Label");
+    }
+
+    [Fact]
+    public async Task A_cancelled_run_with_no_cloud_copy_offers_nothing_to_download()
+    {
+        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
+
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled));
+
+        Item(vm, "stopped").CanRedownload.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Partial_results_of_a_cancelled_run_are_reported_as_expected_not_as_a_warning_and_the_button_calls_the_service_for_that_run()
+    {
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new RedownloadResult(CloudResultsStatus.Partial, 0));
+        var vm = await Loaded(Row("stopped", JobPhase.Cancelled), Row("done"));
+
+        await Item(vm, "stopped").RedownloadCommand.ExecuteAsync(null);
+        await _cloud.Received(1).RedownloadAsync(Arg.Is<RunRecord>(r => r.JobId == "stopped"), Arg.Any<CancellationToken>());
+        _toasts.Received(1).ShowToast("Runs_Redownload_CancelledPartial_Title", "Runs_Redownload_CancelledPartial_Body", ToastSeverity.Info);
+
+        await Item(vm, "done").RedownloadCommand.ExecuteAsync(null);
+        _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body", ToastSeverity.Warning);
     }
 }

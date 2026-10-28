@@ -50,6 +50,15 @@ public class CloudJobRequestFactoryTests
     }
 
     [Fact]
+    public void The_default_region_is_the_region_of_every_default_zone_a_run_will_try()
+    {
+        var request = FactoryCall.Create(Options(), "20260101-000000-abcdef", "my-project", "install-1", "0.0.1");
+
+        request.Zones.ShouldNotBeEmpty();
+        request.Zones.ShouldAllBe(z => ZoneCandidates.RegionOf(z) == CloudJobRequestFactory.DefaultRegion);
+    }
+
+    [Fact]
     public void Every_hard_rule_10_field_is_present_and_labels_render()
     {
         var request = FactoryCall.Create(Options(), "20260101-000000-abcdef", "my-project", "install-1", "0.0.1");

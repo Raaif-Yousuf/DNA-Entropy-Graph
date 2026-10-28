@@ -42,6 +42,20 @@ public class RunErrorResourceTests
     }
 
     [Fact]
+    public void A_run_ended_by_stopping_its_computer_says_stopped_and_one_ended_by_deleting_says_deleted()
+    {
+        var resw = ReswValues();
+
+        var stopped = resw[RunErrorCodes.ResourceKey(RunErrorCodes.StoppedByCleanup)];
+        var deleted = resw[RunErrorCodes.ResourceKey(RunErrorCodes.DeletedByCleanup)];
+
+        stopped.ShouldContain("stopped");
+        stopped.ShouldNotContain("delete", Case.Insensitive);
+        stopped.ShouldContain("Choose Run");
+        deleted.ShouldContain("deleted");
+    }
+
+    [Fact]
     public void Every_cloud_error_kind_maps_to_a_known_code()
     {
         foreach (var kind in Enum.GetValues<CloudErrorKind>())

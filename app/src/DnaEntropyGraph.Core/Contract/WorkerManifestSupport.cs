@@ -9,11 +9,11 @@ namespace DnaEntropyGraph.Core.Contract;
 public static class WorkerManifestSupport
 {
     /// <summary><c>inputs[].annotation</c>, a GFF3 paired with a FASTA (#135, #686).</summary>
-    public static bool Annotation { get; } = false;
+    public static bool Annotation { get; } = true;
 
     /// <summary><c>inputs[].accession</c> and <c>accessionRange</c>, an NCBI accession fetched on the VM (#133, #684).</summary>
-    public static bool Accession { get; } = false;
+    public static bool Accession { get; } = true;
 
     /// <summary>The <c>gc</c> and <c>codons</c> outputs and <c>analysis.gcWindow</c> (#191, #688).</summary>
-    public static bool GcAndCodons { get; } = false;
+    public static bool GcAndCodons { get; } = true;
 }

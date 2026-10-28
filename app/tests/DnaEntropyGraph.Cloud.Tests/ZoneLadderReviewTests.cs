@@ -80,6 +80,12 @@ public class ZoneLadderReviewTests
 
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
 
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+
         public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
     }
 
@@ -450,6 +456,12 @@ public class ZoneLadderReviewTests
         public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
 
         public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken) => inner.ListBucketsAsync(projectId, cancellationToken);
+
+        public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+
+        public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(bucket, prefix, cancellationToken);
     }
 
     [Theory]
