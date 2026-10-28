@@ -106,6 +106,9 @@ public sealed class AppDataRoot
 
     public string WebView2Directory => Combine("webview2");
 
+    /// <summary>Generated <c>.fai</c> indexes of long FASTA files the viewer opens (issue #497): app-owned, so nothing is written beside the user's files.</summary>
+    public string FastaIndexDirectory => Combine("fai");
+
     /// <summary>The real per-user folder. Creates nothing.</summary>
     public static AppDataRoot Default() => new(
         System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DNAEntropyGraph"),

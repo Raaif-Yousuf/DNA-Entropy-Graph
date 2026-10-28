@@ -13,12 +13,12 @@ what it runs, and where CI runs the same thing.
 | Suite | Where | Command | Status |
 | --- | --- | --- | --- |
 | `worker/tests` (not gpu) | Laptop (`premerge.py`, full mode), `ci-worker.yml` | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` | Live |
-| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (on the VM, never the laptop) | Dry-run and `-SelfTest` today; `-Apply` creates, deletes and leak-scans one VM but does not run `pytest -m gpu` yet (#83, see `dev_commands.md`) |
+| `worker/tests` (gpu) | A labelled GCP VM only, via `scripts/cloud_gpu_test.ps1` | `pytest -m gpu` (on the VM, never the laptop) | Dry-run and `-SelfTest` against a stub CloudCli today; `-Apply -Image <digest>` creates a labelled L4 VM that runs `pytest -m gpu` in the image, pulls the log, deletes the VM and ends with the resource table (#83, #759; UNVERIFIED on a real VM, see `dev_commands.md` and `ToTest.md`) |
 | `app/tests/*.Tests` (unit, five libraries) | Laptop (`premerge.py`, full mode; one gate per discovered project), `ci-app.yml` (per assembly, with `--hangdump`, TRX uploaded as the `test-results` artifact, and the step fails if fewer than five `.trx` files exist; #438). The App is built with Windows App SDK bootstrap option `None` in every configuration (no dialog, a missing runtime exits with its HRESULT) and the job installs then asserts Windows App Runtime 1.8, because the bootstrap cannot be disabled for these tests (`BootstrapNeverShowsUiGuardTests`) | `cd app; dotnet test tests/<Project>/<Project>.csproj` (cwd must be `app/`) | Live |
 | `app/tests/DnaEntropyGraph.Guards.Tests` | Laptop (`premerge.py --fast`), `ci-app.yml` | `cd app; dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj` | Live; seconds |
 | `app/tests/*.UiTests` | Not run by `premerge.py` or CI (WinUI-hosted; every test is a skip today) | Manual, or a `docs/ToTest.md` row (`Needs: app-dev`) | Exempt, named in `scripts/premerge.py` |
 | `scripts/tests` (the guards' own tests) | Laptop (`premerge.py`, full mode), `ci-docs.yml`'s `scripts-tests` job | `uv run --with pytest --with pyyaml python -m pytest scripts/tests -q` | Live |
-| `scripts/check_*.py` (every repo guard) | Laptop (`premerge.py`, discovered by glob), `ci-docs.yml`'s `checks` job (same glob) | `worker\.venv\Scripts\python.exe scripts\check_<name>.py` | Live; `check_third_party_notices.py` runs in `premerge.py` full mode only (needs dotnet) |
+| `scripts/check_*.py` (every repo guard) | Laptop (`premerge.py`, discovered by glob), `ci-docs.yml`'s `checks` job (same glob) | `worker\.venv\Scripts\python.exe scripts\check_<name>.py` | Live; `check_third_party_notices.py` runs in `premerge.py` full mode only (needs dotnet); `check_pyright.py` (pyright ratchet) is excluded from `ci-docs.yml`'s glob and runs in `ci-worker.yml`'s `pyright ratchet` job instead |
 | `THIRD-PARTY-NOTICES.md` freshness | `ci-notices.yml` (windows-latest: dotnet SDK + `uv sync --frozen` worker venv), `premerge.py` full mode | `worker\.venv\Scripts\python.exe scripts\check_third_party_notices.py` | Written 2026-10-02 (#416), NOT yet run on a real runner: see `docs/ToTest.md` |
 | Lint (`ruff check` worker and scripts) | Laptop (`premerge.py`), `ci-worker.yml`, `ci-docs.yml` | `uvx ruff check worker`, `uvx ruff check scripts` | Live; no format gate for `scripts/` yet (#430) |
 | Manifest schema drift | Laptop (`premerge.py`), `ci-worker.yml`'s `contract` job | `python scripts/gen_manifest_schema.py --check` | Live |
@@ -129,7 +129,8 @@ test_readers_parity.py` replays it against the Python readers; the C# `FastaLite
 wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
 test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
 may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
-those blocks are the list of known wording differences.
+those blocks are the list of known wording differences (none since #689: every GenBank case
+matches the worker word for word).
 
 ## Fixtures
 

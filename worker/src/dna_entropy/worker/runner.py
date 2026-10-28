@@ -26,6 +26,7 @@ import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
@@ -37,11 +38,12 @@ from ..validation.validators import ValidationError
 from .batch_limits import BatchLimitError, check_batch_limits
 from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, write_json
 from .cancel import CancelWatcher, JobCancelledError
-from .errors import is_retriable
+from .errors import WORKER_ERROR_CODE_SET, is_retriable
 from .gpu import detect_gpu
-from .lifecycle import LifecycleError, apply_lifecycle
+from .lifecycle import AfterTask, LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
 from .result import InputResult, JobResult, ResultFile, ResultGpu, ResultStats, ResultTiming
+from .stage import stage_input
 from .status import (
     DEFAULT_INTERVAL_SECONDS,
     GpuInfo,
@@ -322,12 +324,12 @@ def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) 
     total = 0
     for input_spec in manifest.inputs:
         try:
-            local_input = tmp / "prescan" / Path(input_spec.path).name
-            store.download_file(input_spec.path, local_input)
+            staged = stage_input(store, input_spec, tmp / "prescan", cache_dir=tmp / "entrez-cache")
             cfg = manifest.build_run_config(
                 input_spec,
-                local_input_path=str(local_input),
+                local_input_path=str(staged.local_input),
                 local_out_dir=str(tmp / "prescan-out"),
+                local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
             )
             loaded = load_input(cfg)
             total += sum(len(c.seq) for c in loaded.contigs)
@@ -359,6 +361,7 @@ def _run_one_input(
     deadline.check_or_raise()
 
     def _on_window() -> None:
+        status.mark_progress()  # #522: the compute thread is alive and moving, unlike the heartbeat thread
         cancel.check_or_raise()
         deadline.check_or_raise()
 
@@ -376,13 +379,14 @@ def _run_one_input(
     # same as a bad sequence inside it — not crash the whole job (job_contract.md §7,
     # regression-tested by test_missing_input_file_fails_that_input_not_the_whole_job).
     try:
-        local_input = tmp / "input" / Path(input_spec.path).name
-        store.download_file(input_spec.path, local_input)
+        staged = stage_input(store, input_spec, tmp / "input", cache_dir=tmp / "entrez-cache")
+        local_input = staged.local_input
 
         cfg = manifest.build_run_config(
             input_spec,
             local_input_path=str(local_input),
             local_out_dir=str(local_out),
+            local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
         )
         predictor = shared_predictor.get(cfg, status)
         status.update(stage="running", detail={"input": input_spec.id})
@@ -390,7 +394,10 @@ def _run_one_input(
             cfg,
             on_window=_on_window,
             on_contig=_on_contig,
-            provenance_extra={"input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest()},
+            provenance_extra={
+                "input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest(),
+                **staged.provenance_extra,
+            },
             predictor=predictor,
         )
     except JobCancelledError:
@@ -416,7 +423,17 @@ def _run_one_input(
         # its own more specific code (see errors.py's module docstring / #254's closing
         # comment for the two cases this caught: a Hopper-only model request and a
         # second-OOM both used to report INPUT_INVALID instead of their real code).
+        # ... but ONLY when that code is one of OURS (errors.py's registry). A third-party
+        # exception's `.code` is free text or a number (an HTTP status, an errno, a path or
+        # run name) and result.json error.code ships in the diagnostics zip (issue #613):
+        # anything unregistered is treated as if the exception had no code at all.
         code = getattr(exc, "code", None)
+        original_code: str | None = None
+        if not isinstance(code, str) or code not in WORKER_ERROR_CODE_SET:
+            if code is not None:
+                # Kept for the developer in error.detail (never in error.code): ASCII-escaped, cut at 80.
+                original_code = f"original code: {ascii(code)[:80]}"
+            code = None
         if code is None:
             # WindowingError (K below 128, an input under 10 nt, a ceiling below K) and
             # PipelineError (an unusable run name) are user-correctable input problems
@@ -439,6 +456,8 @@ def _run_one_input(
         error: dict = {"code": code, "message": str(exc), "retriable": is_retriable(code)}
         if code == "WORKER_CRASH":
             error["detail"] = traceback.format_exc()
+        if original_code is not None:
+            error["detail"] = f"{error.get('detail', '')}\n{original_code}".strip()
         # issue #252: whatever contigs/records completed before the crash are already on
         # local disk (pipeline.run()'s own best-effort write) — upload them so one bad
         # record doesn't cost the whole input, not just the whole job.
@@ -449,6 +468,8 @@ def _run_one_input(
     for note in result.notices:
         status.notice(note, data={"input": input_spec.id})
 
+    all_values = result.all_values
+    assert all_values is not None  # RunResult.__post_init__ always fills it; narrows the type only
     return InputResult(
         id=input_spec.id,
         status="done",
@@ -458,9 +479,9 @@ def _run_one_input(
         stats=ResultStats(
             contigs=result.contigs,
             totalNt=result.total_nt,
-            meanEntropy=float(result.all_values.mean()),
-            minEntropy=float(result.all_values.min()),
-            maxEntropy=float(result.all_values.max()),
+            meanEntropy=float(all_values.mean()),
+            minEntropy=float(all_values.min()),
+            maxEntropy=float(all_values.max()),
         ),
     )
 
@@ -747,7 +768,8 @@ def run_job_outcome(
             # operation, not that stop/delete actually completed — apply_lifecycle()
             # now returns the operation's own response body (or raises if that body
             # itself already reports an error) instead of discarding it.
-            operation = apply_lifecycle(effective_action)
+            # the manifest field is a plain str; apply_lifecycle validates it at runtime (LifecycleError)
+            operation = apply_lifecycle(cast(AfterTask, effective_action))
             lifecycle_applied = effective_action
             op_id = (operation.get("name") or operation.get("id")) if operation else None
             if op_id:

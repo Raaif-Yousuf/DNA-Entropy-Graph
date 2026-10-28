@@ -132,6 +132,13 @@ class StatusDocument:
     # Issue #675: true once the worker has seen control/cancel (job_contract.md section 6):
     # its explicit acknowledgement.
     cancelSeen: bool = False
+    # Issue #522: forward-progress liveness, distinct from the heartbeat. The heartbeat thread
+    # ticks even when the compute thread is wedged; these two move ONLY when the compute thread
+    # does something: ``windowsDone`` counts windows finished across the whole job, and
+    # ``lastProgressAt`` is the UTC time of the last window finished or stage change
+    # (job_contract.md section 5).
+    windowsDone: int = 0
+    lastProgressAt: str = ""
 
 
 class StatusWriter:
@@ -198,6 +205,8 @@ class StatusWriter:
             },
             "error": None,
             "cancelSeen": False,
+            "windowsDone": 0,
+            "lastProgressAt": now,
         }
         self._progress: list[dict] = []
         self._progress_seq = 0
@@ -230,6 +239,14 @@ class StatusWriter:
         with self._lock:
             self._state["cancelSeen"] = True
         self._write_status()
+
+    def mark_progress(self) -> None:
+        """Issue #522: the compute thread finished a window. Updates ``windowsDone`` and
+        ``lastProgressAt`` in memory only (no write): the next heartbeat tick, at most one
+        interval away, carries it, so a thousand-window job does not write a thousand times."""
+        with self._lock:
+            self._state["windowsDone"] += 1
+            self._state["lastProgressAt"] = utc_now_iso()
 
     def start(self) -> None:
         """Write an initial snapshot immediately, then start the background heartbeat."""
@@ -274,6 +291,7 @@ class StatusWriter:
                 if stage != self._state["stage"]:
                     # The app reads a stage's age as updatedAt - stageStartedAt after a resume (#90).
                     self._state["stageStartedAt"] = utc_now_iso()
+                    self._state["lastProgressAt"] = self._state["stageStartedAt"]
                 self._state["stage"] = stage
             if percent is not None:
                 self._state["percent"] = float(percent)

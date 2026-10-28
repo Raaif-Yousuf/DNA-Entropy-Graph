@@ -19,6 +19,10 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public class ReattachOnStartupTests : IDisposable
 {
+    // AppStartup.BeginAsync also starts the nothing-left-running guard (#113), whose repeating 5-minute timer runs on the same virtual clock. The probe assertions
+    // below count the probe's timers, so they name that period and exclude it; the first test asserts the guard's timer really is armed, so the exclusion is not vacuous.
+    private static readonly TimeSpan GuardPeriod = DnaEntropyGraph.Presentation.Services.LeftRunningGuard.Period;
+
     private const string Project = "my-project";
     private const string Zone = "us-central1-a";
 
@@ -303,14 +307,15 @@ public class ReattachOnStartupTests : IDisposable
         var observer = (ReconcileOnReconnect)provider.GetRequiredService<ICloudCallObserver>();
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
-        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        time.PendingTimersExcludingPeriod(GuardPeriod).ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        time.PendingTimers.ShouldBe(2, "the probe's timer and the guard's repeating 5-minute timer: the exclusion above removed exactly the guard's");
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
 
         gcp.WithCloudConnected();
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the re-armed probe waits twice as long: 30 s is not enough");
-        time.PendingTimers.ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
+        time.PendingTimersExcludingPeriod(GuardPeriod).ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
 
@@ -328,7 +333,7 @@ public class ReattachOnStartupTests : IDisposable
 
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
 
-        time.PendingTimers.ShouldBe(1, "the probe is armed even though the launch pass threw");
+        time.PendingTimersExcludingPeriod(GuardPeriod).ShouldBe(1, "the probe is armed even though the launch pass threw");
     }
 
     [Fact]
@@ -341,7 +346,7 @@ public class ReattachOnStartupTests : IDisposable
 
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
 
-        time.PendingTimers.ShouldBe(1, "the probe is armed: the reattach could not read the run table");
+        time.PendingTimersExcludingPeriod(GuardPeriod).ShouldBe(1, "the probe is armed: the reattach could not read the run table");
     }
 
     private sealed class FirstReadTimesOutRepository : IRunRepository

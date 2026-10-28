@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "jobId": "20261015-101500-a1b2c3",
+  "inputs": [
+    {
+      "id": "in1",
+      "path": "input/plasmid.fasta",
+      "name": "plasmid",
+      "informat": "fasta",
+      "annotation": "input/plasmid.gff3"
+    },
+    {
+      "id": "in2",
+      "name": "sars2",
+      "accession": "NC_045512.2",
+      "accessionRange": "100-5000"
+    }
+  ],
+  "predictor": { "kind": "mock", "seed": 0 },
+  "analysis": {
+    "contextLength": 4096,
+    "window": 8192,
+    "stride": 4096,
+    "direction": "both-combined",
+    "gcWindow": 101
+  },
+  "outputs": ["bedgraph", "genes_gff3", "gc", "codons"],
+  "limits": { "maxRunSeconds": 14400, "cancelPollSeconds": 10, "heartbeatSeconds": 30 },
+  "lifecycle": { "afterTask": "stop", "keepAliveMinutes": 0, "afterKeepAlive": "stop" },
+  "preset": { "id": "plasmid-qc", "name": "Plasmid QC" },
+  "store": { "kind": "localdir", "root": "C:\\runs\\job1" }
+}

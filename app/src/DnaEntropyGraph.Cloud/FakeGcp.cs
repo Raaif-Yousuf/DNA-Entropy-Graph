@@ -1110,6 +1110,52 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
     }
 
+    private TaskCompletionSource? _endVmGate;
+
+    /// <summary>
+    /// Issue #113: every <see cref="EndVmAsync"/> from now on is "accepted now, done later": it reports acceptance at once, the VM is untouched, and the stop or
+    /// delete is applied only when <see cref="ReleaseEndVmCompletion"/> is called (a caller that gives up first, by its token, leaves the VM as it is), like a real
+    /// stop operation that takes minutes.
+    /// </summary>
+    public FakeGcp HoldEndVmCompletion()
+    {
+        _endVmGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return this;
+    }
+
+    /// <summary>Lets every held <see cref="EndVmAsync"/> finish (see <see cref="HoldEndVmCompletion"/>) and stops holding later ones.</summary>
+    public void ReleaseEndVmCompletion()
+    {
+        var gate = Interlocked.Exchange(ref _endVmGate, null);
+        gate?.TrySetResult();
+    }
+
+    /// <summary>Issue #113: see <see cref="IComputeGateway.EndVmAsync"/>. Without a hold the acceptance is reported when the work is done, like the default.</summary>
+    public async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    {
+        var gate = _endVmGate;
+        if (gate is not null)
+        {
+            ThrowIfScriptedTransient();
+            onAccepted?.Invoke();
+            await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (delete)
+        {
+            await DeleteVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await StopVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (gate is null)
+        {
+            onAccepted?.Invoke();
+        }
+    }
+
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         ThrowIfScriptedTransient();
@@ -1259,6 +1305,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             .Where(v => v.Labels is not null
                 && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+            .Select(v => _maxRunByVm.TryGetValue((v.Name, v.Zone), out var limit) ? v with { MaxRunDuration = limit } : v)
             .ToList();
         return Task.FromResult(matches);
     }
@@ -1429,11 +1476,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading or FakeWorkerMode.StuckInRunning)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running"));
+            var wedged = workerMode == FakeWorkerMode.StuckInRunning;
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null));
+            if (wedged)
+            {
+                // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3);
+            }
+
             if (stuck)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
@@ -1544,10 +1598,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false, int? WindowsDone = null);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false)
-        => new JsonObject
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false, int? windowsDone = null)
+    {
+        var doc = new JsonObject
         {
             ["schema"] = 1,
             ["jobId"] = jobId,
@@ -1558,7 +1613,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,
             ["cancelSeen"] = cancelSeen,
-        }.ToJsonString();
+        };
+        if (windowsDone is { } done)
+        {
+            doc["windowsDone"] = done;
+            doc["lastProgressAt"] = "2026-09-18T15:19:58Z"; // frozen on purpose: the wedged compute thread never advances it
+        }
+
+        return doc.ToJsonString();
+    }
 
     private static string WorkerFirstProgressLine(bool gpu)
         => new JsonObject
@@ -1573,7 +1636,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen, live.WindowsDone));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);

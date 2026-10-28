@@ -21,7 +21,7 @@ from .analysis.direction import DirectionResult, analyze_direction
 from .analysis.gene_summary import GeneRow, summarize_genes
 from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
 from .analysis.smoothing import rolling_mean, validate_smoothing_windows
-from .analysis.surprisal import summarize_surprisal
+from .analysis.surprisal import SurprisalSummary, summarize_surprisal
 from .analysis.windowing import validate_context
 from .annotators.base import GeneFeature
 from .annotators.prodigal import ProdigalAnnotator
@@ -32,7 +32,7 @@ from .readers import detect
 from .readers.input import Contig, load_input
 from .readers.paste import PasteReader
 from .validation.validators import ValidatedSequence, validate_sequence
-from .writers.base import Writer
+from .writers.base import TrackWriter
 from .writers.bedgraph import BedGraphWriter
 from .writers.composition import CodonUsageWriter
 from .writers.fasta import FastaWriter
@@ -200,7 +200,7 @@ def build_predictor(cfg: RunConfig) -> Predictor:
     raise PredictorError(f"Unknown predictor: {cfg.predictor!r}")
 
 
-def _select_track_writer(cfg: RunConfig) -> Writer:
+def _select_track_writer(cfg: RunConfig) -> TrackWriter:
     return WigWriter() if cfg.track_format is TrackFormat.WIG else BedGraphWriter()
 
 
@@ -210,6 +210,42 @@ def _try_annotate(seq: str) -> list[GeneFeature]:
         return ProdigalAnnotator().annotate(seq)
     except Exception:  # missing [genes] extra, or Prodigal failure — GenBank genes are optional
         return []
+
+
+def _surprisal_blocks(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]
+) -> list[tuple[str, np.ndarray]] | None:
+    """`(contig name, surprisal)` per contig when surprisal output is on and every contig
+    carries it, else `None` (the same all-or-nothing rule every surprisal writer used inline;
+    a function so the type checker can see the `None` cannot reach a writer)."""
+    if not cfg.include_surprisal:
+        return None
+    blocks: list[tuple[str, np.ndarray]] = []
+    for c, dr in processed:
+        if dr.surprisal_values is None:
+            return None
+        blocks.append((c.name, dr.surprisal_values))
+    return blocks
+
+
+def _tsv_surprisal_blocks(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]
+) -> list[np.ndarray] | None:
+    blocks = _surprisal_blocks(cfg, processed)
+    return None if blocks is None else [values for _, values in blocks]
+
+
+def _surprisal_summaries(
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]
+) -> list[SurprisalSummary] | None:
+    if not cfg.include_surprisal:
+        return None
+    summaries: list[SurprisalSummary] = []
+    for c, dr in processed:
+        if dr.surprisal_values is None:
+            return None
+        summaries.append(summarize_surprisal(dr.surprisal_values, seq=c.seq))
+    return summaries
 
 
 def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) -> str:
@@ -223,9 +259,17 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
     need a documented 8-column layout; tracked as a follow-up rather than half-built here).
     """
     if any(dr.forward_values is not None for _, dr in processed):
+        separate_blocks = []
+        for c, dr in processed:
+            # unreachable: BOTH_SEPARATE fills both
+            if dr.forward_values is None or dr.reverse_values is None:
+                raise PipelineError(
+                    "internal error: a contig has a combined track but no separate forward/reverse track"
+                )
+            separate_blocks.append((c.name, c.seq, dr.forward_values, dr.reverse_values, dr.values))
         return TsvWriter().write_multi_separate(
             name=cfg.name,
-            blocks=[(c.name, c.seq, dr.forward_values, dr.reverse_values, dr.values) for c, dr in processed],
+            blocks=separate_blocks,
             start=cfg.start,
             out_dir=cfg.out_dir,
         )
@@ -234,11 +278,7 @@ def _write_tsv(cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]]) 
         blocks=[(c.name, c.seq, dr.values) for c, dr in processed],
         start=cfg.start,
         out_dir=cfg.out_dir,
-        surprisal_blocks=(
-            [dr.surprisal_values for _, dr in processed]
-            if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
-            else None
-        ),
+        surprisal_blocks=_tsv_surprisal_blocks(cfg, processed),
     )
 
 
@@ -268,7 +308,7 @@ def _keep_probs(cfg: RunConfig) -> bool:
 
 
 def _write_smoothed(
-    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: TrackWriter
 ) -> list[str]:
     """Write ``<name>.entropy.smooth<W>.<bedgraph|wig>`` per configured window (issue #126):
     the centred rolling mean of each contig's combined entropy track, in the SAME track format
@@ -349,6 +389,7 @@ def _write_provenance(
     processed: list[tuple[Contig, DirectionResult]],
     t0: float,
     extra: dict[str, Any] | None,
+    input_format: str = "",
 ) -> str:
     """Build and write ``provenance.json`` (issue #82). Always called, never gated by an
     ``include_*`` flag -- see :func:`run`'s own docstring."""
@@ -378,6 +419,8 @@ def _write_provenance(
         ambiguity_policy=cfg.ambiguity_policy.value,
         rna=cfg.rna,
         topology=cfg.topology.value,
+        input_format=input_format or None,
+        preset={"id": cfg.preset_id, "name": cfg.preset_name or ""} if cfg.preset_id else None,
         contigs=contigs,
         wall_time_seconds=time.perf_counter() - t0,
         extra=extra,
@@ -386,7 +429,7 @@ def _write_provenance(
 
 
 def _write_separate_tracks(
-    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: Writer
+    cfg: RunConfig, processed: list[tuple[Contig, DirectionResult]], track_writer: TrackWriter
 ) -> list[str]:
     """Direction.BOTH_SEPARATE (section 5.6): the ``.fwd``/``.rev`` variant of every
     position-indexed track writer, one block per contig, alongside the combined track.
@@ -500,11 +543,11 @@ def _write_genbank_outputs(
         )
         # issue #123/#412: surprisal uses the SAME track writer as entropy, so the two
         # can never diverge (and GenBank input honours track_format like every other input).
-        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+        if (surprisal_blocks := _surprisal_blocks(cfg, processed)) is not None:
             outputs.append(
                 track_writer.write_multi(
                     name=cfg.name,
-                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    blocks=surprisal_blocks,
                     start=cfg.start,
                     out_dir=cfg.out_dir,
                     metric="surprisal",
@@ -519,11 +562,11 @@ def _write_genbank_outputs(
                 out_dir=cfg.out_dir,
             )
         )
-        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+        if (surprisal_blocks := _surprisal_blocks(cfg, processed)) is not None:
             outputs.append(
                 GeneiousWriter().write_multi(
                     name=cfg.name,
-                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    blocks=surprisal_blocks,
                     start=cfg.start,
                     out_dir=cfg.out_dir,
                     metric="surprisal",
@@ -538,11 +581,7 @@ def _write_genbank_outputs(
                 out_dir=cfg.out_dir,
                 filename="stats.txt",
                 provenance=[dr for _, dr in processed],
-                surprisal=(
-                    [summarize_surprisal(dr.surprisal_values, seq=c.seq) for c, dr in processed]
-                    if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
-                    else None
-                ),
+                surprisal=_surprisal_summaries(cfg, processed),
             )
         )
 
@@ -569,6 +608,7 @@ def _write_genbank_outputs(
             start=cfg.start,
             out_dir=cfg.out_dir,
             source="genbank",
+            circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
         )
         outputs.append(genes_gff)
     if cfg.include_gene_summary:
@@ -616,11 +656,11 @@ def _write_standard_outputs(
         )
         # issue #123: the single track format track_writer already selected (matching
         # this input kind's existing choice) also gets a surprisal counterpart.
-        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+        if (surprisal_blocks := _surprisal_blocks(cfg, processed)) is not None:
             outputs.append(
                 track_writer.write_multi(
                     name=cfg.name,
-                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    blocks=surprisal_blocks,
                     start=cfg.start,
                     out_dir=cfg.out_dir,
                     metric="surprisal",
@@ -635,11 +675,11 @@ def _write_standard_outputs(
                 out_dir=cfg.out_dir,
             )
         )
-        if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed):
+        if (surprisal_blocks := _surprisal_blocks(cfg, processed)) is not None:
             outputs.append(
                 GeneiousWriter().write_multi(
                     name=cfg.name,
-                    blocks=[(c.name, dr.surprisal_values) for c, dr in processed],
+                    blocks=surprisal_blocks,
                     start=cfg.start,
                     out_dir=cfg.out_dir,
                     metric="surprisal",
@@ -653,11 +693,7 @@ def _write_standard_outputs(
                 start=cfg.start,
                 out_dir=cfg.out_dir,
                 provenance=[dr for _, dr in processed],
-                surprisal=(
-                    [summarize_surprisal(dr.surprisal_values, seq=c.seq) for c, dr in processed]
-                    if cfg.include_surprisal and all(dr.surprisal_values is not None for _, dr in processed)
-                    else None
-                ),
+                surprisal=_surprisal_summaries(cfg, processed),
             )
         )
 
@@ -677,9 +713,13 @@ def _write_standard_outputs(
 
     genes: list[GeneFeature] = []
     genes_by_contig: list[list[GeneFeature]] = [[] for _ in processed]
-    if cfg.genes:
+    # issue #135: genes supplied by a paired GFF3 are the file's own, so Prodigal never runs,
+    # even with --genes (a contig with no GFF3 rows gets no genes rather than a second opinion).
+    annotated = cfg.annotation_path is not None
+    if annotated or cfg.genes:
         for i, (c, _dr) in enumerate(processed):
-            g = ProdigalAnnotator().annotate(c.seq)  # may raise AnnotatorError (explicit opt-in)
+            # Prodigal may raise AnnotatorError (explicit opt-in)
+            g = list(c.features) if annotated else ProdigalAnnotator().annotate(c.seq)
             genes_by_contig[i] = g
             genes += g
         if cfg.include_genes_gff3:
@@ -691,11 +731,12 @@ def _write_standard_outputs(
                     ],
                     start=cfg.start,
                     out_dir=cfg.out_dir,
-                    source="pyrodigal",
+                    source="gff3" if annotated else "pyrodigal",
+                    circular=[cfg.topology.resolve(c.circular) for c, _ in processed],
                 )
             )
 
-    if cfg.include_gene_summary and cfg.genes:
+    if cfg.include_gene_summary and (cfg.genes or annotated):
         outputs += _write_gene_summary(cfg, processed, genes_by_contig)
     outputs += _write_composition(cfg, processed, genes_by_contig, notices)
 
@@ -705,7 +746,7 @@ def _write_standard_outputs(
         try:
             records = []
             for (c, dr), g in zip(processed, genes_by_contig, strict=True):
-                gb_features = g or _try_annotate(c.seq)
+                gb_features = g if annotated else (g or _try_annotate(c.seq))
                 records.append((c.name, c.seq, gb_features, dr.values, c.source_id))
             outputs.append(
                 GenBankWriter().write_multi(
@@ -718,6 +759,22 @@ def _write_standard_outputs(
         except Exception:
             pass  # GenBank is a bonus on this path; never fail the core run over it
     return outputs, genes
+
+
+def validate_run_options(cfg: RunConfig) -> None:
+    """Refuse run options that cannot mean anything, raising :class:`PipelineError` that names the
+    option. Needs no input, so a caller that is about to spend something first (the CLI's NCBI
+    fetch, issue #133) can check before it does; :func:`run` calls it again at its own top."""
+    try:
+        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
+            validate_smoothing_windows(cfg.smoothing_windows)
+        if cfg.include_gc:
+            validate_smoothing_windows([cfg.gc_window])
+        validate_region_options(
+            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
+        )
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
 
 
 def run(
@@ -766,16 +823,7 @@ def run(
     """
     t0 = time.perf_counter()
     cfg.name = sanitize_run_name(cfg.name)
-    try:
-        if cfg.include_smoothed:  # a window nobody asked for is not validated (#126 review)
-            validate_smoothing_windows(cfg.smoothing_windows)
-        if cfg.include_gc:
-            validate_smoothing_windows([cfg.gc_window])
-        validate_region_options(
-            threshold=cfg.region_threshold, min_length=cfg.region_min_length, merge_gap=cfg.region_merge_gap
-        )
-    except ValueError as exc:
-        raise PipelineError(str(exc)) from exc
+    validate_run_options(cfg)
     loaded = load_input(cfg, raw)
     # issue #306: fastaRecords="first" is the prototype-parity opt-out from #283/D14's
     # "all records" default — readers/input.py has no opinion on it (and must not: Lane A
@@ -834,7 +882,7 @@ def run(
                     _write_genbank_outputs(cfg, processed)
                 else:
                     _write_standard_outputs(cfg, processed)
-                _write_provenance(cfg, processed, t0, provenance_extra)
+                _write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format)
             except Exception as write_exc:
                 # Best-effort salvage: never mask the original exception (re-raised below).
                 # One ASCII line, class name only (no path or message), so losing the
@@ -850,7 +898,7 @@ def run(
         genes = [f for c, _ in processed for f in c.features]
     else:
         outputs, genes = _write_standard_outputs(cfg, processed, notices)
-    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra))
+    outputs.append(_write_provenance(cfg, processed, t0, provenance_extra, loaded.input_format))
 
     first_contig, first_dr = processed[0]
     all_values = np.concatenate([dr.values for _, dr in processed])
