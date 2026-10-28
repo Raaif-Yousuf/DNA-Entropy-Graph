@@ -320,12 +320,73 @@ def test_child_of_a_dotnet_command_receives_the_env(tmp_path, monkeypatch):
 # --- review round: artifacts base, lane, machine-wide slots, holders, error paths -------------------
 
 
-def test_default_artifacts_base_is_inside_the_repo_not_temp():
-    # MEASURED by reading 2026-10-02: tests that walk up from AppContext.BaseDirectory to find the repo
-    # (Cloud.Tests FixturePaths, Core.Tests StartupMetadataTests) break when the output is under %TEMP%.
-    base = Path(heavy.default_artifacts_base())
-    repo = SCRIPTS.parent
-    assert base == repo / "app" / ".artifacts"
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=str(cwd), check=True, capture_output=True)
+
+
+def test_default_artifacts_base_follows_the_cwd_repo(tmp_path):
+    # #874: the base is the git toplevel of the CWD (inside the repo, not %TEMP%), so a lane in a
+    # worktree that runs the primary's heavy.py builds under ITS OWN app/.artifacts.
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "DnaEntropyGraph.sln").write_text("")
+    _git(repo, "init", "-q")
+    assert Path(heavy.default_artifacts_base(repo / "app")) == repo.resolve() / "app" / ".artifacts"
+
+
+def test_default_artifacts_base_in_a_linked_worktree_is_the_worktree(tmp_path):
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    _git(primary, "init", "-q")
+    _git(primary, "commit", "-q", "--allow-empty", "-m", "x")
+    wt = tmp_path / "wt"
+    _git(primary, "worktree", "add", "-q", str(wt), "-b", "lane")
+    (wt / "app").mkdir()
+    (wt / "app" / "DnaEntropyGraph.sln").write_text("")
+    got = Path(heavy.default_artifacts_base(wt / "app"))
+    assert got == wt.resolve() / "app" / ".artifacts"
+    assert got != primary.resolve() / "app" / ".artifacts"
+
+
+def test_repo_toplevel_is_none_outside_any_repo(tmp_path):
+    assert heavy.repo_toplevel(tmp_path) is None
+
+
+def test_default_artifacts_base_warns_when_the_cwd_repo_has_no_app_sln(tmp_path, capsys):
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q")
+    got = Path(heavy.default_artifacts_base(other))
+    err = capsys.readouterr().err
+    assert got == heavy.REPO_ROOT / "app" / ".artifacts"
+    assert not (other / "app").exists()
+    assert "heavy: warning:" in err
+    assert str(other.resolve()) in err.replace("/", "\\") or str(other.resolve()) in err
+    assert str(heavy.REPO_ROOT) in err
+
+
+def test_default_artifacts_base_warns_outside_any_repo(tmp_path, capsys):
+    got = Path(heavy.default_artifacts_base(tmp_path))
+    err = capsys.readouterr().err
+    assert got == heavy.REPO_ROOT / "app" / ".artifacts"
+    assert "heavy: warning:" in err
+    assert "not inside a git repo" in err
+    assert str(heavy.REPO_ROOT) in err
+
+
+def test_main_injects_the_cwd_repo_artifacts_path(tmp_path, monkeypatch):
+    # End to end through main(): the injected --artifacts-path comes from the CWD repo.
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "DnaEntropyGraph.sln").write_text("")
+    _git(repo, "init", "-q")
+    monkeypatch.chdir(repo / "app")
+    captured = {}
+    monkeypatch.setattr(heavy, "inject_artifacts_path", lambda argv, lane, base: captured.setdefault("base", base) and argv)
+    monkeypatch.setattr(heavy, "acquire_slot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stop")))
+    with contextlib.suppress(RuntimeError):
+        heavy.main(["--lock-dir", str(tmp_path / "l"), "--lane", "x", "--", "dotnet", "test"])
+    assert Path(captured["base"]) == repo.resolve() / "app" / ".artifacts"
 
 
 def test_needs_lane_only_for_dotnet_verbs_without_artifacts_path():

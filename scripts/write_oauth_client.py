@@ -38,7 +38,7 @@ def minimal_document(raw: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
     raw = os.environ.get("OAUTH_CLIENT_JSON", "")

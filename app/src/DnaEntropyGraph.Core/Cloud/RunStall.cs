@@ -11,6 +11,12 @@ public enum RunNoticeKind
 
     /// <summary>The worker recovered while the question was open: the question is withdrawn and the run goes on.</summary>
     StallCleared,
+
+    /// <summary>Issue #92: the VM request is queued and Google has not found a graphics card yet. Says nothing is wrong; the run is waiting by choice.</summary>
+    WaitingForGpu,
+
+    /// <summary>Issue #92: the queued request ended (a card was found, it ran out of time, or it was cancelled): the waiting line is withdrawn.</summary>
+    WaitingForGpuEnded,
 }
 
 /// <summary>
