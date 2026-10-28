@@ -19,7 +19,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
                IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
                EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
                AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-               Notes, TagsJson
+               Notes, TagsJson, PreemptionCount
         FROM Runs;
         """;
 
@@ -40,14 +40,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
             IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
             EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
             AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-            Notes, TagsJson)
+            Notes, TagsJson, PreemptionCount)
         VALUES (
             @Id, @Name, @IsBatch, @Target, @Phase, @ErrorCode, @ErrorDetail, @CreatedAt, @StartedAt, @VmReadyAt, @FinishedAt,
             @OptionsJson, @ManifestJson, @ProjectId, @Bucket, @JobPrefix, @VmName, @Zone, @MachineType, @GpuType,
             @IsSpot, @VmReused, @LastProgressSeq, @LastHeartbeatAt, @StatusGeneration, @OutputDir,
             @EstimatedCostUsd, @ActualCostUsd, @VmSeconds, @CloudResultsExpireAt, @CloudResultsDeleted,
             @AppVersion, @WorkerVersion, @WorkerImageDigest, @ContractVersion, @InstallationId, @Imported,
-            @Notes, @TagsJson)
+            @Notes, @TagsJson, @PreemptionCount)
         ON CONFLICT(Id) DO UPDATE SET
             Name = excluded.Name, IsBatch = excluded.IsBatch, Target = excluded.Target, Phase = excluded.Phase,
             ErrorCode = excluded.ErrorCode, ErrorDetail = excluded.ErrorDetail,
@@ -61,7 +61,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
             EstimatedCostUsd = excluded.EstimatedCostUsd, ActualCostUsd = excluded.ActualCostUsd, VmSeconds = excluded.VmSeconds,
             CloudResultsExpireAt = excluded.CloudResultsExpireAt, CloudResultsDeleted = excluded.CloudResultsDeleted,
             AppVersion = excluded.AppVersion, WorkerVersion = excluded.WorkerVersion, WorkerImageDigest = excluded.WorkerImageDigest,
-            ContractVersion = excluded.ContractVersion, InstallationId = excluded.InstallationId, Imported = excluded.Imported;
+            ContractVersion = excluded.ContractVersion, InstallationId = excluded.InstallationId, Imported = excluded.Imported,
+            PreemptionCount = excluded.PreemptionCount;
         """;
 
     private readonly SqliteDatabase _database;
@@ -180,7 +181,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         InstallationId: row.InstallationId,
         Imported: row.Imported != 0,
         Notes: row.Notes,
-        TagsJson: row.TagsJson);
+        TagsJson: row.TagsJson,
+        PreemptionCount: (int)row.PreemptionCount);
 
     private RunRow ToRow(RunRecord run) => new()
     {
@@ -223,6 +225,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         Imported = run.Imported ? 1 : 0,
         Notes = run.Notes,
         TagsJson = run.TagsJson,
+        PreemptionCount = run.PreemptionCount,
     };
 
     private sealed class RunRow
@@ -264,6 +267,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         public long? ContractVersion { get; set; }
         public string? InstallationId { get; set; }
         public long Imported { get; set; }
+        public long PreemptionCount { get; set; }
         public string? Notes { get; set; }
         public string? TagsJson { get; set; }
     }

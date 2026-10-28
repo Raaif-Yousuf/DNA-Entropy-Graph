@@ -177,6 +177,18 @@ def _assert_unique_contig_names(contigs: list[Contig]) -> None:
         )
 
 
+def _require_input_path(cfg: RunConfig, kind: str) -> str:
+    """The file a file-reading ``kind`` reads. ``--informat`` can name a file kind while there is
+    no file (stdin / paste), and the readers need a path, so say so instead of failing inside
+    ``pathlib`` with a ``TypeError`` (found by the pyright gate, MEASURED 2026-10-28)."""
+    if cfg.input_path is None:
+        raise ValidationError(
+            f"The input kind is {kind} but no input file was given. Add the file with --input, "
+            "or remove --informat to read pasted text."
+        )
+    return cfg.input_path
+
+
 def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
     """Read + validate the configured input into a :class:`LoadedInput`.
 
@@ -192,7 +204,7 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         )
 
     if kind in _ANNOTATED_FLAT_FILE_READERS:
-        records, notices = _ANNOTATED_FLAT_FILE_READERS[kind](cfg.input_path)
+        records, notices = _ANNOTATED_FLAT_FILE_READERS[kind](_require_input_path(cfg, kind))
         contigs: list[Contig] = []
         running_total = 0
         for i, rec in enumerate(records):
@@ -217,7 +229,7 @@ def load_input(cfg: RunConfig, raw: str | None = None) -> LoadedInput:
         return LoadedInput(contigs=contigs, notices=notices, source_kind=detect.GENBANK, input_format=kind)
 
     if kind == detect.FASTA:
-        records, notices = read_fasta(cfg.input_path)
+        records, notices = read_fasta(_require_input_path(cfg, kind))
         paired: dict[str, list[GeneFeature]] = {}
         gff_circular: set[str] = set()
         if cfg.annotation_path is not None:

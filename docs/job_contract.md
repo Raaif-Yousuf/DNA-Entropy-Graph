@@ -193,7 +193,7 @@ and `predictor.device` may be `cuda:0`.
 
 | Field | Meaning | Notes |
 |---|---|---|
-| `schema` | Contract version, integer | See section 7 (versioning). A worker that reads `schema != 1` (once other versions exist) must refuse the job with a named error rather than guess at compatibility. |
+| `schema` | Contract version, a JSON integer | Must be a JSON integer: `1` is accepted, but `"1"`, `1.0`, `true` and `null` are refused with a `ManifestError` (checked 2026-10-28 on tooling/pyright-gate; the app writes an int). See section 7 (versioning). A worker that reads `schema != 1` (once other versions exist) must refuse the job with a named error rather than guess at compatibility. |
 | `inputs[].informat` | `auto \| genbank \| fasta \| paste \| embl \| snapgene` | `auto` reproduces the prototype's `readers/detect.py` extension-then-content sniff. **Validated 2026-10-15 (issue #704)**: any other spelling (`gb`, `EMBL`, a typo) is refused at parse time with `MANIFEST_INVALID` naming the valid values. |
 | `inputs[].path` | Store-relative object name of the input file | Required unless `accession` is given (the schema cannot express "one of", so the parser enforces it). Giving both is refused. |
 | `inputs[].annotation` | Optional store-relative object name of a GFF3 staged beside a FASTA input | **Added 2026-10-15 (issue #704, worker #135)**: the worker downloads it next to the input and passes it as `RunConfig.annotation_path`; its genes replace Prodigal. Absent means none. Refused with an `informat` of `genbank`/`embl`/`snapgene` and with `accession`. A named object that is missing fails that input (not the job). The app must upload it under `input/` like the FASTA. |
