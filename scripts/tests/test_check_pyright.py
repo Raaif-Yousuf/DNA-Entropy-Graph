@@ -174,9 +174,9 @@ def test_lower_refuses_when_anything_grew(tmp_path: Path) -> None:
 # --- end to end through the CLI, on a saved report (no pyright) ---------------------------------
 
 
-def _cli(tmp_path: Path, report: dict, baseline: dict, *extra: str) -> subprocess.CompletedProcess[str]:
+def _cli(tmp_path: Path, report: dict, baseline: dict, *extra: str, version: str = cp.PYRIGHT_VERSION) -> subprocess.CompletedProcess[str]:
     (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8", newline="\n")
-    (tmp_path / "baseline.json").write_text(json.dumps({"files": baseline}), encoding="utf-8", newline="\n")
+    (tmp_path / "baseline.json").write_text(json.dumps({"pyright": version, "files": baseline}), encoding="utf-8", newline="\n")
     return subprocess.run(
         [
             sys.executable,
@@ -225,6 +225,43 @@ def test_cli_lower_rewrites_the_baseline_file_in_place(tmp_path: Path) -> None:
     text = (tmp_path / "baseline.json").read_bytes()
     assert b"\r" not in text
     assert json.loads(text)["files"] == {"scripts/a.py": 1}
+
+
+# --- the pinned version is part of the baseline ---------------------------------------------------
+
+
+def test_a_baseline_made_by_another_pyright_version_fails_with_both_versions_named(tmp_path: Path) -> None:
+    _touch(tmp_path, "scripts/a.py")
+    r = _cli(tmp_path, _report(tmp_path, {"scripts/a.py": 2}), {"scripts/a.py": 2}, version="1.0.0")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "1.0.0" in r.stderr and cp.PYRIGHT_VERSION in r.stderr
+
+
+def test_a_baseline_with_no_version_field_fails(tmp_path: Path) -> None:
+    p = tmp_path / "b.json"
+    p.write_text(json.dumps({"files": {"scripts/a.py": 1}}), encoding="utf-8", newline="\n")
+    with pytest.raises(cp.PyrightGateError, match="pyright"):
+        cp.check_baseline_version(p)
+
+
+def test_the_committed_baseline_matches_the_pinned_version() -> None:
+    cp.check_baseline_version(cp.BASELINE_PATH)
+
+
+def test_lower_keeps_the_pinned_version_in_the_file(tmp_path: Path) -> None:
+    _touch(tmp_path, "scripts/a.py")
+    done = _cli(tmp_path, _report(tmp_path, {"scripts/a.py": 1}), {"scripts/a.py": 4}, "--lower")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads((tmp_path / "baseline.json").read_text(encoding="utf-8"))["pyright"] == cp.PYRIGHT_VERSION
+
+
+# --- --self-test (every check_*.py has one) --------------------------------------------------------
+
+
+def test_self_test_passes_and_says_how_many_cases() -> None:
+    r = subprocess.run([sys.executable, str(SCRIPT), "--self-test"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "self-test passed" in r.stdout and r.stdout.isascii()
 
 
 # --- the real thing -----------------------------------------------------------------------------

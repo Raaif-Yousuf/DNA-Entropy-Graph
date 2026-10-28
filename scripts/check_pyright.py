@@ -109,6 +109,22 @@ def load_baseline(path: Path) -> dict[str, int]:
     return dict(files)
 
 
+def check_baseline_version(path: Path) -> None:
+    """The baseline records the pyright version that produced its counts; a different pin
+    means the counts may not mean the same thing (new rules, changed inference)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PyrightGateError(f"cannot read the pyright baseline {path} ({exc}). Restore it from git.") from exc
+    recorded = data.get("pyright") if isinstance(data, dict) else None
+    if recorded != PYRIGHT_VERSION:
+        raise PyrightGateError(
+            f"the baseline {path.name} was made with pyright {recorded!r} but PYRIGHT_VERSION is {PYRIGHT_VERSION!r}. "
+            "After bumping the pin, run the gate on the new version, confirm no count rose, then set the baseline's "
+            '"pyright" field to the new version (and lower counts with --lower) in the same commit.'
+        )
+
+
 def compare(current: dict[str, int], baseline: dict[str, int], root: Path) -> list[str]:
     """Every way the current counts disagree with the baseline, one line each (empty = pass)."""
     problems: list[str] = []
@@ -198,15 +214,79 @@ def _write_baseline(path: Path, files: dict[str, int]) -> None:
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
+def self_test() -> int:
+    """Prove the gate can fail: plant each violation and demand the specific verdict."""
+    import tempfile
+
+    failures = 0
+
+    def expect(label: str, condition: bool) -> None:
+        nonlocal failures
+        if not condition:
+            failures += 1
+            print(f"  FAIL: {label}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for rel in ("scripts/a.py", "scripts/b.py", "worker/src/dna_entropy/x.py"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("x = 1\n", encoding="utf-8", newline="\n")
+
+        def kinds(current: dict[str, int], baseline: dict[str, int]) -> list[str]:
+            return sorted(p.split(":")[0] for p in compare(current, baseline, root))
+
+        expect("a count at its baseline passes", kinds({"scripts/a.py": 2}, {"scripts/a.py": 2}) == [])
+        expect("a count over its baseline is NEW", kinds({"scripts/a.py": 3}, {"scripts/a.py": 2}) == ["NEW"])
+        expect("an unlisted file with an error is NEW", kinds({"scripts/b.py": 1}, {}) == ["NEW"])
+        expect("a lowered count with a stale baseline is STALE", kinds({"scripts/a.py": 1}, {"scripts/a.py": 2}) == ["STALE"])
+        expect("an entry for a deleted file is STALE", kinds({}, {"scripts/gone.py": 2}) == ["STALE"])
+        expect(
+            "worker/src in the baseline is ZERO",
+            "ZERO" in kinds({"worker/src/dna_entropy/x.py": 1}, {"worker/src/dna_entropy/x.py": 1}),
+        )
+        expect("a worker/src error is NEW", kinds({"worker/src/dna_entropy/x.py": 1}, {}) == ["NEW"])
+        try:
+            lowered_baseline({"scripts/a.py": 3}, {"scripts/a.py": 2})
+            expect("--lower refuses growth", False)
+        except PyrightGateError:
+            pass
+        expect(
+            "--lower lowers and drops fixed files",
+            lowered_baseline({"scripts/a.py": 1}, {"scripts/a.py": 2, "scripts/b.py": 1}) == {"scripts/a.py": 1},
+        )
+        try:
+            check_report({"generalDiagnostics": [], "summary": {"filesAnalyzed": 1}}, root, {})
+            expect("a run that analysed 1 file is refused", False)
+        except PyrightGateError:
+            pass
+        bad = root / "baseline.json"
+        bad.write_text(json.dumps({"pyright": "0.0.0", "files": {}}), encoding="utf-8", newline="\n")
+        try:
+            check_baseline_version(bad)
+            expect("a baseline from another pyright version is refused", False)
+        except PyrightGateError:
+            pass
+
+    if failures:
+        print(f"check_pyright: self-test FAILED ({failures} case(s)).")
+        return 1
+    print("check_pyright: self-test passed (11 cases).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--root", type=Path, default=REPO_ROOT, help="repo root (default: the repo this script lives in)")
     ap.add_argument("--baseline", type=Path, default=BASELINE_PATH, help="baseline file")
     ap.add_argument("--report", type=Path, help="judge this saved `pyright --outputjson` file instead of running pyright")
     ap.add_argument("--lower", action="store_true", help="lower the baseline to the current counts (never raises it)")
+    ap.add_argument("--self-test", action="store_true", help="prove the gate can fail (no pyright needed)")
     args = ap.parse_args(argv)
+    if args.self_test:
+        return self_test()
 
     try:
+        check_baseline_version(args.baseline)
         baseline = load_baseline(args.baseline)
         if args.report is not None:
             report = json.loads(args.report.read_text(encoding="utf-8"))

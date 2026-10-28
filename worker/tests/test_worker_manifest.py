@@ -572,7 +572,7 @@ def test_an_unknown_topology_is_rejected_naming_the_valid_values() -> None:
         JobManifest.parse(_manifest(analysis={"topology": "ring"}))
 
 
-@pytest.mark.parametrize("bad", ["abc", [1], None, {"v": 1}, 1.5])
+@pytest.mark.parametrize("bad", ["abc", "1", [1], None, {"v": 1}, 1.5, 1.0, True])
 def test_a_non_integer_schema_is_a_manifest_error_not_a_crash(bad) -> None:
     """pyright flagged `int(_require(d, "schema"))` (an `object`). MEASURED 2026-10-28: a string
     schema escaped as ValueError and a list/null one as TypeError, instead of ManifestError."""

@@ -380,6 +380,7 @@ python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass fie
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
 python scripts\check_pyright.py               # static types: pinned uvx pyright==1.1.407 over worker/src, worker/tests and scripts; a per-file RATCHET (see below). Run with the worker venv's python
+python scripts\check_pyright.py --self-test    # plant each violation, no pyright needed
 python scripts\check_pyright.py --lower       # bank progress: lower scripts\pyright_baseline.json to the current counts (refuses if anything grew)
 python scripts\check_app_wiring.py            # the C# half of that same bug class: an unbound command, an unbound [ObservableProperty], a dangling {Binding}, an x:Uid with no .resw entry, a service registered and never resolved
 python scripts\<any check_*.py> --self-test   # every one of them supports this
