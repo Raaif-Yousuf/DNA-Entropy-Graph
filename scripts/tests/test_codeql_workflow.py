@@ -140,7 +140,9 @@ def test_built_projects_reach_every_product_project_so_the_extractor_sees_all_pr
         if cur not in seen:
             seen.add(cur)
             todo.extend(refs(cur))
-    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")} | {p.resolve() for p in (ROOT / "app" / "tools").glob("*/*.csproj")}
+    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")} | {
+        p.resolve() for p in (ROOT / "app" / "tools").glob("*/*.csproj")
+    }
     assert len(product) >= 7, "vacuous: expected the six app/src projects and CloudCli"
     assert product <= seen, f"not built or referenced, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"
     assert not any("tests" in p.parts[-3:] for p in seen), "a test project is in the CodeQL build"
