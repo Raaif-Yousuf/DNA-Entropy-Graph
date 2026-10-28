@@ -32,47 +32,28 @@ public class CloudJobRunnerOutageTests
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
-    /// <summary>
-    /// The clocks of one test run (#525). <see cref="Run"/> is the runner's: call deadlines, the result and lifecycle waits.
-    /// It moves only when the runner sleeps between polls, never while a call is in flight, so a loaded machine cannot
-    /// make a call "time out". <see cref="Retry"/> is the retry pipeline's: its backoff fires at once and the breaker's
-    /// break period passes as the runner polls. Only the test whose subject is a call that really never
-    /// answers runs the runner on real time.
-    /// </summary>
-    private sealed class Clocks
+    private static readonly TimeSpan CallLimit = TimeSpan.FromMilliseconds(50);
+
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null)
     {
-        public VirtualTimeProvider Run { get; } = new();
-
-        public VirtualTimeProvider Retry { get; } = new(autoAdvance: true);
-
-        public Task SleepAsync(TimeSpan span, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Run.Advance(span);
-            Retry.Advance(span);
-            return Task.CompletedTask;
-        }
-    }
-
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, TimeSpan? resultTimeout = null, bool realTime = false)
-    {
-        var clocks = new Clocks();
+        var clocks = new RunnerClocks();
+        clocks.ParkPump(gcp, CallLimit);
         return new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = resultTimeout ?? TimeSpan.FromMilliseconds(80),
-            CallTimeout = TimeSpan.FromMilliseconds(50),
+            CallTimeout = CallLimit,
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-            TimeProvider = realTime ? TimeProvider.System : clocks.Run,
-            PollDelay = realTime ? null : clocks.SleepAsync,
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
     }
 
     /// <summary>The production wiring: every gateway behind the one retry pipeline, with delays short enough for a test.</summary>
     private static CloudJobRunner RunnerThroughRetryPipeline(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase, TimeSpan resultTimeout, bool breaker = false)
     {
-        var clocks = new Clocks();
+        var clocks = new RunnerClocks();
         var options = new CloudRetryOptions
         {
             TimeProvider = clocks.Retry,
@@ -94,7 +75,7 @@ public class CloudJobRunnerOutageTests
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = resultTimeout,
-            CallTimeout = TimeSpan.FromMilliseconds(50),
+            CallTimeout = CallLimit,
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             TimeProvider = clocks.Run,
@@ -357,13 +338,13 @@ public class CloudJobRunnerOutageTests
         // still inside its 50 ms deadline, because test time did not move while it ran.
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
-        var clocks = new Clocks();
+        var clocks = new RunnerClocks();
         var runner = new CloudJobRunner(new SlowLookupCompute(gcp, TimeSpan.FromMilliseconds(150)), gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             BootTimeout = TimeSpan.FromMilliseconds(80),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
-            CallTimeout = TimeSpan.FromMilliseconds(50),
+            CallTimeout = CallLimit,
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             TimeProvider = clocks.Run,
@@ -391,8 +372,7 @@ public class CloudJobRunnerOutageTests
                     gcp.WithHungCalls(2);
                 }
             },
-            TimeSpan.FromSeconds(30),
-            realTime: true);
+            TimeSpan.FromSeconds(30));
 
         var finished = runner.RunAsync(TestInputs.Request("job-hang", Spec("job-hang")), CancellationToken.None);
         var winner = await Task.WhenAny(finished, Task.Delay(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));

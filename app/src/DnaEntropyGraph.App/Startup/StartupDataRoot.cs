@@ -31,6 +31,39 @@ public static class StartupDataRoot
         }
     }
 
+    /// <summary>
+    /// Cheap read-only probe of the run history database, before any window exists (issue #842). It reads the schema version
+    /// only (the app's normal first open migrates). Returns <see cref="StartupExitCodes.Ok"/>, or the exit code after the
+    /// message has been shown. Never throws, and never moves or deletes the file. <paramref name="probe"/> is a test seam.
+    /// </summary>
+    public static int CheckDatabase(AppDataRoot root, Action<string>? show = null, Presentation.Services.IStringResourceProvider? strings = null, Action<string>? probe = null)
+    {
+        show ??= Show;
+        try
+        {
+            (probe ?? Persistence.DatabaseStartupCheck.Run)(root.DatabaseFile);
+            return StartupExitCodes.Ok;
+        }
+        catch (Persistence.DatabaseNewerThanAppException ex)
+        {
+            show(MessageFor(ex, strings ?? new ReswStringResourceProvider()));
+            return StartupExitCodes.DatabaseNewerThanApp;
+        }
+        catch (Persistence.DatabaseInUseException)
+        {
+            show((strings ?? new ReswStringResourceProvider()).GetString("DatabaseInUse"));
+            return StartupExitCodes.DatabaseInUse;
+        }
+        catch (Exception)
+        {
+            show(string.Format(System.Globalization.CultureInfo.CurrentCulture, (strings ?? new ReswStringResourceProvider()).GetString("DatabaseUnusable"), root.Path));
+            return StartupExitCodes.DatabaseUnusable;
+        }
+    }
+
+    public static string MessageFor(Persistence.DatabaseNewerThanAppException ex, Presentation.Services.IStringResourceProvider strings)
+        => string.Format(System.Globalization.CultureInfo.CurrentCulture, strings.GetString("DatabaseNewerThanApp"), ex.DatabaseVersion, ex.AppVersion);
+
     /// <summary>The root for this process: the command line, the environment, a <c>portable.flag</c> beside the exe, then the real folder (issue #144). Public so a test can prove the real program folder is the one asked.</summary>
     public static AppDataRoot ResolveForThisProcess(IReadOnlyList<string> args)
         => AppDataRoot.Resolve(args, Environment.GetEnvironmentVariable, Environment.CurrentDirectory, programDirectory: AppContext.BaseDirectory);

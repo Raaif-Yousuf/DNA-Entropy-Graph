@@ -34,10 +34,12 @@ public class ZoneLadderReviewTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static VmProvisioner Provisioner(IComputeGateway compute, FakeGcp gcp, Func<RunProgress, string, CancellationToken, Task>? claimZone = null)
+    private static VmProvisioner Provisioner(IComputeGateway compute, FakeGcp gcp, Func<RunProgress, string, CancellationToken, Task>? claimZone = null, RunnerClocks? clocks = null)
     {
         var settings = new CloudRunSettings
         {
+            TimeProvider = clocks?.Run ?? TimeProvider.System,
+            PollDelay = clocks is null ? null : clocks.SleepAsync,
             CreateTimeout = TimeSpan.FromSeconds(5),
             CreateSettleTimeout = TimeSpan.FromSeconds(3),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
@@ -224,14 +226,26 @@ public class ZoneLadderReviewTests
     public async Task A_straggler_whose_create_lands_after_the_winner_is_deleted_before_the_ladder_returns()
     {
         var gcp = ThreeStockedOut();
+        // The straggler's create is held until the ladder has given up on it (it armed the 3 s settle window on the abandoned create) or has
+        // returned, so "lands after the ladder stopped waiting" is a fact of ordering, not of how long 400 ms took on this machine.
+        var clocks = new RunnerClocks();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var straggled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stub = new Stub(gcp)
         {
             OnCreate = async (spec, zone, token) =>
             {
                 if (zone == "us-east1-b")
                 {
-                    await Task.Delay(400, CancellationToken.None);
-                    return await gcp.CreateVmAsync(spec, zone, CancellationToken.None);
+                    await release.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
+                    try
+                    {
+                        return await gcp.CreateVmAsync(spec, zone, CancellationToken.None);
+                    }
+                    finally
+                    {
+                        straggled.TrySetResult();
+                    }
                 }
 
                 return await gcp.CreateVmAsync(spec, zone, token);
@@ -239,10 +253,14 @@ public class ZoneLadderReviewTests
         };
         var spec = Spec("job-w2");
 
-        var result = await Provisioner(stub, gcp).ProvisionAsync(Request("job-w2", spec), spec, new RunProgress(), CancellationToken.None);
+        var provision = Provisioner(stub, gcp, clocks: clocks).ProvisionAsync(Request("job-w2", spec), spec, new RunProgress(), CancellationToken.None);
+        _ = Task.WhenAny(provision, clocks.Run.WhenTimerCreatedAsync(0, TimeSpan.FromSeconds(3))).ContinueWith(_ => release.TrySetResult(), TaskScheduler.Default);
+        var result = await provision.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
         result.Success.ShouldBeTrue(result.FailureMessage);
         result.Zone.ShouldBe("us-central1-f");
+        release.TrySetResult();
+        await straggled.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         (await LiveZonesAsync(gcp, "job-w2")).ShouldBe(["us-central1-f"], "an extra that landed late must not be left billing");
     }
 
@@ -410,13 +428,18 @@ public class ZoneLadderReviewTests
         claimed.LastIndexOf(string.Empty).ShouldBeLessThan(claimed.Count - 1, "the parallel batch cleared the claim, then the winner must have been written after it; the one case the claim exists for: an extra that is still alive must be told to stand down");
     }
 
-    private static CloudJobRunner ClaimRunner(FakeGcp gcp, IStorageGateway? storage = null) => new(gcp, storage ?? gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+    private static readonly TimeSpan ClaimCallLimit = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>The runner on test time (#567): its call deadline (300 ms) moves only when a call the test scripted to hang parks, so a loaded machine cannot cut a healthy call.</summary>
+    private static CloudJobRunner ClaimRunner(FakeGcp gcp, RunnerClocks clocks, IStorageGateway? storage = null) => new(gcp, storage ?? gcp, gcp, gcp, gcp, new InMemoryRunRepository())
     {
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
         ResultTimeout = TimeSpan.FromSeconds(10),
-        CallTimeout = TimeSpan.FromMilliseconds(300),
+        CallTimeout = ClaimCallLimit,
         LifecycleTimeout = TimeSpan.FromSeconds(1),
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        TimeProvider = clocks.Run,
+        PollDelay = clocks.SleepAsync,
     };
 
     [Fact]
@@ -429,7 +452,7 @@ public class ZoneLadderReviewTests
             await gcp.UploadAsync(bucket, "jobs/job-s1/control/zone", stale, CancellationToken.None);
         }
 
-        var result = await ClaimRunner(gcp).RunAsync(Request("job-s1", Spec("job-s1")), CancellationToken.None);
+        var result = await ClaimRunner(gcp, new RunnerClocks()).RunAsync(Request("job-s1", Spec("job-s1")), CancellationToken.None);
 
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
         var live = await LiveZonesAsync(gcp, "job-s1");
@@ -437,7 +460,8 @@ public class ZoneLadderReviewTests
         System.Text.Encoding.UTF8.GetString(gcp.GetObjectBytes(bucket, "jobs/job-s1/control/zone")).ShouldBe("us-central1-a", "the VM reads this at boot: a stale zone would make it delete itself");
     }
 
-    private sealed class ClaimHangsStorage(FakeGcp inner) : IStorageGateway
+    /// <summary>Parks the claim write for ever, and, once parked inside the runner's call (whose deadline timer was armed before the call), moves the runner's clock past the call limit so the deadline fires.</summary>
+    private sealed class ClaimHangsStorage(FakeGcp inner, VirtualTimeProvider clock) : IStorageGateway
     {
         public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken) => inner.EnsureBucketAsync(projectId, cancellationToken);
 
@@ -445,6 +469,7 @@ public class ZoneLadderReviewTests
         {
             if (objectKey.EndsWith("control/zone", StringComparison.Ordinal))
             {
+                clock.Advance(ClaimCallLimit + TimeSpan.FromMilliseconds(1));
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
             }
 
@@ -472,7 +497,9 @@ public class ZoneLadderReviewTests
         // GatewayCalls turns a call that outlives its deadline into a Network CloudOperationException; the claim is best effort and swallows it.
         var gcp = (parallel ? ThreeStockedOut() : new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered)).WithWorker(FakeWorkerMode.Done);
 
-        var result = await ClaimRunner(gcp, new ClaimHangsStorage(gcp)).RunAsync(Request("job-h1", Spec("job-h1")), CancellationToken.None);
+        var clocks = new RunnerClocks();
+
+        var result = await ClaimRunner(gcp, clocks, new ClaimHangsStorage(gcp, clocks.Run)).RunAsync(Request("job-h1", Spec("job-h1")), CancellationToken.None);
 
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
     }
