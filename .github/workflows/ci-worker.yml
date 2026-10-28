@@ -119,6 +119,27 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # Static types (pyright). A ratchet, not a zero gate: worker/src must have 0 errors and the
+  # debt in the test suites may only go down (scripts/pyright_baseline.json; how it works is in
+  # scripts/check_pyright.py and docs/dev_commands.md). Pyright itself is `uvx pyright==<pin>`,
+  # run against the locked worker venv so numpy and friends resolve.
+  types:
+    name: pyright ratchet
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+      - name: Create the environment from the lock
+        working-directory: worker
+        run: uv sync --frozen --python 3.12 --extra dev --extra genes
+      - name: pyright ratchet (scripts/check_pyright.py)
+        run: worker/.venv/bin/python scripts/check_pyright.py
+
   build:
     name: sdist and wheel
     needs: changes

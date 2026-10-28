@@ -26,11 +26,12 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, overload, runtime_checkable
 
 
 class BlobstoreError(RuntimeError):
@@ -49,6 +50,7 @@ class Blobstore(Protocol):
     def read_text(self, path: str) -> str:
         """Return the UTF-8 text content of ``path``. Raises :class:`BlobstoreError` if
         it does not exist."""
+        ...
 
     def write_text(self, path: str, text: str) -> None:
         """Write ``text`` to ``path``, atomically from a reader's perspective — a
@@ -58,10 +60,12 @@ class Blobstore(Protocol):
     def exists(self, path: str) -> bool:
         """Return whether ``path`` exists. Used for ``control/cancel`` (job_contract.md
         §6: "presence of the object is the entire signal")."""
+        ...
 
     def list_prefix(self, prefix: str) -> list[str]:
         """Return every path under ``prefix`` (relative to the job prefix, not to
         ``prefix`` itself), in no particular order."""
+        ...
 
     def download_file(self, path: str, local_dest: Path) -> None:
         """Copy ``path`` from the store to a local file at ``local_dest`` (creating parent
@@ -219,13 +223,28 @@ _METADATA_HEADERS = {"Metadata-Flavor": "Google"}
 _STORAGE_API = "https://storage.googleapis.com/storage/v1"
 _STORAGE_UPLOAD_API = "https://storage.googleapis.com/upload/storage/v1"
 
+
 # Injectable HTTP transport, so this module never needs a real socket to be importable or
 # testable. Signature matches urllib.request.urlopen closely enough that the default IS
 # urllib.request.urlopen: (Request) -> a context-manager-like object with .read()/.status.
-HttpOpener = Callable[[urllib.request.Request], "object"]
+class HttpResponse(Protocol):
+    """The slice of ``http.client.HTTPResponse`` this module uses (what ``urlopen`` returns).
+    Declared so a fake opener in a test and the real one share one type."""
+
+    status: int
+    headers: Any
+
+    def read(self, amt: int | None = None, /) -> bytes: ...
+
+    def __enter__(self) -> HttpResponse: ...
+
+    def __exit__(self, *exc_info: object) -> object: ...
 
 
-def default_http_opener(req: urllib.request.Request) -> object:  # pragma: no cover - real I/O
+HttpOpener = Callable[[urllib.request.Request], HttpResponse]
+
+
+def default_http_opener(req: urllib.request.Request) -> HttpResponse:  # pragma: no cover - real I/O
     return urllib.request.urlopen(req, timeout=30)
 
 
@@ -257,7 +276,7 @@ class MetadataTokenProvider:
             return self._cached.value
         req = urllib.request.Request(_METADATA_TOKEN_URL, headers=_METADATA_HEADERS)
         try:
-            with self._opener(req) as resp:  # type: ignore[union-attr]
+            with self._opener(req) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise BlobstoreError(f"could not fetch a metadata-server token: {exc}") from exc
@@ -341,6 +360,26 @@ class GcsBlobstore:
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.get()}"}
 
+    @overload
+    def _request(
+        self,
+        build_request: Callable[[], urllib.request.Request],
+        *,
+        what: str,
+        max_attempts: int,
+        not_found_ok: Literal[False] = False,
+    ) -> HttpResponse: ...
+
+    @overload
+    def _request(
+        self,
+        build_request: Callable[[], urllib.request.Request],
+        *,
+        what: str,
+        max_attempts: int,
+        not_found_ok: Literal[True],
+    ) -> HttpResponse | None: ...
+
     def _request(
         self,
         build_request: Callable[[], urllib.request.Request],
@@ -348,7 +387,7 @@ class GcsBlobstore:
         what: str,
         max_attempts: int,
         not_found_ok: bool = False,
-    ):
+    ) -> HttpResponse | None:
         """Send one logical request, retrying per the policy in the class docstring.
 
         ``build_request`` is a FACTORY, not a pre-built request: a 401 retry needs a
@@ -402,7 +441,7 @@ class GcsBlobstore:
         )
 
     def exists(self, path: str) -> bool:
-        name = urllib.request.quote(self._object_name(path), safe="")
+        name = urllib.parse.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_API}/b/{self.bucket}/o/{name}"
         resp = self._request(
             lambda: urllib.request.Request(url, headers=self._auth_headers()),
@@ -414,7 +453,7 @@ class GcsBlobstore:
 
     def list_prefix(self, prefix: str) -> list[str]:
         full_prefix = self._object_name(prefix, allow_empty=True)
-        base_url = f"{_STORAGE_API}/b/{self.bucket}/o?prefix={urllib.request.quote(full_prefix, safe='')}"
+        base_url = f"{_STORAGE_API}/b/{self.bucket}/o?prefix={urllib.parse.quote(full_prefix, safe='')}"
         names: list[str] = []
         page_token: str | None = None
         while True:
@@ -423,7 +462,7 @@ class GcsBlobstore:
             # drop the rest of a large batch's outputs (issue #40).
             url = base_url
             if page_token:
-                url += f"&pageToken={urllib.request.quote(page_token, safe='')}"
+                url += f"&pageToken={urllib.parse.quote(page_token, safe='')}"
             resp = self._request(
                 lambda url=url: urllib.request.Request(url, headers=self._auth_headers()),
                 what="list_prefix",
@@ -451,7 +490,7 @@ class GcsBlobstore:
             raise
 
     def _stream_to(self, path: str, part: Path) -> None:
-        name = urllib.request.quote(self._object_name(path), safe="")
+        name = urllib.parse.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_API}/b/{self.bucket}/o/{name}?alt=media"
         offset = 0
         failures = 0
@@ -517,7 +556,7 @@ class GcsBlobstore:
         """GCS resumable upload: initiate a session, PUT fixed-size chunks with a
         ``Content-Range``, and after a retryable failure ask the session how much it
         committed (``bytes */total``) and continue from there, never from zero."""
-        name = urllib.request.quote(self._object_name(path), safe="")
+        name = urllib.parse.quote(self._object_name(path), safe="")
         init_url = f"{_STORAGE_UPLOAD_API}/b/{self.bucket}/o?uploadType=resumable&name={name}"
 
         def _init() -> urllib.request.Request:
@@ -600,7 +639,7 @@ class GcsBlobstore:
         return None
 
     def _download_bytes(self, path: str) -> bytes:
-        name = urllib.request.quote(self._object_name(path), safe="")
+        name = urllib.parse.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_API}/b/{self.bucket}/o/{name}?alt=media"
         resp = self._request(
             lambda: urllib.request.Request(url, headers=self._auth_headers()),
@@ -613,7 +652,7 @@ class GcsBlobstore:
         # A single PUT/POST of the whole object body is atomic at the object level in GCS
         # — no reader ever observes a partial object — so no temp-object-then-rename dance
         # is needed here the way LocalBlobstore needs one for a plain filesystem.
-        name = urllib.request.quote(self._object_name(path), safe="")
+        name = urllib.parse.quote(self._object_name(path), safe="")
         url = f"{_STORAGE_UPLOAD_API}/b/{self.bucket}/o?uploadType=media&name={name}"
 
         def _build() -> urllib.request.Request:
