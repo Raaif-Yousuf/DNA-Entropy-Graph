@@ -122,7 +122,7 @@ class Decision:
     path: Path
     reason: str = ""
     branch: str | None = None
-    sha: str = ""  # what was deleted, so a delete can be undone with git branch <name> <sha>`n
+    sha: str = ""  # what was deleted, so a delete can be undone with `git branch <name> <sha>`
 
 
 @dataclass
@@ -159,6 +159,9 @@ class Ctx:
     _contained: dict[tuple[str, bool], bool] = field(default_factory=dict, init=False, repr=False)
     _remote_targets: dict[str, str] | None = field(default=None, init=False, repr=False)
     _merge_neutralizers: list[str] | None = field(default=None, init=False, repr=False)
+    _neutralizers_ready: bool = field(default=False, init=False, repr=False)
+    _repo_slug: str | None = field(default=None, init=False, repr=False)
+    _repo_slug_known: bool = field(default=False, init=False, repr=False)
 
 
 def _text(proc: object) -> str:
@@ -224,9 +227,31 @@ def is_ancestor(ctx: Ctx, sha: str, of: str) -> bool:
     return bool(sha) and bool(of) and _rc(ctx.git(ctx.repo, "merge-base", "--is-ancestor", sha, of, check=False)) == 0
 
 
+def gh_repo_args(ctx: Ctx) -> list[str]:
+    """`--repo owner/name` taken from origin's configured URL, so gh asks about the repository we are about to delete from and not
+    whatever `gh repo set-default` (or a fork) says. An origin that is not a GitHub URL adds nothing: gh then decides alone."""
+    if not ctx._repo_slug_known:
+        proc = ctx.git(ctx.repo, "config", "--get", f"remote.{lw.REMOTE}.url", check=False)
+        match = re.search(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", _text(proc)) if _rc(proc) == 0 else None
+        ctx._repo_slug = f"{match.group(1)}/{match.group(2)}" if match else None
+        ctx._repo_slug_known = True
+    return ["--repo", ctx._repo_slug] if ctx._repo_slug else []
+
+
 def pr_states(ctx: Ctx) -> PrStates | None:
     """branch -> [(state, headRefOid, baseRefName)] from ONE `gh pr list` call. None (with a warning) when gh cannot answer."""
-    argv = [*ctx.gh, "pr", "list", "--state", "all", "--limit", str(ctx.gh_limit), "--json", "headRefName,state,headRefOid,baseRefName"]
+    argv = [
+        *ctx.gh,
+        "pr",
+        "list",
+        *gh_repo_args(ctx),
+        "--state",
+        "all",
+        "--limit",
+        str(ctx.gh_limit),
+        "--json",
+        "headRefName,state,headRefOid,baseRefName",
+    ]
     try:
         proc = lw.subprocess.run(argv, cwd=ctx.repo, capture_output=True, check=False)
         data = json.loads(lw._text(proc.stdout)) if proc.returncode == 0 else None
@@ -249,7 +274,18 @@ def open_prs(ctx: Ctx) -> tuple[set[str], set[str]] | None:
     """(head branches, base branches) of every OPEN PR, from one `gh pr list --state open`. Only open PRs are asked for, so
     the list is small; if it still reaches --limit it may be truncated and None is returned (the caller refuses all remote
     deletion rather than treat a missing entry as 'no open PR'). None, with a warning, when gh cannot answer."""
-    argv = [*ctx.gh, "pr", "list", "--state", "open", "--limit", str(ctx.gh_limit), "--json", "headRefName,baseRefName,state"]
+    argv = [
+        *ctx.gh,
+        "pr",
+        "list",
+        *gh_repo_args(ctx),
+        "--state",
+        "open",
+        "--limit",
+        str(ctx.gh_limit),
+        "--json",
+        "headRefName,baseRefName,state",
+    ]
     try:
         proc = lw.subprocess.run(argv, cwd=ctx.repo, capture_output=True, check=False)
         data = json.loads(lw._text(proc.stdout)) if proc.returncode == 0 else None
@@ -312,15 +348,25 @@ def keep_tip_shas(ctx: Ctx) -> set[str]:
     return {sha for ref, sha in content_targets(ctx).items() if ref != REMOTE_BASE}
 
 
+def _on_origin_at(ctx: Ctx, ref: str, sha: str) -> bool:
+    """Ask origin itself (not the local remote-tracking ref, which `fetch` without --prune leaves behind after a branch is deleted
+    there) whether the branch behind `ref` is still at `sha`."""
+    name = ref.removeprefix(f"{lw.REMOTE}/")
+    proc = ctx.git(ctx.repo, "ls-remote", lw.REMOTE, f"refs/heads/{name}", check=False)
+    return _rc(proc) == 0 and _text(proc).split("\t", 1)[0].strip() == sha
+
+
 def remote_targets(ctx: Ctx) -> dict[str, str]:
     """The targets that may justify deleting a REMOTE branch: origin/main, and a --contained-in tip only when origin has it
-    at the same sha (a remote-tracking ref, or a local branch whose `origin/<name>` is the same commit). A local-only tip is
-    skipped with a warning: it can justify a local delete, but deleting a remote branch because of content that exists only
-    on this laptop could destroy the only pushed copy."""
+    at the same sha (a remote-tracking ref, or a local branch whose `origin/<name>` is the same commit) AND `git ls-remote` says
+    origin still has it there (a stale tracking ref of a tip deleted on origin must not justify anything). A tip that fails
+    either test is skipped with a warning: it can justify a local delete, but deleting a remote branch because of content that
+    may exist only on this laptop could destroy the only pushed copy."""
     if ctx._remote_targets is None:
         out: dict[str, str] = {}
         for ref, sha in content_targets(ctx).items():
-            if ref == REMOTE_BASE or ref.startswith(f"{lw.REMOTE}/") or _commit_of(ctx, f"{lw.REMOTE}/{ref}") == sha:
+            backed = (ref.startswith(f"{lw.REMOTE}/") or _commit_of(ctx, f"{lw.REMOTE}/{ref}") == sha) and _on_origin_at(ctx, ref, sha)
+            if ref == REMOTE_BASE or backed:
                 out[ref] = sha
             else:
                 ctx.say(
@@ -330,21 +376,39 @@ def remote_targets(ctx: Ctx) -> dict[str, str]:
     return ctx._remote_targets
 
 
-def merge_neutralizers(ctx: Ctx) -> list[str]:
+def merge_neutralizers(ctx: Ctx) -> list[str] | None:
     """`git` options that stop attribute-driven merges (#812). A merge driver (`merge=ours`, or a configured custom driver such
     as this repo's resw driver) can make a conflicting edit merge 'cleanly' to the target's own side, which would read as
-    'contained'. Attributes are read from the empty tree and no attributes file, and every configured merge driver is
-    replaced by one that fails, so a file that needs a driver is a conflict, i.e. not contained. Not covered: the builtin
-    `merge=union` set in $GIT_DIR/info/attributes (it is read even with --attr-source)."""
-    if ctx._merge_neutralizers is None:
-        opts = [f"--attr-source={EMPTY_TREE}", "-c", f"core.attributesFile={os.devnull}"]
+    'contained'. Attributes are read from the empty tree and no attributes file, every configured merge driver is replaced by
+    one that fails, and merge.renormalize / core.autocrlf are forced off so line-ending rewriting cannot hide a difference; a
+    file that needs a driver is therefore a conflict, i.e. not contained. Not covered: the builtin `merge=union` set in
+    $GIT_DIR/info/attributes (it is read even with --attr-source).
+    None (with ONE warning) when this git rejects --attr-source (older than 2.40): the content test is then off and only
+    ancestry counts, which is said out loud rather than reported as 'not contained'."""
+    if not ctx._neutralizers_ready:
+        opts = [
+            f"--attr-source={EMPTY_TREE}",
+            "-c",
+            f"core.attributesFile={os.devnull}",
+            "-c",
+            "merge.renormalize=false",
+            "-c",
+            "core.autocrlf=false",
+        ]
         proc = ctx.git(ctx.repo, "config", "--get-regexp", r"^merge\..*\.driver$", check=False)
         if _rc(proc) == 0:
             for line in _text(proc).splitlines():
                 key = line.split(None, 1)[0] if line.strip() else ""
                 if key.startswith("merge.") and key.endswith(".driver") and len(key) > len("merge..driver"):
                     opts += ["-c", f"{key}=exit 1"]
-        ctx._merge_neutralizers = opts
+        probe = ctx.git(ctx.repo, *opts, "rev-parse", "--git-dir", check=False)
+        if _rc(probe) == 0:
+            ctx._merge_neutralizers = opts
+        else:
+            ctx.say(
+                "WARNING: this git rejects --attr-source (needs 2.40 or newer), so the content test is off and only ancestry counts. Update git"
+            )
+        ctx._neutralizers_ready = True
     return ctx._merge_neutralizers
 
 
@@ -366,7 +430,10 @@ def content_contained(ctx: Ctx, sha: str, *, remote: bool = False) -> bool:
             if is_ancestor(ctx, sha, target):
                 result = True
                 break
-            merged = ctx.git(ctx.repo, *merge_neutralizers(ctx), "merge-tree", "--write-tree", target, sha, check=False)
+            safe = merge_neutralizers(ctx)
+            if safe is None:
+                break
+            merged = ctx.git(ctx.repo, *safe, "merge-tree", "--write-tree", target, sha, check=False)
             if _rc(merged) != 0:
                 continue
             tree = ctx.git(ctx.repo, "rev-parse", f"{target}^{{tree}}", check=False)
@@ -758,7 +825,7 @@ def deletable_remote_branches(ctx: Ctx, open_heads: set[str], open_bases: set[st
 
 def prune(ctx: Ctx) -> Report:
     report = Report()
-    if ctx.fetch and _rc(ctx.git(ctx.repo, "fetch", "-q", lw.REMOTE, check=False)) != 0:
+    if ctx.fetch and _rc(ctx.git(ctx.repo, "fetch", "-q", "--prune", lw.REMOTE, check=False)) != 0:
         ctx.say("WARNING: `git fetch origin` failed; judging against the last fetched origin/main")
     worktrees = list_worktrees(ctx)
     if not worktrees:
@@ -783,7 +850,9 @@ def prune(ctx: Ctx) -> Report:
     keep_out = {d.branch for d in report.kept if d.branch}
     if ctx.delete_merged_branches:
         for name, sha in deletable_branches(ctx, keep_out, states):
-            if ctx.apply and _rc(ctx.git(ctx.repo, "branch", "-D", name, check=False)) != 0:
+            if ctx.apply and _rc(ctx.git(ctx.repo, "update-ref", "-d", f"refs/heads/{name}", sha, check=False)) != 0:
+                # `update-ref -d <ref> <old>` is a lease on the sha we judged: a branch that moved since survives
+                ctx.say(f"WARNING: could not delete local branch {name}@{sha} (it moved, or git refused); leaving it")
                 continue
             report.branches_deleted.append(Decision(ctx.repo, "landed, not checked out", name, sha))
         if ctx.apply:
@@ -819,6 +888,8 @@ def print_report(ctx: Ctx, report: Report) -> None:
         for r in rows:
             what = r.branch if is_branch else r.path
             say(f"  {verb}  {what}@{r.sha}" if r.sha else f"  {verb}  {what}")
+            if ctx.apply and not is_branch and r.branch is None and r.sha:
+                say(f"    detached HEAD, undo with: git worktree add --detach {r.path} {r.sha}")
     kept = report.kept + report.orphans_kept
     say(f"kept: {len(kept)}")
     for r in kept:

@@ -1148,7 +1148,7 @@ def test_a_saturated_open_pr_list_refuses_all_remote_deletion(world):
     world.merge_into_main(r2)
     report = _run(world, apply=True, remote=True, gh_limit=1, gh=world.gh_stub([_open_pr("some-other")]))
     assert report.remote_deleted == [] and "feat-r2" in _remote_heads(world)
-    assert "--limit" in world.text()
+    assert "WARNING: remote branches skipped: gh returned 1 open PRs (--limit), so the list may be cut off. Close some, then retry" in world.out
 
 
 def test_remote_delete_is_a_lease_on_the_sha_we_read(world):
@@ -1180,7 +1180,7 @@ def test_a_local_only_keep_tip_cannot_justify_a_remote_delete_but_still_justifie
     _branch_with(world, "attempt-local", {"q.txt": b"q\n"})
     report = _run(world, apply=True, delete_merged_branches=True, remote=True, contained_in=["queued"], gh=world.gh_stub([]))
     assert "feat-sub" in _remote_heads(world) and report.remote_deleted == []
-    assert "queued" in world.text()  # the skipped tip is named
+    assert "WARNING: --contained-in queued is not on origin at the same commit, so it cannot justify a remote delete. Push it first" in world.out
     assert "attempt-local" not in world.branches()  # local deletion may still use the tip
 
 
@@ -1215,3 +1215,84 @@ def test_a_dry_run_says_it_did_not_fetch(world):
 def test_the_remote_path_does_not_blame_use_gh(world):
     _run(world, apply=False, remote=True, gh=[sys.executable, "-c", "import sys; sys.exit(1)"])
     assert "drop --use-gh" not in world.text()
+
+
+# --- review round 2b (#812): leases, stale tracking refs, gh pinning, old git ---------------------------
+
+
+def test_a_local_branch_that_moved_after_it_was_judged_survives_and_is_reported(world):
+    tip = world.merged_branch("feat-local")
+    newer = _git(world.clone, "commit-tree", f"{tip}^{{tree}}", "-p", tip, "-m", "moved meanwhile")
+
+    def moving_git(cwd, *args, **kwargs):
+        if args[:2] == ("update-ref", "-d"):
+            _git(world.clone, "update-ref", "refs/heads/feat-local", newer)  # someone commits between judgement and delete
+        return pw.git(cwd, *args, **kwargs)
+
+    report = _run(world, apply=True, delete_merged_branches=True, git=moving_git)
+    assert "feat-local" in world.branches() and _git(world.clone, "rev-parse", "feat-local") == newer
+    assert report.branches_deleted == []
+    assert f"WARNING: could not delete local branch feat-local@{tip} (it moved, or git refused); leaving it" in world.out
+
+
+def test_a_stale_tracking_ref_of_a_tip_deleted_on_origin_cannot_justify_a_remote_delete(world):
+    _push_remote(world, "queued", {"q.txt": b"q\n"})
+    _push_remote(world, "feat-sub", {"q.txt": b"q\n"})
+    _git(world.origin, "update-ref", "-d", "refs/heads/queued")  # gone on origin; our origin/queued is stale
+    assert _git(world.clone, "rev-parse", "--verify", "refs/remotes/origin/queued")
+    report = _run(world, apply=True, remote=True, contained_in=["origin/queued"], gh=world.gh_stub([]))
+    assert report.remote_deleted == [] and "feat-sub" in _remote_heads(world)
+    assert (
+        "WARNING: --contained-in origin/queued is not on origin at the same commit, so it cannot justify a remote delete. Push it first"
+        in world.out
+    )
+
+
+def test_fetch_prunes_so_deleted_origin_branches_do_not_linger(world):
+    _run(world, apply=True, fetch=True)
+    fetches = [c for c in world.git_calls if c and c[0] == "fetch"]
+    assert fetches and all("--prune" in c for c in fetches)
+
+
+def test_gh_is_pinned_to_the_repository_origin_points_at(world):
+    _git(world.clone, "config", f"url.{world.origin.as_posix()}.insteadOf", "https://github.com/Some-Owner/Some-Repo.git")
+    _git(world.clone, "remote", "set-url", "origin", "https://github.com/Some-Owner/Some-Repo.git")
+    _run(world, apply=False, remote=True, use_gh=True, gh=world.gh_stub([]))
+    calls = world.gh_calls()
+    assert len(calls) == 2 and all("--repo Some-Owner/Some-Repo" in c for c in calls)
+
+
+def test_a_git_without_attr_source_warns_once_and_only_ancestry_counts(world):
+    class Failed:
+        returncode = 129
+        stdout = b""
+        stderr = b"unknown option: --attr-source"
+
+    def old_git(cwd, *args, **kwargs):
+        if any(a.startswith("--attr-source") for a in args):
+            return Failed()
+        return pw.git(cwd, *args, **kwargs)
+
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})
+    _branch_with(world, "feat-r3", {"y.txt": b"y\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, delete_merged_branches=True, git=old_git)
+    warning = "WARNING: this git rejects --attr-source (needs 2.40 or newer), so the content test is off and only ancestry counts. Update git"
+    assert world.out.count(warning) == 1
+    assert [b.branch for b in report.branches_deleted] == ["feat-r2"]  # ancestry only: feat-r1 (same content, other commit) stays
+    assert "feat-r1" in world.branches()
+
+
+def test_the_containment_merge_runs_with_renormalize_and_autocrlf_off(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    _run(world, apply=False, delete_merged_branches=True)
+    merges = [c for c in world.git_calls if "merge-tree" in c]
+    assert merges and all("merge.renormalize=false" in c and "core.autocrlf=false" in c for c in merges)
+
+
+def test_a_removed_detached_worktree_prints_how_to_get_it_back(world):
+    wt = world.add_worktree("lane-d", detach=True)
+    head = _git(wt, "rev-parse", "HEAD")
+    _run(world, apply=True)
+    assert f"    detached HEAD, undo with: git worktree add --detach {wt} {head}" in world.out
