@@ -68,11 +68,38 @@ def default_lock_dir() -> Path:
     return Path(env) if env else Path(tempfile.gettempdir()) / "deg-heavy"
 
 
-def default_artifacts_base() -> str:
-    """`<repo>/app/.artifacts`. Not %TEMP%: tests that find the repo by walking up from
-    AppContext.BaseDirectory (Cloud.Tests FixturePaths, Core.Tests StartupMetadataTests) fail with the
-    output outside the repo. Its bin/ obj/ publish/ subfolders are gitignored by `app/**/bin/` etc."""
-    return str(REPO_ROOT / "app" / ".artifacts")
+def repo_toplevel(cwd: str | os.PathLike[str] | None = None) -> Path | None:
+    """The git toplevel of `cwd` (default: the current directory), or None outside any repo / without git.
+
+    In a linked worktree this is the worktree root, not the primary checkout, which is the point (#874).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd) if cwd is not None else None,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = out.stdout.strip()
+    if out.returncode != 0 or not top:
+        return None
+    return Path(top)
+
+
+def default_artifacts_base(cwd: str | os.PathLike[str] | None = None) -> str:
+    """`<repo>/app/.artifacts`, where <repo> is the git toplevel of the CWD (the checkout the command runs
+    in), falling back to this script's own repo when the CWD is not inside one. Worktree lanes run the
+    PRIMARY's heavy.py, so deriving it from __file__ put their build output under the primary's app/, and
+    Guards.Tests then scanned the primary's tree (#874).
+
+    Not %TEMP%: tests that find the repo by walking up from AppContext.BaseDirectory (Cloud.Tests
+    FixturePaths, Core.Tests StartupMetadataTests) fail with the output outside the repo. Its bin/ obj/
+    publish/ subfolders are gitignored by `app/**/bin/` etc."""
+    return str((repo_toplevel(cwd) or REPO_ROOT) / "app" / ".artifacts")
 
 
 def _positive_int(raw: str) -> int | None:

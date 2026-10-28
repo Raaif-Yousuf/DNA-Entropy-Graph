@@ -126,6 +126,14 @@ public sealed class ViewerIndexedFastaTests : IDisposable
 
     private static string FindViewerAsset(string name)
     {
+        // #874: this source file's own tree first (what was compiled), the output directory walk only as a fallback.
+        var here = Path.GetDirectoryName(ThisFile())!;
+        var fromSource = Path.GetFullPath(Path.Combine(here, "..", "..", "src", "DnaEntropyGraph.App", "Assets", "viewer", name));
+        if (File.Exists(fromSource))
+        {
+            return fromSource;
+        }
+
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
@@ -138,9 +146,7 @@ public sealed class ViewerIndexedFastaTests : IDisposable
             dir = dir.Parent;
         }
 
-        // --artifacts-path under a lane folder: fall back to this source file's own location.
-        var here = Path.GetDirectoryName(ThisFile())!;
-        return Path.GetFullPath(Path.Combine(here, "..", "..", "src", "DnaEntropyGraph.App", "Assets", "viewer", name));
+        return fromSource;
     }
 
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
