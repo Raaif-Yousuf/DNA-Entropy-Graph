@@ -244,6 +244,20 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). The paste box (closed), the status line and Treat as RNA also reset. A start that fails keeps everything.
+What stays across runs, on purpose: the preset, the ticked output files and the run target (they are the user's
+intent for runs in general and match Settings); `PresetPickerTests` pins it. Not persisted across app restarts.
+Back to the page never re-delivers its Open-with files: the page forwards `NavigationArrival` (parameter plus
+`NavigationMode` as a number) and only a New navigation's parameter is acted on. `NewRunPage.OnNavigatedFrom`
+calls `Bindings.StopTracking()`, so the long-lived ViewModel (its `PropertyChanged` and `Items`) does not keep a
+left page alive; the page is not cached, a new instance is made on every visit. THEORY (unverified): the
+memory effect itself was not measured, only that the release is explicit.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,
@@ -356,7 +370,7 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Runs: `RunListItem.Sparkline` (48 points, `TrackResampler`) is filled after the list shows, one finished run at a time, by
   `HistoryViewModel.LoadSparklinesAsync`; `Controls/EntropySparkline` is a plain `Polyline` (a ScottPlot control per card would
   own one GPU surface each). `EntropyOverviewSource` remembers the last 64 tracks by path, size and write time.
-- Not done: drag-select on the strip to jump the viewer (the Viewer page has no locus parameter yet), and a contig picker for a
+- Drag-select (#699): dragging a span on the strip opens the embedded viewer at that range (`OverviewSelection` clamps it and ignores a click; the Viewer page key takes a `ViewerRunTarget` with a locus, a plain folder string still works). Not done: a contig picker for a
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).

@@ -1,0 +1,1 @@
+- Results (#699): dragging a range on the entropy strip opens the embedded viewer at that range. The Viewer page key now also takes a `ViewerRunTarget` (run folder plus locus); `OverviewSelection` clamps the drag to the contig and ignores a plain click.

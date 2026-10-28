@@ -521,6 +521,8 @@ class _Classifier:
         self._deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
 
     def __call__(self, directory: str) -> str:
+        if classify is None:  # unreachable (verdict() returns first); narrows the type
+            return "unknown"
         if directory not in self._cache:
             remaining = self._deadline - time.monotonic()
             if remaining <= 0:

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using Xunit;
 
 namespace DnaEntropyGraph.Cloud.Tests;
 
@@ -55,6 +56,40 @@ internal sealed class InMemoryRunRepository : IRunRepository
         }
 
         _runs.Enqueue(run);
+        Recorded?.Invoke(run);
+    }
+
+    private event Action<RunRecord>? Recorded;
+
+    /// <summary>
+    /// Completes once a stored row satisfies <paramref name="predicate"/>: a signal instead of a poll of the rows on a real clock (#567). Subscribes first and reads second, so a row
+    /// stored before or after the call is seen either way. Bounded by <see cref="RunSignals.Safety"/> only so a lost signal fails the test.
+    /// </summary>
+    public async Task WhenRecordedAsync(Func<RunRecord, bool> predicate)
+    {
+        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(RunRecord run)
+        {
+            if (predicate(run))
+            {
+                seen.TrySetResult();
+            }
+        }
+
+        Recorded += Handler;
+        try
+        {
+            if (_runs.Any(predicate))
+            {
+                seen.TrySetResult();
+            }
+
+            await seen.Task.WaitAsync(RunSignals.Safety, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Recorded -= Handler;
+        }
     }
 
     private readonly object _conditionalGate = new();
@@ -75,7 +110,10 @@ internal sealed class InMemoryRunRepository : IRunRepository
             }
 
             _runs.Enqueue(run);
-            return true;
         }
+
+        // Signalled like UpsertAsync: a test waiting on a row (WhenRecordedAsync) must see a row the runner stored through this conditional write too (#567).
+        Recorded?.Invoke(run);
+        return true;
     }
 }
