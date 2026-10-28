@@ -115,6 +115,9 @@ public sealed partial class RunListItem : ObservableObject
     /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
     public string? PresetText { get; init; }
 
+    /// <summary>"Download again", or "Download partial results" for a cancelled run (issue #717: what the worker uploaded before it stopped).</summary>
+    public string RedownloadLabel { get; init; } = string.Empty;
+
     public bool HasPreset => PresetText is not null;
 
     public IAsyncRelayCommand OpenCommand { get; }

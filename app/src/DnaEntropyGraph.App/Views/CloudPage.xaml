@@ -1,0 +1,87 @@
+<Page
+    x:Class="DnaEntropyGraph.App.Views.CloudPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels"
+    xmlns:converters="using:DnaEntropyGraph.App.Converters">
+
+    <!--
+        Issue #105: everything this app created in the project, found by label, with what it costs (docs/superpowers/specs Appendix A section 2.7).
+        Row commands live on CloudVmRow (built by CloudResourcesViewModel), so the template binds them without reaching back to the page.
+        A computer created by another installation is a read-only row: HasActions is false, so it has no buttons (Hard Rule 9).
+    -->
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="12" MaxWidth="900" HorizontalAlignment="Left">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Uid="CloudPageHeading" Style="{StaticResource TitleTextBlockStyle}" />
+                <Button x:Uid="CloudRefreshButton" Grid.Column="1" Command="{x:Bind ViewModel.RefreshCommand}">
+                    <Button.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="F5" />
+                    </Button.KeyboardAccelerators>
+                </Button>
+            </Grid>
+
+            <InfoBar IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}" Severity="Warning" IsClosable="False" Message="{x:Bind ViewModel.BannerText, Mode=OneWay}" />
+            <InfoBar IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Severity="Error" IsClosable="False" Message="{x:Bind ViewModel.ErrorText, Mode=OneWay}" />
+            <ProgressBar IsIndeterminate="True" Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsBusy), Mode=OneWay}" />
+            <TextBlock x:Uid="CloudEmptyText" TextWrapping="Wrap" Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsEmpty), Mode=OneWay}" />
+
+            <TextBlock x:Uid="CloudVmsHeading" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Vms}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CloudVmRow">
+                        <Grid ColumnSpacing="12" Margin="0,0,0,8" AutomationProperties.Name="{x:Bind Name}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{x:Bind Name}" />
+                                <TextBlock Text="{x:Bind StatusText}" Opacity="0.8" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock Text="{x:Bind TagText}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(HasTag)}" Style="{StaticResource CaptionTextBlockStyle}" />
+                                <TextBlock Text="{x:Bind CostText}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(HasCost)}" Opacity="0.8" Style="{StaticResource CaptionTextBlockStyle}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Visibility="{x:Bind converters:VisibilityHelper.FromBool(HasActions)}">
+                                <Button x:Uid="CloudStopButton" Command="{x:Bind StopCommand}" />
+                                <Button x:Uid="CloudStartButton" Command="{x:Bind StartCommand}" />
+                                <Button x:Uid="CloudDeleteButton" Command="{x:Bind DeleteCommand}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock x:Uid="CloudDisksHeading" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.Disks}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CloudDiskRow">
+                        <StackPanel Margin="0,0,0,8">
+                            <TextBlock Text="{x:Bind Name}" />
+                            <TextBlock Text="{x:Bind DetailText}" Opacity="0.8" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind CostText}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(HasCost)}" Opacity="0.8" Style="{StaticResource CaptionTextBlockStyle}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Text="{x:Bind ViewModel.SummaryText, Mode=OneWay}" TextWrapping="Wrap" />
+
+            <Button x:Uid="CloudDeleteAllButton" Command="{x:Bind ViewModel.DeleteEverythingCommand}" />
+
+            <StackPanel Spacing="4" Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasReport), Mode=OneWay}">
+                <TextBlock Text="{x:Bind ViewModel.ReportHeadline, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.ReportLines}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <TextBlock Text="{x:Bind}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

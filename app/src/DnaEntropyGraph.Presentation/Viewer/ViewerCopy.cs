@@ -12,6 +12,7 @@ public enum ViewerFailure
     SequenceTooLarge,
     ViewerError,
     ProcessFailed,
+    IndexFailed,
     InitFailed,
 }
 
@@ -34,6 +35,7 @@ public static class ViewerCopy
         ViewerFailure.AmbiguousSequence => new("ViewerAmbiguousSequence_Title", "ViewerAmbiguousSequence_Body", null),
         ViewerFailure.SequenceTooLarge => new("ViewerSequenceTooLarge_Title", "ViewerSequenceTooLarge_Body", null),
         ViewerFailure.ViewerError => new("ViewerError_Title", "ViewerError_Body", "ViewerError_Action"),
+        ViewerFailure.IndexFailed => new("ViewerIndexFailed_Title", "ViewerIndexFailed_Body", null),
         ViewerFailure.ProcessFailed => new("ViewerProcessFailed_Title", "ViewerProcessFailed_Body", null),
         ViewerFailure.InitFailed => new("ViewerInitFailed_Title", "ViewerInitFailed_Body", null),
         _ => throw new ArgumentOutOfRangeException(nameof(failure), failure, "No viewer copy for this failure."),

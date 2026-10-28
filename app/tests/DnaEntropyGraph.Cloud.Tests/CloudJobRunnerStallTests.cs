@@ -29,30 +29,47 @@ public class CloudJobRunnerStallTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner StuckRunner(FakeGcp gcp, InMemoryRunRepository repo, StallDecision? onStall, Action<RunNotice>? onNotice = null, TimeSpan? resultTimeout = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
+    /// <summary>
+    /// The runner on VIRTUAL time (#719): every deadline, stage allowance and answer timeout is measured on <paramref name="clock"/>, which moves only when the runner sleeps between
+    /// looks, so a loaded machine cannot stretch or shrink a window. <paramref name="gate"/> runs before each sleep: a test whose handler must have acted before time moves on
+    /// (the handler runs on its own task) awaits its signal there instead of racing the poll loop.
+    /// </summary>
+    private static CloudJobRunner Virtual(FakeGcp gcp, InMemoryRunRepository repo, VirtualTimeProvider clock, StallDecision? onStall, Action<RunNotice>? onNotice, TimeSpan resultTimeout, bool stuck, Func<Task>? gate = null, TimeSpan? answerTimeout = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
     {
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
-        ResultTimeout = resultTimeout ?? TimeSpan.FromSeconds(20),
-        FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
-        HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
-        StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) },
+        ResultTimeout = resultTimeout,
+        FirstHeartbeatTimeout = stuck ? TimeSpan.FromSeconds(20) : TimeSpan.FromMilliseconds(60),
+        HeartbeatStaleTimeout = stuck ? TimeSpan.FromSeconds(20) : TimeSpan.FromMilliseconds(60),
+        StageDeadlines = stuck ? new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) } : null,
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+        StallAnswerTimeout = answerTimeout ?? TimeSpan.FromMinutes(10),
+        TimeProvider = clock,
+        PollDelay = async (span, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (gate is not null)
+            {
+                await gate().ConfigureAwait(false);
+            }
+
+            clock.Advance(span);
+        },
         OnStall = onStall,
         OnNotice = onNotice,
     };
 
-    private static CloudJobRunner StaleRunner(FakeGcp gcp, InMemoryRunRepository repo, StallDecision? onStall, Action<RunNotice>? onNotice = null, TimeSpan? resultTimeout = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
-    {
-        ResultPollInterval = TimeSpan.FromMilliseconds(1),
-        ResultTimeout = resultTimeout ?? TimeSpan.FromSeconds(20),
-        FirstHeartbeatTimeout = TimeSpan.FromMilliseconds(60),
-        HeartbeatStaleTimeout = TimeSpan.FromMilliseconds(60),
-        LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-        LifecycleTimeout = TimeSpan.FromMilliseconds(200),
-        OnStall = onStall,
-        OnNotice = onNotice,
-    };
+    private static TimeSpan Elapsed(VirtualTimeProvider clock) => TimeSpan.FromTicks(clock.GetTimestamp());
+
+    private static CloudJobRunner StuckRunner(FakeGcp gcp, InMemoryRunRepository repo, StallDecision? onStall, Action<RunNotice>? onNotice = null, TimeSpan? resultTimeout = null, VirtualTimeProvider? clock = null, Func<Task>? gate = null)
+        => Virtual(gcp, repo, clock ?? new VirtualTimeProvider(), onStall, onNotice, resultTimeout ?? TimeSpan.FromSeconds(20), stuck: true, gate);
+
+    private static CloudJobRunner StaleRunner(FakeGcp gcp, InMemoryRunRepository repo, StallDecision? onStall, Action<RunNotice>? onNotice = null, TimeSpan? resultTimeout = null, VirtualTimeProvider? clock = null, Func<Task>? gate = null)
+        => Virtual(gcp, repo, clock ?? new VirtualTimeProvider(), onStall, onNotice, resultTimeout ?? TimeSpan.FromSeconds(20), stuck: false, gate);
+
+    /// <summary>A gate that, once virtual time has passed <paramref name="after"/>, waits for <paramref name="signal"/> (the handler's own go-ahead) before time moves on.</summary>
+    private static Func<Task> WaitForHandler(VirtualTimeProvider clock, TimeSpan after, TaskCompletionSource signal)
+        => () => Elapsed(clock) >= after ? signal.Task.WaitAsync(TimeSpan.FromSeconds(30)) : Task.CompletedTask;
 
     private static async Task<string?> VmStatusAsync(FakeGcp gcp, string jobId)
         => (await gcp.GetVmAsync($"deg-{jobId}", Zone, CancellationToken.None))?.Status;
@@ -121,6 +138,8 @@ public class CloudJobRunnerStallTests
         seen.Code.ShouldBe(RunErrorCodes.WorkerStageStuck);
         seen.Stage.ShouldBe("model-loading");
         seen.Message.ShouldNotBeNullOrWhiteSpace();
+        seen.VmName.ShouldBe("deg-job-del", "the dialog must be able to name the computer a Delete would remove (#740)");
+        seen.RunName.ShouldBe("seq.gb", "the dialog must be able to name the run");
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
         (await VmStatusAsync(gcp, "job-del")).ShouldBeNull("Delete means the VM is gone");
@@ -143,12 +162,13 @@ public class CloudJobRunnerStallTests
     {
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         var calls = new List<(DateTimeOffset At, string? VmStatus)>();
+        var clock = new VirtualTimeProvider();
 
         var result = await StuckRunner(gcp, new InMemoryRunRepository(), async (prompt, _) =>
         {
-            calls.Add((DateTimeOffset.UtcNow, await VmStatusAsync(gcp, prompt.JobId)));
+            calls.Add((clock.GetUtcNow(), await VmStatusAsync(gcp, prompt.JobId)));
             return calls.Count == 1 ? StallChoice.KeepWaiting : StallChoice.Stop;
-        }).RunAsync(TestInputs.Request("job-keep", Spec("job-keep")), CancellationToken.None);
+        }, clock: clock).RunAsync(TestInputs.Request("job-keep", Spec("job-keep")), CancellationToken.None);
 
         calls.Count.ShouldBe(2);
         calls[0].VmStatus.ShouldBe("RUNNING");
@@ -164,6 +184,8 @@ public class CloudJobRunnerStallTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         var calls = 0;
         CancellationToken promptToken = default;
+        var clock = new VirtualTimeProvider();
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var result = await StuckRunner(
             gcp,
@@ -172,10 +194,13 @@ public class CloudJobRunnerStallTests
             {
                 Interlocked.Increment(ref calls);
                 promptToken = token;
+                asked.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
                 return StallChoice.KeepWaiting;
             },
-            resultTimeout: TimeSpan.FromMilliseconds(400)).RunAsync(TestInputs.Request("job-pending", Spec("job-pending")), CancellationToken.None);
+            resultTimeout: TimeSpan.FromMilliseconds(400),
+            clock: clock,
+            gate: WaitForHandler(clock, TimeSpan.FromMilliseconds(80), asked)).RunAsync(TestInputs.Request("job-pending", Spec("job-pending")), CancellationToken.None);
 
         calls.ShouldBe(1, "one open prompt per stall");
         result.FailureCode.ShouldBe(RunErrorCodes.ResultTimeout, "an unanswered prompt never extends the run past its limit (Hard Rule 11)");
@@ -237,6 +262,8 @@ public class CloudJobRunnerStallTests
         CancellationToken promptToken = default;
         var statusKey = "jobs/job-wake/status.json";
         var bucket = FakeGcp.BucketName(Project);
+        var clock = new VirtualTimeProvider();
+        var woke = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var result = await StaleRunner(
             gcp,
@@ -246,11 +273,14 @@ public class CloudJobRunnerStallTests
                 promptToken = token;
                 // The worker wakes: a newer heartbeat lands while the user is still deciding.
                 gcp.PutObject(bucket, statusKey, Encoding.UTF8.GetBytes("""{"schema":1,"jobId":"job-wake","stage":"running","heartbeatSeq":99,"updatedAt":"2030-01-01T00:00:00Z","worker":{"version":"1.0.0"}}"""));
+                woke.TrySetResult();
                 await Task.Delay(Timeout.Infinite, token);
                 return StallChoice.KeepWaiting;
             },
             notices.Enqueue,
-            resultTimeout: TimeSpan.FromMilliseconds(300)).RunAsync(TestInputs.Request("job-wake", Spec("job-wake")), CancellationToken.None);
+            resultTimeout: TimeSpan.FromMilliseconds(300),
+            clock: clock,
+            gate: WaitForHandler(clock, TimeSpan.FromMilliseconds(60), woke)).RunAsync(TestInputs.Request("job-wake", Spec("job-wake")), CancellationToken.None);
 
         promptToken.IsCancellationRequested.ShouldBeTrue();
         notices.Select(n => n.Kind).ShouldContain(RunNoticeKind.StallCleared);
@@ -270,6 +300,8 @@ public class CloudJobRunnerStallTests
         var noGpuLine = "{\"seq\":2,\"stage\":\"restoring-cache\",\"level\":\"notice\",\"message\":\"worker starting; GPU: no GPU detected; free disk 90 GB\"}\n";
         var withdrawn = new TaskCompletionSource();
         var notices = new ConcurrentQueue<RunNotice>();
+        var clock = new VirtualTimeProvider();
+        var planted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var result = await StaleRunner(
             gcp,
@@ -277,6 +309,7 @@ public class CloudJobRunnerStallTests
             async (_, token) =>
             {
                 gcp.PutObject(bucket, "jobs/job-race/progress.jsonl", Encoding.UTF8.GetBytes(noGpuLine));
+                planted.TrySetResult();
                 try
                 {
                     await Task.Delay(Timeout.Infinite, token);
@@ -289,7 +322,9 @@ public class CloudJobRunnerStallTests
 
                 return StallChoice.KeepWaiting;
             },
-            notices.Enqueue).RunAsync(TestInputs.Request("job-race", Spec("job-race")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            notices.Enqueue,
+            clock: clock,
+            gate: WaitForHandler(clock, TimeSpan.FromMilliseconds(60), planted)).RunAsync(TestInputs.Request("job-race", Spec("job-race")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         result.FailureCode.ShouldBe(RunErrorCodes.GpuNotVisible);
         (await VmStatusAsync(gcp, "job-race")).ShouldBeNull("a box with no GPU is deleted, not stopped and not kept waiting");
@@ -303,22 +338,11 @@ public class CloudJobRunnerStallTests
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         using var release = new ManualResetEventSlim();
         var request = TestInputs.Request("job-block", Spec("job-block"), afterTask: AfterTaskAction.Stop);
-        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+        var runner = Virtual(gcp, new InMemoryRunRepository(), new VirtualTimeProvider(), (_, _) =>
         {
-            ResultPollInterval = TimeSpan.FromMilliseconds(1),
-            ResultTimeout = TimeSpan.FromSeconds(20),
-            FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
-            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
-            StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) },
-            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
-            StallAnswerTimeout = TimeSpan.FromMilliseconds(100),
-            OnStall = (_, _) =>
-            {
-                release.Wait();
-                return Task.FromResult(StallChoice.KeepWaiting);
-            },
-        };
+            release.Wait();
+            return Task.FromResult(StallChoice.KeepWaiting);
+        }, null, TimeSpan.FromSeconds(20), stuck: true, answerTimeout: TimeSpan.FromMilliseconds(100));
 
         try
         {
