@@ -116,7 +116,7 @@ public sealed class RunCloudResults : IRunCloudResults
         => Classify(run) is null;
 
     public bool CanDelete(RunRecord run)
-        => _deleter.IsAvailable && !run.CloudResultsDeleted && !string.IsNullOrWhiteSpace(run.Bucket) && !string.IsNullOrWhiteSpace(run.JobPrefix);
+        => _deleter.IsAvailable && !run.Imported && !run.CloudResultsDeleted && !string.IsNullOrWhiteSpace(run.Bucket) && !string.IsNullOrWhiteSpace(run.JobPrefix);
 
     public async Task<RedownloadResult> RedownloadAsync(RunRecord run, CancellationToken cancellationToken)
     {
@@ -170,6 +170,12 @@ public sealed class RunCloudResults : IRunCloudResults
 
     public async Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken)
     {
+        // Issue #111: a run found from another computer is read-only here; its owner's computer deletes it.
+        if (run.Imported)
+        {
+            return CloudResultsStatus.Refused;
+        }
+
         if (run.CloudResultsDeleted || string.IsNullOrWhiteSpace(run.Bucket) || string.IsNullOrWhiteSpace(run.JobPrefix))
         {
             return CloudResultsStatus.NoCloudCopy;

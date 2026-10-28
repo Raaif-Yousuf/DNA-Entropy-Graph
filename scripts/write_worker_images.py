@@ -40,7 +40,7 @@ def add_entry(doc: dict, version: str, cuda_digest: str, cpu_digest: str) -> dic
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--file", type=Path, default=DEFAULT_FILE)
     ap.add_argument("--version", required=True)
     ap.add_argument("--cuda-digest", required=True)

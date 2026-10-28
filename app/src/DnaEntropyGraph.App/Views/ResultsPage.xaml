@@ -43,7 +43,8 @@
                 <controls:EntropyOverviewChart
                     x:Uid="ResultsOverviewChart"
                     Height="180"
-                    Contig="{x:Bind ViewModel.Overview, Mode=OneWay}" />
+                    Contig="{x:Bind ViewModel.Overview, Mode=OneWay}"
+                    RangeSelectedCommand="{x:Bind ViewModel.SelectOverviewRangeCommand}" />
                 <TextBlock x:Uid="ResultsOverviewSeam" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" />
             </StackPanel>
 

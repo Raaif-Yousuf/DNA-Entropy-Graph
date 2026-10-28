@@ -570,3 +570,25 @@ def test_topology_defaults_to_auto_when_the_manifest_omits_it() -> None:
 def test_an_unknown_topology_is_rejected_naming_the_valid_values() -> None:
     with pytest.raises(ManifestError, match="circular"):
         JobManifest.parse(_manifest(analysis={"topology": "ring"}))
+
+
+@pytest.mark.parametrize("bad", ["abc", "1", [1], None, {"v": 1}, 1.5, 1.0, True])
+def test_a_non_integer_schema_is_a_manifest_error_not_a_crash(bad) -> None:
+    """pyright flagged `int(_require(d, "schema"))` (an `object`). MEASURED 2026-10-28: a string
+    schema escaped as ValueError and a list/null one as TypeError, instead of ManifestError."""
+    with pytest.raises(ManifestError, match="schema"):
+        JobManifest.parse(_manifest(schema=bad))
+
+
+@pytest.mark.parametrize("bad", [None, [], "gs://bucket", 7])
+def test_a_store_that_is_not_an_object_is_a_manifest_error(bad) -> None:
+    """pyright flagged `StoreSpec.from_dict(_require(d, "store"))` (an `object`). A null store
+    escaped as TypeError ("argument of type 'NoneType' is not iterable")."""
+    with pytest.raises(ManifestError, match="store"):
+        JobManifest.parse(_manifest(store=bad))
+
+
+@pytest.mark.parametrize("text", ["[]", "7", "null", '"x"'])
+def test_a_manifest_that_is_not_a_json_object_is_a_manifest_error(text: str) -> None:
+    with pytest.raises(ManifestError, match="JSON object"):
+        JobManifest.parse(text)

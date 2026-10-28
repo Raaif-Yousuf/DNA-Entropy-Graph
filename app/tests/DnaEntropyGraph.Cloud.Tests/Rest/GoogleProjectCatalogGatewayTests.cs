@@ -382,13 +382,11 @@ public class GoogleProjectCatalogGatewayTests
             .Returns(Post, "/v3/projects", 200, CreateOperationPending)
             .Hangs(Get, "/v3/operations/cp.7001");
 
-        var started = System.Diagnostics.Stopwatch.StartNew();
         var ex = await Should.ThrowAsync<CloudOperationException>(
-            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None));
+            () => rig.Gateways.ProjectCatalog.CreateProjectAsync("dna-entropy-abcd1234", "DNA Entropy Graph", "inst-1", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
 
         ex.Error.Code.ShouldBe("OPERATION_POLL_TIMEOUT");
         ex.Kind.ShouldBe(CloudErrorKind.Network);
-        started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30));
         rig.Handler.To(Post, "/v3/projects").Count.ShouldBe(1);
         rig.Handler.To(Get, "/v3/operations/cp.7001").Count.ShouldBe(1);
         rig.Log.Retries.ShouldBeEmpty();

@@ -30,20 +30,35 @@ public class CloudJobRunnerResumeAndSettleTests
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null)
-        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
+    private static readonly TimeSpan CallLimit = TimeSpan.FromMilliseconds(50);
+
+    private static readonly TimeSpan SettleLimit = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// A runner on test time (#525, #567): every deadline in these tests is on <see cref="RunnerClocks.Run"/>, which moves when the
+    /// runner sleeps between polls or when a call the test scripted to park is waiting, so a loaded machine cannot cut a healthy call.
+    /// A test whose fake must share the runner clock (a slow create) passes its own <paramref name="clocks"/>.
+    /// </summary>
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null, RunnerClocks? clocks = null)
+    {
+        clocks ??= new RunnerClocks();
+        clocks.ParkPump(gcp, CallLimit, SettleLimit);
+        return new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
-            CallTimeout = TimeSpan.FromMilliseconds(50),
+            CallTimeout = CallLimit,
             EnsureBucketTimeout = TimeSpan.FromMilliseconds(50),
             CreateTimeout = TimeSpan.FromMilliseconds(50),
-            CreateSettleTimeout = TimeSpan.FromSeconds(2),
+            CreateSettleTimeout = SettleLimit,
             UploadTimeout = TimeSpan.FromMilliseconds(50),
             BootTimeout = TimeSpan.FromMilliseconds(80),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
+    }
 
     private static async Task<string?> VmStatusAsync(FakeGcp gcp, string jobId)
         => (await gcp.GetVmAsync($"deg-{jobId}", Zone, CancellationToken.None))?.Status;
@@ -127,13 +142,22 @@ public class CloudJobRunnerResumeAndSettleTests
     [Fact]
     public async Task A_create_that_lands_after_its_deadline_is_deleted_before_the_run_is_recorded_Failed()
     {
-        var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(150));
+        // The fake shares the runner clock: the pump moves it past the create deadline (50 ms) once the runner is waiting on it. The
+        // insert is then held on a gate, released only when the runner has armed its settle window on the abandoned create (or the
+        // run is over), so "lands after the deadline and after the runner gave up" is a fact of ordering, never of a few virtual ms.
+        var clocks = new RunnerClocks();
+        var landing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gcp = new FakeGcp(clocks.Run).WithCreateDelay(TimeSpan.FromMilliseconds(55));
+        gcp.CreateLandingGate = landing.Task;
         var repo = new InMemoryRunRepository();
 
-        var result = await WithinAsync(Runner(gcp, repo).RunAsync(TestInputs.Request("job-s1", Spec("job-s1")), CancellationToken.None), "hung");
+        var run = Runner(gcp, repo, clocks: clocks).RunAsync(TestInputs.Request("job-s1", Spec("job-s1")), CancellationToken.None);
+        _ = Task.WhenAny(run, clocks.Run.WhenTimerCreatedAsync(0, SettleLimit)).ContinueWith(_ => landing.TrySetResult(), TaskScheduler.Default);
+        var result = await WithinAsync(run, "hung");
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
-        await Task.Delay(400, TestContext.Current.CancellationToken);
+        landing.TrySetResult();
+        await gcp.WhenDelayedCreateLandedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         (await gcp.FindByJobIdAsync("job-s1", CancellationToken.None)).ShouldBeEmpty("the late insert landed after the run ended: an orphan billing on a Failed run");
     }
 
@@ -177,6 +201,8 @@ public class CloudJobRunnerResumeAndSettleTests
         await Should.ThrowAsync<OperationCanceledException>(() => run);
 
         var cancel = runner.CancelAsync("job-s2", CancellationToken.None);
+        // Real time is kept on purpose: a negative check that can only pass too early under load (a cancel that wrongly finished
+        // would still be seen), never fail a correct run. The cancel itself has no clock-bound step here.
         await Task.Delay(150, TestContext.Current.CancellationToken);
         cancel.IsCompleted.ShouldBeFalse("the cancel recorded Cancelled while its own insert could still land");
         gcp.ReleaseCreate();
