@@ -431,35 +431,33 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
-    public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        => EndVmAsync(vmName, zone, delete: false, onAccepted: null, cancellationToken);
+
+    public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        => EndVmAsync(vmName, zone, delete: true, onAccepted: null, cancellationToken);
+
+    /// <summary>
+    /// Issue #113: <c>instances.stop</c> or <c>instances.delete</c> in two steps the caller can tell apart: the request (the operation insert), after which
+    /// <paramref name="onAccepted"/> is called, and the wait for the operation to reach <c>DONE</c>. A VM that is already gone (404 on the insert) is accepted and done.
+    /// </summary>
+    public async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
     {
         var project = RequireProject();
         ComputeData.Operation operation;
         try
         {
-            operation = await CallAsync("compute.instances.stop", token => _service.Instances.Stop(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            operation = delete
+                ? await CallAsync("compute.instances.delete", token => _service.Instances.Delete(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false)
+                : await CallAsync("compute.instances.stop", token => _service.Instances.Stop(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
-            return; // Already gone: nothing left to stop.
+            onAccepted?.Invoke();
+            return; // Already gone: nothing left to stop, and a delete wants exactly this.
         }
 
-        await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-    {
-        var project = RequireProject();
-        ComputeData.Operation operation;
-        try
-        {
-            operation = await CallAsync("compute.instances.delete", token => _service.Instances.Delete(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-        }
-        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
-        {
-            return; // Already gone is what a delete wants.
-        }
-
+        onAccepted?.Invoke();
         await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
     }
 
@@ -666,7 +664,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels),
             ParseTime(instance.LastStopTimestamp),
             ZoneName(instance.MachineType),
-            ParseTime(instance.LastStartTimestamp));
+            ParseTime(instance.LastStartTimestamp),
+            MaxRunDuration: instance.Scheduling?.MaxRunDuration?.Seconds is { } seconds and > 0 ? TimeSpan.FromSeconds(seconds) : null);
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
     private static string? ZoneName(string? url)

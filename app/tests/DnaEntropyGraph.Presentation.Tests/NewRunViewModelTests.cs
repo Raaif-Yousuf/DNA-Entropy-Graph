@@ -59,6 +59,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _estimates,
         new OutputSelectionStore(Substitute.For<ISettingsStore>()),
         _log,
+        TestGpu.Plan(),
         validate,
         files);
 
@@ -1250,7 +1251,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         _viewModel = new NewRunViewModel(
             _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
-            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog(), TestGpu.Plan());
         await AddOne(Write("a.fasta", ">a\n" + Dna + "\n"));
         _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<string>(new InvalidOperationException("boom")));
@@ -1265,7 +1266,7 @@ public sealed class NewRunViewModelTests : IDisposable
     {
         _viewModel = new NewRunViewModel(
             _picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates,
-            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog());
+            new OutputSelectionStore(Substitute.For<ISettingsStore>()), new ThrowingLog(), TestGpu.Plan());
         _picker.PickInputFilesAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("COM")));
 

@@ -23,7 +23,11 @@ public sealed partial class ViewerPage : Page
         _host = services.GetRequiredService<IgvViewerHost>();
         InitializeComponent();
         Loaded += async (_, _) => await _host.AttachAsync(Viewer, ViewModel);
-        Unloaded += (_, _) => _host.Detach();
+        Unloaded += (_, _) =>
+        {
+            _host.Detach();
+            ViewModel.CancelOpen();
+        };
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e) => ViewModel.OpenRun(e.Parameter as string);

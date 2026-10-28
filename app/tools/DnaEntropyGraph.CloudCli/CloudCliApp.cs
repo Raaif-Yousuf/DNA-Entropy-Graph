@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.CloudCli;
@@ -34,6 +35,8 @@ public static class CloudCliExitCode
 public sealed class CloudCliApp
 {
     private const string DelegatedPrefix = "deg-";
+    private const string GpuTestModeKey = "deg-mode";
+    private const int MaxObjectBytes = 4 * 1024 * 1024;
     private const string NotSignedInMessage = "Sign in with the app first (open DNA Entropy Graph and choose Sign in), then run this again.";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
@@ -77,6 +80,8 @@ public sealed class CloudCliApp
             {
                 ResourcesListCommand list => await ListAsync(session, list, stdout, cancellationToken).ConfigureAwait(false),
                 BucketDescribeCommand describe => await DescribeAsync(session, describe, stdout, stderr, cancellationToken).ConfigureAwait(false),
+                BucketEnsureCommand ensure => await EnsureBucketAsync(session, ensure, stdout, cancellationToken).ConfigureAwait(false),
+                ObjectGetCommand get => await GetObjectAsync(session, get, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 VmCreateCommand create => await CreateAsync(session, create, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 VmDeleteCommand delete => await DeleteAsync(session, delete, stdout, stderr, cancellationToken).ConfigureAwait(false),
                 _ => Fail(stderr, CloudCliExitCode.Usage, CloudCliParser.Usage),
@@ -198,13 +203,116 @@ public sealed class CloudCliApp
         return CloudCliExitCode.Ok;
     }
 
+    private static async Task<int> EnsureBucketAsync(CloudCliSession session, BucketEnsureCommand command, TextWriter stdout, CancellationToken cancellationToken)
+    {
+        var name = await session.Storage.EnsureBucketAsync(command.Project, cancellationToken).ConfigureAwait(false);
+        stdout.WriteLine(command.Json
+            ? JsonSerializer.Serialize(new { name }, JsonOptions)
+            : $"OK: bucket {Ascii(name)}");
+        return CloudCliExitCode.Ok;
+    }
+
+    private static async Task<int> GetObjectAsync(CloudCliSession session, ObjectGetCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
+    {
+        var stream = await session.Storage.TryDownloadAsync(command.Bucket, command.Key, cancellationToken).ConfigureAwait(false);
+        if (stream is null)
+        {
+            return Fail(stderr, CloudCliExitCode.NotFound, $"{Ascii(command.Key)} is not there yet in bucket {Ascii(command.Bucket)}. Wait and run this again, or check the key with 'bucket describe'.");
+        }
+
+        await using (stream.ConfigureAwait(false))
+        {
+            // Capped: a log is text for a person, and one runaway object must not fill the console. Anything outside printable ASCII becomes '?'.
+            // Over the cap the TAIL is kept (a ring of the last MaxObjectBytes): a log's verdict, the pytest summary, is at its end.
+            var ring = new byte[MaxObjectBytes];
+            var chunk = new byte[64 * 1024];
+            long total = 0;
+            while (true)
+            {
+                var n = await stream.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (n == 0)
+                {
+                    break;
+                }
+
+                for (var i = 0; i < n; i++)
+                {
+                    ring[(int)((total + i) % MaxObjectBytes)] = chunk[i];
+                }
+
+                total += n;
+            }
+
+            var truncated = total > MaxObjectBytes;
+            var length = (int)Math.Min(total, MaxObjectBytes);
+            var ordered = new byte[length];
+            if (truncated)
+            {
+                var start = (int)(total % MaxObjectBytes);
+                Array.Copy(ring, start, ordered, 0, MaxObjectBytes - start);
+                Array.Copy(ring, 0, ordered, MaxObjectBytes - start, start);
+            }
+            else
+            {
+                Array.Copy(ring, ordered, length);
+            }
+
+            var text = Encoding.UTF8.GetString(ordered);
+            var builder = new StringBuilder(text.Length);
+            foreach (var c in text)
+            {
+                builder.Append(c is '\n' or '\r' or '\t' || c is >= ' ' and <= '~' ? c : '?');
+            }
+
+            if (truncated)
+            {
+                // Exit 0, not CloudError: the tail WAS printed and a caller that saves stdout (cloud_gpu_test.ps1 pulls the log) must keep
+                // it. The notice leads the output itself, so a saved file says it is cut, and goes to stderr for the console.
+                stdout.WriteLine($"[truncated: only the last {MaxObjectBytes} bytes are shown]");
+                stderr.WriteLine($"WARNING: {Ascii(command.Key)} is larger than {MaxObjectBytes} bytes, so only the last {MaxObjectBytes} bytes were printed. Download the rest from the Google Cloud console.");
+            }
+
+            stdout.Write(builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", stdout.NewLine, StringComparison.Ordinal));
+        }
+
+        return CloudCliExitCode.Ok;
+    }
+
     private async Task<int> CreateAsync(CloudCliSession session, VmCreateCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
     {
+        var jobId = command.Job ?? JobId.NewId(_clock.GetUtcNow(), _random);
+
+        // Issue #759: with --worker-image the VM gets the startup script and its deg-* attributes (StartupMetadata validates every value
+        // against the shape the script can consume). A test VM always deletes itself afterwards (AfterTaskAction.Delete).
+        IReadOnlyDictionary<string, string>? metadata = null;
+        if (command.WorkerImage is not null)
+        {
+            try
+            {
+                var built = new Dictionary<string, string>(StartupMetadata.Build(
+                    command.Bucket!, jobId, command.WorkerImage, command.ExpectGpu, AfterTaskAction.Delete, command.MaxRunDuration));
+                if (command.StartupMode == CloudCliParser.GpuTestMode)
+                {
+                    built[GpuTestModeKey] = CloudCliParser.GpuTestMode;
+                }
+
+                metadata = built;
+
+                // Developer-mode carve-out (#759): the pinned worker image list ships embedded in the WinUI app, which this console host
+                // cannot reference, so it cannot enforce the allowlist the app enforces. It says so every time instead of staying silent.
+                stderr.WriteLine($"WARNING: --worker-image {Ascii(command.WorkerImage)} is not checked against the pinned worker image list that ships with the app (this is the developer path, like the app's developer mode). Use only a digest you released yourself.");
+            }
+            catch (ArgumentException ex)
+            {
+                return Fail(stderr, CloudCliExitCode.Usage, $"{ex.Message} Fix the flag it names and run this again.");
+            }
+        }
+
         // The only way a VM is made: VmSpec, so the six labels, maxRunDuration and DELETE are checked before a request is built (Hard Rule 10).
         var spec = new VmSpec(
             ProjectId: command.Project,
             InstallationId: command.Install,
-            JobId: command.Job ?? JobId.NewId(_clock.GetUtcNow(), _random),
+            JobId: jobId,
             Model: command.Model,
             AppVersion: command.AppVersion,
             Lifecycle: command.Lifecycle,
@@ -213,6 +321,7 @@ public sealed class CloudCliApp
             TerminationAction: VmSpec.RequiredTerminationAction)
         {
             ServiceAccountEmail = command.ServiceAccount,
+            Metadata = metadata,
         };
 
         try

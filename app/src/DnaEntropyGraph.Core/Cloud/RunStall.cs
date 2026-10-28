@@ -36,8 +36,11 @@ public enum StallChoice
     EndAsRunChose,
 }
 
-/// <summary>What the heartbeat watch decided, handed to the caller so the person can choose.</summary>
-public sealed record StallPrompt(string JobId, string Code, string Message, string? Stage, TimeSpan Waited);
+/// <summary>
+/// What the heartbeat watch decided, handed to the caller so the person can choose. <paramref name="RunName"/> (the input's file name or accession) and
+/// <paramref name="VmName"/> (the computer a Delete would remove) are there so the question can name what it is about (#740): two queued questions must differ.
+/// </summary>
+public sealed record StallPrompt(string JobId, string Code, string Message, string? Stage, TimeSpan Waited, string? RunName = null, string? VmName = null);
 
 /// <summary>
 /// Asked once when the heartbeat watch fires (a stage past its deadline, a heartbeat gone stale, or no first heartbeat). The runner keeps polling for
