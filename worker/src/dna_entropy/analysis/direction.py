@@ -445,6 +445,10 @@ def _analyze_linear(
         # this scenario).
         fwd_k_used = fwd.window - fwd.stride
         rev_k_used = rev.window - rev.stride
+        # Type narrowing only: BOTH_* directions are in both _NEEDS_FORWARD and _NEEDS_REVERSE, so the
+        # forward and reverse passes above both ran and set every array below.
+        assert fwd_entropy is not None and fwd_context is not None and fwd_surprisal is not None
+        assert rev_entropy is not None and rev_context is not None and rev_surprisal is not None
         values, reduced, reduced_range = _combine(
             fwd_entropy,
             fwd_context,
@@ -468,6 +472,7 @@ def _analyze_linear(
             averaged=(direction is Direction.BOTH_AVERAGED),
         )
         if keep_probs:
+            assert fwd_probs is not None and rev_probs is not None  # kept above because keep_probs
             # issue #127: the matrix by the IDENTICAL rule (same masks), so each row is the
             # distribution the entropy at that position was computed from.
             probs, _, _ = _combine(
@@ -509,6 +514,9 @@ def _analyze_linear(
                 "reduced context)."
             )
 
+    # Type narrowing only: at least one pass ran (every Direction is in _NEEDS_FORWARD or _NEEDS_REVERSE),
+    # and each sets values/window/stride.
+    assert values is not None and window is not None and stride is not None
     return DirectionResult(
         values=values,
         direction=direction,

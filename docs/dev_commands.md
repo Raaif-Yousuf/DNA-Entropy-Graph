@@ -379,9 +379,31 @@ python scripts\check_write_newline.py        # Hard Rule 5: every text writer in
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
+python scripts\check_pyright.py               # static types: pinned uvx pyright==1.1.407 over worker/src, worker/tests and scripts; a per-file RATCHET (see below). Run with the worker venv's python
+python scripts\check_pyright.py --self-test    # plant each violation, no pyright needed
+python scripts\check_pyright.py --lower       # bank progress: lower scripts\pyright_baseline.json to the current counts (refuses if anything grew)
 python scripts\check_app_wiring.py            # the C# half of that same bug class: an unbound command, an unbound [ObservableProperty], a dangling {Binding}, an x:Uid with no .resw entry, a service registered and never resolved
 python scripts\<any check_*.py> --self-test   # every one of them supports this
 ```
+
+`check_pyright.py` is the static-type gate for the Python side (pyright, MIT, dev-only: nothing ships it, so no
+THIRD-PARTY-NOTICES change). It is a RATCHET, not a zero gate. Measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode`
+"basic", config in `pyrightconfig.json`): 345 errors in 238 files at the start; `worker/src` was taken to 0 and the rest
+is debt in the test suites and `scripts/tests`, recorded per file in `scripts/pyright_baseline.json`:
+
+- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0). Fix the error. Never raise the baseline.
+- `STALE`: a file has fewer errors than its baseline, or its entry names a deleted file. Run `--lower` and commit the
+  smaller baseline, otherwise the slack lets a new error in unseen (the same self-expiring shape as the unused-fields allowlist).
+- `ZERO`: `worker/src` may not be listed in the baseline at all.
+
+`--lower` rewrites the baseline to the per-file minimum and refuses when any count grew or a new file has errors, so it
+cannot bank a new error. Pyright is `uvx pyright==<pin>` (pin in `PYRIGHT_VERSION`; bump it in its own commit), pointed at the
+interpreter running the script (`--pythonpath`), so a git worktree with no `worker\.venv` of its own still resolves numpy as
+long as you launch the gate with the worker venv's python (premerge does). `pythonPlatform` is pinned to "All" because
+`heavy.py` uses both `fcntl` and `msvcrt`; with one platform the Windows laptop and the Linux runner would disagree by a few
+errors. Runs in `premerge.py --fast` (about 12 s warm) and in `ci-worker.yml`'s `pyright ratchet` job; `ci-docs.yml`'s bare
+glob loop skips it (no uv, no numpy there). To look at one file: `uvx pyright==1.1.407 --pythonpath worker\.venv\Scripts\python.exe <file>`.
+In the editor, the Claude Code pyright LSP reads the same `pyrightconfig.json` (`venvPath`/`venv` point it at `worker\.venv`).
 
 `check_manifest_spec_reads.py` is the class-resolving companion to `check_unused_fields.py`: that one matches
 attribute reads by name (so `WindowPlan.stride` masked the unread `AnalysisSpec.stride`, #345), this one types the
@@ -572,7 +594,7 @@ visible, image pull failed) writes the same two objects with `exitCode` 7 and an
 script refuses (exit 2) a `-JobId` whose result object already exists, and does not trust a result whose `image` or `vm.name` is not this
 run's (a stale PASS). A run whose GPU tests were all
 skipped, or none ran, is exit code 6, never a pass (THEORY (unverified), from reading `test_evo_predictor.py`'s `importorskip` fixtures:
-without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run.
+without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run. To build and pin a dev image from a branch (no release), see `release_runbook.md` section 6b (`image-dev.yml`).
 
 **A failed create is never read as clean**: the delete is retried up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete
 exit 5 is reported as "not proof it is gone", the scan and the table still run, and the run exits 1. A failing final table call also exits 1.
