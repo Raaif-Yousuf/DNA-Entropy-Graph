@@ -93,4 +93,35 @@ public sealed class CostEstimateServiceTests
 
         await Should.ThrowAsync<OperationCanceledException>(() => Service().EstimateAsync(L4, false, 1_000, 150, cts.Token));
     }
+
+    private sealed class RefreshingSource : IPricingSource, IPricingRefresh
+    {
+        public double OnDemand { get; private set; } = 0.85;
+
+        public int Refreshes { get; private set; }
+
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good.Replace("0.85", OnDemand.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            Refreshes++;
+            OnDemand = 1.7;
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task A_source_that_can_refresh_is_refreshed_first_and_read_again_so_a_new_price_reaches_the_estimate()
+    {
+        var source = new RefreshingSource();
+        var service = new CostEstimateService(source, _runs);
+
+        var first = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        var second = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+
+        source.Refreshes.ShouldBe(2);
+        var shipped = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        first.Estimate!.MaxUsd.ShouldBeGreaterThan(shipped.Estimate!.MaxUsd, "the refreshed price must be the one used, on the very first estimate");
+        second.Estimate!.MaxUsd.ShouldBe(first.Estimate.MaxUsd);
+    }
 }

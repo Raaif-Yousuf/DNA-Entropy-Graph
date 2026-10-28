@@ -590,10 +590,10 @@
     <value>There is no cost estimate because the price list that comes with this app could not be read. Reinstall the app to bring it back. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoPrice" xml:space="preserve">
-    <value>There is no cost estimate for this kind of computer yet, because the price list that comes with this app has no price for it. You can still press Run.</value>
+    <value>There is no cost estimate for this kind of computer yet, because the price list this app uses has no price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoSpotPrice" xml:space="preserve">
-    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list that comes with this app has no Spot price for it. You can still press Run.</value>
+    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list this app uses has no Spot price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateModelPoint" xml:space="preserve">
     <value>Estimate: about {0}, about {1}, because you have no earlier runs on this PC yet. This is a guess, not a bill.</value>

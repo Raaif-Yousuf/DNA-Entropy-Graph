@@ -235,8 +235,17 @@ public static class ServiceRegistration
         services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
         // Issue #98: the price list ships beside the app (Assets\pricing.json in the output folder) and the New run page's
         // estimate reads it through this one service. A missing file is a named message on the page, not a crash.
-        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
+        // Issue #214: the price catalog (read at most once a day, cached under the app data folder) sits in front of that file, which stays the
+        // fallback when the catalog cannot be read; IPricingStatus says which one the numbers came from and as of when.
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.FilePricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
             Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.CatalogPricingSource>(sp => new DnaEntropyGraph.Core.Cost.CatalogPricingSource(
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.FilePricingSource>(),
+            sp.GetRequiredService<IPricingCatalogGateway>(),
+            new DnaEntropyGraph.Core.Cost.FilePricingCacheStore(Path.Combine(root.Path, "pricing-cache.json")),
+            TimeProvider.System));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(sp => sp.GetRequiredService<DnaEntropyGraph.Core.Cost.CatalogPricingSource>());
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingStatus>(sp => sp.GetRequiredService<DnaEntropyGraph.Core.Cost.CatalogPricingSource>());
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
         // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
@@ -474,6 +483,7 @@ public static class ServiceRegistration
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
         services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
         services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Budget);
+        services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().PricingCatalog);
 
     }
 
@@ -497,6 +507,7 @@ public static class ServiceRegistration
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
     }
 }
 

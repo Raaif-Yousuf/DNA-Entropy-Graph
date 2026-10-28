@@ -483,7 +483,7 @@ exercise.
  API at most once a day, with the shipped table as the fallback when that refresh fails
  or is stale. Seeded from [`docs/research/2026-09-19-gpu-pricing-and-instances.md`](research/2026-09-19-gpu-pricing-and-instances.md)
  (every figure there is THEORY (unverified), not vendor-confirmed, pending issue #303 and
- a real browser read of the vendor pricing pages) until issue #214's live lookup ships.
+ a real browser read of the vendor pricing pages) until the first real catalog read is recorded (issue #214's lookup is below; docs/ToTest.md carries the row).
 - **Boot disk**: `pd-balanced`, 150 GB for the default (7B) model tier, 300 GB for the 40B
  tier (spec section 5.4), autoDelete with the instance. At ~$0.10/GB/month (THEORY
  (unverified), same research note), this is ~$15/month (150 GB) or ~$30/month (300 GB)
@@ -520,6 +520,32 @@ exercise.
  The estimate also carries `StoppedDiskUsdPerDay` (the run's disk over 24 h), because the
  default after a run is Stop (Hard Rule 11) and the disk keeps billing while stopped; the page
  shows it as a second line labelled an estimate.
+- **Catalog prices** (issue #214): `IPricingCatalogGateway` (`Core/Cloud`) lists the Compute Engine SKUs of the Cloud Billing Catalog
+ (`services/6F81-5844-456A/skus`, USD, all pages; the real one is `GooglePricingCatalogGateway`, the only code that touches Google, and `FakeGcp`
+ scripts 403, API disabled and network failures; a half-read catalog is a failure, never a shorter list). `CatalogPriceResolver` (pure) turns SKUs into the table:
+ for each machine, cores x core rate + GB x memory rate + GPUs x GPU rate, on demand and Spot (`usageType` `Preemptible`), plus zonal Balanced PD
+ per GB-month, in the shipped table's region. A SKU that is another region, a commitment, a custom shape or a regional disk is ignored; a component that
+ is missing, not positive or priced two ways leaves that machine to its shipped row (Spot becomes null, never zero); a catalog that prices no machine or no disk is
+ `NoMatch` and the shipped list is used whole. `CatalogPricingSource` is the app's `IPricingSource`: `Load()` is instant and never touches the network
+ (today's cache, an older cache that is not older than the shipped list, or the shipped list); `RefreshIfStaleAsync` asks the catalog at most once a day (cache
+ file `pricing-cache.json` in the app data folder, the same schema as `pricing.json`, `asOf` = the day it was read), waits at most 10 seconds, and after a failure
+ does not ask again for an hour. `CostEstimateService` calls it before each estimate, so the first estimate of a day waits for the read and every other one is instant.
+ `IPricingStatus.Current` is `(Origin: Shipped | Catalog | Cache | CacheStale, AsOf, Reason: None | SignedOut | PermissionDenied | ApiDisabled | Network | Other | NoMatch)`
+ for the page to say which list the numbers come from and why it fell back (the page line is issue #814). A kept Spot price (the catalog gave none) is
+ named in the table's `source` note. A cache is only used beside the exact shipped list it was made with (a hash of that list is stored in it), so an app update never serves rows kept from an older build.
+ MEASURED 2026-10-16 (SKU explorer, public pages cloud.google.com/skus/sku-groups/{on-demand,spot-preemptible}-{g2,a2}-vms and on-demand-balanced-persistent-disk): the
+ Compute Engine service id is `6F81-5844-456A` and the Americas SKU descriptions (id) are: `G2 Instance Core running in Americas` (D18E-3563-415F), `G2 Instance Ram running in Americas`
+ (F0A4-E3D3-33BD), `Nvidia L4 GPU running in Americas` (A88A-5A60-E821), `Spot Preemptible G2 Instance Core running in Americas` (59A6-9C49-BDDB), `Spot Preemptible G2 Instance Ram running in Americas`
+ (BF80-650A-78E6), `Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas` (AEC2-3D5C-61BF), `A2 Instance Core running in Americas` (2922-40C5-B19F), `A2 Instance Ram running in Americas`
+ (2390-DCAF-DA38), `Nvidia Tesla A100 GPU running in Americas` (039F-D0DA-4055), `Nvidia Tesla A100 80GB GPU running in Americas` (EDA0-3A70-3138), `Spot Preemptible A2 Instance Core running in Americas`
+ (3178-715E-CFB6), `Spot Preemptible A2 Instance Ram running in Americas` (65A3-16DB-D57A), `Nvidia Tesla A100 GPU attached to Spot Preemptible VMs running in Americas` (39D4-516A-0317),
+ `Nvidia Tesla A100 80GB GPU attached to Spot Preemptible VMs running in Americas` (DD90-547C-2AAA), and the disk `Balanced PD Capacity` (6AE1-525F-8B80, with `Balanced PD Capacity in <place>` per location).
+ Separate `G2 Custom Instance Core/Ram` SKUs exist for custom shapes and are ignored on purpose, as are `Regional Balanced PD Capacity`. The explorer lists no `A2 Ultra` core or memory SKU, so
+ THEORY (unverified): a2-ultragpu-1g is the A2 core and memory SKUs plus the 80GB GPU. THEORY (unverified, no live read): the `resourceFamily`/`usageType`/`serviceRegions` values of these SKUs
+ (the explorer does not show them), whether a signed-in user's token may list the catalog, and which exact `serviceRegions` the Americas SKUs carry; docs/ToTest.md carries the row.
+ Resolver, gateway and fallback behaviour are MEASURED 2026-10-16 only against scripted payloads that use these real descriptions.
+- `scripts/gen_pricing_json.py --catalog <pages.json> --as-of <date>` regenerates `Assets/pricing.json` from a catalog dump a person with a project fetched (the
+ script never calls Google). Same rules as the resolver; `scripts/tests/test_gen_pricing_json.py` fails if its machine shapes drift from the C# ones.
  Those model constants are THEORY (unverified) until the first GPU acceptance run records
  real numbers, and apply to every tier (an A100 is faster, so its model range overstates).
  An unknown size is `UnknownSize` (no line on the page), history or not, not a guess. A model range that rounds to one figure says "no earlier runs", never "based on your earlier runs". `NoPriceForMachine` and `NoSpotPrice` each have their own copy (not an error the user can fix, so it says the estimate is not available for that machine yet); only an unreadable list says to reinstall. Starting a new check (Treat as RNA, a new validation) clears the line so a Checking pill never shows the old estimate. The
