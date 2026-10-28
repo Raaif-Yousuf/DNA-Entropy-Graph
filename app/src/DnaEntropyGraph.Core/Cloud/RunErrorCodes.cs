@@ -91,6 +91,9 @@ public static class RunErrorCodes
     /// <summary>A note, not a failure (#606): the run went ahead as the project's default Compute Engine account because an organization policy refused the app's own worker identity. Recorded on the row of a run that still completes.</summary>
     public const string WorkerDefaultAccount = "worker_default_account";
 
+    /// <summary>A note, not a failure (#476): a Keep-alive VM was still running after its window and grace, so the app stopped or deleted it itself. Recorded on the row of a run that completed.</summary>
+    public const string KeepAliveEndedByApp = "keepalive_ended_by_app";
+
     /// <summary>The signed-in account may not run a VM as the worker account (issue #604, <c>PERMISSION_ACTAS</c>): its one action is to copy a request for the project owner to grant the Service Account User role on that account.</summary>
     public const string PermissionActAs = "permission_actas";
 
@@ -116,7 +119,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, KeepAliveEndedByApp, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -259,6 +262,7 @@ public static class RunErrorCodes
         LocalWorkerExitedNonzero => "RunError_local_worker_exit_nonzero",
         LocalRunInterrupted => "RunError_local_run_interrupted",
         WorkerDefaultAccount => "RunError_worker_default_account",
+        KeepAliveEndedByApp => "RunError_keepalive_ended_by_app",
         PermissionActAs => "RunError_permission_actas",
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",

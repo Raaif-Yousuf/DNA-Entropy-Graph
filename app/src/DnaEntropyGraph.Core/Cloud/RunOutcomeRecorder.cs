@@ -30,6 +30,8 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
     /// </summary>
     public async Task<CloudJobResult> FinishAsync(CloudJobRequest request, string bucket, string? zone, string resultText, CancellationToken cancellationToken)
     {
+        // The keep-alive window runs from when the worker finished, which is no later than now (the download that follows is inside the grace).
+        var heldSince = terminator.StartClock();
         WorkerResultDocument result;
         try
         {
@@ -97,7 +99,44 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
         }
 
         await rows.SetPhaseAsync(request.JobId, finalPhase, cancellationToken).ConfigureAwait(false);
+        if (request.AfterTask == AfterTaskAction.KeepAlive && zone is not null)
+        {
+            return await VerifyKeepAliveAsync(request, zone, finalPhase, heldSince, cancellationToken).ConfigureAwait(false);
+        }
+
         return new CloudJobResult(finalPhase);
+    }
+
+    /// <summary>
+    /// Issue #476, Hard Rule 11: the run is already recorded finished (the results are in hand), and its VM is held for the keep-alive window.
+    /// Watch it past the window; if it is still up after the grace the app ends it and the row says so (a note, <see cref="RunErrorCodes.KeepAliveEndedByApp"/>),
+    /// and a VM the app could not end is <see cref="RunErrorCodes.LifecycleUnverified"/>. A cancel (the app closing or the run cancelled) ends the wait
+    /// with nothing recorded: the finished result stands and <c>JobReconciler</c> enforces the same expiry at the next start.
+    /// </summary>
+    private async Task<CloudJobResult> VerifyKeepAliveAsync(CloudJobRequest request, string zone, JobPhase finalPhase, long heldSince, CancellationToken cancellationToken)
+    {
+        KeepAliveEndResult end;
+        try
+        {
+            end = await terminator.VerifyKeepAliveEndedAsync(request, zone, heldSince, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new CloudJobResult(finalPhase);
+        }
+
+        if (end.Outcome == KeepAliveEnd.WorkerEnded)
+        {
+            return new CloudJobResult(finalPhase);
+        }
+
+        var (code, detail) = end.Outcome == KeepAliveEnd.AppEnded
+            ? (RunErrorCodes.KeepAliveEndedByApp, "The VM was still running after the keep-alive window and its grace, and the app ended it.")
+            : (RunErrorCodes.LifecycleUnverified, end.Detail);
+
+        // The run stays in its finished phase: this is a note on it, written without being cancellable (recording a terminal fact).
+        await rows.UpdateRowAsync(request.JobId, row => row with { ErrorCode = code, ErrorDetail = detail }, CancellationToken.None).ConfigureAwait(false);
+        return new CloudJobResult(finalPhase, CloudErrorKind.Other, detail, code);
     }
 
     private static string DescribeWorkerFailure(WorkerResultDocument result)

@@ -81,6 +81,7 @@ public static class RunErrorActions
         [RunErrorCodes.InputAccessionUnreachable] = RunErrorAction.CheckInternet,
         [RunErrorCodes.InstallationIdUnusable] = RunErrorAction.RestoreFile,
         [RunErrorCodes.WorkerDefaultAccount] = RunErrorAction.AskAdministrator,
+        [RunErrorCodes.KeepAliveEndedByApp] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,

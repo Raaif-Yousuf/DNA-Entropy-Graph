@@ -456,7 +456,14 @@ this repo's redaction rules). Consequences this drives directly:
  `RunOptions` (issue #476), and `WorkerManifestParityFixtureTests` plus
  `worker/tests/test_app_manifest_parity.py` prove the app-built manifests under
  `tests/contract-fixtures/app_manifests/` validate against `manifest.schema.json` and parse
- with the worker's `JobManifest.parse`.
+ with the worker's `JobManifest.parse`. The app also verifies the end state (Hard Rule 11):
+ after `RunOutcomeRecorder.FinishAsync` records a Keep-alive run finished, `VmTerminator.VerifyKeepAliveEndedAsync`
+ looks at the VM every `KeepAlivePollInterval` (1 min) until `keepAliveMinutes` plus `KeepAliveGrace` (5 min) has passed.
+ A VM already STOPPED (afterKeepAlive stop) or gone is the worker's own end and records nothing; a VM still up after that
+ is stopped or deleted by the app through `EnsureVmEndedAsync` and the finished row gets the note code
+ `keepalive_ended_by_app` (or `lifecycle_unverified` when the end cannot be confirmed). A cancelled token (app closing)
+ ends the wait quietly and `JobReconciler.EnforceLifecycleAsync` enforces the same expiry at the next start.
+ THEORY (unverified): the 5 minute grace covers startup.sh's own Compute call; not measured on a real VM.
 - A `shutdown -h +N` deadman is armed as a genuine last resort only, in case the API call
  itself is what failed.
 - The app **independently verifies** the VM reached its terminal state after

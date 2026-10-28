@@ -172,6 +172,9 @@
   <data name="RunError_vm_unhealthy" xml:space="preserve">
     <value>The rented computer stopped or was lost during the run. Start the run again.</value>
   </data>
+  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
+    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  </data>
   <data name="RunError_lifecycle_unverified" xml:space="preserve">
     <value>Your results were saved, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
