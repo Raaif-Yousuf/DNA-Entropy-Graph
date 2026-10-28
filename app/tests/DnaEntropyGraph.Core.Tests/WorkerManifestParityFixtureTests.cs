@@ -16,7 +16,7 @@ namespace DnaEntropyGraph.Core.Tests;
 /// <c>scripts/gen_manifest_schema.py --check</c>) validates the same files against
 /// <c>manifest.schema.json</c> and parses them with the worker's <c>JobManifest.parse</c>.
 /// A builder change that moves the output fails here until the fixtures are regenerated; a fixture the
-/// schema or parser refuses fails there. Regenerate with <c>DEG_REGEN_APP_MANIFESTS=1 dotnet test --filter WorkerManifestParityFixtureTests</c>.
+/// schema or parser refuses fails there. Regenerate with <c>DEG_REGEN_APP_MANIFESTS=1 dotnet test --filter WorkerManifestParityFixtureTests</c>; that run always fails (it verifies nothing), and the run after it without the variable is the check.
 /// </summary>
 public class WorkerManifestParityFixtureTests
 {
@@ -71,7 +71,7 @@ public class WorkerManifestParityFixtureTests
         yield return ("input_annotation", Emit(Base(), [new StagedInput("x", "a.fasta"), new StagedInput("y", "genes.gff3", IsAnnotation: true)]));
         yield return ("input_accession_range", Emit(Base(), [StagedInput.ForAccession("NC_045512.2", "100-500")]));
         yield return ("input_two_files", Emit(Base(), [new StagedInput("x", "a.gb"), new StagedInput("y", "b.fasta")]));
-        yield return ("store_localdir", Emit(Base() with { RunTarget = "This PC" }, localRoot: @"C:\Users\lab\AppData\Local\DNAEntropyGraph\local-store"));
+        yield return ("store_localdir", Emit(Base() with { RunTarget = "This PC" }, localRoot: @"D:\LabData\DNAEntropyGraph\local-store"));
     }
 
     public static TheoryData<string> CaseNames()
@@ -97,8 +97,12 @@ public class WorkerManifestParityFixtureTests
 
         if (Environment.GetEnvironmentVariable(RegenVariable) == "1")
         {
+            // Never a pass: a run that rewrites the files and then compares them to themselves proves nothing (M4 of the cold review).
+            // Regenerating is its own explicit command; the run that follows without the variable is the verification.
+            Environment.GetEnvironmentVariable("CI").ShouldBeNullOrEmpty($"{RegenVariable} must never be set in CI");
             Directory.CreateDirectory(FixtureDir);
             File.WriteAllText(path, Pretty(json), new System.Text.UTF8Encoding(false));
+            Assert.Fail($"{name}.json was regenerated. This run verifies nothing: review the diff, then run again WITHOUT {RegenVariable}.");
         }
 
         File.Exists(path).ShouldBeTrue($"{path} is missing: regenerate with {RegenVariable}=1");

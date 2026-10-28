@@ -374,7 +374,7 @@ public sealed class JobReconciler
     /// One finished run. Whatever goes wrong here is this row's alone: a cloud answer that does not come, a refusal, or an error nobody
     /// foresaw (recorded by its class, never its message, which could carry a file name) all end THIS row and the pass goes on to the next.
     /// </summary>
-    private async Task EnforceRowAsync(RunRecord row, string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task EnforceRowAsync(RunRecord row, string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken, bool noteEndedByApp = false)
     {
         try
         {
@@ -401,7 +401,33 @@ public sealed class JobReconciler
                         continue;
                     }
 
-                    await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                    if (noteEndedByApp)
+                    {
+                        // Looked at again just before the end (issue #476): a VM a newer run has claimed since the label search must not lose its run.
+                        VmDescriptor? fresh;
+                        try
+                        {
+                            fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                        {
+                            Record(outcomes, row.JobId, vm.Name, ex);
+                            continue;
+                        }
+
+                        if (fresh is null || WantedByLifecycle(row, fresh, options, installation, now) == VmWant.Leave)
+                        {
+                            continue;
+                        }
+
+                        want = WantedByLifecycle(row, fresh, options, installation, now);
+                    }
+
+                    var ended = await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                    if (noteEndedByApp && ended)
+                    {
+                        await NoteKeepAliveEndedAsync(row.JobId).ConfigureAwait(false);
+                    }
                 }
             });
             if (driver is not null)
@@ -427,6 +453,13 @@ public sealed class JobReconciler
     private static VmWant WantedByLifecycle(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
     {
         if (!IsOurs(vm, installation))
+        {
+            return VmWant.Leave;
+        }
+
+        // Issue #476: a VM whose labels were read and whose job-id is another run's (VmProvisioner reuse relabels a stopped VM to the run that
+        // reuses it) is that run's now, never this row's to end.
+        if (vm.Labels is not null && vm.Labels.TryGetValue("job-id", out var vmJob) && !string.Equals(vmJob, row.JobId, StringComparison.Ordinal))
         {
             return VmWant.Leave;
         }
@@ -526,8 +559,9 @@ public sealed class JobReconciler
         => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
 
     /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
-    private async Task ApplyAsync(string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task<bool> ApplyAsync(string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
+        var applied = true;
         try
         {
             await WithDeadline(
@@ -539,6 +573,7 @@ public sealed class JobReconciler
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                     {
+                        applied = false; // gone already: whoever ended it first did it (issue #476: the app then has nothing to note)
                     }
 
                     return true;
@@ -549,12 +584,83 @@ public sealed class JobReconciler
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
             Record(outcomes, jobId, vm.Name, ex);
-            return;
+            return false;
         }
 
         lock (outcomes)
         {
             outcomes.Add(new LifecycleOutcome(jobId, vm.Name, done));
+        }
+
+        return applied;
+    }
+
+    /// <summary>The longest past a Keep-alive window the worker's own end of the VM (startup.sh keep_hold) gets before the app ends it. THEORY (unverified): five minutes covers the worker's own Compute call and its retries; not measured on a real VM.</summary>
+    public static readonly TimeSpan KeepAliveGrace = TimeSpan.FromMinutes(5);
+
+    /// <summary>A tick looks only at windows that ended within this long: a VM cannot outlive its maxRunDuration, and older ones are the launch pass's and the idle sweep's.</summary>
+    private static readonly TimeSpan KeepAliveSweepReach = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// Issue #476, Hard Rule 11: the app-open half of the Keep-alive guarantee, run every few minutes by <see cref="KeepAliveSweeper"/>. A run that Completed
+    /// holding its VM for <c>KeepAliveMinutes</c> has that VM stopped or deleted (per its afterKeepAlive) once the window plus <see cref="KeepAliveGrace"/> has
+    /// passed and the VM is still there. The VM is found by the run's job-id label (never by a remembered name) and looked at again just before it is ended,
+    /// so a VM another run has reused since is never touched. The finished row gets the <see cref="RunErrorCodes.KeepAliveEndedByApp"/> note unless it already
+    /// carries a note. Returns what it did; never throws for a cloud failure or one row's error.
+    /// </summary>
+    public async Task<IReadOnlyList<LifecycleOutcome>> EnforceKeepAliveAsync(CancellationToken cancellationToken)
+    {
+        var outcomes = new List<LifecycleOutcome>();
+        var installation = InstallationId.GetOrCreate(_settings);
+        var now = _time.GetUtcNow();
+        var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var due = all
+            .Select(r => r.JobId)
+            .Distinct()
+            .Select(id => RunRowStore.LatestRecord(all, id)!)
+            .Where(r => r.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted
+                && string.Equals(r.Target, "cloud", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(r.InstallationId, installation, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(r.ProjectId)
+                && r.FinishedAt is not null
+                && KeepAliveWindowEndedRecently(r, now))
+            .ToList();
+        foreach (var row in due)
+        {
+            // The grace is held by the filter above (now >= window end + grace), so the expiry check inside is already met.
+            await EnforceRowAsync(row, installation, now, outcomes, cancellationToken, noteEndedByApp: true).ConfigureAwait(false);
+        }
+
+        return outcomes;
+    }
+
+    private static bool KeepAliveWindowEndedRecently(RunRecord row, DateTimeOffset now)
+    {
+        var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
+        if (options is null || options.AfterTask != AfterTaskAction.KeepAlive)
+        {
+            return false;
+        }
+
+        var expiry = row.FinishedAt!.Value.AddMinutes(options.KeepAliveMinutes);
+        return now >= expiry + KeepAliveGrace && now < expiry + KeepAliveSweepReach;
+    }
+
+    /// <summary>Notes on the finished row that the app ended its VM. One note per row: a row that already has one (say worker_default_account) keeps it.</summary>
+    private async Task NoteKeepAliveEndedAsync(string jobId)
+    {
+        try
+        {
+            await _rows.UpdateRowAsync(
+                jobId,
+                row => string.IsNullOrWhiteSpace(row.ErrorCode)
+                    ? row with { ErrorCode = RunErrorCodes.KeepAliveEndedByApp, ErrorDetail = "The VM was still running after the keep-alive window and its grace, and the app ended it." }
+                    : row,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("reconciler", jobId, ex.GetType().Name);
         }
     }
 

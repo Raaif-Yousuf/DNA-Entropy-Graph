@@ -308,7 +308,7 @@ public class ReattachOnStartupTests : IDisposable
         time.Advance(ReconcileOnReconnect.DefaultProbeInitialDelay);
         await observer.WhenIdleAsync();
         time.PendingTimersExcludingPeriod(GuardPeriod).ShouldBe(1, "WhenIdleAsync returns only once the probe re-armed");
-        time.PendingTimers.ShouldBe(2, "the probe's timer and the guard's repeating 5-minute timer: the exclusion above removed exactly the guard's");
+        time.PendingTimers.ShouldBe(3, "the probe's timer, the guard's and the keep-alive sweeper's repeating 5-minute timers (#476): the exclusion above removed exactly those two");
         (await RowAsync(provider, "job-probe")).Phase.ShouldBe(JobPhase.Running, "the first probe pass found the network still down");
 
         gcp.WithCloudConnected();

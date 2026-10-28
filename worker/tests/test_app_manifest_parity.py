@@ -31,7 +31,9 @@ def test_the_fixture_set_is_not_vacuous() -> None:
 
 @pytest.mark.parametrize("path", FIXTURES, ids=lambda p: p.stem)
 def test_app_manifest_validates_against_the_schema(path: Path) -> None:
-    jsonschema = pytest.importorskip("jsonschema")
+    # Required, never skipped: jsonschema is in the dev extra and a skipped check is a vacuous pass.
+    import jsonschema
+
     jsonschema.Draft202012Validator(SCHEMA).validate(json.loads(path.read_text(encoding="utf-8")))
 
 

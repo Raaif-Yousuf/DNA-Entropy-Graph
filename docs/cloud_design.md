@@ -456,14 +456,7 @@ this repo's redaction rules). Consequences this drives directly:
  `RunOptions` (issue #476), and `WorkerManifestParityFixtureTests` plus
  `worker/tests/test_app_manifest_parity.py` prove the app-built manifests under
  `tests/contract-fixtures/app_manifests/` validate against `manifest.schema.json` and parse
- with the worker's `JobManifest.parse`. The app also verifies the end state (Hard Rule 11):
- after `RunOutcomeRecorder.FinishAsync` records a Keep-alive run finished, `VmTerminator.VerifyKeepAliveEndedAsync`
- looks at the VM every `KeepAlivePollInterval` (1 min) until `keepAliveMinutes` plus `KeepAliveGrace` (5 min) has passed.
- A VM already STOPPED (afterKeepAlive stop) or gone is the worker's own end and records nothing; a VM still up after that
- is stopped or deleted by the app through `EnsureVmEndedAsync` and the finished row gets the note code
- `keepalive_ended_by_app` (or `lifecycle_unverified` when the end cannot be confirmed). A cancelled token (app closing)
- ends the wait quietly and `JobReconciler.EnforceLifecycleAsync` enforces the same expiry at the next start.
- THEORY (unverified): the 5 minute grace covers startup.sh's own Compute call; not measured on a real VM.
+ with the worker's `JobManifest.parse`. The app also verifies the end state of a Keep-alive VM (Hard Rule 11, issue #476) while it is open: `KeepAliveSweeper` (started by `AppStartup`) runs `JobReconciler.EnforceKeepAliveAsync` every 5 minutes. A run that Completed holding its VM has it stopped or deleted (per afterKeepAlive) once the window plus a 5 minute grace has passed and the VM is still there. The VM is found by the run's job-id label, never by a remembered name, and looked at again just before it is ended, so a VM that a later run reused (`VmProvisioner.TryReuseAsync` relabels it) is never touched. The finished row gets the note code `keepalive_ended_by_app`, unless it already carries a note (one note per row; a second note needs a column, tracked in a follow-up issue). Only windows that ended within the last day are looked at; older ones are the launch pass's and the idle sweep's. DECISION (agent-made, 2026-10-28, reversible): this is a periodic sweep, not a wait held inside the run, because a held wait kept a Completed run in `ActiveRuns` for up to four hours (blocking app updates and making the reconciler skip the job). THEORY (unverified): the 5 minute grace covers startup.sh's own Compute call; not measured on a real VM.
 - A `shutdown -h +N` deadman is armed as a genuine last resort only, in case the API call
  itself is what failed.
 - The app **independently verifies** the VM reached its terminal state after

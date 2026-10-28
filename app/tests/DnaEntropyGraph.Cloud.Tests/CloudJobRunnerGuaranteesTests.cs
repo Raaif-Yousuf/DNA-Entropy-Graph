@@ -424,19 +424,15 @@ public class CloudJobRunnerGuaranteesTests
     {
         var gcp = new FakeGcp();
         var repo = new InMemoryRunRepository();
-        // Issue #476: the run now watches a kept VM past its window and ends it (CloudJobRunnerKeepAliveEndTests). This test is about the
-        // callback, so the wait is closed the moment the callback fires: the VM must be exactly as the user left it.
-        using var closeWait = new CancellationTokenSource();
         var runner = Runner(gcp, gcp, repo, (_, phase) =>
         {
             if (phase == JobPhase.Completed)
             {
-                closeWait.Cancel();
                 throw new InvalidOperationException("the UI is gone");
             }
         });
 
-        var result = await runner.RunAsync(TestInputs.Request("job-m6", Spec("job-m6"), null, AfterTaskAction.KeepAlive), closeWait.Token);
+        var result = await runner.RunAsync(TestInputs.Request("job-m6", Spec("job-m6"), null, AfterTaskAction.KeepAlive), CancellationToken.None);
 
         LastRow(repo, "job-m6").Phase.ShouldBe(JobPhase.Completed);
         result.FinalPhase.ShouldBe(LastRow(repo, "job-m6").Phase, "the result and the persisted row disagree");

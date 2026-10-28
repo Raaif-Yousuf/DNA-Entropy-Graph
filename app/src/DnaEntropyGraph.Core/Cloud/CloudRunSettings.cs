@@ -97,15 +97,6 @@ internal sealed class CloudRunSettings
     public TimeSpan LifecyclePollInterval { get; set; } = TimeSpan.FromSeconds(3);
 
     /// <summary>
-    /// Issue #476: how long past a Keep-alive window the worker's own end of the VM (startup.sh <c>keep_hold</c>) gets before the app
-    /// ends the VM itself. THEORY (unverified): five minutes covers the worker's own Compute call and its retries; not measured on a real VM.
-    /// </summary>
-    public TimeSpan KeepAliveGrace { get; set; } = TimeSpan.FromMinutes(5);
-
-    /// <summary>Issue #476: how often the app looks at a held VM while a Keep-alive window runs (a window is up to four hours, so this is a slow poll).</summary>
-    public TimeSpan KeepAlivePollInterval { get; set; } = TimeSpan.FromMinutes(1);
-
-    /// <summary>
     /// The budget for the whole worker-identity step (#606), which is many HTTP calls in one gateway method. THEORY (unverified,
     /// sized from the gateway's worst case, not measured): a project read, an account create, up to 6 tries with 5 waits of
     /// 2 s growing to 12 s for a new account to become visible, a role create and read-back, and two policy read-modify-writes

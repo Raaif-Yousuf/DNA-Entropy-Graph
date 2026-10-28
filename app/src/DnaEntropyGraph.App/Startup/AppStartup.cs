@@ -23,6 +23,16 @@ public static class AppStartup
         // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
         _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
 
+        // Issue #476: a Keep-alive VM still running past its window is ended while the app is open (the launch pass below covers what ended while it was closed).
+        try
+        {
+            services.GetRequiredService<KeepAliveSweeper>().Start();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // No sweep timer: the launch pass and reconnects still enforce lifecycles.
+        }
+
         // This PC runs first and on their own: a run a killed app left non-terminal has no cloud side, and its row must not wait on the network (issue #734).
         try
         {

@@ -146,12 +146,6 @@ public sealed class CloudJobRunner
     /// <summary>How long to wait between looks at a VM that is stopping or being deleted.</summary>
     public TimeSpan LifecyclePollInterval { get => _settings.LifecyclePollInterval; init => _settings.LifecyclePollInterval = value; }
 
-    /// <summary>Issue #476: how long past a Keep-alive window the worker gets to end the VM itself before the app does (default 5 minutes).</summary>
-    public TimeSpan KeepAliveGrace { get => _settings.KeepAliveGrace; init => _settings.KeepAliveGrace = value; }
-
-    /// <summary>Issue #476: how long between looks at a VM held for a Keep-alive window (default 1 minute).</summary>
-    public TimeSpan KeepAlivePollInterval { get => _settings.KeepAlivePollInterval; init => _settings.KeepAlivePollInterval = value; }
-
     /// <summary>The default wait for result.json for a VM with this <c>maxRunDuration</c>: the VM's own limit minus a short margin (see <c>ResultWaiter</c>).</summary>
     public static TimeSpan ResultWaitLimit(TimeSpan maxRunDuration) => ResultWaiter.ResultWaitLimit(maxRunDuration);
 

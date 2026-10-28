@@ -30,29 +30,15 @@ public class CloudJobRunnerVmActionsTests
 
     private static CloudJobRequest Request(string jobId, AfterTaskAction afterTask = AfterTaskAction.KeepAlive, string installationId = "install-1") => TestInputs.Request(jobId, Spec(jobId, installationId), null, afterTask);
 
-    private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null, Action<string, JobPhase>? onPhase = null)
-        => new(gcp, gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository(), onPhase);
-
-    /// <summary>
-    /// Issue #476: a kept-alive run now watches its VM past the window. These tests are about the run page's stop and delete on a VM the run left
-    /// RUNNING, so the wait is closed the moment the run is recorded Completed (the run still returns its finished result).
-    /// </summary>
-    private static (CloudJobRunner Runner, CancellationToken CloseWait) NewKeepAliveRunner(FakeGcp gcp, CancellationTokenSource closeWait)
-        => (NewRunner(gcp, null, (_, phase) =>
-        {
-            if (phase == JobPhase.Completed)
-            {
-                closeWait.Cancel();
-            }
-        }), closeWait.Token);
+    private static CloudJobRunner NewRunner(FakeGcp gcp, InMemoryRunRepository? repo = null)
+        => new(gcp, gcp, gcp, gcp, gcp, repo ?? new InMemoryRunRepository());
 
     [Fact]
     public async Task StopVm_stops_the_VM_found_by_job_id()
     {
         var gcp = new FakeGcp();
-        using var closeWait = new CancellationTokenSource();
-        var (runner, token) = NewKeepAliveRunner(gcp, closeWait);
-        await runner.RunAsync(Request("job-1"), token);
+        var runner = NewRunner(gcp);
+        await runner.RunAsync(Request("job-1"), CancellationToken.None);
         (await gcp.GetVmAsync("deg-job-1", "us-central1-a", CancellationToken.None))!.Status.ShouldBe("RUNNING");
 
         await runner.StopVmAsync("job-1", CancellationToken.None);
@@ -64,9 +50,8 @@ public class CloudJobRunnerVmActionsTests
     public async Task DeleteVm_deletes_the_VM_found_by_job_id()
     {
         var gcp = new FakeGcp();
-        using var closeWait = new CancellationTokenSource();
-        var (runner, token) = NewKeepAliveRunner(gcp, closeWait);
-        await runner.RunAsync(Request("job-2"), token);
+        var runner = NewRunner(gcp);
+        await runner.RunAsync(Request("job-2"), CancellationToken.None);
 
         await runner.DeleteVmAsync("job-2", CancellationToken.None);
 

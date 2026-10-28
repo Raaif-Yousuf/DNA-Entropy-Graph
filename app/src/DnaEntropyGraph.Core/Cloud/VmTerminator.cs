@@ -2,22 +2,6 @@ using System.Globalization;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
-/// <summary>How a Keep-alive VM ended (issue #476).</summary>
-internal enum KeepAliveEnd
-{
-    /// <summary>The worker (or the platform) ended it: STOPPED, or gone, as the run chose. Nothing to record.</summary>
-    WorkerEnded,
-
-    /// <summary>Still up after the window and grace; the app ended it and verified.</summary>
-    AppEnded,
-
-    /// <summary>Still up, and the app could not confirm ending it.</summary>
-    Unconfirmed,
-}
-
-/// <summary>The outcome of <see cref="VmTerminator.VerifyKeepAliveEndedAsync"/>; <paramref name="Detail"/> says why for <see cref="KeepAliveEnd.Unconfirmed"/>.</summary>
-internal sealed record KeepAliveEndResult(KeepAliveEnd Outcome, string? Detail);
-
 /// <summary>
 /// Hard Rule 11: ends a run's VM (stop or delete), verifies it independently, and finds VMs by job-id label (Hard Rule 9).
 /// Holds no run state: every method is a look at the gateway plus a bounded wait.
@@ -168,50 +152,6 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         {
             return $"VM '{name}' in zone '{zone}' could not be confirmed {(action == AfterTaskAction.Delete ? "deleted" : "stopped")}: {ex.Message}";
         }
-    }
-
-    /// <summary>A moment on the run's clock to measure a Keep-alive window from (see <see cref="VerifyKeepAliveEndedAsync"/>).</summary>
-    public long StartClock() => settings.StartClock();
-
-    /// <summary>
-    /// Issue #476, Hard Rule 11: a Keep-alive VM is held for <c>keepAliveMinutes</c> and must then be STOPPED or gone (per
-    /// <c>afterKeepAlive</c>). startup.sh does that itself; this looks at the VM every <see cref="CloudRunSettings.KeepAlivePollInterval"/>
-    /// until the window plus <see cref="CloudRunSettings.KeepAliveGrace"/> has passed (measured from <paramref name="heldSince"/>), returns
-    /// at once if the VM is already in the wanted end state, and otherwise ends it itself through <see cref="EnsureVmEndedAsync"/>. A look
-    /// that fails is not an answer: the wait goes on and the final end-and-verify decides. Throws only for a cancel (the caller leaves the
-    /// VM to <c>JobReconciler</c>, which enforces the same expiry at the next start).
-    /// </summary>
-    public async Task<KeepAliveEndResult> VerifyKeepAliveEndedAsync(CloudJobRequest request, string zone, long heldSince, CancellationToken cancellationToken)
-    {
-        var action = request.Options.AfterKeepAlive == AfterKeepAliveAction.Delete ? AfterTaskAction.Delete : AfterTaskAction.Stop;
-        var deadline = TimeSpan.FromMinutes(request.Options.KeepAliveMinutes) + settings.KeepAliveGrace;
-        var name = request.Spec.VmName;
-        while (true)
-        {
-            try
-            {
-                var vm = await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false);
-                if (vm is null || (action == AfterTaskAction.Stop && VmFacts.IsStopped(vm)))
-                {
-                    return new KeepAliveEndResult(KeepAliveEnd.WorkerEnded, null);
-                }
-            }
-            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
-            {
-                // Not an answer: look again, and let the final end-and-verify below say what is true.
-            }
-
-            var left = deadline - settings.ElapsedSince(heldSince);
-            if (left <= TimeSpan.Zero)
-            {
-                break;
-            }
-
-            await settings.DelayAsync(left < settings.KeepAlivePollInterval ? left : settings.KeepAlivePollInterval, cancellationToken).ConfigureAwait(false);
-        }
-
-        var error = await EnsureVmEndedAsync(request, zone, action, cancellationToken).ConfigureAwait(false);
-        return error is null ? new KeepAliveEndResult(KeepAliveEnd.AppEnded, null) : new KeepAliveEndResult(KeepAliveEnd.Unconfirmed, error);
     }
 
     /// <summary>
