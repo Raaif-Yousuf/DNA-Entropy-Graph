@@ -130,34 +130,76 @@ def _taskkill_tree(pid: int) -> None:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
 
 
-def _posix_descendants(pid: int) -> list[int]:
-    """Every descendant of `pid` (children first-found, deepest last) from /proc/<n>/stat; [] where /proc is absent (macOS)."""
-    parents: dict[int, int] = {}
+def _proc_fields(pid: int | str) -> tuple[str, int, int] | None:
+    """(state, ppid, start time in ticks) from /proc/<pid>/stat, or None (gone, or no /proc). comm (field 2) may contain spaces
+    and parens, so split after its LAST closing paren: the rest starts at field 3 (state), ppid is field 4, starttime field 22."""
+    try:
+        rest = Path(f"/proc/{pid}/stat").read_text(errors="replace").rpartition(")")[2].split()
+        return rest[0], int(rest[1]), int(rest[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _proc_ident(pid: int) -> tuple[int, int] | None:
+    """(ppid, start time): who this pid is. A recycled pid has a different start time."""
+    fields = _proc_fields(pid)
+    return None if fields is None else (fields[1], fields[2])
+
+
+def _proc_table() -> dict[int, tuple[int, int]]:
+    """pid -> (ppid, start time) for every live process; {} where /proc is absent (macOS)."""
+    table: dict[int, tuple[int, int]] = {}
     with contextlib.suppress(OSError):
         for entry in os.listdir("/proc"):
-            if entry.isdigit():
-                with contextlib.suppress(OSError, ValueError, IndexError):
-                    # field 4 is the ppid; comm (field 2) may contain spaces, so split after its closing paren
-                    parents[int(entry)] = int(Path(f"/proc/{entry}/stat").read_text(errors="replace").rpartition(")")[2].split()[1])
-    found: list[int] = []
-    frontier = [pid]
-    while frontier:
-        nxt = [child for child, parent in parents.items() if parent in frontier and child not in found and child != pid]
-        found.extend(nxt)
-        frontier = nxt
-    return found
+            if entry.isdigit() and (ident := _proc_ident(int(entry))) is not None:
+                table[int(entry)] = ident
+    return table
+
+
+def _kill_if_same(pid: int, ident: tuple[int, int], sig: int | None = None) -> bool:
+    """Signal `pid` only if it is still the process recorded at scan time (same ppid and start time): a pid recycled since the
+    scan is skipped. The recheck-then-kill window is microseconds (no pidfd on every kernel); stopped victims cannot exit, so it is
+    only open for a victim that died on its own, and then a reuse inside that window is vanishingly unlikely."""
+    if _proc_ident(pid) != ident:
+        return False
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGKILL if sig is None else sig)
+        return True
+    return False
+
+
+def _posix_kill_tree(pid: int) -> None:
+    """SIGSTOP the root, then SIGSTOP every descendant found, rescanning until none is new (a stopped process cannot fork, so
+    nothing escapes by reparenting to init between the scan and the kill), then SIGKILL them all (children before the root)."""
+    root = _proc_ident(pid)
+    if root is None:
+        return
+    stopped: dict[int, tuple[int, int]] = {}
+    if _kill_if_same(pid, root, signal.SIGSTOP):
+        stopped[pid] = root
+    for _ in range(20):  # bounded: a fork storm outrunning the stops must not spin forever
+        table = _proc_table()
+        new = {c: ident for c, ident in table.items() if ident[0] in stopped and c not in stopped}
+        if not new:
+            break
+        for child, ident in new.items():
+            if _kill_if_same(child, ident, signal.SIGSTOP):
+                stopped[child] = ident
+    for victim, ident in reversed(list(stopped.items())):
+        _kill_if_same(victim, ident)
+    if pid not in stopped:  # the stop failed (permission, or it was already gone): still try the kill
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
     """Kill an unrelated process (one we did not start, e.g. a stuck queue runner) and its descendants, then wait up to `wait`
     seconds for it to be gone. True when it is gone. The caller has verified pid + creation time first.
-    On POSIX the descendants are found by walking /proc (the group may be the user's shell, so killpg is wrong) and signalled first."""
+    On POSIX the tree is frozen with SIGSTOP and walked via /proc (the group may be the user's shell, so killpg is wrong), then killed."""
     if os.name == "nt":
         _taskkill_tree(pid)
     else:
-        for victim in [*_posix_descendants(pid), pid]:
-            with contextlib.suppress(OSError):
-                os.kill(victim, signal.SIGKILL)
+        _posix_kill_tree(pid)
     end = time.monotonic() + wait
     while pid_alive(pid):
         if time.monotonic() >= end:
@@ -304,11 +346,10 @@ def pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    try:  # a zombie (killed, not yet reaped by its parent) is not running; kill(pid, 0) still succeeds on it
-        state = Path(f"/proc/{pid}/stat").read_text(errors="replace").rpartition(")")[2].split()[0]
-    except (OSError, IndexError):
+    fields = _proc_fields(pid)  # a zombie (killed, not yet reaped by its parent) is not running; kill(pid, 0) still succeeds on it
+    if fields is None:
         return True
-    return state not in ("Z", "X")
+    return fields[0] not in ("Z", "X", "x")
 
 
 def proc_start_time(pid: int) -> float | None:

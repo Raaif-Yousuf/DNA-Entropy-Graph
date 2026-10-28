@@ -1115,6 +1115,82 @@ def test_kill_pid_tree_ends_a_process_and_its_child_and_reports_it(tmp_path):
         proc.wait()
 
 
+FORKER = """import subprocess, sys, time
+from pathlib import Path
+out = Path(sys.argv[1])
+end = time.time() + 20
+while time.time() < end:
+    c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    with out.open("a") as f:
+        f.write(str(c.pid) + "\\n")
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+def test_kill_pid_tree_leaves_no_child_forked_while_it_was_scanning(tmp_path):
+    pidfile = tmp_path / "kids.txt"
+    script = tmp_path / "forker.py"
+    script.write_text(FORKER, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    try:
+        end = time.time() + 10
+        while (not pidfile.exists() or len(pidfile.read_text().split()) < 3) and time.time() < end:
+            time.sleep(0.05)
+        assert lw.kill_pid_tree(proc.pid) is True
+        proc.wait()
+        kids = [int(x) for x in pidfile.read_text().split()]
+        assert len(kids) >= 3
+        assert [k for k in kids if not _pid_gone(k, 5)] == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+def test_a_posix_kill_skips_a_pid_whose_start_time_changed(tmp_path):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        ident = lw._proc_ident(victim.pid)
+        assert ident is not None
+        assert lw._kill_if_same(victim.pid, (ident[0], ident[1] + 1)) is False  # a reused pid has a different start time
+        assert victim.poll() is None
+        assert lw._kill_if_same(victim.pid, ident) is True
+        victim.wait(timeout=10)
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+def test_a_posix_kill_freezes_the_root_before_it_scans_for_descendants(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    states = []
+    real = lw._proc_table
+
+    def spy():
+        fields = lw._proc_fields(victim.pid)
+        states.append(fields[0] if fields else None)
+        return real()
+
+    monkeypatch.setattr(lw, "_proc_table", spy)
+    try:
+        assert lw.kill_pid_tree(victim.pid) is True
+        assert states and states[0] == "T"  # stopped: it cannot fork a child that reparents to init after the scan
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+def test_pid_alive_treats_a_lowercase_x_state_as_dead(monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX /proc")
+    real = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, *a, **k: "1 (a b) x " + " ".join(["0"] * 25) if str(self).startswith("/proc/") else real(self, *a, **k)
+    )
+    assert lw.pid_alive(os.getpid()) is False
+
+
 def test_a_transient_pr_view_failure_is_retried_with_backoff_then_merged(world):
     (world.root / "gh.log.viewfail").write_text("2", encoding="utf-8")
     rc, clock = _land_green(world, [[_check("a", "pass")]])
