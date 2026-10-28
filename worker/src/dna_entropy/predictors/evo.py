@@ -12,8 +12,8 @@ tested everywhere.
 from __future__ import annotations
 
 import numpy as np
-import torch  # noqa: F401  (GPU-only dep; isolated to this module)
-from evo2 import Evo2
+import torch  # noqa: F401  # pyright: ignore[reportMissingImports]  (GPU-only [evo] extra, container-only; isolated to this module)
+from evo2 import Evo2  # pyright: ignore[reportMissingImports]  ([evo] extra, container-only)
 
 from .base import PredictorError, PredictorOOMError, check_probability_matrix
 from .hardware import require_hardware

@@ -28,7 +28,10 @@ public class CloudJobRunnerWorkerIdentityTests
         TerminationAction: "DELETE");
 
     private static CloudJobRunner Runner(FakeGcp gcp, IWorkerIdentityGateway identity, InMemoryRunRepository repo)
-        => new(gcp, gcp, gcp, gcp, identity, repo)
+    {
+        // Test time (#567): every deadline is on a clock that moves only as the runner polls (80 ms of real time under load cut a healthy run).
+        var clocks = new RunnerClocks();
+        return new(gcp, gcp, gcp, gcp, identity, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
@@ -39,7 +42,10 @@ public class CloudJobRunnerWorkerIdentityTests
             BootTimeout = TimeSpan.FromSeconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
+    }
 
     [Fact]
     public async Task The_identity_is_ensured_once_with_the_bucket_before_the_create_and_its_email_reaches_the_VM_spec()
@@ -129,8 +135,11 @@ public class CloudJobRunnerWorkerIdentityTests
     {
         // The real gateway is a dozen or more HTTP calls (account, role, two policy edits with retries); the general
         // CallTimeout would abandon it mid-write. The step has its own budget (CloudRunSettings.WorkerIdentityTimeout).
+        // On test time (#567): the step "takes" 250 ms by moving the runner's clock inside the call, past the 50 ms general deadline (whose timer was armed before the call)
+        // and well inside the identity budget, so a regression that used the general deadline here cancels the step's token and fails the run.
         var gcp = new FakeGcp();
-        var slow = new SlowIdentity(gcp, TimeSpan.FromMilliseconds(250));
+        var clocks = new RunnerClocks();
+        var slow = new SlowIdentity(gcp, TimeSpan.FromMilliseconds(250), clocks.Run);
         var repo = new InMemoryRunRepository();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, slow, repo)
         {
@@ -143,6 +152,8 @@ public class CloudJobRunnerWorkerIdentityTests
             BootTimeout = TimeSpan.FromSeconds(5),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
 
         var result = await runner.RunAsync(TestInputs.Request("job-i6", Spec("job-i6")), CancellationToken.None);
@@ -151,11 +162,13 @@ public class CloudJobRunnerWorkerIdentityTests
         gcp.CreatedSpecs.ShouldNotBeEmpty("the slow identity step still reached the create");
     }
 
-    private sealed class SlowIdentity(IWorkerIdentityGateway inner, TimeSpan delay) : IWorkerIdentityGateway
+    private sealed class SlowIdentity(IWorkerIdentityGateway inner, TimeSpan delay, VirtualTimeProvider clock) : IWorkerIdentityGateway
     {
         public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
         {
-            await Task.Delay(delay, cancellationToken);
+            await Task.Yield();
+            clock.Advance(delay);
+            cancellationToken.ThrowIfCancellationRequested();
             return await inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken);
         }
     }

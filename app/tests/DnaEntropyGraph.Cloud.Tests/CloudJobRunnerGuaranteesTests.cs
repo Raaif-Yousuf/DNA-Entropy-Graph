@@ -38,7 +38,11 @@ public class CloudJobRunnerGuaranteesTests
         FakeGcp gcp,
         IRunRepository repo,
         Action<string, JobPhase>? onPhase = null)
-        => new(compute, gcp, gcp, gcp, gcp, repo, onPhase)
+    {
+        // Test time (#567): every deadline of the run is on a clock that moves only as the runner polls.
+        var clocks = new RunnerClocks();
+        clocks.ParkPump(gcp, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(2));
+        return new(compute, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(80),
@@ -49,7 +53,10 @@ public class CloudJobRunnerGuaranteesTests
             BootTimeout = TimeSpan.FromSeconds(10),
             LifecycleTimeout = TimeSpan.FromMilliseconds(80),
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
+    }
 
     private static async Task<string?> VmStatusAsync(FakeGcp gcp, string jobId, string zone = Zone)
         => (await gcp.GetVmAsync($"deg-{jobId}", zone, CancellationToken.None))?.Status;

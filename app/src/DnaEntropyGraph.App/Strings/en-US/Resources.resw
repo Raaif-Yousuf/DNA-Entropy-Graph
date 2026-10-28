@@ -350,7 +350,7 @@
     <value>This sequence is too large for the built-in viewer</value>
   </data>
   <data name="ViewerSequenceTooLarge_Body" xml:space="preserve">
-    <value>The sequence file is larger than 50 MB, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
+    <value>The sequence file is larger than {0}, which the built-in viewer cannot load. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="ViewerLoading.Text" xml:space="preserve">
     <value>Loading the genome viewer...</value>
@@ -2639,5 +2639,11 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
 </root>
