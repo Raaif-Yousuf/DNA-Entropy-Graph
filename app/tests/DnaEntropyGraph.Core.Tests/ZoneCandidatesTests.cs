@@ -193,10 +193,24 @@ public class ZoneCandidatesTests
         => ZoneCandidates.RegionOf(zone).ShouldBe(region);
 
     [Fact]
-    public void A_Spot_run_reads_the_preemptible_metric_not_the_on_demand_one()
+    public void The_preemptible_twin_is_named_PREEMPTIBLE_NVIDIA_L4_GPUS_but_is_not_what_a_Spot_run_reads_by_default()
     {
+        // MEASURED 2026-10-15 (docs.cloud.google.com/compute/resource-usage): the twin's name is right, but without a preemptible grant Spot VMs "consume standard quota".
         QuotaMetrics.ForAccelerator("nvidia-l4", spot: true).ShouldBe("PREEMPTIBLE_NVIDIA_L4_GPUS");
         QuotaMetrics.ForAccelerator("nvidia-l4").ShouldBe(L4);
         QuotaMetrics.ForAccelerator("e2", spot: true).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_Spot_run_reads_the_standard_line_until_a_preemptible_quota_is_granted_and_then_only_the_preemptible_one()
+    {
+        var standard = new QuotaMetric(L4, 1, 0);
+        var ungranted = new QuotaMetric("PREEMPTIBLE_NVIDIA_L4_GPUS", 0, 0);
+        var granted = new QuotaMetric("PREEMPTIBLE_NVIDIA_L4_GPUS", 2, 0);
+
+        QuotaMetrics.SpotRegionalMetric("nvidia-l4", [standard]).ShouldBe(L4, "no preemptible line: Spot consumes the standard quota");
+        QuotaMetrics.SpotRegionalMetric("nvidia-l4", [standard, ungranted]).ShouldBe(L4, "a preemptible line of 0 is not a grant: the standard quota is what the run uses");
+        QuotaMetrics.SpotRegionalMetric("nvidia-l4", [standard, granted]).ShouldBe("PREEMPTIBLE_NVIDIA_L4_GPUS", "once granted, Spot can only consume preemptible quota");
+        QuotaMetrics.SpotRegionalMetric("e2", [standard, granted]).ShouldBeNull();
     }
 }

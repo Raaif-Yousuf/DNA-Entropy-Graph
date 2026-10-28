@@ -19,10 +19,10 @@
           "id": {
             "type": "string"
           },
-          "path": {
+          "name": {
             "type": "string"
           },
-          "name": {
+          "path": {
             "type": "string"
           },
           "informat": {
@@ -47,11 +47,28 @@
           },
           "fastaRecords": {
             "type": "string"
+          },
+          "annotation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accession": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accessionRange": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "id",
-          "path",
           "name"
         ]
       }
@@ -122,6 +139,9 @@
           "type": "integer"
         },
         "regionMergeGap": {
+          "type": "integer"
+        },
+        "gcWindow": {
           "type": "integer"
         },
         "smoothingWindows": {
@@ -206,6 +226,25 @@
           "type": "string"
         }
       }
+    },
+    "preset": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "title": "PresetSpec",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
     }
   },
   "required": [

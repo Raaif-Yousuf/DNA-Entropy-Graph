@@ -52,6 +52,7 @@ public static class SettingsCatalog
     {
         [InstallationId.SettingsKey] = "Identifies this PC's cloud resources (Hard Rules 9 and 10); sharing it would let two PCs claim each other's VMs.",
         ["MainWindowPlacement"] = "Where the window sits on this PC's screens.",
+        ["onboarding_tour_done"] = "Whether the first-run tour was shown on this PC (TourSettings.CompletedKey, #143); a new PC should show it once, so it is not carried over.",
         [WorkerImageSettingKeys.DeveloperMode] = "Developer switch; an imported file must not be able to turn it on.",
         [WorkerImageSettingKeys.WorkerImage] = "An image the app would run on a rented computer; an imported file must not be able to choose one.",
         [ViewerSettingKeys.IgvPath] = "A program path on this PC.",

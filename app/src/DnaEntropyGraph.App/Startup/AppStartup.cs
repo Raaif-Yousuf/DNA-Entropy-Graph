@@ -20,6 +20,9 @@ public static class AppStartup
     /// </summary>
     public static async Task BeginAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
+        // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
+        _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
+
         // This PC runs first and on their own: a run a killed app left non-terminal has no cloud side, and its row must not wait on the network (issue #734).
         try
         {

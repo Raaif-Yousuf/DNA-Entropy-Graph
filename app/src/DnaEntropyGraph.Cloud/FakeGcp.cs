@@ -121,6 +121,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Quota table (IQuotaGateway) ---
     private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
+    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -703,6 +704,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    /// <summary>Sets the regional GPU quota to a limit of <paramref name="limit"/> with <paramref name="used"/> already in use (the quota read then reports limit and usage, so the remainder is their difference).</summary>
+    public FakeGcp WithGpuQuotaUsed(string region, string acceleratorType, int limit, int used)
+    {
+        _regionalQuota[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = limit;
+        _regionalUsed[(region.ToLowerInvariant(), acceleratorType.ToLowerInvariant())] = used;
+        return this;
+    }
+
     /// <summary>
     /// Sets the project-wide <c>GPUS_ALL_REGIONS</c> cap, which
     /// <see cref="GetGpuQuotaAsync"/> then applies as a ceiling under every
@@ -857,6 +866,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow());
+        // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
+        RunSimulatedWorker(spec, zone);
         _vms[key] = vm;
         _labelFingerprints[key] = NextFingerprint();
         _maxRunByVm[key] = spec.MaxRunDuration;
@@ -865,7 +876,6 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _bootPollsLeft[key] = _bootPolls;
         }
 
-        RunSimulatedWorker(spec, zone);
         return Task.FromResult(vm);
     }
 
@@ -1025,8 +1035,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfProjectWide(spec.ProjectId);
         vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
-        _vms[key] = vm;
         RunSimulatedWorker(reuse, zone);
+        _vms[key] = vm;
         if (_reuseResponseLost)
         {
             _reuseResponseLost = false;
@@ -1040,6 +1050,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         if (ConsumeHang())
         {
             return HangAsync<VmDescriptor?>(cancellationToken);
+        }
+
+        if (_getVmFailure is { } getVmFailure)
+        {
+            throw Build(getVmFailure, "SCRIPTED_GET_VM_FAILURE", null, "The VM read was scripted to fail.");
         }
 
         ThrowIfScriptedTransient();
@@ -1091,6 +1106,52 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
+    }
+
+    private TaskCompletionSource? _endVmGate;
+
+    /// <summary>
+    /// Issue #113: every <see cref="EndVmAsync"/> from now on is "accepted now, done later": it reports acceptance at once, the VM is untouched, and the stop or
+    /// delete is applied only when <see cref="ReleaseEndVmCompletion"/> is called (a caller that gives up first, by its token, leaves the VM as it is), like a real
+    /// stop operation that takes minutes.
+    /// </summary>
+    public FakeGcp HoldEndVmCompletion()
+    {
+        _endVmGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return this;
+    }
+
+    /// <summary>Lets every held <see cref="EndVmAsync"/> finish (see <see cref="HoldEndVmCompletion"/>) and stops holding later ones.</summary>
+    public void ReleaseEndVmCompletion()
+    {
+        var gate = Interlocked.Exchange(ref _endVmGate, null);
+        gate?.TrySetResult();
+    }
+
+    /// <summary>Issue #113: see <see cref="IComputeGateway.EndVmAsync"/>. Without a hold the acceptance is reported when the work is done, like the default.</summary>
+    public async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    {
+        var gate = _endVmGate;
+        if (gate is not null)
+        {
+            ThrowIfScriptedTransient();
+            onAccepted?.Invoke();
+            await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (delete)
+        {
+            await DeleteVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await StopVmAsync(vmName, zone, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (gate is null)
+        {
+            onAccepted?.Invoke();
+        }
     }
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
@@ -1146,7 +1207,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfDeleteScripted(vmName);
+        if (_silentNoOpDeletes)
+        {
+            return;
+        }
+
         var existed = _vms.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            DetachDisksOf(vmName);
+        }
+
         _labelFingerprints.TryRemove((vmName, zone), out _);
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
@@ -1231,6 +1303,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             .Where(v => v.Labels is not null
                 && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
+            .Select(v => _maxRunByVm.TryGetValue((v.Name, v.Zone), out var limit) ? v with { MaxRunDuration = limit } : v)
             .ToList();
         return Task.FromResult(matches);
     }
@@ -1296,7 +1369,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         ThrowIfScriptedTransient();
         IReadOnlyList<BucketDescriptor> buckets = _bucketProjects.ContainsKey(projectId)
-            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null)]
+            ? [new BucketDescriptor(BucketName(projectId), ResultsBucket.DefaultLocation, ResultsBucket.Labels("fake-installation", "fake"), null, _bucketSoftDeleteDays)]
             : [];
         return Task.FromResult(buckets);
     }
@@ -1313,9 +1386,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfScriptedTransient();
+        ThrowIfUploadScripted(objectKey);
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
         _objects[(bucket, objectKey)] = copy.ToArray();
+        OnObjectStored(bucket, objectKey);
     }
 
     public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
@@ -1399,17 +1474,24 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var vmKey = (spec.VmName, zone);
         var resultKey = (bucket, prefix + "result.json");
 
-        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading)
+        if (workerMode is FakeWorkerMode.HeartbeatStopsAfterRunning or FakeWorkerMode.NoGpuFirstLine or FakeWorkerMode.HeartbeatingThenDone or FakeWorkerMode.StuckInModelLoading or FakeWorkerMode.StuckInRunning)
         {
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running"));
+            var wedged = workerMode == FakeWorkerMode.StuckInRunning;
+            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null));
+            if (wedged)
+            {
+                // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
+                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3);
+            }
+
             if (stuck)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
             }
 
-            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
+            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
                 _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done));
@@ -1514,10 +1596,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running");
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false, int? WindowsDone = null);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = "running")
-        => new JsonObject
+    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false, int? windowsDone = null)
+    {
+        var doc = new JsonObject
         {
             ["schema"] = 1,
             ["jobId"] = jobId,
@@ -1527,7 +1610,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["vm"] = new JsonObject { ["gpu"] = "NVIDIA L4" },
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,
-        }.ToJsonString();
+            ["cancelSeen"] = cancelSeen,
+        };
+        if (windowsDone is { } done)
+        {
+            doc["windowsDone"] = done;
+            doc["lastProgressAt"] = "2026-09-18T15:19:58Z"; // frozen on purpose: the wedged compute thread never advances it
+        }
+
+        return doc.ToJsonString();
+    }
 
     private static string WorkerFirstProgressLine(bool gpu)
         => new JsonObject
@@ -1542,7 +1634,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private void TickLiveWorker(string bucket, string statusKey, LiveWorker live)
     {
         var next = live with { Seq = live.Seq + 1, ReadsLeft = live.ReadsLeft - 1 };
-        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage));
+        _objects[(bucket, statusKey)] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, next.Seq, live.Stage, live.CancelSeen, live.WindowsDone));
         if (next.ReadsLeft <= 0)
         {
             _liveWorkers.TryRemove((bucket, statusKey), out _);
@@ -1654,9 +1746,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var scripted = new Dictionary<(string Region, string Metric), int>();
+        var used = new Dictionary<(string Region, string Metric), int>();
         foreach (var ((region, accelerator), available) in _regionalQuota)
         {
             scripted[(region, MetricOf(accelerator))] = available;
+        }
+
+        foreach (var ((region, accelerator), inUse) in _regionalUsed)
+        {
+            used[(region, MetricOf(accelerator))] = inUse;
         }
 
         var regionNames = new HashSet<string>(DefaultQuotaRegions, StringComparer.OrdinalIgnoreCase);
@@ -1677,7 +1775,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             table[region] = metricNames
-                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, 0))
+                .Select(m => new QuotaMetric(m, scripted.TryGetValue((region.ToLowerInvariant(), m), out var configured) ? configured : DefaultRegionalQuota, used.GetValueOrDefault((region.ToLowerInvariant(), m))))
                 .ToList();
         }
 
