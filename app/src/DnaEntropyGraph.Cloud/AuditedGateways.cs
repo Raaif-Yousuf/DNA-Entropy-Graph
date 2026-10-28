@@ -67,6 +67,10 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
 
     public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
         => inner.ListAppVmsAsync(cancellationToken);
+
+    // Issue #91: a read, forwarded to the real gateway's own lookup (the interface default says "not preempted", which would silently disable the Spot retry).
+    public Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
+        => inner.WasPreemptedAsync(vmName, zone, incarnation, cancellationToken);
 }
 
 public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor auditor) : IStorageGateway, IAuditedGateway
@@ -82,6 +86,10 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
 
     public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
         => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(bucket, prefix, cancellationToken), started: true);
+
+    // Issue #91: the Spot retry clears the preempted attempt's status and progress files. The interface default refuses, so the audit must forward to the real delete.
+    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
+        => auditor.RunAsync("Storage.DeleteObject", () => PrefixOf(bucket, objectKey), () => inner.DeleteObjectAsync(bucket, objectKey, cancellationToken));
 
     public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
         => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);

@@ -192,9 +192,9 @@ public class CloudAuditTests
                 ("StopVmAsync", "Compute.StopVm"), ("DeleteVmAsync", "Compute.DeleteVm"), ("DeleteDiskAsync", "Compute.DeleteDisk"),
                 ("EndVmAsync", "Compute.DeleteVm"), // ArgFor passes delete: true
             ],
-            ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync"]),
+            ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync", "WasPreemptedAsync"]),
         [typeof(IStorageGateway)] = (
-            [("EnsureBucketAsync", "Storage.EnsureBucket"), ("UploadAsync", "Storage.Upload"), ("DeletePrefixAsync", "Storage.DeletePrefix")],
+            [("EnsureBucketAsync", "Storage.EnsureBucket"), ("UploadAsync", "Storage.Upload"), ("DeletePrefixAsync", "Storage.DeletePrefix"), ("DeleteObjectAsync", "Storage.DeleteObject")],
             ["DownloadAsync", "TryDownloadAsync", "ListBucketsAsync", "GetPrefixUsageAsync", "ListChildPrefixesAsync"]),
         [typeof(IProjectSetupGateway)] = ([("EnableComputeApiAsync", "ProjectSetup.EnableComputeApi")], ["GetProjectStateAsync", "IsBillingEnabledAsync", "IsComputeApiEnabledAsync"]),
         [typeof(IWorkerIdentityGateway)] = ([("EnsureWorkerIdentityAsync", "Iam.EnsureWorkerIdentity")], []),
@@ -233,6 +233,7 @@ public class CloudAuditTests
         _ when type == typeof(string) => "jobs/job-9/in/x.gb",
         _ when type == typeof(Stream) => new MemoryStream(),
         _ when type == typeof(VmSpec) => Spec("job-9"),
+        _ when type == typeof(VmIncarnation) => new VmIncarnation(1UL, null),
         _ when type == typeof(QuotaIncreaseRequest) => new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret),
         _ when type == typeof(IReadOnlyList<string>) => new[] { "compute.googleapis.com" },
         _ => throw new NotSupportedException("teach CloudAuditTests.ArgFor to build a " + type.Name),
