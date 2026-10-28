@@ -396,7 +396,8 @@ public static class ServiceRegistration
         // Issue #87: the New run page's linked model and graphics card pickers, over the one shipped catalog.
         services.AddSingleton<GpuCatalog>(_ => GpuCatalog.Shipped);
         services.AddTransient<GpuPlanViewModel>();
-        services.AddTransient<NewRunViewModel>();
+        // Issue #527: one instance for the app, so the files on the New run page survive a trip to another page and back; it empties itself when a run starts.
+        services.AddSingleton<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
         // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.

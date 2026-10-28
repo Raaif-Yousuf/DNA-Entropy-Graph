@@ -236,6 +236,20 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). The paste box (closed), the status line and Treat as RNA also reset. A start that fails keeps everything.
+What stays across runs, on purpose: the preset, the ticked output files and the run target (they are the user's
+intent for runs in general and match Settings); `PresetPickerTests` pins it. Not persisted across app restarts.
+Back to the page never re-delivers its Open-with files: the page forwards `NavigationArrival` (parameter plus
+`NavigationMode` as a number) and only a New navigation's parameter is acted on. `NewRunPage.OnNavigatedFrom`
+calls `Bindings.StopTracking()`, so the long-lived ViewModel (its `PropertyChanged` and `Items`) does not keep a
+left page alive; the page is not cached, a new instance is made on every visit. THEORY (unverified): the
+memory effect itself was not measured, only that the release is explicit.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,

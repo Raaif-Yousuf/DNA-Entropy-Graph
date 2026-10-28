@@ -136,6 +136,122 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_run_starts_the_page_is_empty_for_the_next_one()
+    {
+        // Issue #527: the ViewModel outlives the page, so a started run must leave a clean New run page behind.
+        var path = Write("started.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.PasteText = "half typed";
+        _viewModel.IsTreatingAsRna = true;
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        _viewModel.SelectedItem.ShouldBeNull();
+        _viewModel.PasteText.ShouldBe(string.Empty);
+        _viewModel.IsTreatingAsRna.ShouldBeFalse();
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
+        File.Exists(path).ShouldBeTrue("the user's own file is never touched (Hard Rule 14)");
+    }
+
+    [Fact]
+    public async Task After_a_run_starts_no_stale_status_line_or_open_paste_box_is_left_behind()
+    {
+        var path = Write("clean.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.IsPasteOpen = true;
+        _viewModel.PasteText = Path.Combine(_dir, "no-such-file.fasta");
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        _viewModel.HasStatusMessage.ShouldBeTrue("the setup: a path-not-found line is showing");
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.StatusMessage.ShouldBeEmpty();
+        _viewModel.HasStatusMessage.ShouldBeFalse();
+        _viewModel.IsPasteOpen.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_navigation_parameter_is_taken_only_on_a_new_navigation_not_when_Back_returns_to_the_page()
+    {
+        // Issue #527: Back re-delivers the Open-with files the page was first opened with; they were already run, so they must not return.
+        var path = Write("openwith.fasta", ">o\n" + Dna + "\n");
+
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(Drop(path), IsNewNavigation: false));
+        _viewModel.Items.ShouldBeEmpty();
+
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(Drop(path), IsNewNavigation: true));
+        _viewModel.Items.Select(i => i.Path).ShouldBe([path]);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(3, false)]
+    public void Only_the_New_navigation_mode_counts_as_a_new_navigation(int mode, bool expectedNew)
+        => NavigationArrival.From("p", mode).IsNewNavigation.ShouldBe(expectedNew);
+
+    [Fact]
+    public async Task Back_to_the_page_still_attaches_it_to_the_intake()
+    {
+        var intake = new NewRunIntake();
+        var viewModel = new NewRunViewModel(_picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates, new OutputSelectionStore(Substitute.For<ISettingsStore>()), _log, TestGpu.Plan(), intake: intake);
+        var path = Write("later.fasta", ">l\n" + Dna + "\n");
+
+        await viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(new NavigationArrival(null, IsNewNavigation: false));
+
+        intake.TryAdd(Drop(path)).ShouldBeTrue("a Back arrival is still 'this screen is showing'");
+    }
+
+    [Fact]
+    public async Task A_start_that_fails_keeps_the_files_so_the_user_can_try_again()
+    {
+        var path = Write("again.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns<Task<string>>(_ => throw new InvalidOperationException("no"));
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.Select(i => i.Path).ShouldBe([path]);
+        _viewModel.SelectedItem.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task Leaving_and_coming_back_keeps_the_files_and_the_selection()
+    {
+        var a = Write("a.fasta", ">a\n" + Dna + "\n");
+        var b = Write("b.fasta", ">b\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(a, b));
+        _viewModel.SelectedItem = _viewModel.Items[1];
+
+        _viewModel.DetachFromIntake();
+        await _viewModel.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        _viewModel.Items.Select(i => i.Path).ShouldBe([a, b]);
+        _viewModel.SelectedItem.ShouldBeSameAs(_viewModel.Items[1]);
+    }
+
+    [Fact]
+    public async Task After_a_run_starts_the_other_pasted_copies_are_deleted_but_the_started_ones_stays_for_its_run()
+    {
+        // The started run's input is staged before StartRunAsync returns, but a retry restages from the recorded path, so that copy stays.
+        _viewModel.PasteText = Dna;
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var started = _viewModel.Items.Single();
+        _viewModel.PasteText = Dna + "ACGT";
+        await _viewModel.AddPastedCommand.ExecuteAsync(null);
+        var other = _viewModel.Items.Last();
+        _viewModel.SelectedItem = started;
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        File.Exists(started.Path).ShouldBeTrue();
+        File.Exists(other.Path).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_file_with_a_problem_cannot_be_run()
     {
         await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
