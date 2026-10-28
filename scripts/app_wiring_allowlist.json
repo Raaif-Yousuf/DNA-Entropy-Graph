@@ -3,6 +3,10 @@
   "_WHY_THIS_FILE_IS_LONG_TODAY": "Every entry below is the same fact said twenty-five times: app/ is a skeleton whose ViewModels exist and whose Views do not, so every command and every observable property is genuinely bound to nothing. That is not a false positive; it is the guard correctly describing an unfinished app. Each entry names the issue whose page will bind it, and the entry must be deleted in that issue's own PR.",
 
 
+  "UNBOUND-DISPLAY-PROPERTY:CloudVmRow.Zone": "#568 re-merge: the zone is row identity for Stop/Start/Delete (CloudResourcesViewModel.cs:258-273), not copy; the row shows Name and StatusText. Stays unbound by construction.",
+  "UNBOUND-DISPLAY-PROPERTY:CloudDiskRow.Zone": "#568 re-merge: the zone is row identity for the delete call, not copy; the row shows Name and DetailText. Stays unbound by construction.",
+  "UNBOUND-DISPLAY-PROPERTY:InputPillItem.Accession": "#568 re-merge (#684): the accession is carried for the manifest and history search (HistoryViewModel.cs:208); the pill shows it through its DisplayName. Stays unbound by construction.",
+  "UNBOUND-DISPLAY-PROPERTY:InputPillItem.AccessionRange": "#568 re-merge (#684): the range is carried for the manifest (WorkerManifestBuilder.cs:114) and history search; the pill shows it through its DisplayName. Stays unbound by construction.",
   "UNBOUND-DISPLAY-PROPERTY:RunTargetOption.Reason": "#568: not shown by its own row; RunTargetPickerViewModel copies it into the picker's Note (RunTargetPickerViewModel.cs:147,186,222), which the page binds. Stays unbound by construction.",
   "UNBOUND-DISPLAY-PROPERTY:SetupStepRow.RequestText": "#568: the copy-to-clipboard text for the 'ask your admin' button (SetupStepsViewModel.cs:235, WizardViewModel.cs:365); it is never displayed on screen, by design.",
   "CODE-ONLY-COMMAND:NewRunViewModel.AddDroppedCommand": "#63, done: Drop is an event, not a bindable Command= property, so NewRunPage.xaml.cs forwards the dropped items to this command (the same shape as NavigateToCommand). Stays C#-only by construction.",
@@ -16,9 +20,5 @@
   "CODE-ONLY-OBSERVABLE:RunProgressViewModel.JobId": "#66; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CanCancel": "#66, done: CanCancel only ever drives CancelCommand's CanExecute via [NotifyCanExecuteChangedFor]; WinUI's Button.Command already syncs IsEnabled from ICommand.CanExecuteChanged, so no view ever needs to read the bool property itself.",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.IsVmActionable": "#66, done: same reasoning as CanCancel above, for StopVmCommand/DeleteVmCommand.",
-  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry.",
-
-  "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
-  "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
-  "DEAD-REGISTRATION:GpuQuotaRequester": "#99: the wizard GPU step (app lane) is its first consumer; delete this entry in that PR"
+  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry."
 }

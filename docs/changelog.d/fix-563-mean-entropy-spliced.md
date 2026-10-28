@@ -1,0 +1,1 @@
+- fix(worker): the GenBank `mean_entropy` note of a spliced gene averages its joined exon bases, not the introns inside the outer span, so it equals the gene table's value (#563).
