@@ -63,6 +63,7 @@ public class AccountSurfaceTests
     [InlineData(AuthErrorCodes.OAuthClientMissing, "AuthError_OAUTH_CLIENT_MISSING", "")]
     [InlineData(AuthErrorCodes.SigninExpired, "AuthError_SIGNIN_EXPIRED", "AuthAction_SignInAgain")]
     [InlineData(AuthErrorCodes.NetworkUnavailable, "AuthError_SIGNIN_NETWORK", "AuthAction_TryAgain")]
+    [InlineData(AuthErrorCodes.ConsentIncomplete, "AuthError_CONSENT_INCOMPLETE", "AuthAction_AllowAccess")]
     public async Task A_failed_sign_in_shows_its_message_and_action_and_does_not_navigate(string code, string messageKey, string actionKey)
     {
         var account = Substitute.For<IGcpAccount>();

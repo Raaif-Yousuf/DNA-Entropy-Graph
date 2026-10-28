@@ -1,0 +1,1 @@
+- OAuth: a sign-in or token refresh whose granted scopes lack cloud-platform (granular consent) now fails with CONSENT_INCOMPLETE and a Sign in again and allow access button instead of 403s later (#259).

@@ -59,6 +59,7 @@ public sealed class KeyboardShortcutTests
             estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             Substitute.For<IDiagnosticsLog>(),
+            TestGpu.Plan(),
             clipboard: clipboard);
     }
 
