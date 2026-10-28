@@ -21,6 +21,49 @@ public class FakeGcpTests
         TerminationAction: "DELETE");
 
     [Fact]
+    public async Task A_delete_that_lands_between_a_stops_read_and_write_leaves_the_vm_deleted_when_the_stop_takes_polls()
+    {
+        // The STOPPING branch of the same race (#875).
+        var gcp = new FakeGcp().WithStopBehaviour(stoppingPolls: 2);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        gcp.BeforeStopWrite = () => gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
+
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+
+        (await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_delete_that_lands_between_a_reuses_claim_and_its_start_leaves_the_vm_deleted_and_the_reuse_says_gone()
+    {
+        // Start vs Delete (#875): real Compute answers a start of a deleted instance with a 404; the VM must not come back RUNNING.
+        var gcp = new FakeGcp();
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+        gcp.BeforeStartWrite = () => gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => gcp.ReuseVmAsync(ValidSpec("job-2"), created.Name, created.Zone, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("VM_NOT_FOUND");
+        (await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
+    private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string file = "") => file;
+
+    [Fact]
+    public void Only_a_create_may_assign_a_vm_row_directly_every_change_goes_through_UpdateVm()
+    {
+        // #875: a bare `_vms[key] = ...` is a read-modify-write that can resurrect a deleted VM. Two creates assign a new row; everything else is UpdateVm.
+        var source = Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "..", "src", "DnaEntropyGraph.Cloud", "FakeGcp.cs"); // from this file, not the build output (which may live elsewhere)
+        File.Exists(source).ShouldBeTrue();
+        var lines = File.ReadAllLines(source);
+        var assignments = lines.Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal) && System.Text.RegularExpressions.Regex.IsMatch(l, @"_vms\[[^\]]*\]\s*=[^=]")).ToList();
+
+        assignments.Count.ShouldBe(2, "only WithAlreadyExists and CreateVmAsync insert a new row:" + string.Join(" | ", assignments.Select(a => a.Trim())));
+        lines.Count(l => l.Contains("UpdateVm(", StringComparison.Ordinal)).ShouldBeGreaterThan(5); // vacuity: the helper is really used
+    }
+
+    [Fact]
     public async Task A_delete_that_lands_between_a_stops_read_and_write_leaves_the_vm_deleted_like_real_compute()
     {
         // Issue #875: a stop is a read-modify-write of the VM row. A delete interleaved there used to be overwritten, resurrecting a deleted VM as STOPPED.

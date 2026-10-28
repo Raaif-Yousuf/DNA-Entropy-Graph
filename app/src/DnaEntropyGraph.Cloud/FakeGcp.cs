@@ -1093,7 +1093,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                     merged[k] = v;
                 }
 
-                _vms[key] = vm with { Labels = merged };
+                UpdateVm(key, v => v with { Labels = merged });
                 _labelFingerprints[key] = NextFingerprint();
             }
         }
@@ -1145,8 +1145,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
 
             _labelFingerprints[key] = NextFingerprint();
-            vm = vm with { Labels = reuse.ToLabels() };
-            _vms[key] = vm;
+            vm = UpdateVm(key, v => v with { Labels = reuse.ToLabels() }) ?? throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
             _maxRunByVm[key] = reuse.MaxRunDuration;
         }
 
@@ -1161,9 +1160,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ThrowIfProjectWide(spec.ProjectId);
-        vm = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
         RunSimulatedWorker(reuse, zone);
-        _vms[key] = vm;
+        BeforeStartWrite?.Invoke();
+        // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
+        vm = UpdateVm(key, v => v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null })
+            ?? throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
         if (_reuseResponseLost)
         {
             _reuseResponseLost = false;
@@ -1193,18 +1194,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         var key = (vmName, zone);
-        if (!_vms.TryGetValue(key, out var vm))
+        if (!_vms.TryGetValue(key, out var found))
         {
             return Task.FromResult<VmDescriptor?>(null);
         }
 
+        VmDescriptor? vm = found;
         if (vm.Status == "PROVISIONING" && _bootPollsLeft.TryGetValue(key, out var bootLeft))
         {
             if (bootLeft <= 0)
             {
                 _bootPollsLeft.TryRemove(key, out _);
-                vm = vm with { Status = "RUNNING" };
-                _vms[key] = vm;
+                vm = UpdateVm(key, v => v.Status == "PROVISIONING" ? v with { Status = "RUNNING" } : v);
             }
             else
             {
@@ -1212,13 +1213,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
         }
 
-        if (vm.Status == "STOPPING" && _stoppingPollsLeft.TryGetValue(key, out var left))
+        if (vm is { Status: "STOPPING" } && _stoppingPollsLeft.TryGetValue(key, out var left))
         {
             if (left <= 0)
             {
                 _stoppingPollsLeft.TryRemove(key, out _);
-                vm = vm with { Status = _stoppedStatus };
-                _vms[key] = vm;
+                vm = UpdateVm(key, v => v.Status == "STOPPING" ? v with { Status = _stoppedStatus } : v);
             }
             else
             {
@@ -1226,10 +1226,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             }
         }
 
-        if (vm.Status == "RUNNING" && _preemptAt.TryGetValue(key, out var preemptAt) && _timeProvider.GetUtcNow() >= preemptAt)
+        if (vm is { Status: "RUNNING" } && _preemptAt.TryGetValue(key, out var preemptAt) && _timeProvider.GetUtcNow() >= preemptAt)
         {
-            vm = vm with { Status = "TERMINATED", StatusReason = "preempted" };
-            _vms[key] = vm;
+            vm = UpdateVm(key, v => v.Status == "RUNNING" ? v with { Status = "TERMINATED", StatusReason = "preempted" } : v);
+        }
+
+        if (vm is null)
+        {
+            return Task.FromResult<VmDescriptor?>(null); // deleted while this poll was updating it
         }
 
         return Task.FromResult<VmDescriptor?>(vm with { ServerNow = _timeProvider.GetUtcNow() });
@@ -1301,6 +1305,27 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
+    /// <summary>Test seam (#875): runs between a reuse's claim and its start, so a test can interleave a delete there deterministically.</summary>
+    internal Action? BeforeStartWrite { get; set; }
+
+    /// <summary>
+    /// The ONLY way to change an existing VM row (#875): a compare-and-swap loop that applies <paramref name="change"/> to the row as it is NOW and gives up (null) when the row
+    /// has vanished, so a concurrent delete is never overwritten and a deleted VM never comes back. A guard test forbids a bare <c>_vms[key] =</c> assignment anywhere else but a create.
+    /// </summary>
+    private VmDescriptor? UpdateVm((string Name, string Zone) key, Func<VmDescriptor, VmDescriptor> change)
+    {
+        while (_vms.TryGetValue(key, out var current))
+        {
+            var next = change(current);
+            if (ReferenceEquals(next, current) || _vms.TryUpdate(key, next, current))
+            {
+                return next;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Test seam (#875): runs between a stop's read of the VM and its write, so a test can interleave a delete there deterministically.</summary>
     internal Action? BeforeStopWrite { get; set; }
 
@@ -1318,17 +1343,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         BeforeStopWrite?.Invoke();
+        // A delete that landed since the read wins (real Compute deletes the instance and the stop operation then fails), it is never resurrected as STOPPED.
         if (_stoppingPolls > 0)
         {
-            // Compare-and-swap: a delete that landed since the read wins (real Compute deletes the instance and the stop operation then fails), it is never resurrected as STOPPED.
-            if (_vms.TryUpdate(key, vm with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }, vm))
+            if (UpdateVm(key, v => v with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }) is not null)
             {
                 _stoppingPollsLeft[key] = _stoppingPolls;
             }
         }
         else
         {
-            _vms.TryUpdate(key, vm with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }, vm);
+            UpdateVm(key, v => v with { Status = _stoppedStatus, StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() });
         }
     }
 
