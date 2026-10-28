@@ -198,11 +198,13 @@ public class VmReuseReviewTests
                 return await gcp.ReuseVmAsync(spec, name, zone, token);
             },
         };
-        var runner = Runner(compute, gcp, repo, resultTimeout: TimeSpan.FromMilliseconds(300));
+        var runner = Runner(compute, gcp, repo, new VirtualTimeProvider(), resultTimeout: TimeSpan.FromMilliseconds(300));
 
         var run = runner.RunAsync(TestInputs.Request("job-new", Spec("job-new")), CancellationToken.None);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         var cancel = runner.CancelAsync("job-new", CancellationToken.None);
+        // Real time on purpose (#567): a window for the cancel to look while the reuse is held. Nothing observable says "the cancel has looked" on correct code (it waits for the reuse), so
+        // this is a negative-evidence wait: too short under load can only hide the old bug (a false pass), it can never fail correct code.
         await Task.Delay(300, TestContext.Current.CancellationToken);
         gate.SetResult();
         await cancel.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
@@ -230,12 +232,15 @@ public class VmReuseReviewTests
             OnReuse = (spec, name, zone, token) =>
             {
                 cancel = Task.Run(() => runner!.CancelAsync("job-new", CancellationToken.None));
-                SpinWait.SpinUntil(() => repo.AllRecordedInOrder.Any(r => r.JobId == "job-new" && r.Phase == JobPhase.Cancelling), TimeSpan.FromSeconds(10));
-                Thread.Sleep(250); // the cancel has looked (and, unfixed, found nothing) before the reuse call returns
+                // Blocks this thread on the repository's own signal (the cancel recorded Cancelling), never on a poll.
+                repo.WhenRecordedAsync(r => r.JobId == "job-new" && r.Phase == JobPhase.Cancelling).GetAwaiter().GetResult();
+                // Real time on purpose (#567): a negative-evidence window for the cancel to look (and, unfixed, find nothing) before the reuse call returns. Too short under load can only hide
+                // the old bug (a false pass); it can never fail the fixed code.
+                Thread.Sleep(250);
                 return gcp.ReuseVmAsync(spec, name, zone, token);
             },
         };
-        runner = Runner(compute, gcp, repo, resultTimeout: TimeSpan.FromMilliseconds(300));
+        runner = Runner(compute, gcp, repo, new VirtualTimeProvider(), resultTimeout: TimeSpan.FromMilliseconds(300));
 
         var run = runner.RunAsync(TestInputs.Request("job-new", Spec("job-new")), CancellationToken.None);
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);

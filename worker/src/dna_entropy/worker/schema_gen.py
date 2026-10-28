@@ -83,7 +83,7 @@ def _concrete_type_to_schema(tp: object) -> JsonSchema:
     if isinstance(tp, type) and issubclass(tp, enum.Enum):
         values = [member.value for member in tp]
         return {"type": "string", "enum": values}
-    if dataclasses.is_dataclass(tp):
+    if isinstance(tp, type) and dataclasses.is_dataclass(tp):
         return dataclass_to_schema(tp)
     # Anything genuinely unrecognized still produces a *valid* (unconstrained) schema
     # fragment rather than raising — a missing type mapping should show up as a loose
