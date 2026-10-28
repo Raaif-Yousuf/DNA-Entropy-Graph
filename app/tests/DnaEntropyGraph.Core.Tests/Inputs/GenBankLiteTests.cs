@@ -45,7 +45,7 @@ public sealed class GenBankLiteTests
 
         var result = GenBankLite.Read(testCase.Text);
 
-        result.Records.Select(r => (r.Seq, Genes: r.GeneCount > 0 ? r.GeneCount : r.CdsCount))
+        result.Records.Select(r => (r.Seq, Genes: r.Mapped))
             .ShouldBe(testCase.Python.Records.Select(r => (r.Seq, r.GeneCount)), $"case {testCase.Id} records");
         var expectedNotices = testCase.CSharpDivergence?.Notices ?? testCase.Python.Notices;
         result.Notices.ShouldBe(expectedNotices, $"case {testCase.Id} notices");

@@ -2640,4 +2640,13 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
+  <data name="DatabaseNewerThanApp" xml:space="preserve">
+    <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
+  </data>
+  <data name="DatabaseInUse" xml:space="preserve">
+    <value>Your run history is in use by another copy of DNA Entropy Graph, so this copy cannot start. Your history has not been changed. Close the other copy, then start the app again.</value>
+  </data>
+  <data name="DatabaseUnusable" xml:space="preserve">
+    <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
+  </data>
 </root>

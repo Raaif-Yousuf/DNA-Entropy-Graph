@@ -28,15 +28,22 @@ public class CloudJobRunnerHeartbeatTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo) => new(gcp, gcp, gcp, gcp, gcp, repo)
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo)
     {
-        ResultPollInterval = TimeSpan.FromMilliseconds(1),
-        ResultTimeout = TimeSpan.FromSeconds(20),
-        FirstHeartbeatTimeout = TimeSpan.FromMilliseconds(60),
-        HeartbeatStaleTimeout = TimeSpan.FromMilliseconds(60),
-        LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-        LifecycleTimeout = TimeSpan.FromMilliseconds(200),
-    };
+        // Test time (#567): the heartbeat staleness windows and every deadline are on a clock that moves only as the runner polls.
+        var clocks = new RunnerClocks();
+        return new(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromMilliseconds(60),
+            HeartbeatStaleTimeout = TimeSpan.FromMilliseconds(60),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
+        };
+    }
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -102,6 +109,7 @@ public class CloudJobRunnerHeartbeatTests
         // The heartbeat thread keeps ticking, so the stale rule alone would wait for the result limit (20 s here).
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         var repo = new InMemoryRunRepository();
+        var clocks = new RunnerClocks();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
@@ -111,6 +119,8 @@ public class CloudJobRunnerHeartbeatTests
             StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(60) },
             LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
             LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
 
         var result = await runner.RunAsync(TestInputs.Request("job-stuck", Spec("job-stuck")), CancellationToken.None);

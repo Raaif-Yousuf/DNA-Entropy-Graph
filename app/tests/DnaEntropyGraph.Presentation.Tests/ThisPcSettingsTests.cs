@@ -123,10 +123,12 @@ public sealed class ThisPcSettingsTests
         var vm = Create();
         await vm.RefreshCommand.ExecuteAsync(null);
         var seen = new List<string>();
+        var stepLanded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _installer.InstallAsync(Arg.Any<IProgress<LocalInstallProgress>>(), Arg.Any<CancellationToken>()).Returns(async call =>
         {
             call.Arg<IProgress<LocalInstallProgress>>().Report(new LocalInstallProgress(LocalInstallStep.InstallingPackages));
-            await Task.Delay(150); // a Progress report posts to the thread pool in a test; let it land while the install is still running
+            // A Progress report posts to the thread pool in a test: wait for the step to land while the install is still running. A signal, not a fixed delay that a loaded CI machine outruns (#567).
+            await stepLanded.Task.WaitAsync(TimeSpan.FromSeconds(30));
             Ready(Capable, Healthy);
             return new LocalInstallResult(true);
         });
@@ -135,6 +137,7 @@ public sealed class ThisPcSettingsTests
             if (e.PropertyName == nameof(vm.ProgressText) && vm.ProgressText.Length > 0)
             {
                 seen.Add(vm.ProgressText);
+                stepLanded.TrySetResult();
             }
         };
 

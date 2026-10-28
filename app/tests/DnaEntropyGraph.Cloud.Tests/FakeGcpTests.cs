@@ -133,4 +133,21 @@ public class FakeGcpTests
         gcp.IsSignedIn.ShouldBeTrue();
         gcp.SelectedProjectId.ShouldBe("my-project");
     }
+
+    [Fact]
+    public async Task A_VM_made_again_under_a_name_that_was_deleted_waits_for_its_own_delete_signal()
+    {
+        var gcp = new FakeGcp();
+        var spec = ValidSpec("job-regen");
+        await gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
+        await gcp.DeleteVmAsync(spec.VmName, Zone, CancellationToken.None);
+        gcp.WhenVmDeletedAsync(spec.VmName).IsCompleted.ShouldBeTrue("the first delete happened");
+
+        await gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
+
+        var second = gcp.WhenVmDeletedAsync(spec.VmName);
+        second.IsCompleted.ShouldBeFalse("the VM made again is not deleted yet: the first delete's signal must not answer for it");
+        await gcp.DeleteVmAsync(spec.VmName, Zone, CancellationToken.None);
+        second.IsCompleted.ShouldBeTrue();
+    }
 }
