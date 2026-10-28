@@ -110,7 +110,10 @@ internal sealed class InMemoryRunRepository : IRunRepository
             }
 
             _runs.Enqueue(run);
-            return true;
         }
+
+        // Signalled like UpsertAsync: a test waiting on a row (WhenRecordedAsync) must see a row the runner stored through this conditional write too (#567).
+        Recorded?.Invoke(run);
+        return true;
     }
 }
