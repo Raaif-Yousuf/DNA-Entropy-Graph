@@ -38,6 +38,10 @@ is the same: click **Sign in again**.
 on the Google page"**, nothing changed. Click **Sign in again** and finish the steps in the
 browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
 
+**"Google signed you in, but the permission this app needs was not ticked"**, Google lets you
+untick permissions on its page. Click **Sign in again and allow access** and leave every box ticked;
+the app cannot create or start your rented computer without it. *(`CONSENT_INCOMPLETE`)*
+
 **"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
 online, then click **Try again**. *(`SIGNIN_NETWORK`)*
 

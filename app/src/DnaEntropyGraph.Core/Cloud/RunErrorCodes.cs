@@ -106,6 +106,9 @@ public static class RunErrorCodes
     public const string DeletedByCleanup = "cleanup_deleted";
     /// <summary>The run was refused before anything was created because the monthly spending cap's hard stop is on and this month's estimated spend has reached it (issue #109).</summary>
     public const string SpendCap = "spend_cap";
+
+    /// <summary>The run was ended because its computer was stopped from the exit window (issue #113) while the run was still live: the row is Cancelled, never left Running.</summary>
+    public const string StoppedByCleanup = "cleanup_stopped";
     public const string Other = "other";
 
     /// <summary>Every code a run can be recorded under.</summary>
@@ -115,7 +118,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, SpendCap,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, SpendCap, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
     ];
 
@@ -193,6 +196,19 @@ public static class RunErrorCodes
     /// </summary>
     public static IReadOnlyList<string> WorkerStatusCodesWithoutDedicatedCopy { get; } = ["MODEL_UNKNOWN", "GPU_TESTS_FAILED"];
 
+    /// <summary>
+    /// Every code the worker may write as <c>error.code</c> (docs/contract/error-codes.json, generated from the worker's own
+    /// registry): the ones <see cref="ForWorkerStatusCode"/> maps plus <see cref="WorkerStatusCodesWithoutDedicatedCopy"/>.
+    /// The diagnostics bundle keeps no other <c>error.code</c> (#613), because a value outside this set did not come from
+    /// the worker's registry and could be free text. <c>WorkerContractGuardTests</c> pins this set equal to the contract.
+    /// </summary>
+    public static IReadOnlySet<string> WorkerErrorCodes { get; } = new HashSet<string>(
+        [
+            "GPU_NOT_VISIBLE", "IMAGE_PULL_FAILED", "MANIFEST_INVALID", "WORKER_CRASH", "MODEL_NEEDS_HOPPER", "MODEL_OOM",
+            "BATCH_LIMIT_EXCEEDED", "INPUT_INVALID", "WORKER_VERSION_MISMATCH", "RUN_TIME_LIMIT", .. WorkerStatusCodesWithoutDedicatedCopy,
+        ],
+        StringComparer.Ordinal);
+
     /// <summary>The <c>Resources.resw</c> key for a code (plain, non-dotted: it is read from code, not through <c>x:Uid</c>). An unknown code gets the generic message.</summary>
     public static string ResourceKey(string? code) => code switch
     {
@@ -250,6 +266,7 @@ public static class RunErrorCodes
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
         DeletedByCleanup => "RunError_cleanup_deleted",
         SpendCap => "RunError_spend_cap",
+        StoppedByCleanup => "RunError_cleanup_stopped",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",
         "quota" => "RunError_quota",

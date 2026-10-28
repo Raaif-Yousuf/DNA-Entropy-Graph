@@ -37,7 +37,7 @@ from ..validation.validators import ValidationError
 from .batch_limits import BatchLimitError, check_batch_limits
 from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, write_json
 from .cancel import CancelWatcher, JobCancelledError
-from .errors import is_retriable
+from .errors import WORKER_ERROR_CODE_SET, is_retriable
 from .gpu import detect_gpu
 from .lifecycle import LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
@@ -422,7 +422,17 @@ def _run_one_input(
         # its own more specific code (see errors.py's module docstring / #254's closing
         # comment for the two cases this caught: a Hopper-only model request and a
         # second-OOM both used to report INPUT_INVALID instead of their real code).
+        # ... but ONLY when that code is one of OURS (errors.py's registry). A third-party
+        # exception's `.code` is free text or a number (an HTTP status, an errno, a path or
+        # run name) and result.json error.code ships in the diagnostics zip (issue #613):
+        # anything unregistered is treated as if the exception had no code at all.
         code = getattr(exc, "code", None)
+        original_code: str | None = None
+        if not isinstance(code, str) or code not in WORKER_ERROR_CODE_SET:
+            if code is not None:
+                # Kept for the developer in error.detail (never in error.code): ASCII-escaped, cut at 80.
+                original_code = f"original code: {ascii(code)[:80]}"
+            code = None
         if code is None:
             # WindowingError (K below 128, an input under 10 nt, a ceiling below K) and
             # PipelineError (an unusable run name) are user-correctable input problems
@@ -445,6 +455,8 @@ def _run_one_input(
         error: dict = {"code": code, "message": str(exc), "retriable": is_retriable(code)}
         if code == "WORKER_CRASH":
             error["detail"] = traceback.format_exc()
+        if original_code is not None:
+            error["detail"] = f"{error.get('detail', '')}\n{original_code}".strip()
         # issue #252: whatever contigs/records completed before the crash are already on
         # local disk (pipeline.run()'s own best-effort write) — upload them so one bad
         # record doesn't cost the whole input, not just the whole job.

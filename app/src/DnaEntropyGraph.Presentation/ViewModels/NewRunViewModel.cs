@@ -26,6 +26,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
 
+    // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
+    private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
+
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
     private static readonly TimeSpan CountDebounce = TimeSpan.FromMilliseconds(150);

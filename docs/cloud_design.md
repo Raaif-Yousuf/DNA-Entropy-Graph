@@ -526,7 +526,7 @@ exercise.
  New run page (`NewRunViewModel.EstimateText`) shows it from the selected, valid file's
  base count, always labelled an estimate. The shipped prices are THEORY (unverified):
  gathered 2026-09-19 for us-central1 from public pages, not checked against the Billing
- Catalog (#214, #303); the A100 Spot prices are left null because sources disagree 4x.
+ Catalog (#214, #303); the Spot prices were read from Google's own pricing pages on 2026-10-16 (#303, MEASURED).
  Still open under #98: the daily Billing Catalog refresh (#214), the live ticker (#217) and
  the actual cost on the Results page (#557).
 - Thresholds: warn above a single-job estimate of $2 (user setting), warn at month-to-date
@@ -1093,6 +1093,13 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
   `OAUTH_CLIENT_INVALID` name the installer as the action: the user never has this file, the build does.
+- **Granted scopes (issue #259).** Under granular consent a user can untick `cloud-platform` and still be signed in. MEASURED 2026-10-16
+  (https://developers.google.com/identity/protocols/oauth2/native-app): the token response `scope` field lists what the token grants,
+  a user `may not grant your app access to all` requested scopes, and `Incremental authorization is not supported for installed apps`,
+  so `include_granted_scopes` is not used; the re-ask is the same flow with `prompt=select_account consent`. At sign-in a `scope` without
+  `cloud-platform` (or none) fails `CONSENT_INCOMPLETE` before anything is stored; on a refresh a `scope` that names scopes without it
+  deletes the token file, sets `needsSignIn` and fails the same way (a refresh answer with no `scope` keeps the stored grant). The action
+  is **Sign in again and allow access**, which is the ordinary sign-in command. Decision #18 (single `cloud-platform` scope) is what makes this one check enough.
 - **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
   and the account entry whatever Google said, and makes the next remaining account current.
 - **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
@@ -1473,7 +1480,42 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
 
 Settings > Advanced edits `worker_image` (a digest-pinned worker image) and shows whether the cloud is the fake. `PinnedWorkerImageProvider.Resolve` reads `worker_image` and `developer_mode` on every run start (no cache), so a saved value is the next run's image; the box is live only when `developer_mode` is already `true` in settings.json, and the page refuses anything that is not an `@sha256:` reference. The DLVM image family override is NOT built: the family is the constant `GoogleComputeGateway.Image` in the Cloud project and `VmSpec` carries no image, so it needs a Cloud change first (issue filed with #644's close-out).
 
-## 18. Spot VMs (issue #91)
+## 18. The nothing-left-running scan (issue #113)
+
+`LeftRunningScanner` (Core) lists this installation's computers and disks by label through the same gateway calls the Cloud page uses
+(`ListByInstallationAsync`, `ListDisksByInstallationAsync`; Hard Rules 9 and 10, so another installation's computers are never reported or touched).
+A running computer reports its remaining time (`VmDescriptor.MaxRunDuration`, read from `scheduling.maxRunDuration`, against the run clock start and the platform's
+own clock when the read carried one), its hourly rate from the price list, and whether a non-terminal run row carries its job id. A disk no running computer holds is a
+"stopped disk" with its monthly cost (size times the price list's per-GB-month rate).
+
+`LeftRunningGuard` (Presentation) runs it three ways: at launch (`AppStartup.BeginAsync`), every 5 minutes on a `TimeProvider` timer (a running computer with no live
+run gets one warning toast, again only if it ended and came back), and on close (`AppWindowService` cancels `AppWindow.Closing` at once, asks asynchronously, then closes
+again; the UI thread is never blocked). The exit modal offers Stop, Delete or Leave running; Leave running is never indefinite because every computer carries a
+`maxRunDuration` (Hard Rule 11). A scan that cannot read Google, or a dialog that cannot be shown, never keeps the window open; a Stop or Delete that fails for some computer
+does (it names the action, and the next close asks again).
+
+Bounds (cold-review H1): the scan is abandoned after 10 s (``Task.WaitAsync`` on the ``TimeProvider``, so a listing that ignores its token cannot hold the close), the dialog waits at most 10 s for the window's one-dialog gate (``IChoiceDialogService.ChooseAsync`` with a gate timeout; null answer allows the close), and Stop / Delete wait at most 30 s each, in parallel: a call still unanswered is not a failure, the window closes and an Info toast says it finishes on Google's side. Stop and Delete go through ``InstallationCleanup.EndVmAsync`` (round 3, see below): the exit claims "finishing on Google's side" only for a request Google ACCEPTED; a request never accepted keeps the window open with the failure message. A computer whose run is still live ends that run's row as Cancelled (``cleanup_deleted`` for a delete, ``cleanup_stopped`` for a stop, each with its own ``RunError_`` text) instead of leaving it Running (Hard Rule 11); the modal warns that the results are not downloaded yet. The close decision (cancel at once, ask once, re-close without asking again) is ``CloseConfirmation``, tested without a window. Several computers found in one scan make one toast (the message bar holds one message). A computer whose limit could not be read gets a neutral line, not a claim that it ends itself.
+
+Round 3 (the end of one computer, `InstallationCleanup.EndVmAsync`):
+
+- **Accepted is the insert, not the end of the operation (H1).** `IComputeGateway.EndVmAsync(name, zone, delete, onAccepted, ct)` calls `onAccepted` as soon as the Compute request (the operation insert) was accepted (or answered "already gone"), then waits for the operation to reach DONE and throws what it ends with. `GoogleComputeGateway` and `ResilientComputeGateway` (through the pipeline, breaker bypassed like stop and delete; a replayed attempt may call `onAccepted` again) implement it; `StopVmAsync` and `DeleteVmAsync` keep their meaning for every other caller. `FakeGcp.HoldEndVmCompletion()` / `ReleaseEndVmCompletion()` script "accepted now, done later". A GPU stop that takes over 30 s therefore reads as "finishing on Google's side", not as Failed, and the run row is written at acceptance.
+- **The driver is stopped only after acceptance (M1).** A refused request (403, quota) leaves the run, its driver and its row exactly as they were.
+- **After acceptance nothing the caller's token can cancel decides the row (M3).** The driver wait (bounded by `DriverStopWait`) and the row write take no caller token, so a caller that gives up still gets the run's end recorded (Hard Rule 11). THEORY (unverified): an operation that fails AFTER it was accepted leaves the row Cancelled with the computer still running; the end then reports Failed and the next scan finds a running computer with no live run and warns.
+- **A second end for the same job reports what really happened (M2).** The first end publishes its outcome; the second waits for it (bounded by `InFlightWait` = 20 s, then Failed: nothing is known to be finishing, so nothing is claimed). Accepted: Done and nothing more is sent, except a Delete asked behind an accepted Stop, which is sent and then rewrites the row's code from `cleanup_stopped` to `cleanup_deleted`. Refused: the second makes its own attempt. A cancel some other code owns (the runner's, "Delete everything") is still `AlreadyEnding`.
+- **A run row phase write is atomic per job (H2).** `RunRowStore` takes one process-wide lock per job id for the read and the write, and writes through `IRunRepository.TryUpsertIfPhaseAsync(row, phaseThatWasRead)`, which the SQLite repository does as one `BEGIN IMMEDIATE` transaction (check and write, never resurrecting a removed row). A writer that lost the race re-reads and re-validates; a terminal phase is never left (`JobStateMachine` throws for any move out of one), so a late driver cannot overwrite the cleanup's Cancelled. The interface default is a plain upsert for single-writer test doubles; a repository other writers can reach must override it.
+- Logging: a fault the guard awaits is logged once by the awaiting code; only a call the timeout abandoned is observed for a late fault (with the job id when there is one).
+
+Round 4 (same method):
+
+- **The job is released once the row is ended, not when the operation is done (M1).** The cancel scope (`ActiveRuns.TryBeginCancel`) is disposed right after the run's row is Cancelled; a runner cancel, "Delete everything" and the reconciler no longer see `AlreadyEnding` or wait out a GPU stop. The end's entry stays published until the operation is done, so a second `EndVmAsync` for the job still joins it.
+- **Taking the job and publishing the entry are one step (L4)** under one lock, so a concurrent second call always finds either our entry or someone else's cancel.
+- **A superseding Delete owns the outcome (M2).** When a Delete is accepted behind an accepted Stop, the Stop's end reports the Delete's outcome if the Stop's own operation later ends in error (the computer was deleted under it). THEORY (unverified): that a real Stop operation errors when its computer is deleted; the guard never shows "stop failed" for a deleted computer either way.
+- **A caller token cancelled after acceptance is acceptance (L3)**: Done, row Cancelled, driver stopped. Cancelled before acceptance throws and touches nothing. Both are pinned by tests (the code already did this).
+- **Annotations are conditional too (L5)**: `RunRowStore.UpdateRowAsync` takes the same per-job lock and writes through `TryUpsertIfPhaseAsync`, re-reading and re-applying the change if it lost a race.
+
+THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes back populated in an instances aggregatedList on a real project.
+
+## 19. Spot VMs (issue #91)
 
 `RunOptions.SpotVm` (off by default: the owner decision is #10, not made here, and `NewRunViewModel.DefaultSpot` reads the same default so the estimate and the run cannot disagree) becomes `VmSpec.Spot` in `CloudJobRequestFactory.Create`. The Compute body (`ComputeVmShape.Scheduling`) then carries `provisioningModel=SPOT` next to the unchanged Hard Rule 10 fields: `maxRunDuration` and `instanceTerminationAction=DELETE`. An on-demand spec names no provisioning model. THEORY (unverified, no live project): Compute accepts SPOT with `maxRunDuration`, `DELETE` and `onHostMaintenance=TERMINATE` on a GPU VM (ToTest row #91).
 

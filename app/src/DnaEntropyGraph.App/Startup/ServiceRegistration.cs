@@ -330,6 +330,22 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ActiveRuns>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
         });
+        // Issue #113: the nothing-left-running scan (launch, every 5 minutes, and the exit modal); started by AppStartup, asked on close by AppWindowService.
+        services.AddSingleton<LeftRunningScanner>(sp => new LeftRunningScanner(
+            sp.GetRequiredService<IComputeGateway>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            sp.GetRequiredService<IRunRepository>(),
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingSource>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<LeftRunningGuard>(sp => new LeftRunningGuard(
+            sp.GetRequiredService<LeftRunningScanner>(),
+            sp.GetRequiredService<InstallationCleanup>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            sp.GetRequiredService<IChoiceDialogService>(),
+            sp.GetRequiredService<IToastService>(),
+            sp.GetRequiredService<IStringResourceProvider>(),
+            sp.GetRequiredService<IDiagnosticsLog>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();

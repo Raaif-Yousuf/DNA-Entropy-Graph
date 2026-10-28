@@ -1,0 +1,1 @@
+- Docs: CI trigger descriptions in `dev_commands.md`, `branching_and_prs.md` and `packaging_design.md` now match the workflow files (ci-app, ci-docs, ci-worker, ci-notices run on pull_request; codeql weekly/PR/push; release on tags). #450 (DECISION agent-made, reversible: docs follow the workflows).
