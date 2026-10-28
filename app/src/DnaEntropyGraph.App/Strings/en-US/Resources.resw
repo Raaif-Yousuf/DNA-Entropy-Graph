@@ -2688,6 +2688,15 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
+  <data name="Results_ExportPng_Title" xml:space="preserve">
+    <value>Entropy of {0}, record {1}</value>
+  </data>
+  <data name="Results_ExportPng_XAxis" xml:space="preserve">
+    <value>Position (bases)</value>
+  </data>
+  <data name="Results_ExportPng_YAxis" xml:space="preserve">
+    <value>Entropy (bits, 0 to 2)</value>
+  </data>
   <data name="Results_GenesTruncated" xml:space="preserve">
     <value>Only the first 500 genes are shown here. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
   </data>

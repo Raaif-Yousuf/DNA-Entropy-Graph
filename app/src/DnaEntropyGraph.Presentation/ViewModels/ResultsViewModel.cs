@@ -385,8 +385,9 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        var path = Path.Combine(folder, SafeFileName(contig.Name) + ".entropy.overview.png");
-        var written = await Task.Run(() => exporter.Export(contig, path), CancellationToken.None);
+        var path = Path.Combine(folder, SafeFileName(contig.Name) + ".entropy.png");
+        var labels = new OverviewImageLabels(Format(ResultsCopy.ExportPngTitle, Title, contig.Name), _strings.GetString(ResultsCopy.ExportPngXAxis), _strings.GetString(ResultsCopy.ExportPngYAxis));
+        var written = await Task.Run(() => exporter.Export(contig, labels, path), CancellationToken.None);
         if (written)
         {
             Report(_launcher.ShowInFolder(path), ResultsCopy.FileActionFailed);

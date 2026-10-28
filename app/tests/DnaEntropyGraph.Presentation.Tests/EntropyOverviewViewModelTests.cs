@@ -80,25 +80,39 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     public async Task Export_writes_a_png_in_the_run_folder_and_shows_it()
     {
         var (vm, exporter) = await Results(Overview("chr1"));
-        var expected = Path.Combine(_dir, "chr1.entropy.overview.png");
-        exporter.Export(Arg.Any<EntropyContig>(), expected).Returns(true);
+        var expected = Path.Combine(_dir, "chr1.entropy.png");
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), expected).Returns(true);
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
-        exporter.Received(1).Export(Arg.Is<EntropyContig>(c => c.Name == "chr1"), expected);
+        exporter.Received(1).Export(Arg.Is<EntropyContig>(c => c.Name == "chr1"), Arg.Any<OverviewImageLabels>(), expected);
         _launcher.Received(1).ShowInFolder(expected);
         vm.ActionNoticeText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_picture_is_titled_with_the_run_and_contig_and_labelled_in_bits()
+    {
+        var (vm, exporter) = await Results(Overview("chr1"));
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        var labels = (OverviewImageLabels)exporter.ReceivedCalls().Single().GetArguments()[1]!;
+        labels.Title.ShouldBe(ResultsCopy.ExportPngTitle, "the title is the localised format string, formatted with the run name and contig");
+        labels.XAxis.ShouldBe(ResultsCopy.ExportPngXAxis);
+        labels.YAxis.ShouldBe(ResultsCopy.ExportPngYAxis);
     }
 
     [Fact]
     public async Task A_contig_name_that_is_not_a_file_name_cannot_choose_where_the_png_goes()
     {
         var (vm, exporter) = await Results(Overview("..\\..\\evil:name"));
-        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<string>()).Returns(true);
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(true);
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
-        var path = (string)exporter.ReceivedCalls().Single().GetArguments()[1]!;
+        var path = (string)exporter.ReceivedCalls().Single().GetArguments()[2]!;
         Path.GetDirectoryName(path).ShouldBe(_dir);
         Path.GetFileName(path).ShouldNotContain("..");
     }
@@ -107,7 +121,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     public async Task A_failed_export_says_so()
     {
         var (vm, exporter) = await Results(Overview("chr1"));
-        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<string>()).Returns(false);
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 

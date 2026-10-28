@@ -10,13 +10,16 @@ public sealed class OverviewPngExporter : IOverviewImageExporter
     private const int Width = 1600;
     private const int Height = 480;
 
-    public bool Export(EntropyContig contig, string path)
+    public bool Export(EntropyContig contig, OverviewImageLabels labels, string path)
     {
         try
         {
             var plot = EntropyPlotBuilder.Build(contig, dark: false);
             plot.FigureBackground.Color = ScottPlot.Colors.White;
             plot.DataBackground.Color = ScottPlot.Colors.White;
+            plot.Title(labels.Title);
+            plot.XLabel(labels.XAxis);
+            plot.YLabel(labels.YAxis);
             plot.SavePng(path, Width, Height);
             return true;
         }

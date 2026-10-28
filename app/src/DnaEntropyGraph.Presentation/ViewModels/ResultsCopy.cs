@@ -17,6 +17,9 @@ public static class ResultsCopy
 
     // Issue #118: the entropy overview strip.
     public const string ExportPngFailed = "Results_ExportPngFailed";
+    public const string ExportPngTitle = "Results_ExportPng_Title";
+    public const string ExportPngXAxis = "Results_ExportPng_XAxis";
+    public const string ExportPngYAxis = "Results_ExportPng_YAxis";
 
     // Issue #552: the gene table.
     public const string GenesTruncated = "Results_GenesTruncated";
@@ -84,11 +87,11 @@ public static class ResultsCopy
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
-        GenesTruncated, GenesUnreadable, GenesSortedAscending, GenesSortedDescending,
+        ExportPngTitle, ExportPngXAxis, ExportPngYAxis, GenesTruncated, GenesUnreadable, GenesSortedAscending, GenesSortedDescending,
         .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
+    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
 }
 
