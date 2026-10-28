@@ -93,6 +93,14 @@ public static class ServiceRegistration
         services.AddSingleton<IFilePicker, FilePickerService>();
         services.AddSingleton<DialogService>();
         services.AddSingleton<IDialogService>(sp => sp.GetRequiredService<DialogService>());
+        // Issue #675: the three-button question (Stop / Delete / Keep waiting) is the same window's ContentDialog.
+        services.AddSingleton<IChoiceDialogService>(sp => sp.GetRequiredService<DialogService>());
+        // Issue #675: the runner's slow-run notice and stall question, answered by the UI (replaces the log-only defaults below).
+        services.AddSingleton<RunStallCoordinator>(sp => new RunStallCoordinator(
+            sp.GetRequiredService<IChoiceDialogService>(),
+            sp.GetRequiredService<IMessenger>(),
+            sp.GetRequiredService<IStringResourceProvider>(),
+            sp.GetRequiredService<IDiagnosticsLog>()));
         services.AddSingleton<IStringResourceProvider, ReswStringResourceProvider>();
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
@@ -285,10 +293,11 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
             {
-                // Issue #675: safe production defaults until the app lane binds a real question and a real notice. With no UI a stall is answered at once with "end it as the
-                // run chose" (never a question nobody can answer, never a VM left billing), and a notice is logged by id and kind (never a sequence, a file name or an email).
-                OnStall = StallDecisions.EndAsRunChose,
-                OnNotice = notice => sp.GetRequiredService<IDiagnosticsLog>().Warning("run-notice", notice.JobId, notice.Kind.ToString()),
+                // Issue #675: the stall question is a Stop / Delete / Keep waiting dialog and the slow-run notice is a line on the run page (RunStallCoordinator; the notice is also
+                // logged by id and kind, never a sequence, a file name or an email). A dialog that cannot be shown answers Keep waiting; StallDecisions.EndAsRunChose stays the
+                // default for a runner built without a UI (tests, the reconciler's own runner).
+                OnStall = sp.GetRequiredService<RunStallCoordinator>().AskAsync,
+                OnNotice = sp.GetRequiredService<RunStallCoordinator>().OnNotice,
             };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
@@ -309,6 +318,22 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ActiveRuns>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
         });
+        // Issue #113: the nothing-left-running scan (launch, every 5 minutes, and the exit modal); started by AppStartup, asked on close by AppWindowService.
+        services.AddSingleton<LeftRunningScanner>(sp => new LeftRunningScanner(
+            sp.GetRequiredService<IComputeGateway>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            sp.GetRequiredService<IRunRepository>(),
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingSource>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<LeftRunningGuard>(sp => new LeftRunningGuard(
+            sp.GetRequiredService<LeftRunningScanner>(),
+            sp.GetRequiredService<InstallationCleanup>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            sp.GetRequiredService<IChoiceDialogService>(),
+            sp.GetRequiredService<IToastService>(),
+            sp.GetRequiredService<IStringResourceProvider>(),
+            sp.GetRequiredService<IDiagnosticsLog>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
@@ -353,6 +378,9 @@ public static class ServiceRegistration
         services.AddTransient<SetupStepsViewModel>();
         services.AddTransient<WizardViewModel>();
         services.AddTransient<PresetPickerViewModel>();
+        // Issue #87: the New run page's linked model and graphics card pickers, over the one shipped catalog.
+        services.AddSingleton<GpuCatalog>(_ => GpuCatalog.Shipped);
+        services.AddTransient<GpuPlanViewModel>();
         services.AddTransient<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
@@ -360,6 +388,9 @@ public static class ServiceRegistration
         services.AddSingleton<IWebViewRuntimeProbe, WebView2RuntimeProbe>();
         services.AddTransient<IgvViewerHost>();
         services.AddTransient<ViewerViewModel>();
+        // Issue #497: the .fai of a long FASTA is built into the app's own folder, never beside the user's file.
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IFastaIndexStore>(sp =>
+            new DnaEntropyGraph.Core.Viewers.FastaIndexStore(sp.GetRequiredService<AppDataRoot>().FastaIndexDirectory));
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
