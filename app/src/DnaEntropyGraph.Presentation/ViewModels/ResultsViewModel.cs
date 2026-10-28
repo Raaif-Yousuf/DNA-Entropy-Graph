@@ -6,6 +6,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
+using DnaEntropyGraph.Presentation.Viewer;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -255,6 +256,16 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     [RelayCommand(CanExecute = nameof(HasFolder))]
     private void OpenFolder() => Report(_folder is not null && _launcher.OpenFolder(_folder), ResultsCopy.OpenFolderFailed);
+
+    /// <summary>Issue #699: a range dragged on the overview strip opens the embedded viewer at that range. A click opens nothing.</summary>
+    [RelayCommand]
+    private void SelectOverviewRange(OverviewRange range)
+    {
+        if (Overview is { } contig && _folder is { } folder && OverviewSelection.ToTarget(folder, contig, range) is { } target)
+        {
+            _navigator.NavigateTo(ViewerViewModel.PageKey, target);
+        }
+    }
 
     [RelayCommand(CanExecute = nameof(HasFolder))]
     private void OpenInViewer() => _navigator.NavigateTo(ViewerViewModel.PageKey, _folder);
