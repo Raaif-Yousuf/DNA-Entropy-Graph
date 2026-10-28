@@ -307,22 +307,25 @@ public sealed class RunCloudResults : IRunCloudResults
             return;
         }
 
-        await using var source = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + file.Path, cancellationToken).ConfigureAwait(false)
-                                 ?? throw new InvalidDataException("A result file is listed but is not in the bucket.");
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         var partial = destination + ".part";
         try
         {
+            // Issue #588: streamed from the bucket straight into the .part file, then verified; memory stays flat for a result of any size.
+            if (!await _storage.TryDownloadToFileAsync(run.Bucket!, run.JobPrefix + file.Path, partial, cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidDataException("A result file is listed but is not in the bucket.");
+            }
+
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long written = 0;
-            await using (var target = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            await using (var downloaded = new FileStream(partial, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
             {
                 var buffer = new byte[81920];
                 int read;
-                while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await downloaded.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
                     hash.AppendData(buffer, 0, read);
-                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                     written += read;
                 }
             }

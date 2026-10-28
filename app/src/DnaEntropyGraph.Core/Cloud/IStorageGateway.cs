@@ -18,6 +18,49 @@ public interface IStorageGateway
     Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Issue #588: downloads an object that may not exist straight into the file at <paramref name="destinationPath"/> (created or
+    /// truncated), true when it was written and false for a 404 (nothing is left on disk). Any failure or cancellation deletes the file, so a
+    /// partial never lingers. A result file (a probability matrix can be hundreds of MB) goes through this, never through <see cref="TryDownloadAsync"/>, which holds
+    /// the whole body in memory. The default copies the stream <see cref="TryDownloadAsync"/> returns; the real gateway overrides it to stream from the network.
+    /// </summary>
+    async Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+    {
+        var source = await TryDownloadAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
+        if (source is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await using (source.ConfigureAwait(false))
+            await using (var target = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            {
+                await source.CopyToAsync(target, 81920, cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            DeleteQuietly(destinationPath);
+            throw;
+        }
+    }
+
+    /// <summary>Deletes a leftover partial file; there is nothing more to do when that fails, and it never carries a final name.</summary>
+    static void DeleteQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // Best effort.
+        }
+    }
+    /// <summary>
     /// Every bucket of ours in the project: a <c>deg-</c> bucket that carries <c>app=dna-entropy-graph</c> (Hard Rule 9: by label, never
     /// by name alone). Read-only: unlike <see cref="EnsureBucketAsync"/> it never creates or repairs one. For the CloudCli (issue #60).
     /// </summary>

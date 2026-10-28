@@ -1263,8 +1263,12 @@ replay the create. Each HTTP call goes through `CloudCallPipeline` on its own, a
   is swallowed and the other surfaces as `org_policy`; the documented shapes are not captured from a real project (a ToTest row covers it). It is not
   rewritten when a retention changes (the lifecycle rule on the bucket is the truth; a `retention change patches the rule` flow is #114).
 - **Objects.** `UploadAsync` is a resumable `objects.insert` (the stream is rewound for a replay; a stream that cannot seek is
-  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (results and manifests are
-  small; the multi-GB weights cache is the worker's, #496). `TryDownloadAsync` answers null for a 404 only; every other failure
+  tried once). `DownloadAsync` and `TryDownloadAsync` are `objects.get?alt=media` read into memory (manifests, `status.json` and `result.json`
+  are small; the multi-GB weights cache is the worker's, #496). Result files (a probability matrix can be hundreds of MB) never go through them: issue #588 added
+  `TryDownloadToFileAsync(bucket, key, path)`, which the Google client writes chunk by chunk into the caller's `.part` file, so memory stays flat at any size
+  (MEASURED 2026-10-28: a generated 256 MB body allocates under 32 MB, the in-memory path allocated 672 MB). It answers false for a 404, and every failure,
+  retry attempt or cancel deletes the partial. The gateway checks no md5/crc32c; `RunTransfer` and `RunCloudResults` verify the finished `.part` file against the size and
+  SHA-256 `result.json` lists, then move it into place, so a corrupt or short file never carries the final name. There is no byte-range resume: a retry restarts the file. `TryDownloadAsync` answers null for a 404 only; every other failure
   throws, so a transport error never reads as "the worker has not finished".
 - **Error roster.** `BUCKET_CONFIG_NOT_APPLIED` and `BUCKET_NAME_TAKEN` are `SetupErrorCodes.BucketConfigNotApplied` and
   `BucketNameTaken` (in `SetupErrorCodes.All`, `Resources.resw`, `copy_catalog.md` and `triage_diagnostics.py`); both name Try

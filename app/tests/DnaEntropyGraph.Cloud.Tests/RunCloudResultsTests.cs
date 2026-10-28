@@ -61,6 +61,27 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
+    public async Task Redownload_fetches_each_result_file_through_the_file_streaming_call_never_the_in_memory_one()
+    {
+        // Issue #588: the observable that differs if the consumer is still wired to the buffered call.
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        var storage = Substitute.For<IStorageGateway>();
+        storage.TryDownloadAsync(Bucket, Prefix + "result.json", Arg.Any<CancellationToken>()).Returns(ci => _gcp.TryDownloadAsync(Bucket, Prefix + "result.json", ci.Arg<CancellationToken>()));
+        storage.TryDownloadToFileAsync(Bucket, Prefix + "output/sample.bedgraph", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                File.WriteAllBytes(ci.ArgAt<string>(2), BedGraph);
+                return Task.FromResult(true);
+            });
+
+        (await Make(storage).RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        File.ReadAllBytes(Path.Combine(folder, "sample.bedgraph")).ShouldBe(BedGraph);
+        await storage.DidNotReceive().TryDownloadAsync(Bucket, Prefix + "output/sample.bedgraph", Arg.Any<CancellationToken>());
+        Directory.GetFiles(folder, "*.part").ShouldBeEmpty();
+    }
+    [Fact]
     public async Task Redownload_restores_a_deleted_local_folder_from_the_bucket()
     {
         PutResult();

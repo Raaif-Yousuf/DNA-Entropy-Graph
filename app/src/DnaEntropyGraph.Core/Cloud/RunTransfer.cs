@@ -130,24 +130,27 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
     private async Task DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, CancellationToken cancellationToken)
     {
-        var stream = await calls.CallAsync(token => storage.TryDownloadAsync(bucket, objectKey, token), cancellationToken).ConfigureAwait(false)
-                     ?? throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} is listed by the worker but is not in the bucket.");
-
         var partial = destination + ".part";
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+
+            // Issue #588: the gateway streams the object straight into the .part file (memory stays flat for a result of any size), then the file is verified below.
+            var found = await calls.CallAsync(token => storage.TryDownloadToFileAsync(bucket, objectKey, partial, token), cancellationToken, settings.DownloadTimeout).ConfigureAwait(false);
+            if (!found)
+            {
+                throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} is listed by the worker but is not in the bucket.");
+            }
+
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long written = 0;
-            await using (stream.ConfigureAwait(false))
-            await using (var target = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            await using (var downloaded = new FileStream(partial, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
             {
                 var buffer = new byte[81920];
                 int read;
-                while ((read = await calls.CallAsync(token => stream.ReadAsync(buffer, token).AsTask(), cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await downloaded.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
                     hash.AppendData(buffer, 0, read);
-                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                     written += read;
                 }
             }

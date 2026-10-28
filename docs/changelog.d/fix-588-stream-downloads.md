@@ -1,0 +1,1 @@
+- Result downloads stream from the bucket straight to a temporary file instead of buffering the whole object in memory (#588): a probability matrix of hundreds of MB no longer needs that much RAM. The finished file is still checked against the size and SHA-256 the worker reported before it takes its final name, and a failed or cancelled download leaves no partial file behind.
