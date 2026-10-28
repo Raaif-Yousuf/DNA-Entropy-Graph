@@ -400,6 +400,9 @@ public static class ServiceRegistration
         services.AddSingleton<IWebViewRuntimeProbe, WebView2RuntimeProbe>();
         services.AddTransient<IgvViewerHost>();
         services.AddTransient<ViewerViewModel>();
+        // Issue #497: the .fai of a long FASTA is built into the app's own folder, never beside the user's file.
+        services.AddSingleton<DnaEntropyGraph.Core.Viewers.IFastaIndexStore>(sp =>
+            new DnaEntropyGraph.Core.Viewers.FastaIndexStore(sp.GetRequiredService<AppDataRoot>().FastaIndexDirectory));
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
