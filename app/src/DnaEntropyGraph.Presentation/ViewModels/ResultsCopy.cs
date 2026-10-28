@@ -21,6 +21,9 @@ public static class ResultsCopy
     // Issue #552: the gene table.
     public const string GenesTruncated = "Results_GenesTruncated";
     public const string GenesUnreadable = "Results_GenesUnreadable";
+    public const string GenesRowsSkipped = "Results_GenesRowsSkipped";
+    public const string GenesOrderFile = "Results_GenesOrderFile";
+    public const string GenesOrderSorted = "Results_GenesOrderSorted";
     public const string GenesSortedAscending = "Results_GenesSortedAscending";
     public const string GenesSortedDescending = "Results_GenesSortedDescending";
 
@@ -84,11 +87,11 @@ public static class ResultsCopy
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
-        GenesTruncated, GenesUnreadable, GenesSortedAscending, GenesSortedDescending,
+        GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
         .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
+    public static IReadOnlyList<string> FormatKeys { get; } = [GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
 }
 

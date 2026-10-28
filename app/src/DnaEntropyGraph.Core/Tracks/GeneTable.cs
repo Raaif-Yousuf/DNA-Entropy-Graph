@@ -18,16 +18,19 @@ public sealed record GeneRecord(
     double? MeanSurprisal,
     double FractionLowEntropy);
 
-/// <summary>Reads the worker's gene summary table. Never throws for a bad file: null means "could not be read", an empty list means "no genes".</summary>
+/// <summary>A gene table as read: the genes, and how many data rows were left out because they could not be read.</summary>
+public sealed record GeneTableContent(IReadOnlyList<GeneRecord> Rows, int SkippedRows);
+
+/// <summary>
+/// Reads the worker's gene summary table by column name, so a reordered file or an added column still reads. A row whose gene,
+/// position or mean entropy cannot be read is left out and counted, never turned into a guess; only a file that has no such columns,
+/// or cannot be opened, is unreadable (null).
+/// </summary>
 public static class GeneTableReader
 {
-    private static readonly string[] Columns =
-    [
-        "contig", "gene_id", "begin", "end", "strand", "length_nt", "partial", "wraps_origin", "segments",
-        "mean_entropy_bits", "min_entropy_bits", "max_entropy_bits", "mean_surprisal_bits", "fraction_low_entropy",
-    ];
+    private static readonly string[] Required = ["contig", "gene_id", "begin", "end", "mean_entropy_bits"];
 
-    public static IReadOnlyList<GeneRecord>? Read(string path)
+    public static GeneTableContent? Read(string path)
     {
         string[] lines;
         try
@@ -39,48 +42,63 @@ public static class GeneTableReader
             return null;
         }
 
-        if (lines.Length == 0 || !lines[0].TrimEnd('\r').Split('\t').SequenceEqual(Columns))
+        if (lines.Length == 0)
+        {
+            return null;
+        }
+
+        var header = lines[0].TrimEnd('\r').Split('\t');
+        var at = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < header.Length; i++)
+        {
+            at.TryAdd(header[i].Trim(), i);
+        }
+
+        if (Required.Any(c => !at.ContainsKey(c)))
         {
             return null;
         }
 
         var rows = new List<GeneRecord>(lines.Length - 1);
-        foreach (var line in lines.Skip(1).Where(l => l.Length > 0))
+        var skipped = 0;
+        foreach (var line in lines.Skip(1).Where(l => l.Trim().Length > 0))
         {
-            var c = line.Split('\t');
-            if (c.Length != Columns.Length
-                || !long.TryParse(c[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var begin)
-                || !long.TryParse(c[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var end)
-                || !long.TryParse(c[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var length)
-                || !Number(c[9], out var mean)
-                || !Number(c[10], out var min)
-                || !Number(c[11], out var max)
-                || !Number(c[13], out var low))
+            var c = line.TrimEnd('\r').Split('\t');
+            string Cell(string name) => at.TryGetValue(name, out var i) && i < c.Length ? c[i] : string.Empty;
+
+            if (!long.TryParse(Cell("begin"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var begin)
+                || !long.TryParse(Cell("end"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var end)
+                || !Number(Cell("mean_entropy_bits"), out var mean)
+                || Cell("gene_id").Length == 0)
             {
-                return null;
+                skipped++;
+                continue;
             }
 
-            double? surprisal = Number(c[12], out var s) ? s : null;
-            rows.Add(new GeneRecord(c[0], c[1], begin, end, c[4], length, c[6] == "true", c[7] == "true", mean, min, max, surprisal, low));
+            long.TryParse(Cell("length_nt"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var length);
+            var min = Number(Cell("min_entropy_bits"), out var lo) ? lo : mean;
+            var max = Number(Cell("max_entropy_bits"), out var hi) ? hi : mean;
+            Number(Cell("fraction_low_entropy"), out var low);
+            double? surprisal = Number(Cell("mean_surprisal_bits"), out var s) ? s : null;
+            rows.Add(new GeneRecord(Cell("contig"), Cell("gene_id"), begin, end, Cell("strand"), length, Cell("partial") == "true", Cell("wraps_origin") == "true", mean, min, max, surprisal, low));
         }
 
-        return rows;
+        return new GeneTableContent(rows, skipped);
     }
 
     private static bool Number(string text, out double value)
         => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
 }
 
-/// <summary>One <c>*.genes.tsv</c> of a run: its path under the run folder and its rows (null when unreadable).</summary>
-public sealed record GeneTableFile(string RelativePath, IReadOnlyList<GeneRecord>? Rows);
+/// <summary>One <c>*.genes.tsv</c> of a run: its path under the run folder and what was read from it (null when the file is unreadable).</summary>
+public sealed record GeneTableFile(string RelativePath, GeneTableContent? Content);
 
 /// <summary>Finds a run's gene tables for the Results page (issue #552). Touches the disk: callers run it off the UI thread.</summary>
 public interface IGeneTableSource
 {
     IReadOnlyList<GeneTableFile> Load(string folder);
 }
-
-/// <summary>The real source: every <c>*.genes.tsv</c> in the run folder and one level of per-input folders; a link, hidden or system entry is never entered (Hard Rule 14).</summary>
+/// <summary>The real source: every <c>*.genes.tsv</c> in the run folder and the one level of per-input folders below it; a link, hidden or system entry is never entered (Hard Rule 14).</summary>
 public sealed class GeneTableSource : IGeneTableSource
 {
     private const string Suffix = ".genes.tsv";
@@ -97,7 +115,7 @@ public sealed class GeneTableSource : IGeneTableSource
             var options = new EnumerationOptions
             {
                 RecurseSubdirectories = true,
-                MaxRecursionDepth = 4,
+                MaxRecursionDepth = 1,
                 AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.Hidden | FileAttributes.System,
             };
             return [.. Directory.EnumerateFiles(folder, "*" + Suffix, options)

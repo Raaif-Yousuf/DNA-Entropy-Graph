@@ -31,18 +31,18 @@ public sealed partial class ResultsGeneTable : ObservableObject
     /// <summary>Drawing thousands of rows in a non-virtualised list would stall the page; the full table is in the file.</summary>
     public const int MaxRowsShown = 500;
 
-    private static readonly Dictionary<string, Func<GeneRecord, IComparable>> Keys = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, Comparison<GeneRecord>> Keys = new(StringComparer.Ordinal)
     {
-        ["contig"] = g => g.Contig,
-        ["gene"] = g => g.GeneId,
-        ["begin"] = g => g.Begin,
-        ["end"] = g => g.End,
-        ["strand"] = g => g.Strand,
-        ["length"] = g => g.LengthNt,
-        ["mean"] = g => g.MeanEntropy,
-        ["min"] = g => g.MinEntropy,
-        ["max"] = g => g.MaxEntropy,
-        ["low"] = g => g.FractionLowEntropy,
+        ["contig"] = (x, y) => NaturalStringComparer.Instance.Compare(x.Contig, y.Contig),
+        ["gene"] = (x, y) => NaturalStringComparer.Instance.Compare(x.GeneId, y.GeneId),
+        ["begin"] = (x, y) => x.Begin.CompareTo(y.Begin),
+        ["end"] = (x, y) => x.End.CompareTo(y.End),
+        ["strand"] = (x, y) => string.CompareOrdinal(x.Strand, y.Strand),
+        ["length"] = (x, y) => x.LengthNt.CompareTo(y.LengthNt),
+        ["mean"] = (x, y) => x.MeanEntropy.CompareTo(y.MeanEntropy),
+        ["min"] = (x, y) => x.MinEntropy.CompareTo(y.MinEntropy),
+        ["max"] = (x, y) => x.MaxEntropy.CompareTo(y.MaxEntropy),
+        ["low"] = (x, y) => x.FractionLowEntropy.CompareTo(y.FractionLowEntropy),
     };
 
     private readonly IReadOnlyList<GeneRecord> _records;
@@ -71,7 +71,15 @@ public sealed partial class ResultsGeneTable : ObservableObject
 
     public bool IsTruncated => _records.Count > MaxRowsShown;
 
-    public string TruncatedNotice => IsTruncated ? _strings.GetString(ResultsCopy.GenesTruncated) : string.Empty;
+    /// <summary>"500 of 1200 genes shown, sorted by Mean entropy" and where the rest is; empty when every gene is shown.</summary>
+    public string TruncatedNotice => !IsTruncated
+        ? string.Empty
+        : string.Format(
+            CultureInfo.CurrentCulture,
+            _strings.GetString(ResultsCopy.GenesTruncated),
+            MaxRowsShown,
+            _records.Count,
+            SortKey.Length == 0 ? _strings.GetString(ResultsCopy.GenesOrderFile) : string.Format(CultureInfo.CurrentCulture, _strings.GetString(ResultsCopy.GenesOrderSorted), _strings.GetString(ResultsCopy.GeneColumnKey(SortKey))));
 
     /// <summary>Header text of the column the table is sorted by, with its direction, for the line above the table.</summary>
     public string SortSummary => SortKey.Length == 0
@@ -89,9 +97,11 @@ public sealed partial class ResultsGeneTable : ObservableObject
         SortDescending = SortKey == key && !SortDescending;
         SortKey = key;
         OnPropertyChanged(nameof(SortSummary));
+        OnPropertyChanged(nameof(TruncatedNotice));
 
         // OrderBy is stable, so equal values keep the file's order in both directions.
-        Fill(SortDescending ? _records.OrderByDescending(select) : _records.OrderBy(select));
+        var comparer = Comparer<GeneRecord>.Create(select);
+        Fill(SortDescending ? _records.OrderByDescending(g => g, comparer) : _records.OrderBy(g => g, comparer));
     }
 
     private void Fill(IEnumerable<GeneRecord> ordered)
@@ -114,4 +124,69 @@ public sealed partial class ResultsGeneTable : ObservableObject
     }
 
     private static string Bits(double value) => value.ToString("F2", CultureInfo.CurrentCulture);
+}
+
+/// <summary>
+/// Orders text the way a person reads gene names: digit runs by their number (g2 before g10), everything else by character code, so
+/// the order is the same on every PC whatever its language setting. Equal numbers with different zero padding order by length.
+/// </summary>
+public sealed class NaturalStringComparer : IComparer<string>
+{
+    public static NaturalStringComparer Instance { get; } = new();
+
+    public int Compare(string? x, string? y)
+    {
+        x ??= string.Empty;
+        y ??= string.Empty;
+        int i = 0, j = 0;
+        while (i < x.Length && j < y.Length)
+        {
+            if (char.IsAsciiDigit(x[i]) && char.IsAsciiDigit(y[j]))
+            {
+                var si = i;
+                var sj = j;
+                while (i < x.Length && char.IsAsciiDigit(x[i]))
+                {
+                    i++;
+                }
+
+                while (j < y.Length && char.IsAsciiDigit(y[j]))
+                {
+                    j++;
+                }
+
+                var dx = x[si..i].TrimStart('0');
+                var dy = y[sj..j].TrimStart('0');
+                var byLength = dx.Length.CompareTo(dy.Length);
+                if (byLength != 0)
+                {
+                    return byLength;
+                }
+
+                var byDigits = string.CompareOrdinal(dx, dy);
+                if (byDigits != 0)
+                {
+                    return byDigits;
+                }
+
+                var byPadding = (i - si).CompareTo(j - sj);
+                if (byPadding != 0)
+                {
+                    return byPadding;
+                }
+            }
+            else
+            {
+                if (x[i] != y[j])
+                {
+                    return x[i].CompareTo(y[j]);
+                }
+
+                i++;
+                j++;
+            }
+        }
+
+        return (x.Length - i).CompareTo(y.Length - j);
+    }
 }

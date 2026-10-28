@@ -36,6 +36,8 @@ public sealed class ResultsGeneTablesTests : IDisposable
 
     private static GeneRecord Gene(string id, double mean) => new("c1", id, 1, 30, "+", 30, false, false, mean, mean, mean, null, 0);
 
+    private static GeneTableFile Table(string name, params GeneRecord[] rows) => new(name, new GeneTableContent(rows, 0));
+
     private async Task<ResultsViewModel> Load(params GeneTableFile[] tables)
     {
         var repository = Substitute.For<IRunRepository>();
@@ -49,7 +51,7 @@ public sealed class ResultsGeneTablesTests : IDisposable
     [Fact]
     public async Task A_run_with_a_gene_table_lists_it_sortable()
     {
-        var vm = await Load(new GeneTableFile("a.genes.tsv", [Gene("hi", 1.9), Gene("lo", 0.2)]));
+        var vm = await Load(Table("a.genes.tsv", Gene("hi", 1.9), Gene("lo", 0.2)));
 
         vm.HasGeneTables.ShouldBeTrue();
         var table = vm.GeneTables.Single();
@@ -62,20 +64,40 @@ public sealed class ResultsGeneTablesTests : IDisposable
     [Fact]
     public async Task Several_tables_are_each_named_by_their_file_but_one_table_is_not()
     {
-        (await Load(new GeneTableFile("a.genes.tsv", [Gene("x", 1)]))).GeneTables.Single().HasTitle.ShouldBeFalse();
+        (await Load(Table("a.genes.tsv", Gene("x", 1)))).GeneTables.Single().HasTitle.ShouldBeFalse();
 
-        var many = await Load(new GeneTableFile("a/a.genes.tsv", [Gene("x", 1)]), new GeneTableFile("b/b.genes.tsv", [Gene("y", 1)]));
+        var many = await Load(Table("a/a.genes.tsv", Gene("x", 1)), Table("b/b.genes.tsv", Gene("y", 1)));
         many.GeneTables.Select(t => t.Title).ShouldBe(["a/a.genes.tsv", "b/b.genes.tsv"]);
     }
 
     [Fact]
     public async Task An_unreadable_table_says_which_file_and_what_to_do_and_the_others_still_show()
     {
-        var vm = await Load(new GeneTableFile("bad.genes.tsv", null), new GeneTableFile("ok.genes.tsv", [Gene("x", 1)]));
+        var vm = await Load(new GeneTableFile("bad.genes.tsv", null), Table("ok.genes.tsv", Gene("x", 1)));
 
         vm.GeneTables.Count.ShouldBe(1);
         vm.GeneNoticeText.ShouldBe(ResultsCopy.GenesUnreadable);
         vm.IsGeneNoticeVisible.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Every_unreadable_table_is_counted_and_named_not_only_the_first()
+    {
+        _strings.GetString(ResultsCopy.GenesUnreadable).Returns("{0}|{1}");
+
+        var vm = await Load(new GeneTableFile("a.genes.tsv", null), new GeneTableFile("b.genes.tsv", null));
+
+        vm.GeneTables.ShouldBeEmpty();
+        vm.GeneNoticeText.ShouldBe("2|a.genes.tsv, b.genes.tsv");
+    }
+
+    [Fact]
+    public async Task Skipped_rows_are_reported_with_their_count_and_the_table_still_shows()
+    {
+        var vm = await Load(new GeneTableFile("a.genes.tsv", new GeneTableContent([Gene("x", 1)], 3)));
+
+        vm.GeneTables.Count.ShouldBe(1);
+        vm.GeneNoticeText.ShouldBe(ResultsCopy.GenesRowsSkipped);
     }
 
     [Fact]

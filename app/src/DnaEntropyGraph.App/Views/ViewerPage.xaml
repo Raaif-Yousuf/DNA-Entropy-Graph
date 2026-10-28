@@ -72,6 +72,11 @@
                 Grid.Row="1"
                 Spacing="4"
                 Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasSmoothedTracks), Mode=OneWay}">
+                <InfoBar
+                    IsOpen="{x:Bind ViewModel.IsTrackNoticeVisible, Mode=OneWay}"
+                    Severity="Warning"
+                    IsClosable="False"
+                    Message="{x:Bind ViewModel.TrackNoticeText, Mode=OneWay}" />
                 <TextBlock x:Uid="ViewerSmoothedHeading" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" TextWrapping="Wrap" />
                 <ItemsControl
                     ItemsSource="{x:Bind ViewModel.SmoothedTracks}"

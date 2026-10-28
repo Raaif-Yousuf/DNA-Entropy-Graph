@@ -107,6 +107,38 @@ public sealed class ViewerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void A_track_the_page_could_not_load_turns_its_switch_back_off_and_names_one_action()
+    {
+        var vm = ReadyWithSmoothed();
+        _strings.GetString("Viewer_TrackFailed").Returns("failed {0}");
+        var track = vm.SmoothedTracks.Single();
+        track.IsOn = true;
+        _sent.Clear();
+
+        vm.OnViewerMessage("{\"evt\":\"trackFailed\",\"name\":\"" + track.Name + "\",\"message\":\"404\"}");
+
+        track.IsOn.ShouldBeFalse();
+        _sent.Select(Cmd).ShouldNotContain("track", "switching it off after a failed load must not ask the page to remove a track it never drew");
+        vm.IsTrackNoticeVisible.ShouldBeTrue();
+        vm.TrackNoticeText.ShouldBe("failed " + track.Window);
+
+        track.IsOn = true;
+        vm.IsTrackNoticeVisible.ShouldBeFalse("trying again clears the old message");
+    }
+
+    [Fact]
+    public void A_track_failure_for_a_name_the_model_does_not_know_changes_nothing()
+    {
+        var vm = ReadyWithSmoothed();
+        vm.SmoothedTracks.Single().IsOn = true;
+
+        vm.OnViewerMessage("{\"evt\":\"trackFailed\",\"name\":\"other\"}");
+
+        vm.SmoothedTracks.Single().IsOn.ShouldBeTrue();
+        vm.IsTrackNoticeVisible.ShouldBeFalse();
+    }
+
+    [Fact]
     public void A_redrawn_page_starts_with_every_smoothed_track_off_without_sending_anything()
     {
         var vm = ReadyWithSmoothed();

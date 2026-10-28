@@ -219,13 +219,24 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         var several = tables.Count > 1;
-        foreach (var table in tables.Where(t => t.Rows is not null))
+        var notices = new List<string>();
+        foreach (var table in tables.Where(t => t.Content is not null))
         {
-            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Rows!, _strings));
+            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Content!.Rows, _strings));
+            if (table.Content.SkippedRows > 0)
+            {
+                notices.Add(Format(ResultsCopy.GenesRowsSkipped, table.Content.SkippedRows, table.RelativePath));
+            }
         }
 
-        var unreadable = tables.FirstOrDefault(t => t.Rows is null);
-        GeneNoticeText = unreadable is null ? string.Empty : Format(ResultsCopy.GenesUnreadable, unreadable.RelativePath);
+        // Every unreadable table is reported, with how many there are, so none goes missing without a word.
+        var unreadable = tables.Where(t => t.Content is null).Select(t => t.RelativePath).ToList();
+        if (unreadable.Count > 0)
+        {
+            notices.Add(Format(ResultsCopy.GenesUnreadable, unreadable.Count, string.Join(", ", unreadable)));
+        }
+
+        GeneNoticeText = string.Join(" ", notices);
         OnPropertyChanged(nameof(HasGeneTables));
     }
 

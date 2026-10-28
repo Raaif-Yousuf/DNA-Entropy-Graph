@@ -18,6 +18,8 @@ public sealed class ResultsSurfacesWiringTests
     [InlineData("Views/ResultsPage.xaml", "ItemsSource=\"{x:Bind Rows}\"")]
     [InlineData("Views/ResultsPage.xaml", "Command=\"{x:Bind SortByCommand}\" CommandParameter=\"mean\"")]
     [InlineData("Views/ViewerPage.xaml", "ItemsSource=\"{x:Bind ViewModel.SmoothedTracks}\"")]
+    [InlineData("Views/ViewerPage.xaml", "Message=\"{x:Bind ViewModel.TrackNoticeText, Mode=OneWay}\"")]
+    [InlineData("Views/ResultsPage.xaml", "Text=\"{x:Bind TruncatedNotice, Mode=OneWay}\"")]
     [InlineData("Views/ViewerPage.xaml", "IsChecked=\"{x:Bind IsOn, Mode=TwoWay}\"")]
     [InlineData("Views/ViewerPage.xaml", "IsEnabled=\"{x:Bind ViewModel.AreSmoothedTracksEnabled, Mode=OneWay}\"")]
     public void The_XAML_binds_the_surfaces(string file, string fragment)
@@ -51,5 +53,6 @@ public sealed class ResultsSurfacesWiringTests
         js.ShouldContain("case 'track':");
         js.ShouldContain("removeTrackByName");
         js.ShouldContain("loadTrack");
+        js.ShouldContain("evt: 'trackFailed'");
     }
 }
