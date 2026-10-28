@@ -186,6 +186,13 @@ public sealed partial class ViewerViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasSmoothedTracks;
 
+    /// <summary>Why a switched-on track is not drawn (the page could not load it): one reason, one action. Empty when there is nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsTrackNoticeVisible))]
+    private string _trackNoticeText = string.Empty;
+
+    public bool IsTrackNoticeVisible => TrackNoticeText.Length > 0;
+
     /// <summary>The switches work only while the page shows the run: a track cannot be added to a page that has not drawn it.</summary>
     public bool AreSmoothedTracksEnabled => _pageReady && Status == ViewerStatus.Ready;
 
@@ -207,7 +214,30 @@ public sealed partial class ViewerViewModel : ObservableObject
         }
 
         HasSmoothedTracks = SmoothedTracks.Count > 0;
+        TrackNoticeText = string.Empty;
         OnPropertyChanged(nameof(AreSmoothedTracksEnabled));
+    }
+
+    // The page could not draw a track the user switched on: put the switch back to off (without telling the page) and say what to do.
+    private void OnTrackFailed(string? name)
+    {
+        var track = SmoothedTracks.FirstOrDefault(t => t.Name == name);
+        if (track is null)
+        {
+            return;
+        }
+
+        _settingTracks = true;
+        try
+        {
+            track.IsOn = false;
+        }
+        finally
+        {
+            _settingTracks = false;
+        }
+
+        TrackNoticeText = string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("Viewer_TrackFailed"), track.Window);
     }
 
     // A freshly drawn page has none of the optional tracks, so the switches go back to off without telling the page.
@@ -233,6 +263,8 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             return;
         }
+
+        TrackNoticeText = string.Empty;
 
         if (track.IsOn)
         {
@@ -593,6 +625,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 break;
             case "key":
                 OnViewerKey(json);
+                break;
+            case "trackFailed":
+                OnTrackFailed(ReadString(json, "name"));
                 break;
         }
     }

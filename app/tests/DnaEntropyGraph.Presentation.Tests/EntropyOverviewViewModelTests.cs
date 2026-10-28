@@ -91,6 +91,38 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Save_picture_never_overwrites_a_file_that_is_already_there()
+    {
+        var (vm, exporter) = await Results(Overview("chr1"));
+        File.WriteAllText(Path.Combine(_dir, "chr1.entropy.png"), "another run's picture");
+        File.WriteAllText(Path.Combine(_dir, "chr1.entropy (2).png"), "and another");
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        var path = (string)exporter.ReceivedCalls().Single().GetArguments()[2]!;
+        Path.GetFileName(path).ShouldBe("chr1.entropy (3).png");
+        File.ReadAllText(Path.Combine(_dir, "chr1.entropy.png")).ShouldBe("another run's picture");
+        _launcher.Received(1).ShowInFolder(path);
+    }
+
+    [Fact]
+    public async Task A_second_save_of_the_same_run_gets_its_own_name_too()
+    {
+        var (vm, exporter) = await Results(Overview("chr1"));
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(ci =>
+        {
+            File.WriteAllText(ci.ArgAt<string>(2), "png");
+            return true;
+        });
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        exporter.ReceivedCalls().Select(c => Path.GetFileName((string)c.GetArguments()[2]!)).ShouldBe(["chr1.entropy.png", "chr1.entropy (2).png"]);
+    }
+
+    [Fact]
     public async Task The_picture_is_titled_with_the_run_and_contig_and_labelled_in_bits()
     {
         var (vm, exporter) = await Results(Overview("chr1"));

@@ -36,9 +36,7 @@ public sealed class GeneTableReaderTests : IDisposable
     {
         var path = Write("a.genes.tsv", Header, "c1\tgeneA\t10\t99\t+\t90\tfalse\tfalse\t10..99\t1.2500\t0.5000\t1.9000\t\t0.1000");
 
-        var rows = GeneTableReader.Read(path)!;
-
-        var r = rows.Single();
+        var r = GeneTableReader.Read(path)!.Rows.Single();
         r.Contig.ShouldBe("c1");
         r.GeneId.ShouldBe("geneA");
         r.Begin.ShouldBe(10);
@@ -55,15 +53,35 @@ public sealed class GeneTableReaderTests : IDisposable
 
     [Fact]
     public void A_header_only_file_is_an_empty_table_not_a_failure()
-        => GeneTableReader.Read(Write("a.genes.tsv", Header))!.ShouldBeEmpty();
+        => GeneTableReader.Read(Write("a.genes.tsv", Header))!.Rows.ShouldBeEmpty();
 
     [Fact]
     public void A_file_with_the_wrong_header_is_unreadable()
         => GeneTableReader.Read(Write("a.genes.tsv", "position\tbase", "1\tA"))!.ShouldBeNull();
 
     [Fact]
-    public void A_row_that_does_not_parse_is_unreadable_not_silently_dropped()
-        => GeneTableReader.Read(Write("a.genes.tsv", Header, "c1\tg\tx\t99\t+\t90\tfalse\tfalse\t1..9\t1\t1\t1\t\t0"))!.ShouldBeNull();
+    public void A_row_that_does_not_parse_is_left_out_and_counted_and_the_good_rows_still_show()
+    {
+        var content = GeneTableReader.Read(Write(
+            "a.genes.tsv",
+            Header,
+            "c1\tbad\tx\t99\t+\t90\tfalse\tfalse\t1..9\t1\t1\t1\t\t0",
+            "c1\tempty\t1\t9\t+\t9\tfalse\tfalse\t1..9\t\t\t\t\t",
+            "c1\tgood\t1\t9\t+\t9\tfalse\tfalse\t1..9\t1.0\t1\t1\t\t0"))!;
+
+        content.Rows.Select(r => r.GeneId).ShouldBe(["good"]);
+        content.SkippedRows.ShouldBe(2);
+    }
+
+    [Fact]
+    public void Columns_are_found_by_name_so_an_added_or_reordered_column_still_reads()
+    {
+        var content = GeneTableReader.Read(Write("a.genes.tsv", "note\tgene_id\tcontig\tend\tbegin\tmean_entropy_bits\textra", "n\tg1\tc9\t99\t10\t1.5\tz"))!;
+
+        var r = content.Rows.Single();
+        (r.GeneId, r.Contig, r.Begin, r.End, r.MeanEntropy).ShouldBe(("g1", "c9", 10L, 99L, 1.5));
+        content.SkippedRows.ShouldBe(0);
+    }
 
     [Fact]
     public void The_source_finds_every_table_one_folder_down_and_names_it_by_relative_path()
@@ -75,7 +93,15 @@ public sealed class GeneTableReaderTests : IDisposable
         var tables = new GeneTableSource().Load(_dir);
 
         tables.Select(t => t.RelativePath).ShouldBe([Path.Combine("in1", "in1.genes.tsv"), Path.Combine("in2", "in2.genes.tsv")]);
-        tables[0].Rows!.Count.ShouldBe(1);
+        tables[0].Content!.Rows.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_table_two_folders_down_is_not_listed()
+    {
+        Write("a/b/deep.genes.tsv", Header);
+
+        new GeneTableSource().Load(_dir).ShouldBeEmpty();
     }
 
     [Fact]

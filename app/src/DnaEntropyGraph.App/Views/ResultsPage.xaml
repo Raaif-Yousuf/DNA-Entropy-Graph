@@ -177,7 +177,7 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <TextBlock Text="{x:Bind TruncatedNotice}" Visibility="{x:Bind IsTruncated}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Bind TruncatedNotice, Mode=OneWay}" Visibility="{x:Bind IsTruncated}" TextWrapping="Wrap" />
                         </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>

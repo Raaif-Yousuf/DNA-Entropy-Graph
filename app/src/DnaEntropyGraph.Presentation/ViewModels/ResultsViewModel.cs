@@ -219,13 +219,24 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         var several = tables.Count > 1;
-        foreach (var table in tables.Where(t => t.Rows is not null))
+        var notices = new List<string>();
+        foreach (var table in tables.Where(t => t.Content is not null))
         {
-            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Rows!, _strings));
+            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Content!.Rows, _strings));
+            if (table.Content.SkippedRows > 0)
+            {
+                notices.Add(Format(ResultsCopy.GenesRowsSkipped, table.Content.SkippedRows, table.RelativePath));
+            }
         }
 
-        var unreadable = tables.FirstOrDefault(t => t.Rows is null);
-        GeneNoticeText = unreadable is null ? string.Empty : Format(ResultsCopy.GenesUnreadable, unreadable.RelativePath);
+        // Every unreadable table is reported, with how many there are, so none goes missing without a word.
+        var unreadable = tables.Where(t => t.Content is null).Select(t => t.RelativePath).ToList();
+        if (unreadable.Count > 0)
+        {
+            notices.Add(Format(ResultsCopy.GenesUnreadable, unreadable.Count, string.Join(", ", unreadable)));
+        }
+
+        GeneNoticeText = string.Join(" ", notices);
         OnPropertyChanged(nameof(HasGeneTables));
     }
 
@@ -385,7 +396,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        var path = Path.Combine(folder, SafeFileName(contig.Name) + ".entropy.png");
+        var path = UnusedPath(folder, SafeFileName(contig.Name) + ".entropy", ".png");
         var labels = new OverviewImageLabels(Format(ResultsCopy.ExportPngTitle, Title, contig.Name), _strings.GetString(ResultsCopy.ExportPngXAxis), _strings.GetString(ResultsCopy.ExportPngYAxis));
         var written = await Task.Run(() => exporter.Export(contig, labels, path), CancellationToken.None);
         if (written)
@@ -396,6 +407,19 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
         }
+    }
+
+    // Hard Rule 14: a picture is never written over a file that is already there (another run in a shared folder, or two records whose
+    // names clean up to the same text). The first free name wins: name.png, name (2).png, name (3).png.
+    private static string UnusedPath(string folder, string stem, string extension)
+    {
+        var path = Path.Combine(folder, stem + extension);
+        for (var n = 2; File.Exists(path); n++)
+        {
+            path = Path.Combine(folder, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{stem} ({n}){extension}"));
+        }
+
+        return path;
     }
 
     // A contig name comes from the user's own file: only its letters, digits and a few safe marks may reach a file name.

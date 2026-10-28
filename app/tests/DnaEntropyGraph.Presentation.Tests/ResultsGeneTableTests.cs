@@ -86,6 +86,25 @@ public sealed class ResultsGeneTableTests
     }
 
     [Fact]
+    public void Gene_names_sort_naturally_and_the_same_on_every_language_setting()
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+            var t = Table(Gene("g10", 1), Gene("g2", 1), Gene("G1", 1), Gene("g02", 1), Gene("g1", 1));
+
+            t.SortByCommand.Execute("gene");
+
+            Ids(t).ShouldBe(["G1", "g1", "g2", "g02", "g10"]);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
     public void A_gene_row_shows_its_numbers_in_bits_to_two_decimals()
     {
         var row = Table(Gene("g", 1.256, begin: 10, length: 90)).Rows.Single();
@@ -104,6 +123,17 @@ public sealed class ResultsGeneTableTests
         t.Rows.Count.ShouldBe(ResultsGeneTable.MaxRowsShown);
         t.IsTruncated.ShouldBeTrue();
         t.TruncatedNotice.ShouldBe(ResultsCopy.GenesTruncated);
+
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        strings.GetString(ResultsCopy.GenesTruncated).Returns("{0} of {1} genes shown, {2}");
+        strings.GetString(ResultsCopy.GenesOrderFile).Returns("file order");
+        strings.GetString(ResultsCopy.GenesOrderSorted).Returns("sorted by {0}");
+        strings.GetString(ResultsCopy.GeneColumnKey("mean")).Returns("Mean entropy");
+        var worded = new ResultsGeneTable("t", [.. Enumerable.Range(0, ResultsGeneTable.MaxRowsShown + 5).Select(i => Gene("g" + i, i))], strings);
+        worded.TruncatedNotice.ShouldBe("500 of 505 genes shown, file order");
+        worded.SortByCommand.Execute("mean");
+        worded.TruncatedNotice.ShouldBe("500 of 505 genes shown, sorted by Mean entropy");
 
         t.SortByCommand.Execute("mean");
         t.SortByCommand.Execute("mean");

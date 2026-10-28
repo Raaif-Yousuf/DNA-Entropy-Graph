@@ -3,7 +3,7 @@
 //   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"track", op:"add"|"remove", config|name}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
-//   {evt:"snapshot", svg}, {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
+//   {evt:"snapshot", svg}, {evt:"trackFailed", name, message} (an added track could not load), {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
 //   and {evt:"loaded", locus} carries the locus first shown. Commands in also include {cmd:"keys", enabled}.
 // Runs with no network: igv.js is vendored beside this file and every URL it fetches is
 // https://run.deg/... (the run's output folder, mapped by the host).
@@ -68,7 +68,12 @@
   // track stays primary and a reload starts without them. Adding twice or removing one that is absent is a no-op.
   async function changeTrack(cmd) {
     if (cmd.op === 'add' && cmd.config) {
-      if (browser.findTracks('name', cmd.config.name).length === 0) { await browser.loadTrack(cmd.config); }
+      // A track that cannot be loaded (404, bad file) must not leave its switch ticked with nothing drawn: tell the host.
+      try {
+        if (browser.findTracks('name', cmd.config.name).length === 0) { await browser.loadTrack(cmd.config); }
+      } catch (err) {
+        post({ evt: 'trackFailed', name: cmd.config.name, message: describe(err) });
+      }
     } else if (cmd.op === 'remove' && cmd.name) {
       browser.removeTrackByName(cmd.name);
     }
