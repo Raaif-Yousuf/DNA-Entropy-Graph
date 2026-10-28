@@ -448,21 +448,60 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             return;
         }
 
+        // Issue #135, the conservative rules: a GFF3 goes to the FASTA with the same name (case does not matter), preferring one added in this
+        // drop; the only FASTA on the page is taken when no name matches at all. Anything unclear (two FASTA files with that name, two GFF3
+        // files for one FASTA, a FASTA that already has a GFF3) is left alone and the page says why: the result is always visible on the
+        // pill and undone with Remove GFF3.
+        var plans = new List<(string Gff, InputPillItem Target, bool ByName)>();
         foreach (var gff in annotations)
         {
             var candidates = Items.Where(item => item.Kind == InputKind.Fasta && item.IsValid).ToList();
             var stem = Path.GetFileNameWithoutExtension(gff);
-            bool SameStem(InputPillItem item) => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase);
-            var target = candidates.FirstOrDefault(item => added.Contains(item) && SameStem(item))
-                ?? candidates.FirstOrDefault(SameStem)
-                ?? (candidates.Count == 1 ? candidates[0] : null);
-            if (target is null)
+            var named = candidates.Where(item => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase)).ToList();
+            var namedInThisDrop = named.Where(added.Contains).ToList();
+            var pool = namedInThisDrop.Count > 0 ? namedInThisDrop : named;
+            if (pool.Count > 1)
+            {
+                messages.Add(Format("NewRunStatusAnnotationAmbiguousName", Path.GetFileName(gff)));
+                continue;
+            }
+
+            if (pool.Count == 1)
+            {
+                plans.Add((gff, pool[0], true));
+            }
+            else if (candidates.Count == 1)
+            {
+                plans.Add((gff, candidates[0], false));
+            }
+            else
             {
                 messages.Add(_strings.GetString(candidates.Count == 0 ? "NewRunStatusAnnotationNoFasta" : "NewRunStatusAnnotationAmbiguous"));
+            }
+        }
+
+        foreach (var group in plans.GroupBy(p => p.Target))
+        {
+            var target = group.Key;
+            if (group.Count() > 1)
+            {
+                messages.Add(Format("NewRunStatusAnnotationTwoForOne", Path.GetFileName(target.Path)));
+                continue;
+            }
+
+            var (gff, _, byName) = group.Single();
+            if (target.AnnotationPath is { } existing)
+            {
+                messages.Add(Format("NewRunStatusAnnotationAlreadyPaired", Path.GetFileName(target.Path), Path.GetFileName(existing), Path.GetFileName(gff)));
                 continue;
             }
 
             await AttachAnnotationAsync(target, gff, messages, cancellationToken);
+            if (!byName && target.AnnotationPath == gff)
+            {
+                // Pairing by position, not by name, is a guess the user should see (and can undo).
+                messages.Add(Format("NewRunStatusAnnotationPairedOnly", Path.GetFileName(gff), Path.GetFileName(target.Path)));
+            }
         }
     }
 

@@ -460,6 +460,18 @@
   <data name="NewRunStatusAnnotationAmbiguous" xml:space="preserve">
     <value>There is more than one FASTA file and the GFF3 name does not match any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
   </data>
+  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
+    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
+    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
+    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
+  </data>
   <data name="NewRunAnnotationProblem_FileUnreadable" xml:space="preserve">
     <value>The GFF3 or its FASTA file could not be read. Check that both still exist and are not open in another program, then add the GFF3 again.</value>
   </data>

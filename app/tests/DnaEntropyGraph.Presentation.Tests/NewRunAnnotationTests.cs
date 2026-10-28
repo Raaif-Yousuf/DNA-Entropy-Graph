@@ -247,6 +247,116 @@ public sealed class NewRunAnnotationTests : IDisposable
         await _jobEngine.Received(1).StartRunAsync(Arg.Is<RunOptions>(o => o.AnnotationPath == null), Arg.Any<CancellationToken>());
     }
 
+    // Issue #135: the conservative auto-pairing rules. Same stem, case-insensitive; anything unclear is left unpaired and the page says why.
+
+    [Fact]
+    public async Task A_gff3_dropped_later_pairs_with_the_fasta_already_on_the_page_whatever_the_case_of_the_names()
+    {
+        var vm = NewViewModel();
+        var fasta = Fasta("Plasmid.FASTA");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(fasta));
+        var other = Fasta("other.fasta");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(other));
+        var gff = Gff("PLASMID.GFF3");
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(gff));
+
+        vm.Items.Single(i => i.Path == fasta).AnnotationPath.ShouldBe(gff);
+        vm.Items.Single(i => i.Path == other).HasAnnotation.ShouldBeFalse();
+        vm.StatusMessage.ShouldBeEmpty("a name match is the expected result and needs no explanation");
+    }
+
+    [Fact]
+    public async Task A_gff3_pairs_by_name_with_a_gff_extension_too()
+    {
+        var vm = NewViewModel();
+        var fasta = Fasta("genomic.fna");
+        var gff = Gff("genomic.gff");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("zzz.fasta"), fasta, gff));
+
+        vm.Items.Single(i => i.Path == fasta).AnnotationPath.ShouldBe(gff);
+    }
+
+    [Fact]
+    public async Task Two_fasta_files_with_the_same_name_in_different_folders_leave_the_gff3_unpaired_and_say_why()
+    {
+        var vm = NewViewModel();
+        Directory.CreateDirectory(Path.Combine(_dir, "a"));
+        Directory.CreateDirectory(Path.Combine(_dir, "b"));
+        var first = Fasta(Path.Combine("a", "same.fasta"));
+        var second = Fasta(Path.Combine("b", "same.fasta"));
+        var gff = Gff("same.gff3");
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(first, second, gff));
+
+        vm.Items.ShouldAllBe(i => !i.HasAnnotation);
+        vm.StatusMessage.ShouldBe("ambiguous-name:same.gff3");
+        _checks.ShouldBeEmpty("nothing is validated, and nothing is guessed, for an ambiguous name");
+    }
+
+    [Fact]
+    public async Task Two_gff3_files_for_one_fasta_pair_neither_and_say_so()
+    {
+        var vm = NewViewModel();
+        var fasta = Fasta("x.fasta");
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(fasta, Gff("x.gff3"), Gff("x.gff")));
+
+        vm.Items.ShouldHaveSingleItem().HasAnnotation.ShouldBeFalse();
+        vm.StatusMessage.ShouldBe("two:x.fasta");
+        _checks.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_second_gff3_never_replaces_one_already_paired_and_the_page_says_how_to_swap_it()
+    {
+        var vm = NewViewModel();
+        var first = Gff("p.gff3");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("p.fasta"), first));
+        vm.StatusMessage.ShouldBeEmpty();
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Gff("p.gff")));
+
+        vm.Items.Single().AnnotationPath.ShouldBe(first);
+        vm.StatusMessage.ShouldBe("already:p.fasta:p.gff3:p.gff");
+    }
+
+    [Fact]
+    public async Task After_Remove_GFF3_the_same_file_can_be_paired_again()
+    {
+        var vm = NewViewModel();
+        var gff = Gff("p.gff3");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("p.fasta"), gff));
+        vm.RemoveAnnotationCommand.Execute(vm.Items.Single());
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(gff));
+
+        vm.Items.Single().AnnotationPath.ShouldBe(gff);
+    }
+
+    [Fact]
+    public async Task A_pair_made_only_because_there_was_one_fasta_says_so_and_how_to_undo_it()
+    {
+        var vm = NewViewModel();
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("a.fasta"), Gff("annotations.gff")));
+
+        vm.Items.Single().HasAnnotation.ShouldBeTrue();
+        vm.StatusMessage.ShouldBe("paired-only:annotations.gff:a.fasta");
+    }
+
+    [Fact]
+    public async Task A_gff3_that_fails_the_local_check_on_the_only_fasta_is_never_kept_even_though_it_was_the_only_choice()
+    {
+        var vm = NewViewModel();
+        _result = new AnnotationCheckResult(new AnnotationProblem(AnnotationProblemCode.NoNameMatch, "x"), 0, []);
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("a.fasta"), Gff("annotations.gff")));
+
+        vm.Items.Single().HasAnnotation.ShouldBeFalse();
+        vm.StatusMessage.ShouldBe("NewRunAnnotationProblem_NoNameMatch");
+    }
+
     private sealed class Strings : IStringResourceProvider
     {
         private static readonly Dictionary<string, string> Templates = new()
@@ -258,6 +368,10 @@ public sealed class NewRunAnnotationTests : IDisposable
             ["NewRunPillAnnotationLine"] = "ann:{0}:{1}",
             ["NewRunNotice_AnnotationUnmatchedNames"] = "unmatched {0}",
             ["NewRunNotice_AnnotationUnmatchedNames_One"] = "unmatched one",
+            ["NewRunStatusAnnotationPairedOnly"] = "paired-only:{0}:{1}",
+            ["NewRunStatusAnnotationAlreadyPaired"] = "already:{0}:{1}:{2}",
+            ["NewRunStatusAnnotationTwoForOne"] = "two:{0}",
+            ["NewRunStatusAnnotationAmbiguousName"] = "ambiguous-name:{0}",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);
