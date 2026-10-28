@@ -177,7 +177,7 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--catalog", type=Path, required=True)
     ap.add_argument("--shipped", type=Path, default=DEFAULT_FILE)
     ap.add_argument("--out", type=Path, default=None)
