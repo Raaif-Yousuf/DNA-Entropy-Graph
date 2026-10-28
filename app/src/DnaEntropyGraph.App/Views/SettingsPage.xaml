@@ -119,6 +119,16 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsHelpHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsHelpExplainer" TextWrapping="Wrap" />
+                        <Button x:Uid="ReplayTourButton" Command="{x:Bind Tour.StartCommand}" />
+                        <HyperlinkButton x:Uid="OpenUserGuideLink" NavigateUri="{x:Bind Tour.GuideIndexUri}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsThisPcHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="12">

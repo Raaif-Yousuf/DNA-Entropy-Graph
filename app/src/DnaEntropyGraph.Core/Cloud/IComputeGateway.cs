@@ -38,11 +38,51 @@ public interface IComputeGateway
     /// </summary>
     Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Issue #670: the zones that offer <paramref name="acceleratorType"/> (<c>nvidia-l4</c>, see <see cref="ZoneCandidates.AcceleratorFor"/>),
+    /// the zone universe the ladder builds its candidates from. A real gateway implements this with <c>acceleratorTypes.aggregatedList</c>
+    /// filtered to that name. An empty list means "the gateway does not know", never "no zone has it": the caller then falls back to the
+    /// zones the request names. A failure throws like any other read; the caller treats it the same as an empty answer.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: starts a stopped VM AS IT IS (no label, scheduling or metadata rewrite: that is <see cref="ReuseVmAsync"/>). A VM that is gone is a
+    /// <c>VM_NOT_FOUND</c> (404) error, never a silent success; a stockout on the start is <see cref="CloudErrorKind.Stockout"/>. Starting a VM that
+    /// already runs is accepted by Compute and is a no-op. THEORY (unverified, ToTest #105): a VM stopped past its <c>maxRunDuration</c> is accepted.
+    /// </summary>
+    Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #105: every persistent disk carrying <c>app=dna-entropy-graph</c> AND <c>installation-id=&lt;installationId&gt;</c>, across every zone, with size,
+    /// status and the VMs holding it (a disk a deleted VM left behind is what keeps billing). Like the VM listings it fails when a zone cannot be read
+    /// rather than return a partial list, and an id no label can hold answers an empty list without asking anyone. A real gateway implements this via
+    /// <c>disks.aggregatedList</c> filtered on those two labels.
+    /// </summary>
+    Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken);
+
+    /// <summary>Issue #105: deletes one disk. Already gone is a success; a disk still attached is an error. The caller reads back to verify (see <c>InstallationCleanup</c>).</summary>
+    Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken);
+
     Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
 
     Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issue #113: <see cref="StopVmAsync"/> (<paramref name="delete"/> false) or <see cref="DeleteVmAsync"/> (true), but the caller learns WHEN GOOGLE ACCEPTED the request:
+    /// <paramref name="onAccepted"/> is called as soon as the Compute request (the operation insert) was accepted, or answered "already gone", and the task then goes on
+    /// to wait for the operation to finish (which for a GPU stop can take minutes) and throws what the operation ends with. It is never called for a request that was refused,
+    /// and a resilience layer that replays the request may call it more than once, so it must be idempotent. The other callers of stop and delete keep their
+    /// semantics (a task that ends when the work is done).
+    /// The default implementation has no earlier moment to report, so it reports acceptance when the work is done: a gateway that can do better MUST override it.
+    /// </summary>
+    async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    {
+        await (delete ? DeleteVmAsync(vmName, zone, cancellationToken) : StopVmAsync(vmName, zone, cancellationToken)).ConfigureAwait(false);
+        onAccepted?.Invoke();
+    }
 
     /// <summary>
     /// Every VM labelled with this job id, across every zone - Hard Rule

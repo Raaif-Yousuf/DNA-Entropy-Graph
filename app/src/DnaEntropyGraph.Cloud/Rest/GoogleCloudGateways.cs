@@ -72,7 +72,7 @@ public static class GoogleCloudGateways
             // the pipeline itself, and the policy writes carry the etag they read, so a replay conflicts instead of overwriting.
             workerIdentity,
             // Not wrapped: both reads (regions.list, projects.get) go through the pipeline per request, and a failed read is a value (UNKNOWN), never a zero.
-            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline),
+            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, GoogleRestClient.CreateHttpClient(tokens, options)),
             // Not wrapped: the upsert is a list, a project-number read and a create or patch; each HTTP call goes through the pipeline itself,
             // and the create is never replayed (a lost response would otherwise make a second budget; the next upsert finds the first by name).
             new GoogleBudgetGateway(

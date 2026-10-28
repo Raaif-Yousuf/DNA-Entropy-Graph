@@ -63,11 +63,10 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
 
-    private static string? UserProjectOf(HttpRequestMessage request)
-        => request.Headers.TryGetValues("x-goog-user-project", out var values) ? values.FirstOrDefault() : null;
-
     public IReadOnlyList<RecordedRequest> To(HttpMethod method, string absolutePath)
         => Requests.Where(r => r.Method == method && r.Uri.AbsolutePath == absolutePath).ToList();
+
+    private static string? UserProject(HttpRequestMessage request) => request.Headers.TryGetValues("X-Goog-User-Project", out var values) ? values.Single() : null;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -77,12 +76,12 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
             var partial = new byte[limit];
             var stream = await request.Content.ReadAsStreamAsync(cancellationToken);
             var read = await stream.ReadAtLeastAsync(partial, limit, throwOnEndOfStream: false, cancellationToken);
-            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), Encoding.UTF8.GetString(partial, 0, read), request.Content.Headers.ContentRange?.ToString(), UserProjectOf(request)));
+            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), Encoding.UTF8.GetString(partial, 0, read), request.Content.Headers.ContentRange?.ToString(), UserProject(request)));
             throw new HttpRequestException("The connection dropped while the request body was being sent.");
         }
 
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString(), UserProjectOf(request)));
+        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers.Authorization?.ToString(), body, request.Content?.Headers.ContentRange?.ToString(), UserProject(request)));
 
         if (_routes.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var queue) && queue.Count > 0)
         {

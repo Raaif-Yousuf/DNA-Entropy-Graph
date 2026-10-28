@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace DnaEntropyGraph.Core.Inputs;
@@ -24,9 +25,12 @@ public static class EmblLite
         var coded = new List<InputNotice>();
 
         var open = false;
+        RecordIdentity? identity = null; // Biopython's record id, fed the ID line and the AC / SV lines (#847)
         var inSeq = false;
-        var genes = 0;
-        var cds = 0;
+        var tableChecked = false; // Biopython reads the feature table once per record
+        long? idLength = null; // the ID line's length and topology decide how an origin-wrapping location reads
+        var idCircular = false;
+        var tableFeatures = new List<(string Key, string? DroppedText)>();
         var recordIndex = 0;
         var seq = new StringBuilder();
 
@@ -37,22 +41,28 @@ public static class EmblLite
             // readers/genbank.py::records_from_parsed, shared by the EMBL reader: no sequence, or only N, is skipped.
             if (recSeq.Length == 0 || recSeq.All(c => c == 'N'))
             {
-                notices.Add($"Skipped EMBL record {recordIndex}: no nucleotide sequence.");
+                notices.Add($"Skipped EMBL record {recordIndex} (id {PrivacySafeText.DescribeLen(identity!.Id)}): no nucleotide sequence.");
                 coded.Add(new InputNotice(InputNoticeCode.GenBankRecordSkippedNoSequence, recordIndex));
             }
             else
             {
-                records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex));
+                // #796: the same dropped-location rule and counts as a GenBank record (the worker shares records_from_parsed).
+                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, notices, coded);
+                records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex) { MappedCount = mapped });
             }
+            identity = null;
             open = false;
             inSeq = false;
-            genes = 0;
-            cds = 0;
+            tableChecked = false;
+            idLength = null;
+            idCircular = false;
+            tableFeatures.Clear();
             seq.Clear();
         }
 
-        foreach (var line in lines)
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            var line = lines[lineIndex];
             if (line.StartsWith("//", StringComparison.Ordinal))
             {
                 if (open)
@@ -64,6 +74,14 @@ public static class EmblLite
             if (!open)
             {
                 open = IsIdLine(line);
+                if (open)
+                {
+                    (idLength, idCircular) = ReadIdLine(line);
+                    var rest = line.Length > 5 ? line[5..] : string.Empty;
+                    var name = rest.Count(c => c == ';') == 6 ? rest.Trim().Split(';')[0].Trim() : rest.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+                    identity = new RecordIdentity(name);
+                    identity.FeedEmblIdLine(line);
+                }
                 continue;
             }
             if (IsIdLine(line))
@@ -71,6 +89,38 @@ public static class EmblLite
                 // THEORY (unverified): Biopython's EMBL scanner refuses a record with no "//" before the next ID, as it does at
                 // the end of the file; this does the same, so a truncated or hand-joined file is caught before a VM exists.
                 throw new GenBankReadException("An EMBL record is missing its closing // line, so the file looks truncated or edited by hand.");
+            }
+            if (!inSeq && !tableChecked)
+            {
+                if (GenBankFeatureTable.IsStartMarker(line, FeatureTableFormat.Embl))
+                {
+                    // The worker's parser refuses a bad feature table (#548) and a location it cannot recover from (#788, #796), and it drops a
+                    // feature whose location it cannot read (#543): the same walk and the same location verdict as a GenBank record.
+                    var walked = GenBankFeatureTable.Walk(FeatureTableFormat.Embl, lines, lineIndex, recordIndex + 1, out var end);
+                    foreach (var feature in walked)
+                    {
+                        var reading = GenBankLocation.Read(feature.Location, idLength, idCircular);
+                        if (reading.Verdict == LocationVerdict.Refused)
+                        {
+                            throw GenBankFeatureTable.RefuseLocation(recordIndex + 1, FeatureTableFormat.Embl);
+                        }
+
+                        tableFeatures.Add((feature.Key, reading.Verdict == LocationVerdict.Dropped ? reading.QuotedText : null));
+                    }
+
+                    tableChecked = true;
+                    lineIndex = end - 1; // resume at the line that ended the table
+                    continue;
+                }
+
+                if (GenBankFeatureTable.IsSequenceHeader(line, FeatureTableFormat.Embl))
+                {
+                    tableChecked = true; // no feature table in this record
+                }
+                else
+                {
+                    identity?.FeedEmblHeader(line);
+                }
             }
             if (line.StartsWith("SQ", StringComparison.Ordinal))
             {
@@ -94,14 +144,6 @@ public static class EmblLite
             {
                 inSeq = false;
             }
-            else if (IsFeatureLine(line, "gene"))
-            {
-                genes++;
-            }
-            else if (IsFeatureLine(line, "CDS"))
-            {
-                cds++;
-            }
         }
 
         if (open)
@@ -110,19 +152,51 @@ public static class EmblLite
         }
         if (records.Count == 0)
         {
-            throw new GenBankReadException("No EMBL records with a nucleotide sequence found (expected an ID line and an SQ block).");
+            // readers/genbank.py::records_from_parsed with the EMBL label: no record at all, or every record skipped for want of a sequence.
+            throw new GenBankReadException(recordIndex == 0
+                ? "No EMBL records found in the file."
+                : "The EMBL file has no records with a nucleotide sequence (a truncated or sequence-less export). "
+                  + "Re-export the file from the tool that made it, with its sequence included.");
         }
-        if (records.Count > 1)
-        {
-            coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, records.Sum(r => r.GeneCount + r.CdsCount)));
-        }
+
+        // The worker counts the features it maps: a record's gene features, else its CDS features (records_from_parsed).
+        var totalFeatures = records.Sum(r => r.Mapped);
+        notices.Add($"Read {records.Count} record(s) with {totalFeatures} gene feature(s) from the EMBL (not re-annotated).");
+        coded.Add(new InputNotice(InputNoticeCode.GenBankRead, records.Count, totalFeatures));
 
         return new GenBankLiteResult(records, notices) { NoticeCodes = coded };
     }
 
-    // "FT   gene            1..42": the key starts in column 6; a qualifier line is indented to column 22, so it never matches.
-    private static bool IsFeatureLine(string line, string key)
-        => line.StartsWith("FT   ", StringComparison.Ordinal)
-           && line.AsSpan(5).StartsWith(key, StringComparison.Ordinal)
-           && (line.Length == 5 + key.Length || char.IsWhiteSpace(line[5 + key.Length]));
+    /// <summary>
+    /// The length and topology Biopython takes from an ID line (<c>EmblScanner._feed_first_line</c>): the 2006 layout has six semicolons
+    /// (<c>ID   X56734; SV 1; linear; mRNA; STD; PLN; 1859 BP.</c>), the older one three
+    /// (<c>ID   BSUB9999   standard; circular DNA; PRO; 4214630 BP.</c>). Any other layout gives neither (the worker refuses it elsewhere);
+    /// only origin-wrapping locations depend on them.
+    /// </summary>
+    private static (long? Length, bool Circular) ReadIdLine(string line)
+    {
+        var rest = line.Length > 5 ? line[5..] : string.Empty;
+        var semicolons = rest.Count(c => c == ';');
+        if (semicolons == 6)
+        {
+            var fields = rest.Trim().Split(';').Select(f => f.Trim()).ToArray();
+            return (ParseLength(fields[6]), fields[2] == "circular");
+        }
+
+        if (semicolons == 3 && !PythonText.TrimEnd(line).EndsWith(" SQ", StringComparison.Ordinal))
+        {
+            var parts = rest.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries);
+            var fields = parts.Length == 2 ? parts[1].Split(';').Select(f => f.Trim()).ToArray() : [];
+            return fields.Length >= 4 ? (ParseLength(fields[3]), fields[1].Contains("circular", StringComparison.Ordinal)) : (null, false);
+        }
+
+        return (null, false);
+    }
+
+    // "126 BP." -> 126: the number before the unit.
+    private static long? ParseLength(string field)
+    {
+        var words = field.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return words.Length == 2 && long.TryParse(words[0], NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
 }

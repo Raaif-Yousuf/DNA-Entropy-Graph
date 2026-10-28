@@ -24,6 +24,7 @@ public class CostEstimateWiringTests
     private static readonly Dictionary<GpuTier, string> UnpricedOnPurpose = new()
     {
         [GpuTier.H100] = "a3-highgpu-1g has no figure in docs/research/2026-09-19-gpu-pricing-and-instances.md and a price copied from memory would be invented; Evo 2 7B runs on L4 and A100 only (docs/cloud_design.md section 10, issue #98 round 2).",
+        [GpuTier.H100x2] = "a3-highgpu-2g (the evo2_40b tier, Spot or Flex-start only) has no figure in docs/research/2026-09-19-gpu-pricing-and-instances.md; the catalog does not offer it (issue #14 is undecided).",
     };
 
     [Fact]

@@ -113,7 +113,7 @@ public class DiagnosticsBundleBuilderTests
             detail = new { input = FileName, contig = Contig, window = 5, windows = 11, direction = "forward" },
             input = FileName,
             vm = new { name = Vm, zone = "us-central1-a", gpu = "NVIDIA L4" },
-            error = new { code = "WORKER_FAILED", message = $"could not read {FileName} {Sequence}", remediation = "x" },
+            error = new { code = "WORKER_CRASH", message = $"could not read {FileName} {Sequence}", remediation = "x" },
         }),
         ["runs/20261001-080000-abc234/progress.jsonl"] =
             JsonSerializer.Serialize(new { seq = 1, ts = "2026-10-01T08:00:00Z", stage = "analysing", level = "info", message = $"{Contig} {Sequence}", data = new { input = FileName } })
@@ -302,7 +302,7 @@ public class DiagnosticsBundleBuilderTests
         status.ShouldContain("\"stage\": \"failed\"");
         status.ShouldContain("\"heartbeatSeq\": 7");
         status.ShouldContain("\"window\": 5");
-        status.ShouldContain("WORKER_FAILED");
+        status.ShouldContain("WORKER_CRASH");
         status.ShouldContain("us-central1-a");
         status.ShouldContain("NVIDIA L4");
         foreach (var dropped in new[] { "\"input\"", "\"contig\"", "\"message\"", "\"remediation\"", "\"name\"" })
@@ -321,6 +321,63 @@ public class DiagnosticsBundleBuilderTests
         result.ShouldNotContain(PatientKey);
         result.ShouldContain("\"meanEntropy\": 1.34");
         result.ShouldNotContain("contigs\": [");
+    }
+
+    [Theory]
+    [InlineData("status.json")]
+    [InlineData("result.json")]
+    public void An_error_code_outside_the_workers_registry_never_ships_and_is_scrubbed_from_the_logs(string file)
+    {
+        // #613: a third-party exception's free-text .code is plain-looking text, so only the known-code set can keep it out.
+        const string FreeText = "my-patient-42";
+        var folder = SeededFolder();
+        // Keep the seeded file (its data-named fields are what the scrub list is harvested from) and swap only error.code.
+        var planted = System.Text.Json.Nodes.JsonNode.Parse(folder[$"runs/20261001-080000-abc234/{file}"])!.AsObject();
+        planted["error"] = new System.Text.Json.Nodes.JsonObject { ["code"] = FreeText, ["retriable"] = false };
+        folder[$"runs/20261001-080000-abc234/{file}"] = planted.ToJsonString();
+        folder["logs/app-20261003.log"] += $"\n12:20 error code {FreeText} reported";
+
+        var entries = BuildSeeded(folder);
+
+        entries.Count.ShouldBeGreaterThan(5, "vacuity: a real bundle was built");
+        entries[$"files/runs/20261001-080000-abc234/{file}"].ShouldContain("<redacted>");
+        string.Concat(entries.Values).ShouldNotContain(FreeText);
+    }
+
+    [Fact]
+    public void A_word_like_rejected_error_code_is_redacted_but_not_scrubbed_from_every_log_line()
+    {
+        // #613 review: a plain-word code ("job") is still not shipped, but scrubbing it would blank the word "job" in every log line.
+        var folder = SeededFolder();
+        var planted = System.Text.Json.Nodes.JsonNode.Parse(folder["runs/20261001-080000-abc234/result.json"])!.AsObject();
+        planted["error"] = new System.Text.Json.Nodes.JsonObject { ["code"] = "job", ["retriable"] = false };
+        folder["runs/20261001-080000-abc234/result.json"] = planted.ToJsonString();
+        folder["logs/app-20261003.log"] += "\n12:20 job started for the run";
+
+        var entries = BuildSeeded(folder);
+
+        entries["files/runs/20261001-080000-abc234/result.json"].ShouldContain("<redacted>");
+        entries["files/logs/log-01.log"].ShouldContain("job started for the run");
+    }
+
+    [Fact]
+    public void A_known_worker_error_code_ships_in_result_json()
+    {
+        var folder = SeededFolder();
+        folder["runs/20261001-080000-abc234/result.json"] = JsonSerializer.Serialize(new { schema = 1, jobId = "job-1", status = "failed", error = new { code = "MODEL_OOM", retriable = true } });
+
+        BuildSeeded(folder)["files/runs/20261001-080000-abc234/result.json"].ShouldContain("\"code\": \"MODEL_OOM\"");
+    }
+
+    [Fact]
+    public void An_error_code_that_is_an_object_ships_nothing_of_it()
+    {
+        var folder = SeededFolder();
+        folder["runs/20261001-080000-abc234/result.json"] = "{\"status\":\"failed\",\"error\":{\"code\":{\"x\":\"my-patient-42\"}}}";
+
+        var result = BuildSeeded(folder)["files/runs/20261001-080000-abc234/result.json"];
+
+        result.ShouldNotContain("my-patient-42");
     }
 
     [Fact]
