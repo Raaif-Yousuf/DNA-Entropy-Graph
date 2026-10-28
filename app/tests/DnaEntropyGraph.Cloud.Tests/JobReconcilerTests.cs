@@ -2,6 +2,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.Runs;
 using NSubstitute;
@@ -98,6 +99,40 @@ public class JobReconcilerTests
             log ?? Log);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
+
+        /// <summary>A killed app's leftovers for an NCBI accession run (issue #684): a row at <paramref name="phase"/> whose options name the accession, no copy of any input, no VM.</summary>
+        public async Task SeedAccessionAsync(string jobId, JobPhase phase, string accession, string? range = null, bool uploaded = false)
+        {
+            var options = new RunOptions
+            {
+                ModelId = "evo2_7b",
+                RunTarget = "Cloud",
+                Accession = accession,
+                AccessionRange = range,
+                OutputFolder = TestInputs.OutputParent(jobId),
+            };
+            var vmName = "deg-" + jobId;
+            if (uploaded)
+            {
+                var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
+                await Runner.UploadInputsAsync(request, CancellationToken.None);
+                vmName = request.Spec.VmName;
+            }
+
+            await Repo.UpsertAsync(
+                new RunRecord(
+                    jobId,
+                    phase,
+                    Launch.AddMinutes(-5),
+                    Target: "cloud",
+                    OptionsJson: RunOptionsJson.Serialize(options),
+                    ProjectId: Project,
+                    Bucket: uploaded ? FakeGcp.BucketName(Project) : null,
+                    VmName: vmName,
+                    AppVersion: "0.1.0",
+                    InstallationId: "install-1"),
+                CancellationToken.None);
+        }
 
         /// <summary>
         /// The state a killed app leaves behind: the run row at <paramref name="phase"/>, the app's own copy of the input,
@@ -213,6 +248,79 @@ public class JobReconcilerTests
         env.Gcp.CreateAttempts.ShouldBe(0, "a lost VM is not silently replaced: the user chooses to run again");
     }
 
+    // Issue #679 (b), reviewed: a gone VM is run_time_limit only on the worker's OWN evidence of how long the VM lived (status.json startedAt to
+    // updatedAt, one clock), never on the row's start time, which counts the hours the app was closed after the VM had already died.
+    private static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
+
+    private static void PutStatus(Env env, string jobId, string json)
+        => env.Gcp.PutObject(FakeGcp.BucketName(Project), WorkerManifestBuilder.JobPrefix(jobId) + "status.json", System.Text.Encoding.UTF8.GetBytes(json));
+
+    private static string Heartbeat(TimeSpan lived)
+    {
+        var began = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero);
+        return "{\"stage\":\"running\",\"heartbeatSeq\":9,\"startedAt\":\"" + began.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)
+            + "\",\"stageStartedAt\":\"" + began.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture)
+            + "\",\"updatedAt\":\"" + (began + lived).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) + "\",\"worker\":{\"version\":\"0.1.0\"}}";
+    }
+
+    [Fact]
+    public async Task A_VM_that_died_early_while_the_app_was_closed_is_not_run_time_limit_even_after_20_hours()
+    {
+        var env = new Env();
+        await env.SeedAsync("job-l", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = Launch.AddHours(-20) });
+        PutStatus(env, "job-l", Heartbeat(TimeSpan.FromMinutes(3)));
+
+        var outcome = await OneAsync(env.Reconciler(), "job-l");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
+        env.Row("job-l").ErrorCode.ShouldBe(RunErrorCodes.VmUnhealthy, "its last heartbeat says it lived 3 minutes: it did not reach its limit");
+    }
+
+    [Theory]
+    [InlineData(-2, RunErrorCodes.RunTimeLimit)]
+    [InlineData(0, RunErrorCodes.RunTimeLimit)]
+    [InlineData(-9, RunErrorCodes.RunTimeLimit)]
+    [InlineData(-11, RunErrorCodes.VmUnhealthy)]
+    [InlineData(-60, RunErrorCodes.VmUnhealthy)]
+    public async Task A_gone_VM_with_a_heartbeat_near_its_limit_is_run_time_limit_and_one_far_from_it_is_not(int minutesFromLimit, string expected)
+    {
+        var env = new Env();
+        await env.SeedAsync("job-h", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = Launch.AddHours(-20) });
+        PutStatus(env, "job-h", Heartbeat(RunLimit + TimeSpan.FromMinutes(minutesFromLimit)));
+
+        await OneAsync(env.Reconciler(), "job-h");
+
+        env.Row("job-h").ErrorCode.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task A_gone_VM_with_a_worker_error_in_status_json_records_that_error_not_a_limit()
+    {
+        var env = new Env();
+        await env.SeedAsync("job-w", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = Launch.AddHours(-20) });
+        PutStatus(env, "job-w", "{\"stage\":\"failed\",\"error\":{\"code\":\"WORKER_CRASH\"},\"updatedAt\":\"2026-10-02T09:01:00Z\"}");
+
+        await OneAsync(env.Reconciler(), "job-w");
+
+        env.Row("job-w").ErrorCode.ShouldBe(RunErrorCodes.WorkerCrashed, "the worker said why; the reconciler must read it as the live path does");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not json")]
+    public async Task A_gone_VM_with_no_usable_status_json_is_vm_unhealthy_whatever_the_rows_age(string? status)
+    {
+        var env = new Env();
+        await env.SeedAsync("job-n0", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { StartedAt = Launch.AddHours(-20) });
+        if (status is not null)
+        {
+            PutStatus(env, "job-n0", status);
+        }
+
+        await OneAsync(env.Reconciler(), "job-n0");
+
+        env.Row("job-n0").ErrorCode.ShouldBe(RunErrorCodes.VmUnhealthy, "with no evidence of how long the VM lived, the age of the row proves nothing");
+    }
     [Fact]
     public async Task A_run_whose_VM_stopped_without_a_result_fails_and_the_VM_is_ended()
     {
@@ -251,6 +359,46 @@ public class JobReconcilerTests
         outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
         env.Gcp.CreateAttempts.ShouldBe(1);
         (await env.Gcp.FindByJobIdAsync("job-v", CancellationToken.None)).Count.ShouldBe(1);
+    }
+
+    // ---- an NCBI accession run (issue #684) has no file: nothing to find, nothing to upload ----
+
+    [Theory]
+    [InlineData(JobPhase.Validating)]
+    [InlineData(JobPhase.Provisioning)]
+    public async Task An_accession_run_killed_before_a_VM_existed_resumes_with_no_upload_and_its_manifest_names_the_accession(JobPhase phase)
+    {
+        var env = new Env();
+        await env.SeedAccessionAsync("job-n", phase, "NC_045512.2", "100-500", uploaded: phase == JobPhase.Provisioning);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-n");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed, outcome.ErrorCode);
+        outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
+        env.Gcp.CreateAttempts.ShouldBe(1);
+        var keys = env.Gcp.ObjectKeys(FakeGcp.BucketName(Project));
+        keys.ShouldNotContain(key => key.Contains("/input/", StringComparison.Ordinal), "an accession is fetched by the worker, so no input is uploaded");
+        var manifest = System.Text.Json.JsonDocument.Parse(env.Gcp.GetObjectBytes(FakeGcp.BucketName(Project), "jobs/job-n/manifest.json")).RootElement;
+        var input = manifest.GetProperty("inputs")[0];
+        input.GetProperty("accession").GetString().ShouldBe("NC_045512.2");
+        input.GetProperty("accessionRange").GetString().ShouldBe("100-500");
+        input.TryGetProperty("path", out _).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("not an accession", null)]
+    [InlineData("NC_045512.2", "500-100")]
+    public async Task An_accession_run_whose_recorded_accession_no_longer_checks_out_fails_as_invalid_and_creates_nothing(string accession, string? range)
+    {
+        // The row is the app's own file on disk; a damaged or hand-edited one must not reach the cloud (Hard Rule 2).
+        var env = new Env();
+        await env.SeedAccessionAsync("job-x", JobPhase.Provisioning, accession, range);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-x");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
+        env.Row("job-x").ErrorCode.ShouldBe(RunErrorCodes.InputAccessionInvalid);
+        env.Gcp.CreateAttempts.ShouldBe(0);
     }
 
     // ---- a run killed before a VM could exist restarts from the app's own copy of the input ----

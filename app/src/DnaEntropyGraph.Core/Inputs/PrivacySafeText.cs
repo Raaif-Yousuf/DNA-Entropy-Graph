@@ -15,7 +15,7 @@ public static class PrivacySafeText
     public static string DescribeLen(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        var n = text.Length;
+        var n = text.EnumerateRunes().Count(); // code points, as Python's len() counts them
         return n == 1 ? "1 char" : $"{n} chars";
     }
 

@@ -66,7 +66,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
 
     private readonly SqliteDatabase _database;
 
-    public RunRepository(SqliteDatabase database) => _database = database;
+    private readonly DataPathMapper _paths;
+
+    /// <param name="paths">Portable mode (issue #144): stores paths under the portable folder relative to it. Null stores every path as given.</param>
+    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null)
+    {
+        _database = database;
+        _paths = paths ?? new DataPathMapper(null);
+    }
 
     public async Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
     {
@@ -83,6 +90,50 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
+    /// <summary>Test seam: runs inside <see cref="TryUpsertIfPhaseAsync"/> between its read of the stored phase and its write, so a test can force another writer into that gap. Null in production.</summary>
+    internal Func<Task>? BetweenPhaseReadAndWrite { get; set; }
+
+    /// <summary>
+    /// Issue #113 (H2): the check and the write are ONE step, under <c>BEGIN IMMEDIATE</c> (the write lock is taken before the read, so two writers
+    /// that read the same phase cannot both pass the check). A row that is gone is never resurrected: expecting a phase needs that row.
+    /// </summary>
+    public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        await connection.ExecuteAsync(new CommandDefinition("BEGIN IMMEDIATE;", cancellationToken: cancellationToken)).ConfigureAwait(false);
+        try
+        {
+            var stored = await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition("SELECT Phase FROM Runs WHERE Id = @Id;", new { Id = run.JobId }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            if (BetweenPhaseReadAndWrite is { } hook)
+            {
+                await hook().ConfigureAwait(false);
+            }
+
+            if (stored != expectedPhase?.ToString())
+            {
+                await connection.ExecuteAsync("ROLLBACK;").ConfigureAwait(false);
+                return false;
+            }
+
+            await connection.ExecuteAsync(new CommandDefinition(UpsertSql, ToRow(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            await connection.ExecuteAsync("COMMIT;").ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            try
+            {
+                await connection.ExecuteAsync("ROLLBACK;").ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // No transaction left to roll back (the failure was the COMMIT or the BEGIN itself); the connection is disposed next.
+            }
+
+            throw;
+        }
+    }
+
     public async Task DeleteAsync(string jobId, CancellationToken cancellationToken)
     {
         using var connection = _database.OpenConnection();
@@ -90,7 +141,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
-    private static RunRecord ToRecord(RunRow row) => new(
+    private RunRecord ToRecord(RunRow row) => new(
         JobId: row.Id,
         Phase: Enum.Parse<JobPhase>(row.Phase),
         CreatedUtc: Iso.Parse(row.CreatedAt)!.Value,
@@ -116,7 +167,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq: (int)row.LastProgressSeq,
         LastHeartbeatAt: Iso.Parse(row.LastHeartbeatAt),
         StatusGeneration: row.StatusGeneration is null ? null : (int)row.StatusGeneration,
-        OutputDir: row.OutputDir,
+        OutputDir: _paths.FromStored(row.OutputDir),
         EstimatedCostUsd: row.EstimatedCostUsd,
         ActualCostUsd: row.ActualCostUsd,
         VmSeconds: row.VmSeconds,
@@ -131,7 +182,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         Notes: row.Notes,
         TagsJson: row.TagsJson);
 
-    private static RunRow ToRow(RunRecord run) => new()
+    private RunRow ToRow(RunRecord run) => new()
     {
         Id = run.JobId,
         Name = run.Name ?? run.JobId,
@@ -158,7 +209,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq = run.LastProgressSeq,
         LastHeartbeatAt = Iso.Format(run.LastHeartbeatAt),
         StatusGeneration = run.StatusGeneration,
-        OutputDir = run.OutputDir,
+        OutputDir = _paths.ToStored(run.OutputDir),
         EstimatedCostUsd = run.EstimatedCostUsd,
         ActualCostUsd = run.ActualCostUsd,
         VmSeconds = run.VmSeconds,

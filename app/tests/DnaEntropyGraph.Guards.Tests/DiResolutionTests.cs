@@ -101,6 +101,37 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void New_run_resolves_with_the_catalog_backed_gpu_pickers_and_the_run_machine_comes_from_them()
+    {
+        // Issue #87's wired-to-nothing observable: NewRunViewModel requires the pickers (no fallback), so a missing GpuPlanViewModel registration
+        // fails resolution of the page. Resolve both directly: the container holds the shipped catalog and the pickers, and the page's pickers
+        // resolve a machine the catalog (not a literal) names.
+        using var provider = BuildRealServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.GpuCatalog>().ShouldBeSameAs(DnaEntropyGraph.Core.Cloud.GpuCatalog.Shipped);
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.GpuPlanViewModel>().ShouldNotBeNull();
+        var gpu = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>().Gpu;
+        gpu.Gpus.Count.ShouldBeGreaterThan(1);
+        DnaEntropyGraph.Core.Cloud.CloudJobRequestFactory.MachineTypeFor(gpu.Tier).ShouldBe("g2-standard-8");
+    }
+
+    [Fact]
+    public void The_real_build_asks_NCBI_and_New_run_and_the_engine_share_that_one_lookup()
+    {
+        // Issue #684 / Hard Rule 2: the lookup is an optional argument of NewRunViewModel, so a missing registration would not fail resolution; the
+        // page would add accession pills with no check and no length. The shipped build must hold the NCBI one, and both consumers the same instance.
+        using var provider = BuildRealServiceProvider();
+
+        var lookup = provider.GetRequiredService<DnaEntropyGraph.Core.Inputs.IAccessionLookup>();
+        lookup.ShouldBeOfType<DnaEntropyGraph.Core.Inputs.NcbiAccessionLookup>();
+        var page = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>();
+        typeof(DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel).GetField("_accessionLookup", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(page).ShouldBeSameAs(lookup);
+        typeof(DnaEntropyGraph.App.JobEngine).GetField("_accessionLookup", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(provider.GetRequiredService<DnaEntropyGraph.App.JobEngine>()).ShouldBeSameAs(lookup);
+    }
+
+    [Fact]
     public void Every_Presentation_facing_and_Cloud_gateway_interface_resolves()
     {
         using var provider = BuildRealServiceProvider();
@@ -357,5 +388,78 @@ public class DiResolutionTests
             typeof(DnaEntropyGraph.Presentation.ViewModels.ResultsViewModel).GetProperty(command).ShouldNotBeNull(command);
             xaml.ShouldContain("{x:Bind ViewModel." + command + "}");
         }
+    }
+
+    [Theory]
+    [InlineData(CloudBackend.Google)]
+    [InlineData(CloudBackend.Fake)]
+    [InlineData(CloudBackend.Developer)]
+    public void The_Cloud_page_gateway_pieces_resolve_in_every_backend(CloudBackend backend)
+    {
+        // Issue #105: InstallationCleanup and StartVmAsync have no caller yet (the app lane binds them); a registration that fails
+        // would only show as an exception on the first Cloud page open.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: backend);
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IComputeGateway>().ShouldNotBeNull();
+        provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IStorageGateway>().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task The_registered_cleanup_ends_the_row_of_a_run_whose_VM_it_deletes_and_StartVm_reaches_the_gateway()
+    {
+        // The observable that differs if the run repository and the driver registry were not wired into the cleanup: the row stays Running.
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: TempAppDataRoot.Value, cloud: CloudBackend.Developer);
+        using var provider = services.BuildServiceProvider();
+        var gcp = provider.GetRequiredService<DnaEntropyGraph.Cloud.FakeGcp>();
+        var spec = new DnaEntropyGraph.Core.Cloud.VmSpec(
+            ProjectId: "fake-project",
+            InstallationId: "inst-di",
+            JobId: "job-di",
+            Model: "evo2_7b",
+            AppVersion: "0.1.0",
+            Lifecycle: "stop",
+            MachineType: "g2-standard-8",
+            MaxRunDuration: TimeSpan.FromHours(4),
+            TerminationAction: "DELETE");
+        await gcp.CreateVmAsync(spec, "us-central1-a", CancellationToken.None);
+        var compute = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.IComputeGateway>();
+        await compute.StopVmAsync("deg-job-di", "us-central1-a", CancellationToken.None);
+        await compute.StartVmAsync("deg-job-di", "us-central1-a", CancellationToken.None);
+        (await compute.GetVmAsync("deg-job-di", "us-central1-a", CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        var runs = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>();
+        await runs.UpsertAsync(new DnaEntropyGraph.Core.Abstractions.RunRecord("job-di", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync("fake-project", "inst-di", CancellationToken.None);
+
+        var row = (await runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-di");
+        row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
+        row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
+    }
+    [Fact]
+    public async Task The_production_runner_asks_the_UI_through_the_coordinator_and_a_missing_window_never_ends_a_run()
+    {
+        // Issue #675: OnStall / OnNotice / CancelAckTimeout were wired to nothing in production; now they are the RunStallCoordinator's. With no window attached the
+        // dialog cannot be shown, so the answer is Keep waiting (never a deletion), and the notice is published for the run page.
+        using var provider = BuildRealServiceProvider();
+        var runner = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>();
+        var notices = new List<DnaEntropyGraph.Presentation.Messaging.RunNoticeMessage>();
+        var recipient = new object();
+        provider.GetRequiredService<CommunityToolkit.Mvvm.Messaging.IMessenger>().Register<DnaEntropyGraph.Presentation.Messaging.RunNoticeMessage>(recipient, (_, m) => notices.Add(m));
+
+        runner.OnStall.ShouldNotBeNull();
+        var choice = await runner.OnStall!(new DnaEntropyGraph.Core.Cloud.StallPrompt("job-1", "worker_stage_stuck", "stuck", "model-loading", TimeSpan.FromMinutes(20)), CancellationToken.None);
+        choice.ShouldBe(DnaEntropyGraph.Core.Cloud.StallChoice.KeepWaiting);
+        notices.Select(n => n.Text).ShouldBe([string.Empty], "the question's end clears the run page notice (#740)");
+        notices.Clear();
+        runner.OnNotice.ShouldNotBeNull();
+        runner.OnNotice!(new DnaEntropyGraph.Core.Cloud.RunNotice("job-1", DnaEntropyGraph.Core.Cloud.RunNoticeKind.SlowStage, "model-loading", TimeSpan.FromMinutes(9), TimeSpan.FromMinutes(12)));
+        notices.Count.ShouldBe(1);
+        notices[0].JobId.ShouldBe("job-1");
+        notices[0].Text.ShouldNotBeNullOrWhiteSpace();
+        runner.CancelAckTimeout.ShouldBe(TimeSpan.FromSeconds(60));
     }
 }

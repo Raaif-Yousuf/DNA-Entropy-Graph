@@ -1,0 +1,1 @@
+- feat(worker): batch outlier QC in the summary file for runs of 3+ inputs (#192), `dna-entropy compare` writes a B-minus-A difference bedGraph and a largest-deviations table (#129), and `dna-entropy variants` scores substitutions with one forward pass each, bounded by `--max-variants`, with the cost printed first (#130). Worker side only; the app has no buttons for them yet.

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Viewers;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -85,6 +86,25 @@ public sealed class SettingsResetTests
         page.Viewers.IgvPath.ShouldBeEmpty();
         page.Viewers.IgvPortText.ShouldBe(IgvBatchCommands.DefaultPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
         _settings.Values.ShouldBeEmpty("showing the starting values must not save them again");
+    }
+
+    [Fact]
+    public async Task After_Reset_all_the_theme_radio_goes_back_to_system_and_the_window_follows_without_a_restart_or_a_write()
+    {
+        // Issue #677: the Appearance radio is on the Settings page's own ViewModel, which Reset all did not tell.
+        var themes = Substitute.For<IThemeApplier>();
+        themes.CurrentTheme.Returns("Dark");
+        var toasts = Substitute.For<IToastService>();
+        var settingsViewModel = new SettingsViewModel(_settings, toasts, _strings, Substitute.For<IDiagnosticsExporter>(), Substitute.For<IFilePicker>(), Substitute.For<IFolderLauncher>(), TimeProvider.System, themes, _messenger);
+        settingsViewModel.ThemeIndex.ShouldBe(1, "the window shows Dark");
+        var page = OpenSettingsPage();
+
+        await page.Advanced.ResetAllSettingsCommand.ExecuteAsync(null);
+
+        settingsViewModel.ThemeIndex.ShouldBe(2);
+        themes.Received(1).Apply("System");
+        toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
+        _settings.Values.ShouldBeEmpty("showing the starting theme must not save it again");
     }
 
     [Fact]

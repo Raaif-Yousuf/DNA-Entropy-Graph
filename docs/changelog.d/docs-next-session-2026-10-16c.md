@@ -1,0 +1,1 @@
+- docs: handoff for the 2026-10-16c wave (landing queue, held #260/#112/#138, #830 next, owner asks).

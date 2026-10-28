@@ -71,7 +71,7 @@ public static class GoogleCloudGateways
             // the pipeline itself, and the policy writes carry the etag they read, so a replay conflicts instead of overwriting.
             workerIdentity,
             // Not wrapped: both reads (regions.list, projects.get) go through the pipeline per request, and a failed read is a value (UNKNOWN), never a zero.
-            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline),
+            new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, GoogleRestClient.CreateHttpClient(tokens, options)),
             // Not wrapped: a read-only list whose every page goes through the pipeline (issue #214).
             new GooglePricingCatalogGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options.TimeProvider));
     }
