@@ -584,6 +584,7 @@ def land(
         git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}")
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
+        _record_landed(ctx, url, full_sha)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
             rc = _merge_when_green(ctx, url, checks_timeout, checks_poll, rerun_failed_once)
@@ -607,6 +608,20 @@ def land(
         if wt is not None and not wt.exists():
             _lock_path(ctx, wt.name).unlink(missing_ok=True)
     return rc
+
+
+def _record_landed(ctx: Ctx, url: str, sha: str) -> None:
+    """Tell the `gh pr merge` hook (#451) this PR passed premerge in the throwaway worktree. Advisory only."""
+    pr = url.rsplit("/", 1)[-1].strip()
+    if not pr.isdigit():
+        return
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import premerge_stamp
+
+        premerge_stamp.record_landed(ctx.repo, pr, sha)
+    except Exception as err:  # noqa: BLE001  (a missing marker only makes the hook ask for premerge by hand)
+        ctx.say(f"WARNING: could not record the landed PR for the merge hook ({err})")
 
 
 def _default_venv(repo: Path) -> Path:

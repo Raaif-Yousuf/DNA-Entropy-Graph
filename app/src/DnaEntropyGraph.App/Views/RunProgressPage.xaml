@@ -20,12 +20,19 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <InfoBar
-            x:Uid="RunProgressStayOpenBanner"
-            Grid.Row="0"
-            IsOpen="{x:Bind ViewModel.IsStayOpenBannerVisible, Mode=OneWay}"
-            Severity="Informational"
-            IsClosable="False" />
+        <StackPanel Grid.Row="0" Spacing="8">
+            <InfoBar
+                x:Uid="RunProgressStayOpenBanner"
+                IsOpen="{x:Bind ViewModel.IsStayOpenBannerVisible, Mode=OneWay}"
+                Severity="Informational"
+                IsClosable="False" />
+            <!-- Issue #675: "taking longer than usual" / "looks stuck", from the runner through RunStallCoordinator. -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasSlowNotice, Mode=OneWay}"
+                Message="{x:Bind ViewModel.SlowNoticeText, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False" />
+        </StackPanel>
 
         <TextBlock
             Grid.Row="1"

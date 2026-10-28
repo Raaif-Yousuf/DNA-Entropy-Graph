@@ -359,7 +359,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 else if (verdict is not null && !verdict.DeleteVm && settings.OnStall is { } ask)
                 {
                     var waited = settings.ElapsedSince(clockStart);
-                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited), verdict, cancellationToken, settings.StallAnswerTimeout, settings.TimeProvider);
+                    stall.Open(ask, new StallPrompt(request.JobId, verdict.Code, verdict.Message, verdict.Stage, waited, RunNameOf(request), request.Spec.VmName), verdict, cancellationToken, settings.StallAnswerTimeout, settings.TimeProvider);
                     Notify(stall, new RunNotice(request.JobId, RunNoticeKind.StallDetected, verdict.Stage, Code: verdict.Code));
                     verdict = null;
                 }
@@ -399,6 +399,10 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             await settings.DelayAsync(settings.ResultPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <summary>What a stall question calls the run: its first input's file name, or its accession (never a path: the app's own staging folder is not the user's word for it).</summary>
+    private static string? RunNameOf(CloudJobRequest request)
+        => request.Inputs.FirstOrDefault(i => !i.IsAnnotation) is { } first ? (first.IsAccession ? first.Accession : first.FileName) : null;
 
     /// <summary>The platform's time now: the last reading aged by monotonic elapsed time, or this laptop's wall clock when no plausible reading was ever taken.</summary>
     private DateTimeOffset PlatformNow(PlatformReading? reading)

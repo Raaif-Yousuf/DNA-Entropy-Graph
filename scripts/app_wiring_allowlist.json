@@ -16,9 +16,5 @@
   "CODE-ONLY-OBSERVABLE:RunProgressViewModel.JobId": "#66; the CODE-ONLY classification is a name collision with IRunRepository.JobId, see the script's docstring on name matching",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CanCancel": "#66, done: CanCancel only ever drives CancelCommand's CanExecute via [NotifyCanExecuteChangedFor]; WinUI's Button.Command already syncs IsEnabled from ICommand.CanExecuteChanged, so no view ever needs to read the bool property itself.",
   "TEST-ONLY-OBSERVABLE:RunProgressViewModel.IsVmActionable": "#66, done: same reasoning as CanCancel above, for StopVmCommand/DeleteVmCommand.",
-  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry.",
-
-  "UNBOUND-COMMAND:CloudResourcesViewModel.ConfirmDeleteCommand": "#105 builds the Cloud page",
-  "CODE-ONLY-OBSERVABLE:CloudResourcesViewModel.SelectedProjectId": "#105 builds the Cloud page; the CODE-ONLY classification (previously TEST-ONLY) is a name collision with IGcpAccount.SelectedProjectId, now also read by ShellViewModel.cs's status-pill logic (#62) alongside FakeGcp.SelectedProjectId in Cloud.Tests.",
-  "DEAD-REGISTRATION:GpuQuotaRequester": "#99: the wizard GPU step (app lane) is its first consumer; delete this entry in that PR"
+  "TEST-ONLY-OBSERVABLE:RunProgressViewModel.CurrentPhase": "#66, done: RunProgressPage binds the derived StageTitle text, not the raw JobPhase enum; a future accessibility pass (docs/ui_conventions.md section 5's LiveSetting=Polite) may bind CurrentPhase directly for Narrator, which would clear this entry."
 }

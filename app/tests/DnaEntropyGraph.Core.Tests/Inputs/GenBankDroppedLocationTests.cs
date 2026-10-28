@@ -185,7 +185,7 @@ public sealed class GenBankDroppedLocationTests
         var ex = Should.Throw<GenBankReadException>(() => GenBankLite.Read(WithFirstGeneAt("join()")));
 
         ex.Message.ShouldStartWith("Could not parse the GenBank file (record 1): ");
-        ex.Message.ShouldContain("re-export it from the tool that made it");
+        ex.Message.ShouldContain("that its ORIGIN block matches its own LOCUS/FEATURES");
         ex.Message.ShouldNotContain("join()");
     }
 
@@ -220,7 +220,7 @@ public sealed class GenBankDroppedLocationTests
         var result = GenBankLite.Read(text + text);
 
         result.Records.Select(r => r.CdsCount).ShouldBe([0, 0]);
-        result.Notices.ShouldContain(n => n.Contains("Read 2 record(s) with 0 gene/CDS feature(s)", StringComparison.Ordinal));
+        result.Notices.ShouldContain(n => n.Contains("Read 2 record(s) with 0 gene feature(s)", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -160,13 +160,15 @@ Poll `status.json` every 5 s for the first 10 min, then 10 s (GET with `ifGenera
 
 ### 4.1 Model to GPU matrix
 
-> **Now wrong, partially:** `docs/research/2026-09-19-gpu-pricing-and-instances.md` (this session's research pass) confirms the on-demand prices below within rounding, but found the **Spot** prices for the two A100 rows disagree with independent sources by roughly 2 to 4x (~$0.43/h and ~$0.58/h found vs. ~1.1-2.1 and ~1.5-2.0 shown below). Neither figure is vendor-verified yet; issue #303 tracks getting a real reading. Do not treat either number as settled, and do not average them.
+> **Spot prices corrected 2026-10-16 (#303):** MEASURED 2026-10-16 from Google's accelerator-optimized and Spot VM pricing pages (us-central1): `g2-standard-8` Spot $0.51, `a2-highgpu-1g` Spot $2.20, `a2-ultragpu-1g` Spot $3.04, see `docs/research/2026-09-19-gpu-pricing-and-instances.md` section 3a. The history below is kept for the record.
+>
+> **Was wrong, partially:** `docs/research/2026-09-19-gpu-pricing-and-instances.md` (this session's research pass) confirms the on-demand prices below within rounding, but found the **Spot** prices for the two A100 rows disagree with independent sources by roughly 2 to 4x (~$0.43/h and ~$0.58/h found vs. ~1.1-2.1 and ~1.5-2.0 shown below). Neither figure is vendor-verified yet; issue #303 tracks getting a real reading. Do not treat either number as settled, and do not average them.
 
 | Model | Precision / stack | Fits on | Machine type | Quota metric | ~$/h on-demand (us-central1) | Spot ~$/h | Notes |
 |---|---|---|---|---|---|---|---|
-| `evo2_7b` (default), `evo2_7b_262k` | bf16, flash-attn, no Transformer Engine | any 24 GB+ | **g2-standard-8** (1x L4 24 GB) | `NVIDIA_L4_GPUS` | ~0.85 | ~0.18 to 0.30 | default tier; context ceiling 8,192 |
-| same | bf16 | 40 GB | a2-highgpu-1g (1x A100 40 GB) | `NVIDIA_A100_GPUS` | ~3.67 | ~1.1 to 2.1 | stockout fallback / bigger windows |
-| same | bf16 | 80 GB | a2-ultragpu-1g (1x A100 80 GB) | `NVIDIA_A100_80GB_GPUS` | ~5.07 | ~1.5 to 2.0 | largest single-GPU bf16 option |
+| `evo2_7b` (default), `evo2_7b_262k` | bf16, flash-attn, no Transformer Engine | any 24 GB+ | **g2-standard-8** (1x L4 24 GB) | `NVIDIA_L4_GPUS` | ~0.85 | ~0.51 (MEASURED 2026-10-16) | default tier; context ceiling 8,192 |
+| same | bf16 | 40 GB | a2-highgpu-1g (1x A100 40 GB) | `NVIDIA_A100_GPUS` | ~3.67 | ~2.20 (MEASURED 2026-10-16) | stockout fallback / bigger windows |
+| same | bf16 | 80 GB | a2-ultragpu-1g (1x A100 80 GB) | `NVIDIA_A100_80GB_GPUS` | ~5.07 | ~3.04 (MEASURED 2026-10-16) | largest single-GPU bf16 option |
 | `evo2_40b` | **FP8 via Transformer Engine, Hopper required**; NIM matrix: 2x H100 80 GB or 1x H200 | | **a3-highgpu-2g** (2x H100 80 GB), **Spot or Flex-start only** | `NVIDIA_H100_GPUS` | not offered on-demand for small A3 shapes | ~4 to 5 per GPU-hour x 2 | vortex auto-splits across devices; experimental |
 | `evo2_1b_base`, `evo2_20b` | FP8/Hopper per README | | | | | | **hidden**: no cheap tier exists; 1B needs the same H100 as 40B |
 
