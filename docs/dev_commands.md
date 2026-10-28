@@ -271,6 +271,8 @@ The machine limit lives in one place, `<lock dir>\slots.txt`, set with `heavy.py
 `--slots` flag (for tests and one-offs only) > `slots.txt` > `$HEAVY_SLOTS` > 2. Callers that disagree on
 `$HEAVY_SLOTS` therefore cannot exceed the file's limit.
 
+The build folder follows the CWD, not heavy.py's own location (#874): the default `--artifacts-path` base is `<git toplevel of the CWD>\app\.artifacts\<lane>`, falling back to heavy.py's own repo outside any repo. A worktree lane can therefore run the primary's `heavy.py` (the venv lives there) from its own `app\` and build and test its own tree; no hand-passed `--artifacts-path` is needed. The test helpers that locate the repo (`RepoPaths`, `FixturePaths`, `TestPaths`, `ContractFixtures`) also walk up from their own source file (`CallerFilePath`) before the binary's directory, so Guards.Tests scan the tree that was compiled. Source-first means a test run scans the source tree its binary was compiled from; if that path no longer exists (the binary was moved to another machine or the checkout was deleted) the helpers fall back to walking up from the binary's directory. When the CWD is not inside a repo with `app\DnaEntropyGraph.sln`, heavy.py falls back to its own repo and prints a `heavy: warning:` line to stderr naming both. Until the fixed heavy.py is on the primary, run the worktree's copy: `python <worktree>\scripts\heavy.py ...`.
+
 For `dotnet build|test|run|pack|publish` it adds `--artifacts-path <repo>\app\.artifacts\<lane>` unless one is
 given (not for `dotnet format`), so concurrent lanes never share `obj/`. `--lane <name>` is **required** for
 those commands (exit 2 without it; a shared default lane would put two agents back in one `obj/`).
@@ -594,7 +596,7 @@ visible, image pull failed) writes the same two objects with `exitCode` 7 and an
 script refuses (exit 2) a `-JobId` whose result object already exists, and does not trust a result whose `image` or `vm.name` is not this
 run's (a stale PASS). A run whose GPU tests were all
 skipped, or none ran, is exit code 6, never a pass (THEORY (unverified), from reading `test_evo_predictor.py`'s `importorskip` fixtures:
-without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run.
+without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run. To build and pin a dev image from a branch (no release), see `release_runbook.md` section 6b (`image-dev.yml`).
 
 **A failed create is never read as clean**: the delete is retried up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete
 exit 5 is reported as "not proof it is gone", the scan and the table still run, and the run exits 1. A failing final table call also exits 1.
