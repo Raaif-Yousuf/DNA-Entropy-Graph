@@ -448,29 +448,37 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             return;
         }
 
-        // Issue #135, the conservative rules: a GFF3 goes to the FASTA with the same name (case does not matter), preferring one added in this
-        // drop; the only FASTA on the page is taken when no name matches at all. Anything unclear (two FASTA files with that name, two GFF3
-        // files for one FASTA, a FASTA that already has a GFF3) is left alone and the page says why: the result is always visible on the
-        // pill and undone with Remove GFF3.
+        // Issue #135, the conservative rules: a GFF3 goes to the FASTA with the same name (case does not matter), whether or not that FASTA
+        // passed its check (a same-name FASTA that failed is the name match: the GFF3 is not handed to a different file, the page says why);
+        // the only valid FASTA on the page is taken when no FASTA has that name at all. Anything unclear (two FASTA files with that name,
+        // wherever they were added, two GFF3 files for one FASTA, a FASTA that already has a GFF3) is left alone and the page says why: the
+        // result is always visible on the pill and undone with Remove GFF3. The same GFF3 path twice in one drop is one GFF3.
         var plans = new List<(string Gff, InputPillItem Target, bool ByName)>();
-        foreach (var gff in annotations)
+        foreach (var gff in annotations.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var candidates = Items.Where(item => item.Kind == InputKind.Fasta && item.IsValid).ToList();
+            var fastas = Items.Where(item => item.Kind == InputKind.Fasta).ToList();
             var stem = Path.GetFileNameWithoutExtension(gff);
-            var named = candidates.Where(item => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase)).ToList();
-            var namedInThisDrop = named.Where(added.Contains).ToList();
-            var pool = namedInThisDrop.Count > 0 ? namedInThisDrop : named;
-            if (pool.Count > 1)
+            var named = fastas.Where(item => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (named.Count > 1)
             {
                 messages.Add(Format("NewRunStatusAnnotationAmbiguousName", Path.GetFileName(gff)));
                 continue;
             }
 
-            if (pool.Count == 1)
+            if (named.Count == 1)
             {
-                plans.Add((gff, pool[0], true));
+                if (!named[0].IsValid)
+                {
+                    messages.Add(Format("NewRunStatusAnnotationNamedInvalid", Path.GetFileName(gff), Path.GetFileName(named[0].Path)));
+                    continue;
+                }
+
+                plans.Add((gff, named[0], true));
+                continue;
             }
-            else if (candidates.Count == 1)
+
+            var candidates = fastas.Where(item => item.IsValid).ToList();
+            if (candidates.Count == 1)
             {
                 plans.Add((gff, candidates[0], false));
             }
@@ -483,16 +491,31 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         foreach (var group in plans.GroupBy(p => p.Target))
         {
             var target = group.Key;
-            if (group.Count() > 1)
+            var byNameInGroup = group.Where(p => p.ByName).ToList();
+            if (byNameInGroup.Count > 0)
+            {
+                // The exact name match wins; a guess made only because there was one FASTA yields to it (and says so).
+                foreach (var guess in group.Where(p => !p.ByName))
+                {
+                    messages.Add(Format("NewRunStatusAnnotationFallbackRefused", Path.GetFileName(guess.Gff), Path.GetFileName(target.Path)));
+                }
+            }
+
+            var candidatesForTarget = byNameInGroup.Count > 0 ? byNameInGroup : group.ToList();
+            if (candidatesForTarget.Count > 1)
             {
                 messages.Add(Format("NewRunStatusAnnotationTwoForOne", Path.GetFileName(target.Path)));
                 continue;
             }
 
-            var (gff, _, byName) = group.Single();
+            var (gff, _, byName) = candidatesForTarget.Single();
             if (target.AnnotationPath is { } existing)
             {
-                messages.Add(Format("NewRunStatusAnnotationAlreadyPaired", Path.GetFileName(target.Path), Path.GetFileName(existing), Path.GetFileName(gff)));
+                if (!string.Equals(existing, gff, StringComparison.OrdinalIgnoreCase))
+                {
+                    messages.Add(Format("NewRunStatusAnnotationAlreadyPaired", Path.GetFileName(target.Path), Path.GetFileName(existing), Path.GetFileName(gff)));
+                }
+
                 continue;
             }
 
@@ -504,7 +527,6 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             }
         }
     }
-
     /// <summary>Checks the GFF3 against the FASTA on this PC (Hard Rule 2) and, when it fits, shows it on the pill. A GFF3 that does not fit is not kept: the page says why.</summary>
     private async Task AttachAnnotationAsync(InputPillItem pill, string gffPath, List<string> messages, CancellationToken cancellationToken)
     {

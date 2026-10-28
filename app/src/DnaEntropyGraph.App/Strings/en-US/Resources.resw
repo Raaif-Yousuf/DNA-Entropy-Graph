@@ -463,7 +463,12 @@
   <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
     <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
   </data>
-  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
+    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
+    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
+  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
     <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
   <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">

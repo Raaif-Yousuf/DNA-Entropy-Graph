@@ -357,6 +357,85 @@ public sealed class NewRunAnnotationTests : IDisposable
         vm.StatusMessage.ShouldBe("NewRunAnnotationProblem_NoNameMatch");
     }
 
+    // ---- #135 cold review ----
+
+    private string BadFasta(string name) => Write(name, ">x\nACGTX\n");
+
+    [Fact]
+    public async Task A_gff3_named_like_an_invalid_fasta_is_not_paired_with_a_different_fasta_and_the_page_says_why()
+    {
+        var vm = NewViewModel();
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(BadFasta("x.fasta"), Fasta("other.fasta"), Gff("x.gff3")));
+
+        vm.Items.ShouldAllBe(i => !i.HasAnnotation);
+        vm.StatusMessage.ShouldBe("named-invalid:x.gff3:x.fasta");
+        _checks.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_gff3_named_like_the_only_fasta_when_that_fasta_is_invalid_names_the_fasta_not_a_missing_one()
+    {
+        var vm = NewViewModel();
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(BadFasta("x.fasta"), Gff("x.gff3")));
+
+        vm.StatusMessage.ShouldBe("named-invalid:x.gff3:x.fasta");
+    }
+
+    [Fact]
+    public async Task A_same_name_fasta_in_this_drop_does_not_silently_beat_an_older_one_already_on_the_page()
+    {
+        var vm = NewViewModel();
+        Directory.CreateDirectory(Path.Combine(_dir, "a"));
+        Directory.CreateDirectory(Path.Combine(_dir, "b"));
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta(Path.Combine("a", "same.fasta"))));
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta(Path.Combine("b", "same.fasta")), Gff("same.gff3")));
+
+        vm.Items.ShouldAllBe(i => !i.HasAnnotation);
+        vm.StatusMessage.ShouldBe("ambiguous-name:same.gff3");
+        _checks.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_name_match_wins_over_a_fallback_gff3_in_the_same_drop_and_only_the_fallback_is_refused()
+    {
+        var vm = NewViewModel();
+        var named = Gff("x.gff3");
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("x.fasta"), Gff("other.gff3"), named));
+
+        vm.Items.ShouldHaveSingleItem().AnnotationPath.ShouldBe(named);
+        vm.StatusMessage.ShouldBe("fallback-refused:other.gff3:x.fasta");
+    }
+
+    [Fact]
+    public async Task The_same_gff3_path_dropped_twice_is_one_gff3_and_pairs_without_a_complaint()
+    {
+        var vm = NewViewModel();
+        var gff = Gff("x.gff3");
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("x.fasta"), gff, gff));
+
+        vm.Items.ShouldHaveSingleItem().AnnotationPath.ShouldBe(gff);
+        vm.StatusMessage.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Dropping_a_gff3_again_that_is_already_paired_to_that_fasta_changes_nothing_and_says_nothing()
+    {
+        var vm = NewViewModel();
+        var gff = Gff("x.gff3");
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(Fasta("x.fasta"), gff));
+        _checks.Clear();
+
+        await vm.AddDroppedCommand.ExecuteAsync(Drop(gff));
+
+        vm.Items.ShouldHaveSingleItem().AnnotationPath.ShouldBe(gff);
+        vm.StatusMessage.ShouldBeEmpty();
+        _checks.ShouldBeEmpty("an unchanged pair is not validated again");
+    }
     private sealed class Strings : IStringResourceProvider
     {
         private static readonly Dictionary<string, string> Templates = new()
@@ -372,6 +451,8 @@ public sealed class NewRunAnnotationTests : IDisposable
             ["NewRunStatusAnnotationAlreadyPaired"] = "already:{0}:{1}:{2}",
             ["NewRunStatusAnnotationTwoForOne"] = "two:{0}",
             ["NewRunStatusAnnotationAmbiguousName"] = "ambiguous-name:{0}",
+            ["NewRunStatusAnnotationNamedInvalid"] = "named-invalid:{0}:{1}",
+            ["NewRunStatusAnnotationFallbackRefused"] = "fallback-refused:{0}:{1}",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);
