@@ -26,6 +26,7 @@ import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from .. import __version__ as WORKER_VERSION
 from .. import pipeline
@@ -39,7 +40,7 @@ from .blobstore import Blobstore, BlobstoreError, GcsBlobstore, write_json
 from .cancel import CancelWatcher, JobCancelledError
 from .errors import WORKER_ERROR_CODE_SET, is_retriable
 from .gpu import detect_gpu
-from .lifecycle import LifecycleError, apply_lifecycle
+from .lifecycle import AfterTask, LifecycleError, apply_lifecycle
 from .manifest import InputSpec, JobManifest, ManifestError, StoreSpec
 from .result import InputResult, JobResult, ResultFile, ResultGpu, ResultStats, ResultTiming
 from .stage import stage_input
@@ -467,6 +468,8 @@ def _run_one_input(
     for note in result.notices:
         status.notice(note, data={"input": input_spec.id})
 
+    all_values = result.all_values
+    assert all_values is not None  # RunResult.__post_init__ always fills it; narrows the type only
     return InputResult(
         id=input_spec.id,
         status="done",
@@ -476,9 +479,9 @@ def _run_one_input(
         stats=ResultStats(
             contigs=result.contigs,
             totalNt=result.total_nt,
-            meanEntropy=float(result.all_values.mean()),
-            minEntropy=float(result.all_values.min()),
-            maxEntropy=float(result.all_values.max()),
+            meanEntropy=float(all_values.mean()),
+            minEntropy=float(all_values.min()),
+            maxEntropy=float(all_values.max()),
         ),
     )
 
@@ -765,7 +768,8 @@ def run_job_outcome(
             # operation, not that stop/delete actually completed — apply_lifecycle()
             # now returns the operation's own response body (or raises if that body
             # itself already reports an error) instead of discarding it.
-            operation = apply_lifecycle(effective_action)
+            # the manifest field is a plain str; apply_lifecycle validates it at runtime (LifecycleError)
+            operation = apply_lifecycle(cast(AfterTask, effective_action))
             lifecycle_applied = effective_action
             op_id = (operation.get("name") or operation.get("id")) if operation else None
             if op_id:

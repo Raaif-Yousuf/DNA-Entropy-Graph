@@ -289,7 +289,7 @@ def explain(cwd: str) -> str:
     path -- a pure read-only affordance for testing the hook by hand."""
     paths = _git_paths(cwd)  # ONE git call: classify() would run a second one
     result = _classify_paths(paths)
-    if result == "unknown":
+    if result == "unknown" or paths is None:  # paths is None exactly when result is unknown
         return (
             f"UNKNOWN for cwd={cwd!r}: could not resolve --git-dir/--git-common-dir "
             "(no git on PATH, cwd not inside any git repository, or a malformed "
@@ -298,7 +298,7 @@ def explain(cwd: str) -> str:
             "an ambiguous case that would otherwise be indistinguishable from a "
             "genuine primary-checkout allow."
         )
-    git_dir, git_common_dir = paths  # cannot be None when result != "unknown"
+    git_dir, git_common_dir = paths
     if result == "primary":
         return f"PRIMARY CHECKOUT for cwd={cwd!r}: --git-dir == --git-common-dir == {git_common_dir!r}. Agent dispatch ALLOWED."
     return f"LINKED WORKTREE for cwd={cwd!r}: --git-dir={git_dir!r} != --git-common-dir={git_common_dir!r}. Agent dispatch DENIED."
@@ -357,7 +357,7 @@ def verdict(cwd: str, caller_id: str | None = None) -> str | None:
     here, so that route is closed at its source.
     """
     paths = _git_paths(cwd, GIT_TIMEOUT)
-    if _classify_paths(paths) != "linked_worktree":
+    if paths is None or _classify_paths(paths) != "linked_worktree":
         return None
     if caller_id and not _owns_agent_worktree(caller_id, paths[1]):
         return None

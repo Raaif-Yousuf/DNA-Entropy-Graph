@@ -41,19 +41,21 @@
     Consequences (issue #619): the accelerator and boot disk come from the
     machine type and the gateway (-AcceleratorType, -AcceleratorCount and
     -DiskSizeGb are plan-only; -DiskSizeGb other than 150 is refused with
-    -Apply), the `purpose` label is plan-only, and -Image is refused with
-    -Apply because CloudCli has no flag for an image or startup metadata.
+    -Apply), and the `purpose` label is plan-only. With -Image, the list
+    gains CloudCli's `--worker-image --bucket --startup-mode gpu-test
+    --expect-gpu` flags (issue #759).
     `-PrintApplyArgs` prints the list as JSON with no cloud call; the
     CloudGpuTestScriptContractTests C# test feeds it to the real parser.
 
-    WHAT -Apply DOES TODAY: create the VM, delete it in a `finally` (so a
-    failed or interrupted run does not leave a billing VM), run the leak
-    scan, and print the resource table as the LAST output line. It does NOT
-    yet run `pytest -m gpu` on the VM or pull logs: CloudCli cannot set the
-    startup metadata, and worker/vm/startup.sh only runs `dna-entropy-worker
-    run`. The run says so ("pytest -m gpu: NOT RUN"); issue #83 stays open
-    for that half.
-
+    WHAT -Apply DOES: without -Image, create the VM (it idles), delete it in
+    a `finally` (so a failed or interrupted run does not leave a billing
+    VM), run the leak scan, and print the resource table as the LAST output
+    line; the run says "pytest -m gpu: NOT RUN". With -Image <name@sha256:...>
+    (a digest, never a tag): `bucket ensure`, create the VM in gpu-test
+    mode, poll `jobs/<job>/logs/gpu-test-result.json`, pull the log, then
+    delete and leak-scan; the run passes only if pytest exited 0. Proven
+    against a stub CloudCli by -SelfTest; UNVERIFIED against a real project
+    and a real image (issue #83 stays open until it has run on a GPU).
     LABELS AND maxRunDuration (Hard Rule 10)
     -------------------------------------------
     `docs/job_contract.md` section 2 is the source of truth: every VM,

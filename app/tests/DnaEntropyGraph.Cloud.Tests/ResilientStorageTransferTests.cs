@@ -57,6 +57,7 @@ public class ResilientStorageTransferTests
         var spec = new VmSpec(Project, "install-1", "job-rt", "evo2_7b", "0.1.0", "stop", "g2-standard-8", TimeSpan.FromHours(1), "DELETE");
         var request = TestInputs.Request("job-rt", spec);
 
+        var clocks = new RunnerClocks();
         var runner = new CloudJobRunner(
             new ResilientComputeGateway(gcp, pipeline),
             new ResilientStorageGateway(new FlakyFirstUpload(gcp), pipeline),
@@ -67,6 +68,8 @@ public class ResilientStorageTransferTests
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(100),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
 
         var result = await runner.RunAsync(request, CancellationToken.None);

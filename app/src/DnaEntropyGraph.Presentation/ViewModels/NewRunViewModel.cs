@@ -631,6 +631,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private Task ReceiveNavigationParameterAsync(object? parameter)
     {
         _intake?.Attach(this);
+
+        // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
+        if (parameter is NavigationArrival arrival)
+        {
+            parameter = arrival.IsNewNavigation ? arrival.Parameter : null;
+        }
+
         return parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
     }
 
@@ -884,6 +891,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     {
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
+        var startedItem = SelectedItem!;
         var options = new RunOptions
         {
             ModelId = Gpu.ModelId,
@@ -930,6 +938,31 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             // Also when the navigation throws: the run is paid for, so its choice is still remembered.
             RememberOutputs(group, outputs);
+
+            // Issue #527: this ViewModel outlives the page, so a started run leaves a clean page for the next one.
+            await ResetForNextRunAsync(startedItem);
+        }
+    }
+
+    /// <summary>
+    /// Empties the page once a run has started (issue #527): the files, the paste box, the status line and the RNA choice. The preset,
+    /// the ticked outputs and the run target stay: they are the user's intent for runs in general (docs/ui_conventions.md section 9). Pasted copies of the files
+    /// that were not run are deleted like a Remove would; the copy behind the run that started stays, because a retry restages from
+    /// its recorded path. The user's own files are never touched (Hard Rule 14).
+    /// </summary>
+    private async Task ResetForNextRunAsync(InputPillItem startedItem)
+    {
+        var dropped = Items.ToList();
+        Items.Clear();
+        SelectedItem = null;
+        PasteText = string.Empty;
+        IsPasteOpen = false;
+        StatusMessage = string.Empty;
+        IsTreatingAsRna = false;
+        OnPropertyChanged(nameof(OfferTreatAsRna));
+        foreach (var item in dropped.Where(item => !ReferenceEquals(item, startedItem)))
+        {
+            await DeleteSavedPasteAsync(item);
         }
     }
 
