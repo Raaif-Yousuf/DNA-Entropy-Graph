@@ -182,6 +182,14 @@ def is_stale(age_days: int, max_age_days: int) -> bool:
     return age_days > max_age_days
 
 
+def duplicate_key(row: Row) -> tuple[str, str] | None:
+    """The identity two rows share when they are duplicates: issue number + "Do this" (whitespace-normalised,
+    case-insensitive). None for a row too short to have both (reported by validate_row_shape)."""
+    if len(row.cells) < 4:
+        return None
+    return (row.cells[0].strip().lower(), " ".join(row.cells[3].split()).lower())
+
+
 def find_duplicate_rows(rows: list[Row]) -> list[str]:
     """One problem per row repeating an earlier row's issue number and "Do this"
     text (whitespace-normalised, case-insensitive). One issue may legitimately
@@ -189,9 +197,9 @@ def find_duplicate_rows(rows: list[Row]) -> list[str]:
     seen: dict[tuple[str, str], int] = {}
     problems: list[str] = []
     for row in rows:
-        if len(row.cells) < 4:
+        key = duplicate_key(row)
+        if key is None:
             continue  # malformed shape is reported by validate_row_shape
-        key = (row.cells[0].strip().lower(), " ".join(row.cells[3].split()).lower())
         if key in seen:
             problems.append(f"L{row.line_no}: duplicate of L{seen[key]} (same issue {row.cells[0].strip()} and same 'Do this') -- delete one")
         else:
