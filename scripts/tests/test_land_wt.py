@@ -64,6 +64,13 @@ if sys.argv[2:4] == ["pr", "checks"]:
         sys.exit(reply["exit"])
     print(reply if isinstance(reply, str) else json.dumps(reply))
     sys.exit(1 if isinstance(reply, str) else 0)
+if sys.argv[2:3] == ["api"]:
+    reply = json.loads(Path(str(log) + ".alerts").read_text(encoding="utf-8"))
+    if isinstance(reply, dict) and "exit" in reply:  # {"exit": N, "stderr": "..."}
+        sys.stderr.write(reply.get("stderr", ""))
+        sys.exit(reply["exit"])
+    print(reply["raw"] if isinstance(reply, dict) and "raw" in reply else json.dumps(reply))
+    sys.exit(0)
 if sys.argv[2:4] == ["run", "rerun"]:
     rc_file = Path(str(log) + ".rerunrc")
     sys.exit(int(rc_file.read_text()) if rc_file.exists() else 0)
@@ -1558,3 +1565,203 @@ def test_a_failing_record_landed_only_warns_and_the_landing_still_succeeds(world
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
     assert "WARNING: could not record the landed PR" in capsys.readouterr().out
+
+
+def _alert(rule: str, path: str) -> dict:
+    return {"rule": {"id": rule}, "most_recent_instance": {"location": {"path": path}}}
+
+
+def _land_codeql(world: World, alerts, check: str = "CodeQL") -> tuple[int, str]:
+    (world.root / "gh.log.alerts").write_text(json.dumps(alerts), encoding="utf-8", newline="\n")
+    rc, _ = _land_green(world, [[_check(check, "fail")]])
+    return rc, ""
+
+
+def test_a_failed_codeql_check_prints_a_per_rule_and_per_directory_breakdown(world, capsys):
+    alerts = [
+        _alert("py/path-injection", "scripts/a.py"),
+        _alert("py/path-injection", "scripts/b.py"),
+        _alert("py/path-injection", "worker/src/c.py"),
+        _alert("cs/log-forging", "app/src/X.cs"),
+    ]
+    rc, _ = _land_codeql(world, alerts)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 4 open alert(s) on PR 7: py/path-injection 3 (scripts 2, worker 1), cs/log-forging 1 (app 1)" in out
+    assert "not all under a test path" in out
+    assert out.isascii()
+    api = [c for c in world.gh_calls() if c[0] == "api"]
+    assert len(api) == 1 and "refs/pull/7/merge" in api[0][1] and "--paginate" in api[0]
+    assert "o/r" in api[0][1]
+    assert _calls(world, "merge") == []
+
+
+def test_every_alert_under_a_test_path_is_flagged_as_such(world, capsys):
+    rc, _ = _land_codeql(world, [_alert("py/x", "scripts/tests/t.py"), _alert("cs/y", "app/tests/Z.cs"), _alert("py/x", "worker/tests/q.py")])
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "every alert is under a test path" in out
+
+
+def test_an_analyze_check_name_also_triggers_the_triage(world, capsys):
+    _land_codeql(world, [_alert("py/x", "scripts/a.py")], check="analyze (python)")
+    assert "CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)" in capsys.readouterr().out
+
+
+def test_a_gh_failure_listing_alerts_is_one_line_and_changes_nothing(world, capsys):
+    rc, _ = _land_codeql(world, {"exit": 1, "stderr": "HTTP 403"})
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: " in out and "403" in out
+    assert _calls(world, "merge") == []
+
+
+def test_a_non_codeql_failed_check_makes_no_alert_call_and_prints_nothing_extra(world, capsys):
+    (world.root / "gh.log.alerts").write_text("[]", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("scripts tests", "fail")]])
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert [c for c in world.gh_calls() if c[0] == "api"] == []
+    assert "CodeQL" not in out and "alerts" not in out
+
+
+def _api_calls(world: World) -> list[list[str]]:
+    return [c for c in world.gh_calls() if c[0] == "api"]
+
+
+def test_the_could_not_be_re_run_refusal_prints_the_codeql_breakdown(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("cs/useless-upcast", "app/tests/X/H.cs")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)]], rerun=True, rerun_rc=1)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "could not be re-run" in out
+    assert "CodeQL: 1 open alert(s) on PR 7: cs/useless-upcast 1 (app 1)" in out
+    assert "every alert is under a test path" in out
+    assert len(_api_calls(world)) == 1
+
+
+def test_the_no_rerun_flag_path_prints_the_codeql_breakdown(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("py/x", "scripts/a.py")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)]], rerun=False)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)" in capsys.readouterr().out
+
+
+def test_a_second_red_after_a_rerun_prints_the_breakdown_exactly_once(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("py/x", "scripts/a.py")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)], [_check("CodeQL", "fail", run=5)]], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "still red after one re-run" in out
+    assert out.count("CodeQL: 1 open alert(s)") == 1
+    assert len(_api_calls(world)) == 1
+
+
+def test_a_rerun_that_goes_green_prints_nothing_and_makes_no_api_call(world, capsys):
+    (world.root / "gh.log.alerts").write_text("[]", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)], [_check("CodeQL", "pass", run=5)]], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_OK
+    assert "CodeQL:" not in out and "alerts" not in out
+    assert _api_calls(world) == []
+
+
+def _land_alerts_reply(world: World, reply, replies=None, **kw) -> int:
+    (world.root / "gh.log.alerts").write_text(json.dumps(reply), encoding="utf-8", newline="\n")
+    rc, _ = _land_green(world, replies or [[_check("CodeQL", "fail", run=5)]], **kw)
+    return rc
+
+
+def test_paginated_output_of_two_concatenated_arrays_is_summed(world, capsys):
+    raw = json.dumps([_alert("py/x", "scripts/a.py")]) + "\n \n" + json.dumps([_alert("py/x", "scripts/b.py"), _alert("py/y", "app/c.cs")])
+    rc = _land_alerts_reply(world, {"raw": raw})
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 3 open alert(s) on PR 7: py/x 2 (scripts 2), py/y 1 (app 1)" in out
+
+
+def test_alert_pages_decodes_concatenated_arrays_where_json_loads_cannot():
+    raw = '[{"a": 1}]\n  [{"b": 2}]'
+    with pytest.raises(ValueError):
+        json.loads(raw)
+    assert lw._alert_pages(raw) == [{"a": 1}, {"b": 2}]
+
+
+def test_rc0_with_non_json_output_is_one_could_not_list_line(world, capsys):
+    rc = _land_alerts_reply(world, {"raw": "<html>nope</html>"})
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: unexpected response" in out and "CodeQL: " not in out
+
+
+@pytest.mark.parametrize("raw", ["", "{}", '{"message": "Not Found"}'])
+def test_an_empty_body_or_a_json_object_is_unexpected_response_not_zero_alerts(world, capsys, raw):
+    rc = _land_alerts_reply(world, {"raw": raw})
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: unexpected response" in out and "0 open alert" not in out
+
+
+def test_zero_real_alerts_says_the_failure_is_a_build_error(world, capsys):
+    rc = _land_alerts_reply(world, [])
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 0 open alert(s) on PR 7 (the failure is a build/analysis error, not alerts)" in capsys.readouterr().out
+
+
+def test_the_alert_call_timing_out_is_one_could_not_list_line_and_exit_stays_5(world, capsys, monkeypatch):
+    real = lw.run_bounded
+
+    def fake(argv, **kw):
+        if "api" in argv:
+            raise subprocess.TimeoutExpired(list(argv), 1)
+        return real(argv, **kw)
+
+    monkeypatch.setattr(lw, "run_bounded", fake)
+    rc = _land_alerts_reply(world, [])
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: gh timed out after" in out
+
+
+def test_any_unexpected_error_in_the_triage_is_one_line_not_a_crash(world, capsys, monkeypatch):
+    def boom(raw):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(lw, "_alert_pages", boom)
+    rc = _land_alerts_reply(world, [_alert("py/x", "a.py")])
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: kaboom" in capsys.readouterr().out
+
+
+def test_a_non_ascii_path_under_a_cp1252_console_is_printed_ascii_and_exit_stays_5(world, monkeypatch):
+    import io
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True))
+    rc = _land_alerts_reply(world, [_alert("py/x", "scripts/\u4e2d\u6587.py")])
+    text = raw.getvalue().decode("cp1252")
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)" in text
+    assert text.isascii()
+
+
+def test_non_ascii_gh_stderr_is_made_ascii_in_the_could_not_list_line(world, monkeypatch):
+    import io
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True))
+    monkeypatch.setattr(lw, "_codeql_summary_lines", lambda ctx, pr: (_ for _ in ()).throw(ValueError("bad \u4e2d \ufffd")))
+    rc = _land_alerts_reply(world, [])
+    text = raw.getvalue().decode("cp1252")
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: bad ? ?" in text
+
+
+def test_a_red_codeql_with_another_check_pending_prints_the_triage_at_the_pending_timeout(world, capsys):
+    replies = [[_check("CodeQL", "fail", run=5), _check("scripts tests", "pending")]]
+    rc = _land_alerts_reply(world, [_alert("py/x", "scripts/a.py")], replies, rerun=True, timeout=30.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert "still pending: scripts tests" in out
+    assert out.count("CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)") == 1
+    assert len(_api_calls(world)) == 1
