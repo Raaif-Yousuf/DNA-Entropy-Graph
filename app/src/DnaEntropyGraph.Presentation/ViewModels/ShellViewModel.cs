@@ -200,7 +200,25 @@ public sealed partial class ShellViewModel : ObservableObject
 
     /// <summary>First-launch offers, run once the window is showing (issue #243: bring in the earlier version's runs). Never throws.</summary>
     public Task RunStartupOffersAsync(CancellationToken cancellationToken)
-        => _startupOffers ??= _prototypeImport is null ? Task.CompletedTask : _prototypeImport.OfferOnFirstLaunchAsync(cancellationToken);
+        => (_startupOffers ??= RunOffersOnceAsync()).WaitAsync(cancellationToken);
+
+    // The offers run on the shell's own lifetime, not the first caller's token: that token only ends that caller's wait (WaitAsync above).
+    // Never throws: MainWindow awaits this in an async void handler, where an escaped exception would end the app.
+    private async Task RunOffersOnceAsync()
+    {
+        try
+        {
+            if (_prototypeImport is not null)
+            {
+                await _prototypeImport.OfferOnFirstLaunchAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Only the class is traced (a message can carry a path).
+            System.Diagnostics.Trace.TraceWarning($"startup offers failed: {ex.GetType().Name}");
+        }
+    }
 
     /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run; null when the user already chose a page. Valid after <see cref="PrepareSessionAsync"/>.</summary>
     public string? StartupNavKey { get; private set; } = InitialPageKeyValue;

@@ -52,8 +52,10 @@ public sealed partial class PrototypeImportViewModel : ObservableObject
                 return;
             }
         }
-        catch (SettingsUnavailableException)
+        catch (Exception ex)
         {
+            // A locked or unreadable settings file (SettingsUnavailableException, IOException, ...) means "ask again next launch"; only the class is traced.
+            System.Diagnostics.Trace.TraceWarning($"prototype import settings read failed: {ex.GetType().Name}");
             return;
         }
 

@@ -30,6 +30,13 @@ public sealed class ShellStartupOrderTests : IDisposable
         public void SetString(string key, string value) => Values[key] = value;
     }
 
+    private sealed class ThrowingSettings : ISettingsStore
+    {
+        public string? GetString(string key) => throw new IOException("disk gone");
+
+        public void SetString(string key, string value) => throw new IOException("disk gone");
+    }
+
     private sealed class MemoryRuns : IRunRepository
     {
         public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<RunRecord>>([]);
@@ -37,7 +44,7 @@ public sealed class ShellStartupOrderTests : IDisposable
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private (ShellViewModel Shell, TourViewModel Tour) Make(bool withPrototypeRuns)
+    private (ShellViewModel Shell, TourViewModel Tour) Make(bool withPrototypeRuns, ISettingsStore? offerSettings = null)
     {
         if (withPrototypeRuns)
         {
@@ -49,13 +56,14 @@ public sealed class ShellStartupOrderTests : IDisposable
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         var dialogs = Substitute.For<IDialogService>();
-        dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _dialogShown.TrySetResult();
-            return _answer.Task;
+            // Like the real dialog, ends when its token is cancelled.
+            return _answer.Task.WaitAsync(call.Arg<CancellationToken>());
         });
         var proto = new PrototypeImportViewModel(
-            new MemorySettings(),
+            offerSettings ?? new MemorySettings(),
             new PrototypeSearchPaths(Path.Combine(_root, "AppData", "dna-entropy", "config.json"), Path.Combine(_root, "Downloads")),
             new PrototypeImporter(new MemoryRuns()),
             dialogs,
@@ -116,27 +124,35 @@ public sealed class ShellStartupOrderTests : IDisposable
     }
 
     [Fact]
-    public async Task A_cancelled_offer_still_lets_the_tour_start_and_never_throws_out_of_a_fire_and_forget_call()
+    public async Task A_settings_read_that_throws_an_IOException_never_escapes_the_startup_offers_and_the_tour_still_starts()
     {
-        var (shell, tour) = Make(withPrototypeRuns: true);
-        using var cancelled = new CancellationTokenSource();
-        await cancelled.CancelAsync();
+        var (shell, tour) = Make(withPrototypeRuns: true, new ThrowingSettings());
 
-        _ = shell.RunStartupOffersAsync(cancelled.Token).ContinueWith(static _ => { }, TestContext.Current.CancellationToken, TaskContinuationOptions.None, TaskScheduler.Default);
+        // MainWindow awaits this unguarded inside an async void handler: it must complete normally.
+        await shell.RunStartupOffersAsync(CancellationToken.None);
         await shell.OnWindowLoadedAsync();
 
         tour.IsNewRunStepOpen.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task A_faulted_offer_still_lets_the_tour_start()
+    public async Task The_offers_do_not_take_their_lifetime_from_the_first_callers_token_a_cancelled_token_only_ends_that_callers_wait()
     {
         var (shell, tour) = Make(withPrototypeRuns: true);
-        _answer.SetException(new InvalidOperationException("boom"));
+        using var cancelled = new CancellationTokenSource();
 
-        _ = shell.RunStartupOffersAsync(CancellationToken.None).ContinueWith(static _ => { }, TestContext.Current.CancellationToken, TaskContinuationOptions.None, TaskScheduler.Default);
-        await shell.OnWindowLoadedAsync();
+        var first = shell.RunStartupOffersAsync(cancelled.Token);
+        await _dialogShown.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await cancelled.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => first);
 
+        // The question is still open and the tour still waits for it.
+        var loaded = shell.OnWindowLoadedAsync();
+        loaded.IsCompleted.ShouldBeFalse();
+        tour.IsNewRunStepOpen.ShouldBeFalse();
+
+        _answer.SetResult(true);
+        await loaded;
         tour.IsNewRunStepOpen.ShouldBeTrue();
     }
 }
