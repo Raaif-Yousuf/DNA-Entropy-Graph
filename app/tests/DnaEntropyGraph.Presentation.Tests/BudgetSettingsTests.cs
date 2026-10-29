@@ -173,7 +173,7 @@ public sealed class BudgetSettingsTests
     [Fact]
     public async Task Any_other_failed_look_on_open_is_neutral_too()
     {
-        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Network));
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Other));
         var vm = Open();
 
         await vm.RefreshCommand.ExecuteAsync(null);
@@ -632,7 +632,7 @@ public sealed class BudgetSettingsTests
     }
 
     [Fact]
-    public async Task Save_is_impossible_before_the_first_read_has_succeeded()
+    public void Save_is_impossible_before_the_first_read_has_succeeded()
     {
         var vm = Open();
 
@@ -714,5 +714,106 @@ public sealed class BudgetSettingsTests
         await vm.RefreshCommand.ExecuteAsync(null);
 
         vm.AmountText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task After_the_selected_project_changes_without_a_refresh_save_and_remove_are_off_and_do_nothing()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(500m));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.SaveCommand.CanExecute(null).ShouldBeTrue();
+        vm.RemoveCommand.CanExecute(null).ShouldBeTrue();
+
+        _account.SelectedProjectId.Returns("other-lab");
+
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse("the read was for my-lab, not other-lab");
+        vm.RemoveCommand.CanExecute(null).ShouldBeFalse();
+        await vm.SaveCommand.ExecuteAsync(null);
+        await vm.RemoveCommand.ExecuteAsync(null);
+        await _budgets.DidNotReceiveWithAnyArgs().SaveAsync(default!, default, TestContext.Current.CancellationToken);
+        await _budgets.DidNotReceiveWithAnyArgs().RemoveAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_failed_read_forgets_the_budget_the_previous_read_found()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(500m));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.HasBudget.ShouldBeTrue();
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Network));
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.HasBudget.ShouldBeFalse("a budget this read did not find is not shown");
+    }
+
+    [Fact]
+    public async Task A_failed_read_after_a_refused_one_does_not_keep_the_old_request_or_link()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.OrgPolicy));
+        _shell.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Network));
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.CopyRequestCommand.Execute(null);
+
+        vm.ShowCopyRequest.ShouldBeFalse();
+        vm.ConsoleLink.ShouldBeNull();
+        _shell.Received(1).CopyText("BudgetRequestText");
+    }
+
+    [Fact]
+    public async Task A_cancelled_refresh_says_to_open_settings_again_instead_of_leaving_the_buttons_off_in_silence()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw new OperationCanceledException());
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("BudgetStatusCouldNotCheck");
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, BudgetErrorCodes.BillingReadPermission, "BudgetStatusBillingReadNoAccess", false, false)]
+    [InlineData(CloudErrorKind.Billing, null, "BudgetStatusBilling", false, true)]
+    [InlineData(CloudErrorKind.OrgPolicy, null, "BudgetStatusOrgPolicy", true, false)]
+    [InlineData(CloudErrorKind.ApiDisabled, null, "BudgetStatusApiDisabled", false, true)]
+    [InlineData(CloudErrorKind.Network, null, "BudgetStatusNetwork", false, false)]
+    [InlineData(CloudErrorKind.Quota, null, "BudgetStatusCouldNotCheck", false, false)]
+    [InlineData(CloudErrorKind.Other, null, "BudgetStatusCouldNotCheck", false, false)]
+    public async Task A_failed_look_names_the_action_that_can_work_for_its_own_kind(CloudErrorKind kind, string? code, string status, bool copyRequest, bool link)
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(kind, code));
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe(status);
+        vm.ErrorText.ShouldBeEmpty();
+        vm.ShowCopyRequest.ShouldBe(copyRequest);
+        vm.ShowConsoleLink.ShouldBe(link);
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Save_pressed_while_a_refresh_is_in_flight_does_nothing()
+    {
+        var vm = await OpenKnownAsync();
+        var gate = new TaskCompletionSource<BudgetInfo?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(gate.Task);
+
+        var refresh = vm.RefreshCommand.ExecuteAsync(null);
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+        await vm.SaveCommand.ExecuteAsync(null);
+        await _budgets.DidNotReceiveWithAnyArgs().SaveAsync(default!, default, TestContext.Current.CancellationToken);
+
+        gate.SetResult(null);
+        await refresh;
+        vm.SaveCommand.CanExecute(null).ShouldBeTrue("the read finished");
     }
 }

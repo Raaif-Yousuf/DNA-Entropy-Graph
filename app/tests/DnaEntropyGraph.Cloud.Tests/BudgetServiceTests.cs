@@ -385,4 +385,33 @@ public class BudgetServiceTests
         var unlinked = new FakeGcp().WithBillingOff(Project);
         (await Service(unlinked).ConsoleLinkAsync(Project, CancellationToken.None)).ShouldBe("https://console.cloud.google.com/billing");
     }
+
+    [Fact]
+    public async Task A_refused_read_of_the_projects_billing_link_is_a_project_permission_not_a_billing_role_for_a_look_and_a_save()
+    {
+        var gcp = await LinkedAsync();
+        var billing = Substitute.For<IBillingGateway>();
+        billing.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BillingStatus>>(_ => throw Refused());
+        var service = new BudgetService(gcp, billing, gcp, Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var look = await Should.ThrowAsync<CloudOperationException>(() => service.GetAsync(Project, CancellationToken.None));
+        var save = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
+
+        look.Kind.ShouldBe(CloudErrorKind.Permission);
+        look.Error.Code.ShouldBe(BudgetErrorCodes.BillingReadPermission);
+        save.Error.Code.ShouldBe(BudgetErrorCodes.BillingReadPermission);
+        look.InnerException.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_billing_read_that_fails_for_another_reason_keeps_its_own_kind_and_code()
+    {
+        var gcp = await LinkedAsync();
+        var billing = Substitute.For<IBillingGateway>();
+        var network = new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "dropped"), CloudErrorKind.Network);
+        billing.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BillingStatus>>(_ => throw network);
+        var service = new BudgetService(gcp, billing, gcp, Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        (await Should.ThrowAsync<CloudOperationException>(() => service.GetAsync(Project, CancellationToken.None))).ShouldBeSameAs(network);
+    }
 }

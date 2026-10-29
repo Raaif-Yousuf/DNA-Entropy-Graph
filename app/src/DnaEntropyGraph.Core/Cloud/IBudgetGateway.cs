@@ -106,6 +106,12 @@ public static class BudgetErrorCodes
     /// </summary>
     public const string ApiReadPermission = "BUDGET_API_READ_PERMISSION";
 
+    /// <summary>
+    /// Reading which billing account the project is linked to was refused (a right on the PROJECT, not a billing role). No budget call was made. Action: ask a project owner for access to the
+    /// project. A <see cref="CloudErrorKind.Permission"/> kind, so a caller that only knows kinds still reads it as a refusal.
+    /// </summary>
+    public const string BillingReadPermission = "BUDGET_BILLING_READ_PERMISSION";
+
     /// <summary>The amount is not a usable number. Action: type an amount.</summary>
     public const string InvalidAmount = "BUDGET_INVALID_AMOUNT";
 }

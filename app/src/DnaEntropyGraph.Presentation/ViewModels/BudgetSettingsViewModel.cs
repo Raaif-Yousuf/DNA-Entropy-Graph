@@ -48,11 +48,14 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
     private bool _hasProject;
 
-    // True only while the LAST read of the budget state succeeded for the shown project. Save and Remove need it: blind, they could overwrite or delete a budget the page never showed.
+    // True only while the LAST read of the budget state succeeded. Save and Remove need it: blind, they could overwrite or delete a budget the page never showed.
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
     private bool _stateKnown;
+
+    // The project that successful read was FOR. The selection can change without a Refresh, and Save and Remove re-read the live selection, so they also need it to equal the known project.
+    private string? _knownProject;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
@@ -106,6 +109,11 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
         ClearMessages();
         StateKnown = false;
+        _knownProject = null;
+
+        // A budget the last read found belongs to a read that is over: every look starts with none shown, and a failed one leaves none.
+        HasBudget = false;
+        _requestKey = "BudgetRequestText";
         HasProject = ProjectId() is not null;
         if (ProjectId() is not { } project)
         {
@@ -132,27 +140,18 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            Show(await _budgets.GetAsync(project, cancellationToken));
+            Show(await _budgets.GetAsync(project, cancellationToken), project);
         }
         catch (OperationCanceledException)
         {
-            // The page went away: nothing to report.
+            // The look was interrupted (the page went away, or it was cancelled): Create and Remove stay off, so say the one thing that turns them back on.
+            StatusText = _strings.GetString("BudgetStatusCouldNotCheck");
         }
         catch (CloudOperationException ex)
         {
-            // Nobody asked for this look, so a refusal is quiet information, not a red error; red is for a Save the user pressed.
+            // Nobody asked for this look, so a refusal is quiet information, not a red error; red is for a Save the user pressed. Each kind names the action that can work for it.
             System.Diagnostics.Trace.TraceWarning($"Budget look refused: {ex.Kind}");
-            if (ex.Kind == CloudErrorKind.Permission && ex.Error.Code == BudgetErrorCodes.ApiReadPermission)
-            {
-                // The refused read was of the PROJECT's API state: the person to ask is a project owner, and the request text says so.
-                StatusText = _strings.GetString("BudgetStatusApiReadNoAccess");
-                _requestKey = "BudgetRequestText_ApiRead";
-                ShowCopyRequest = true;
-            }
-            else
-            {
-                StatusText = _strings.GetString(ex.Kind == CloudErrorKind.Permission ? "BudgetStatusNoAccess" : "BudgetStatusCouldNotCheck");
-            }
+            await ReportLookAsync(ex, project, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -191,14 +190,14 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             var saved = await _budgets.SaveAsync(project, amount, cancellationToken);
             // What was saved (rounded to cents) replaces what was typed, and the box is Google's again.
             _amountEdited = false;
-            Show(saved);
+            Show(saved, project);
             StatusText = saved.ThresholdPercents.Count == 0
                 ? _strings.GetString("BudgetStatusNoThresholds")
                 : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetSaved"), Format(saved.AmountUsd), Thresholds(saved));
         }, project, cancellationToken);
     }
 
-    private bool CanSave() => HasProject && StateKnown && !IsBusy;
+    private bool CanSave() => HasProject && KnownForSelection() && !IsBusy;
 
     [RelayCommand(CanExecute = nameof(CanRemove))]
     private async Task RemoveAsync(CancellationToken cancellationToken)
@@ -224,7 +223,10 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }, project, cancellationToken, removing: true);
     }
 
-    private bool CanRemove() => HasBudget && HasProject && StateKnown && !IsBusy;
+    private bool CanRemove() => HasBudget && HasProject && KnownForSelection() && !IsBusy;
+
+    // The last successful read must be of the project that is selected NOW (the selection can change without a Refresh).
+    private bool KnownForSelection() => StateKnown && _knownProject is { } known && string.Equals(known, ProjectId(), StringComparison.Ordinal);
 
     /// <summary>Copies the plain-words request the user can send to their billing administrator.</summary>
     [RelayCommand]
@@ -293,6 +295,10 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
                 _requestKey = "BudgetRequestText_ApiRead";
                 ShowCopyRequest = true;
                 break;
+            case CloudErrorKind.Permission when ex.Error.Code == BudgetErrorCodes.BillingReadPermission:
+                // The read of the project's billing link was refused: nothing was saved, and the person to ask is a project owner.
+                ErrorText = _strings.GetString("BudgetError_BillingReadPermission");
+                break;
             case CloudErrorKind.Permission when removing:
                 // The create request would ask for the wrong thing; the budget is removed on Google's own page.
                 ErrorText = _strings.GetString("BudgetError_PermissionRemove");
@@ -326,6 +332,45 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
     }
 
+    private async Task ReportLookAsync(CloudOperationException ex, string project, CancellationToken cancellationToken)
+    {
+        switch (ex.Kind)
+        {
+            case CloudErrorKind.Permission when ex.Error.Code == BudgetErrorCodes.ApiReadPermission:
+                // The refused read was of the PROJECT's API state: the person to ask is a project owner, and the request text says so.
+                StatusText = _strings.GetString("BudgetStatusApiReadNoAccess");
+                _requestKey = "BudgetRequestText_ApiRead";
+                ShowCopyRequest = true;
+                break;
+            case CloudErrorKind.Permission when ex.Error.Code == BudgetErrorCodes.BillingReadPermission:
+                // The refused read was of the project's billing link: a project right again, so the billing administrator is the wrong person to ask.
+                StatusText = _strings.GetString("BudgetStatusBillingReadNoAccess");
+                break;
+            case CloudErrorKind.Permission:
+                StatusText = _strings.GetString("BudgetStatusNoAccess");
+                break;
+            case CloudErrorKind.Billing:
+                StatusText = _strings.GetString("BudgetStatusBilling");
+                await OfferConsoleAsync(project, cancellationToken);
+                break;
+            case CloudErrorKind.OrgPolicy:
+                StatusText = _strings.GetString("BudgetStatusOrgPolicy");
+                _requestKey = "BudgetRequestText_OrgPolicy";
+                ShowCopyRequest = true;
+                break;
+            case CloudErrorKind.ApiDisabled:
+                StatusText = _strings.GetString("BudgetStatusApiDisabled");
+                ConsoleLink = new Uri(BudgetLinks.ForApi(project));
+                break;
+            case CloudErrorKind.Network:
+                StatusText = _strings.GetString("BudgetStatusNetwork");
+                break;
+            default:
+                StatusText = _strings.GetString("BudgetStatusCouldNotCheck");
+                break;
+        }
+    }
+
     private async Task OfferConsoleAsync(string project, CancellationToken cancellationToken)
     {
         try
@@ -338,8 +383,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
     }
 
-    private void Show(BudgetInfo? budget)
+    private void Show(BudgetInfo? budget, string project)
     {
+        _knownProject = project;
         StateKnown = true;
         HasBudget = budget is not null;
         if (budget is null)

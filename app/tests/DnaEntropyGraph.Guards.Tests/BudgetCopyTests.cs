@@ -90,6 +90,21 @@ public sealed class BudgetCopyTests
         resw.Where(p => p.Key.StartsWith("Budget", StringComparison.Ordinal)).ShouldAllBe(p => !p.Value.Contains('—'));
     }
 
+    [Fact]
+    public void Each_failed_look_status_names_the_one_action_for_its_own_cause_and_never_the_wrong_person()
+    {
+        var resw = Resw();
+        resw["BudgetStatusBillingReadNoAccess"].ShouldContain("Ask a project owner");
+        resw["BudgetStatusBillingReadNoAccess"].ShouldNotContain("billing administrator");
+        resw["BudgetStatusBilling"].ShouldContain("turn billing back on");
+        resw["BudgetStatusBilling"].ShouldNotContain("open Settings again", Case.Insensitive);
+        resw["BudgetStatusOrgPolicy"].ShouldContain("Copy a request for my administrator");
+        resw["BudgetStatusOrgPolicy"].ShouldNotContain("open Settings again", Case.Insensitive);
+        resw["BudgetStatusApiDisabled"].ShouldContain("switch it on");
+        resw["BudgetStatusNetwork"].ShouldContain("Check your internet connection");
+        resw["BudgetError_BillingReadPermission"].ShouldContain("Ask a project owner");
+    }
+
     private sealed class RealStrings(Dictionary<string, string> resw) : IStringResourceProvider
     {
         public string GetString(string key) => resw.TryGetValue(key, out var value) ? value : throw new KeyNotFoundException(key);

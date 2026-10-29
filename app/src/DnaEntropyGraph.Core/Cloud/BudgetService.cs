@@ -53,7 +53,7 @@ public sealed class BudgetService : IBudgetService
             throw new CloudOperationException(new CloudError(BudgetErrorCodes.InvalidAmount, null, "The budget amount is not a usable number."), CloudErrorKind.Other);
         }
 
-        var status = await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var status = await BillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrEmpty(status.AccountId))
         {
             throw new CloudOperationException(new CloudError(BudgetErrorCodes.NoBilling, null, "The project has no billing account to put a budget on."), CloudErrorKind.Billing);
@@ -138,9 +138,22 @@ public sealed class BudgetService : IBudgetService
         }
     }
 
+    // The one read of which billing account the project is linked to: a refusal is a right on the PROJECT (never the billing account's budget role), so it carries its own code.
+    private async Task<BillingStatus> BillingStatusAsync(string projectId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
+        {
+            throw ApiPermission(ex, BudgetErrorCodes.BillingReadPermission, "Reading which billing account the project is linked to was refused; no budget call was made.");
+        }
+    }
+
     private async Task<string?> LinkedAccountAsync(string projectId, CancellationToken cancellationToken)
     {
-        var status = await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var status = await BillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false);
         // An account that is linked but switched off cannot bill, so it reads as no billing (the same action: open Google's billing page).
         return !status.Enabled || string.IsNullOrEmpty(status.AccountId) ? null : status.AccountId;
     }
