@@ -1,0 +1,1 @@
+- tooling: scripts/heavy.py derives the default artifacts path from the git toplevel of the CWD (not its own location), and the C# test path helpers (Guards RepoPaths, Cloud FixturePaths, Presentation TestPaths, Core ContractFixtures) prefer the compiled source tree over the binary's directory, so a worktree lane's Guards.Tests scan its own tree (#874). New RepoPathsTests guard.

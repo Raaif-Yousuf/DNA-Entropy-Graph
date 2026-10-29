@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DnaEntropyGraph.Core.Viewers;
 
 namespace DnaEntropyGraph.Presentation.Viewer;
 
@@ -10,10 +11,11 @@ public enum IgvPlanFailure
     NoEntropyTrack,
     AmbiguousSequenceFile,
     SequenceTooLarge,
+    IndexFailed,
 }
 
 /// <summary>What to show for one run folder: the JSON <c>load</c> command for bridge.js, or why there is none.</summary>
-public sealed record IgvLoadPlan(IgvPlanFailure Failure, string? RunFolder, string? LoadMessageJson);
+public sealed record IgvLoadPlan(IgvPlanFailure Failure, string? RunFolder, string? LoadMessageJson, string? FastaPath = null);
 
 public static class ViewerLimits
 {
@@ -23,6 +25,21 @@ public static class ViewerLimits
     /// ~50 MB"; above it a <c>.fai</c> would be needed (docs/superpowers/specs Appendix A section 5, "Data feed").
     /// </summary>
     public const long MaxFastaBytes = 50L * 1024 * 1024;
+
+    /// <summary>
+    /// The largest FASTA the viewer loads through a generated <c>.fai</c> (issue #497): igv.js then reads it by byte range, so the size
+    /// no longer decides memory, only how long the one-off index takes. Above this the file is refused as before (a multi-gigabyte
+    /// genome is out of scope).
+    /// </summary>
+    public const long MaxIndexedFastaBytes = 1024L * 1024 * 1024;
+
+    /// <summary>A limit in the words the user reads ("1 GB", "50 MB"), so the message is formatted from the constant and never drifts from it.</summary>
+    public static string Describe(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 and var b when b % (1024L * 1024 * 1024) == 0 => $"{b / (1024L * 1024 * 1024)} GB",
+        >= 1024L * 1024 and var b when b % (1024L * 1024) == 0 => $"{b / (1024L * 1024)} MB",
+        _ => $"{bytes} bytes",
+    };
 }
 
 /// <summary>
@@ -36,7 +53,26 @@ public static class IgvLoadPlanner
 {
     private static readonly string[] EntropyExtensions = ["bedgraph", "wig"];
 
-    public static IgvLoadPlan Plan(string? runFolder, long maxFastaBytes = ViewerLimits.MaxFastaBytes)
+    /// <summary>
+    /// Plans one run folder. A FASTA over <paramref name="maxFastaBytes"/> is refused (<see cref="IgvPlanFailure.SequenceTooLarge"/>, with its
+    /// path in <see cref="IgvLoadPlan.FastaPath"/>) unless an <paramref name="indexStore"/> is given and the file is within
+    /// <paramref name="maxIndexedBytes"/>: then its <c>.fai</c> is built (blocking, the caller runs this off the UI thread) in the store's own
+    /// folder and the reference loads indexed (issue #497).
+    /// </summary>
+    public static IgvLoadPlan Plan(
+        string? runFolder,
+        long maxFastaBytes = ViewerLimits.MaxFastaBytes,
+        IFastaIndexStore? indexStore = null,
+        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
+        => PlanCancellable(runFolder, maxFastaBytes, indexStore, maxIndexedBytes, CancellationToken.None);
+
+    /// <summary><see cref="Plan"/> whose index build stops with <see cref="OperationCanceledException"/> when the page is left (issue #497).</summary>
+    public static IgvLoadPlan PlanCancellable(
+        string? runFolder,
+        long maxFastaBytes,
+        IFastaIndexStore? indexStore,
+        long maxIndexedBytes,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(runFolder) || !Directory.Exists(runFolder))
         {
@@ -65,9 +101,24 @@ public static class IgvLoadPlanner
         }
 
         var fasta = withEntropy[0];
-        if (new FileInfo(Path.Combine(runFolder, fasta)).Length > maxFastaBytes)
+        var fastaPath = Path.Combine(runFolder, fasta);
+        var fastaBytes = new FileInfo(fastaPath).Length;
+        string? indexUrl = null;
+        if (fastaBytes > maxFastaBytes)
         {
-            return Fail(IgvPlanFailure.SequenceTooLarge, runFolder);
+            if (indexStore is null || fastaBytes > maxIndexedBytes)
+            {
+                return new IgvLoadPlan(IgvPlanFailure.SequenceTooLarge, runFolder, null, fastaPath);
+            }
+
+            try
+            {
+                indexUrl = ViewerUrls.IndexBaseUrl + Uri.EscapeDataString(Path.GetFileName(indexStore.EnsureIndex(fastaPath, cancellationToken)));
+            }
+            catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
+            {
+                return Fail(IgvPlanFailure.IndexFailed, runFolder);
+            }
         }
 
         var stem = Path.GetFileNameWithoutExtension(fasta);
@@ -88,18 +139,24 @@ public static class IgvLoadPlanner
             });
         }
 
+        var reference = new Dictionary<string, object>
+        {
+            ["id"] = stem,
+            ["name"] = stem,
+            ["fastaURL"] = Url(fasta),
+            ["indexed"] = indexUrl is not null,
+        };
+        if (indexUrl is not null)
+        {
+            reference["indexURL"] = indexUrl;
+        }
+
         var message = new Dictionary<string, object>
         {
             ["cmd"] = "load",
             ["config"] = new Dictionary<string, object>
             {
-                ["reference"] = new Dictionary<string, object>
-                {
-                    ["id"] = stem,
-                    ["name"] = stem,
-                    ["fastaURL"] = Url(fasta),
-                    ["indexed"] = false,
-                },
+                ["reference"] = reference,
                 ["tracks"] = tracks,
             },
         };

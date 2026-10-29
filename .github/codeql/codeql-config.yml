@@ -13,3 +13,20 @@ paths-ignore:
   - worker/legacy/**
   - '**/obj/**'
   - '**/bin/**'
+
+# Style-only rules from the security-and-quality suite, triaged as noise in #488 and #491 (each hit
+# was read; none was a defect). P/Invoke is how the Windows shell code reaches the OS. Rules that can
+# flag a real defect (cs/path-combine, cs/catch-of-all-exceptions, cs/local-not-disposed) stay on.
+query-filters:
+  - exclude:
+      id: cs/xmldoc/missing-summary
+  - exclude:
+      id: cs/linq/missed-select
+  - exclude:
+      id: cs/linq/missed-where
+  - exclude:
+      id: cs/unmanaged-code
+  - exclude:
+      id: cs/call-to-unmanaged-code
+  - exclude:
+      id: py/import-and-import-from

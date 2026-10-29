@@ -99,7 +99,7 @@ def read_gff3(path: str) -> tuple[dict[str, list[GeneFeature]], list[str], set[s
         source = by_type["CDS"] if use_cds else genes
         features: list[GeneFeature] = []
         groups: dict[str, list[_Row]] = {}
-        order: list[object] = []
+        order: list[str | _Row] = []
         for row in source:
             fid = row[4].get("ID", "")
             if fid:

@@ -111,6 +111,10 @@ public sealed class IgvViewerHost(AppDataRoot dataRoot)
             Path.Combine(AppContext.BaseDirectory, "Assets", "viewer"),
             CoreWebView2HostResourceAccessKind.Deny);
 
+        // Issue #497: generated .fai files live in the app's own folder, served next to the run's files.
+        Directory.CreateDirectory(dataRoot.FastaIndexDirectory);
+        core.SetVirtualHostNameToFolderMapping(ViewerUrls.IndexHost, dataRoot.FastaIndexDirectory, CoreWebView2HostResourceAccessKind.Allow);
+
         core.NavigationStarting += (_, e) => e.Cancel = !ViewerUrls.IsAllowedNavigation(e.Uri);
         core.NewWindowRequested += (_, e) => e.Handled = true;
         core.DownloadStarting += (_, e) => e.Cancel = true;
