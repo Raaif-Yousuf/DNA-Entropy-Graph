@@ -179,6 +179,9 @@
                             <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
                         </StackPanel>
                         <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock x:Uid="CloudActivityLogExplainer" TextWrapping="Wrap" />
+                        <Button x:Uid="CloudActivityLogOpenButton" Command="{x:Bind CloudActivity.OpenCloudActivityLogCommand}" />
+                        <TextBlock Text="{x:Bind CloudActivity.CloudActivityStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                     </StackPanel>
                 </Border>
             </StackPanel>

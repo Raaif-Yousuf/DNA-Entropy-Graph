@@ -193,6 +193,15 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   Serilog file log yet (issue #164, which will drop its `logs/` folder into the bundle with no change here), so today the
   bundle holds the worker and run logs and per-run files only.
 
+## 5c. The cloud audit log (issue #245, implemented)
+
+`logs/cloud-audit.jsonl` records every mutating cloud call (operation, a resource name the app made, request and operation ids, the
+outcome class, the duration). It is an identifiers-only file: no sequence, no input file name, no object name below `jobs/<id>`, no
+error message, no email, no billing account id (pinned by `CloudAuditTests`). It is local, size-bounded (about 2 MB across two files),
+copied into the diagnostics zip through the same redactor and leak scan as a log, and a failure to write it never reaches the run.
+It is evidence for support and for the user, not a tamper-proof record: anyone with access to the data folder can edit it
+(section 4, local access), and Google's own Cloud Audit Logs are the authoritative record.
+
 ## 6. Residual risk this document does not pretend to solve
 
 - A user's own Windows account being compromised compromises the DPAPI-protected token

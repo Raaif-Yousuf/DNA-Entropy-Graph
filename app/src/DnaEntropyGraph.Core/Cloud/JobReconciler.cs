@@ -995,13 +995,23 @@ public sealed class JobReconciler
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
+        Task<T>? task = null;
         try
         {
-            return await call(deadline.Token).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            task = Audit.CloudAuditContext.StartUnderDeadline(cancellationToken, deadline.Token, call);
+            return await task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
             throw new TimeoutException();
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            // WaitAsync's own timer can beat the linked deadline (a TimeoutException), and a caller's cancel can unwind the wait before the link passes it on:
+            // either way the abandoned call is told to stop now, so it ends (and is audited) at once instead of running on unaware.
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
+            throw;
         }
     }
 

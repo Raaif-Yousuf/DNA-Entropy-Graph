@@ -1503,6 +1503,63 @@ THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes bac
 - **Expiry classification (review L7).** THEORY (unverified): the real shape of an expired request is not measured; `CloudErrorClassifier` treats a code naming `FLEX_START`, and a message about capacity that was not available, not granted, not fulfilled (or "could not be fulfilled") or timed out, as `Stockout`; for a `FLEX_START` code a `requestValidForDuration` message that says the wait elapsed or expired also counts, never on an HTTP 400. The `FLEX_START` code counts only AFTER the quota, permission, 403 and org-policy rules and only when the code or message is about capacity (a `FLEX_START_QUOTA_EXCEEDED` is Quota, a 403 is Permission, an invalid field is Other). Round 3: a message that says "quota" never counts as a flex expiry (quota wins, even with "no capacity" or "exhausted" in it; "exhausted" alone is not capacity wording), plain "unavailable" counts only beside "resource", and connection phrasing ("connection", "could not reach", "network is unreachable") wins over capacity wording on the flex path as well and reads as Network. A message that merely names `requestValidForDuration` is not a stockout. ToTest #92 records the real one.
 - **Fake.** `FakeGcp.WithFlexStartHeld()` / `GrantFlexStart()` hold a queued request until the test grants it (the request lives on the fake's "server": a caller that gives up does not remove it), `WithQueuedRequestsHiddenFromLabelListing()` hides it from the label listing, `FakeGcp.WithFlexStartGrantedAfter(wait)` queues a flex create (the VM exists, PROVISIONING, from the first moment, as a pending request does; a stockout script does not turn a flex create away) and grants it after the wait; `WithFlexStartExpiringAfter(wait)` ends it as a stockout with nothing left; `FlexStartQueued` completes when the request is queued.
 
+## 21. The cloud audit log (issue #245)
+
+Every call that changes something in the user's Google Cloud project leaves one line in `logs\cloud-audit.jsonl` under the data root
+(so portable mode and `--profile` follow it). Support reads it to answer "what did the app do, and when".
+
+- **Where it hooks.** Not in `CloudCallPipeline` (the pipeline sees an operation name and a closure, not the resource, and the real
+  Google gateways run it once per HTTP request, so a pipeline hook would log a retry as a second mutation). It is a decorator per gateway
+  interface (`Audited*Gateway` in `DnaEntropyGraph.Cloud/AuditedGateways.cs`) around whatever the container hands out: the
+  `Resilient*` wrapper over `FakeGcp`, or the real Google gateway. One entry per logical call, with the whole duration including retries.
+  `CloudAuditRegistration.Add` (ServiceRegistration) wraps the registered descriptors after the Google/Fake switch, so both backends are
+  audited the same way. `CloudAuditTests.Classified` is a closed list of every method of every gateway interface, as a mutation (with the
+  operation name its entry must carry) or a read. A reflection scan of every `I*Gateway` in Core
+  (`Every_gateway_interface_in_Core_is_classified...`) fails for a gateway nobody listed, `Every_method_of_every_gateway_interface_is_classified...`
+  for an unlisted method, and `Every_classified_mutation_has_an_audited_decorator_that_records_it` invokes EVERY listed mutation through
+  its decorator over a stub inner and asserts exactly one entry with that operation (and none for a read). `ProductionCloudWiringTests`
+  resolves every scanned gateway from the production container and requires its audit decorator, seeing through `IAuditedGateway.Inner`
+  to check the real gateway underneath.
+- **Not audited: the developer CloudCli.** `app/tools/DnaEntropyGraph.CloudCli` (dev-only, never shipped in the installer; driven by
+  `scripts/cloud_gpu_test.ps1`) builds the gateways itself with `GoogleCloudGateways.Create` in `CloudCliSessions`, outside
+  `CloudAuditRegistration`, so what it creates or deletes in the owner's test project leaves NO line in `cloud-audit.jsonl`. The
+  Settings explainer says so. Its trail is the script's own log and the resource labels.
+- **What is a mutation.** Compute create, reuse (claim, scheduling, metadata, start), stop, delete; Storage `EnsureBucket` (create and
+  lifecycle patch) and object upload; the worker identity (service account, role, project and bucket bindings); Service Usage enable;
+  `EnableComputeApi`; billing link; project create; start VM; delete disk; delete a job prefix; the quota-increase request
+  (resource `projects/<p>/quotas/<metric>[/regions/<r>]`, never the justification text or contact email). Reads (get, list, find, download, quota) are never logged. MEASURED 2026-10-16
+  (read of the interfaces): there is no `setLabels`, bucket-patch or object-delete call at the interface today; they are inside `ReuseVm` and `EnsureBucket`, so
+  each shows as that one entry. When one becomes its own interface method, the guard test above names it.
+- **An entry** (`CloudAuditEntry`): `timeUtc`, `installationId`, `jobId` (when the VM name or object key carries one), `operation`
+  (`Compute.CreateVm`), `resource` (`zones/<zone>/instances/deg-<job>`, `buckets/<bucket>/jobs/<job>`, `projects/<project>`),
+  `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext`; other calls leave them null because
+  the gateway interface does not surface them). The insert's `requestId` is client-made: the create decorator mints it BEFORE the started
+  line (`mintRequestId`), the gateway sends that same id (`CloudAuditContext.RequestIdForCall`), so the started line and a finished line
+  for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`; `cancelled` only when the caller's own token was cancelled; `timeout` for any other cancellation, such as an HttpClient timeout; or the `CloudErrorClassifier` bucket), `errorCode`
+  (Google's structured code, never the message) and `durationMs`.
+- **One way to start a call under the app's deadline.** Any code that hands an audited gateway call a token linked to an app-made deadline (`GatewayCalls`, the reconciler's `WithDeadline`) starts it through `CloudAuditContext.StartUnderDeadline(callerToken, deadlineToken, call)`, which names the caller's own token to the auditor; a new site that links a deadline and calls a gateway uses the same helper. Both sites also give up on the call through `CloudAuditContext.StopAbandonedAsync(deadline, task)` when the wait ends (timeout or user cancel): it cancels the call's token so it ends and is audited at once, observes a fault the abandoned task may raise later, and does not let a cancellation callback the callee registered replace the outcome: `CancelAsync` raises an `AggregateException` when the callback is registered directly on the source being cancelled (MEASURED 2026-10-29: the helper's own swallow test) that would otherwise replace the cancellation or timeout that callers such as the reconciler's quiet-cancel filter look for. That is all it covers, the app's own abandon of a call. A callee callback that throws is still not harmless: on a timeout it also runs on the timer's thread through the linked source, where the helper cannot catch it (MEASURED 2026-10-29: a scratch test, not committed, that gave GatewayCalls a 200 ms CallTimeout and a call that registered a throwing callback on its token and then awaited it: 3 of 3 runs ended the test host with an unhandled AggregateException; no committed test runs that shape, because it ends the host), and THEORY (unverified): it can surface out of the user's own `Cancel()` when the link relays before the wait unwinds (MEASURED 2026-10-29: 0 of 200 runs of each of the two user-cancel tests saw it, run alongside a whole `Presentation.Tests` run). THEORY (unverified): the Google client libraries do not register throwing callbacks.
+- **Known race (accepted).** A user cancel that lands after the app's deadline already fired, but before the abandoned inner call ends, is recorded as `cancelled`, because the auditor reads the caller's token when the call ends. The entry is then wrong about the first cause only; the call did not succeed either way.
+- **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
+  email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
+  `Object_prefix_stops_at_the_job...` guard it.
+- **Started and finished lines.** The multi-step, non-replayable mutations (create, reuse, start and delete a VM; `Storage.EnsureBucket`;
+  `Storage.DeletePrefix`; `Iam.EnsureWorkerIdentity`) write a `phase: started` line (outcome `started`) BEFORE the call and a
+  `phase: finished` line with the outcome after, both with the same `correlationId`. A process killed mid-call leaves the started line
+  with no finished line: that is the evidence. Single-request writes (stop VM, delete disk, upload, enable API or services, billing
+  link, project create, quota request) write only the finished line.
+- **Arguments are read inside the audit.** Each decorator passes the resource and job id as a function the auditor runs inside its
+  guarded region, so a null argument is a recorded failure (`resource: (unknown)`, outcome `other`), not a synchronous throw.
+- **Never throws.** `CloudAuditor` and `JsonLinesCloudAuditLog` swallow every failure to write (full disk, locked file, bad path): the
+  line is lost, the run is not.
+- **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB. The cap is soft: if the move
+  fails (the previous file is open in a reader or antivirus), the line is still appended to the current file and the rotation is tried
+  again on the next write. Rotate plus append run under a machine-wide named mutex (`Global\deg-cloud-audit-<hash of the full path>`,
+  `JsonLinesCloudAuditLog.MutexName`), so two processes (or two log instances) sharing one data root cannot both move the same full file
+  and clobber `.1` with a nearly empty one. The wait is 250 ms; on a timeout, or where the platform gives no mutex, the line is appended
+  WITHOUT rotating, so the audit never holds a caller up (the next write rotates).
+- **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
+  like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),
