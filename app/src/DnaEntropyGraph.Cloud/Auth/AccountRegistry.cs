@@ -70,23 +70,23 @@ public sealed class AccountRegistry
     /// with the folder, not a lock, so trying again does not help. <see cref="Unreadable"/> is also true then. Set by <see cref="Load"/> only
     /// (it is how a test reads the answer); code that must act on an answer uses <see cref="LoadWithOutcome"/> or <see cref="Update"/>, which hand it back.
     /// </summary>
-    public bool QuarantineFailed { get; private set; }
+    internal bool QuarantineFailed { get; private set; }
 
     /// <summary>Where the last <see cref="Load"/> set an unparseable file aside (<c>accounts.json.bad</c>, or <c>.bad.1</c>, <c>.bad.2</c> and so on, never over an earlier one), or null when it set nothing aside.</summary>
-    public string? QuarantinedTo { get; private set; }
+    internal string? QuarantinedTo { get; private set; }
 
     /// <summary>
     /// True when the last <see cref="Load"/> found the file but could not read it (another program or copy of the app holds it) after retrying.
     /// The list is then empty only because it is unread.
     /// </summary>
-    public bool Unreadable { get; private set; }
+    internal bool Unreadable { get; private set; }
 
     /// <summary>
     /// A missing file is an empty list (a first run). A file that does not parse is also an empty list, but the file is first moved aside
     /// (<see cref="QuarantinedTo"/>) so the next <see cref="Update"/> cannot overwrite the only copy of the user's account list (issue #616).
     /// A file that cannot be read at all (locked, no access) is an empty list and is left where it is.
     /// </summary>
-    public AccountsFile Load()
+    internal AccountsFile Load()
     {
         var outcome = LoadWithOutcome();
         QuarantinedTo = outcome.QuarantinedTo;
@@ -169,7 +169,7 @@ public sealed class AccountRegistry
     /// <paramref name="change"/> runs while the lock is held: keep it short (no waiting, no network). Whatever it throws leaves the file untouched.
     /// <paramref name="onQuarantined"/> is told, under the lock and before <paramref name="change"/> runs, where a damaged file was set aside by this
     /// very read (it is never told of one set aside earlier); it must not take a lock a <see cref="Load"/> caller holds.
-    /// Throws <see cref="AccountsFileLockedException"/> when the file exists but cannot be read (it is never replaced then), and a
+    /// Throws <see cref="AccountsFileFolderException"/> when the file is damaged and cannot be set aside (the folder is the problem), <see cref="AccountsFileLockedException"/> when the file exists but cannot be read (it is never replaced then), and a
     /// <see cref="TokenStorageException"/> when it cannot be written. Returns the file that was written.
     /// </summary>
     public AccountsFile Update(Func<AccountsFile, AccountsFile> change, Action<string>? onQuarantined = null)
@@ -178,6 +178,11 @@ public sealed class AccountRegistry
         WithLock(() =>
         {
             var outcome = ReadLocked();
+            if (outcome.QuarantineFailed)
+            {
+                throw new AccountsFileFolderException(new IOException("the accounts file is damaged and could not be set aside, so it is not replaced"));
+            }
+
             if (outcome.Unreadable)
             {
                 throw new AccountsFileLockedException(new IOException("the accounts file exists but could not be read, so it is not replaced"));
@@ -194,8 +199,12 @@ public sealed class AccountRegistry
         return written!;
     }
 
+    /// <summary>Tests only: runs under the lock just before the file is written, to play a write that fails (disk full) after a set-aside.</summary>
+    internal Action? BeforeWriteForTest { get; set; }
+
     private void Write(AccountsFile file)
     {
+        BeforeWriteForTest?.Invoke();
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         DeleteOrphanTempFiles();
         var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";

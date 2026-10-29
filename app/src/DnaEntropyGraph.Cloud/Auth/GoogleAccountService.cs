@@ -56,6 +56,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
     public event EventHandler? AccountChanged;
 
+    /// <summary>Tests only: the registry under this service (to play a failed write).</summary>
+    internal AccountRegistry Registry => _registry;
+
+    /// <summary>Tests only: runs between the token file's write-time stamp and the list update of an expiry mark, to land another copy's sign-in in that window.</summary>
+    internal Func<Task>? AfterExpiryStampForTest { get; set; }
+
     public bool IsSignedIn => State.Active is { NeedsSignIn: false };
 
     /// <summary>
@@ -134,7 +140,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             var wasLocked = _accountsFileLocked;
             var outcome = _registry.LoadWithOutcome();
             var loaded = Reconcile(outcome.File);
-            _accountsFileSetAside = outcome.QuarantinedTo is not null;
+            // |=, not =: a notice from a set-aside that no change has yet reported (a failed write after it, below) must survive the next load.
+            _accountsFileSetAside |= outcome.QuarantinedTo is not null;
             // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
             _accountsFileLocked = outcome.Unreadable;
             _accountsFileFolderProblem = outcome.QuarantineFailed;
@@ -231,6 +238,11 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                         var record = new AccountRecord(identity.Sub, email, NeedsSignIn: false, file.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
                         return new AccountsFile(identity.Sub, [.. file.Accounts.Where(a => a.Sub != identity.Sub), record]);
                     }).ConfigureAwait(false);
+                    // The user has just signed in against the list as it now is: a set-aside this change found is not reported on the next one ("sign in again" straight after signing in).
+                    lock (_loadLock)
+                    {
+                        _accountsFileSetAside = false;
+                    }
                 }
                 catch (TokenStorageException ex)
                 {
@@ -265,6 +277,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 return true;
             }
 
+            // The token file as this copy found it: a sign-in of the same account during the revoke below stores a new one, which must not be deleted with the old.
+            var stamp = File.GetLastWriteTimeUtc(_store.PathFor(active.Sub));
             // The list goes first, then the revoke (Google's flow also deletes the stored token when it revokes), then the local deletion,
             // which happens whatever Google said: the user asked to be signed out. If the list cannot be saved (a lock, a full disk) the
             // account stays listed, signed in, with its token and still valid at Google, rather than listed signed-in with no token.
@@ -277,7 +291,10 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 return new AccountsFile(currentStays ? file.ActiveSub : next?.Sub, remaining);
             }).ConfigureAwait(false);
             revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
-            await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
+            if (File.GetLastWriteTimeUtc(_store.PathFor(active.Sub)) == stamp)
+            {
+                await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
+            }
         }
         catch (TokenStorageException ex)
         {
@@ -317,7 +334,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         catch (TokenStorageException ex)
         {
             // Not StorageFailure: its code says "your sign-in could not be saved" and offers Sign in again, wrong for a project choice. A lock is still a lock.
-            throw new AccountAuthException(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
+            throw new AccountAuthException(ex is AccountsFileLockedException ? AuthErrorCodes.AccountsFileLocked : ex is AccountsFileFolderException ? AuthErrorCodes.StorageFailed : AuthErrorCodes.ProjectSaveFailed, ex.Message, ex);
         }
         finally
         {
@@ -477,7 +494,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
         try
         {
-            using var flow = NewFlow(_options.ClientLoader.Load(), _store);
+            // A discarding store: the flow would delete the stored token itself on success, and that may by now be a newer one (SignOutAsync deletes the old one, guarded).
+            using var flow = NewFlow(_options.ClientLoader.Load(), new DiscardingDataStore());
             await flow.RevokeTokenAsync(account.Sub, token.RefreshToken, cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -526,7 +544,16 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         // The list first, then the token, and the token only if it is still the one this copy found dead: another copy may have signed this account in
         // again meanwhile (it stores the new token before it lists it), and deleting that one would sign it out. Its write time is the stamp.
         var stamp = File.GetLastWriteTimeUtc(_store.PathFor(account.Sub));
-        await UpdateAsync(file => file with { Accounts = [.. file.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
+        if (AfterExpiryStampForTest is { } hook)
+        {
+            await hook().ConfigureAwait(false);
+        }
+
+        // The check runs under the registry lock, on the file as it is now: a fresh sign-in of this account from another copy that landed after the stamp (it stores the token
+        // first) leaves the list as it is, instead of marking the fresh account as needing sign-in.
+        await UpdateAsync(file => File.GetLastWriteTimeUtc(_store.PathFor(account.Sub)) != stamp
+            ? file
+            : file with { Accounts = [.. file.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
         if (File.GetLastWriteTimeUtc(_store.PathFor(account.Sub)) == stamp)
         {
             await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
@@ -550,20 +577,21 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         }
         catch (Exception ex)
         {
-            if (setAside is not null)
+            if (setAside is not null || ex is AccountsFileFolderException)
             {
-                // This update found the file damaged and set it aside (issue #616): the list this copy cached is gone, and the user is told now if the change gave up.
+                // This update found the file damaged (set it aside, issue #616, or could not): the list this copy cached is gone, and the user is told now if the change gave up.
+                // One lock for the cache and the flag: a load between them would see no state and no notice.
+                var told = setAside is not null && ex is AccountAuthException;
                 lock (_loadLock)
                 {
                     _state = null;
+                    _accountsFileSetAside |= setAside is not null && !told;
                 }
 
-                if (ex is AccountAuthException)
+                if (told)
                 {
                     throw new AccountAuthException(AuthErrorCodes.AccountsFileUnreadable, "accounts.json could not be parsed and was set aside as accounts.json.bad", ex);
                 }
-
-                NoteSetAside();
             }
 
             throw;
@@ -573,14 +601,6 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         {
             _state = written;
             _accountsFileSetAside |= setAside is not null;
-        }
-    }
-
-    private void NoteSetAside()
-    {
-        lock (_loadLock)
-        {
-            _accountsFileSetAside = true;
         }
     }
 

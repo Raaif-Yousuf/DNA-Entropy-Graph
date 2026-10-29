@@ -57,7 +57,7 @@ public class AccountsFileConcurrencyEdgeTests
     }
 
     [Fact]
-    public async Task A_sign_in_that_set_a_damaged_file_aside_is_followed_by_the_notice_on_the_next_change()
+    public async Task A_sign_in_that_set_a_damaged_file_aside_does_not_leave_the_notice_pending_for_the_next_change()
     {
         using var harness = new AuthHarness();
         var service = await harness.SignedInAsync("1001", "first@example.test");
@@ -65,11 +65,85 @@ public class AccountsFileConcurrencyEdgeTests
         harness.Google.NextIdentity = new FakeIdentity("2002", "second@example.test");
 
         await service.SignInAsync(CancellationToken.None);
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SelectProjectAsync("deg-proj-one", CancellationToken.None));
-
-        failure.Code.ShouldBe(AuthErrorCodes.AccountsFileUnreadable);
-        File.ReadAllBytes(AccountsPath(harness) + ".bad").ShouldBe(Damaged);
         await service.SelectProjectAsync("deg-proj-one", CancellationToken.None);
-        service.SelectedProjectId.ShouldBe("deg-proj-one");
+
+        service.SelectedProjectId.ShouldBe("deg-proj-one", "the user just signed in again: the project choice is not refused with 'sign in again'");
+        File.ReadAllBytes(AccountsPath(harness) + ".bad").ShouldBe(Damaged);
+    }
+
+    [Fact]
+    public async Task A_failed_write_after_a_set_aside_keeps_the_notice_for_the_next_sign_in()
+    {
+        using var harness = new AuthHarness();
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        File.WriteAllBytes(AccountsPath(harness), Damaged);
+        service.Registry.BeforeWriteForTest = () => throw new IOException("disk full");
+
+        harness.Google.NextIdentity = new FakeIdentity("2002", "second@example.test");
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SignInAsync(CancellationToken.None));
+        failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+        service.Registry.BeforeWriteForTest = null;
+        service.IsSignedIn.ShouldBeFalse("the list was set aside and is empty");
+
+        var next = await Should.ThrowAsync<AccountAuthException>(() => service.SignInAsync(CancellationToken.None));
+        next.Code.ShouldBe(AuthErrorCodes.AccountsFileUnreadable);
+        File.ReadAllBytes(AccountsPath(harness) + ".bad").ShouldBe(Damaged);
+    }
+
+    [Fact]
+    public async Task A_stale_expiry_mark_does_not_override_a_fresh_sign_in_from_another_copy()
+    {
+        using var harness = new AuthHarness();
+        var copyA = await harness.SignedInAsync("1001", "first@example.test");
+        var copyB = harness.NewService();
+        File.WriteAllBytes(Path.Combine(harness.AuthDirectory, "1001.tok"), [1, 2, 3]); // A will find its token dead
+        copyA.AfterExpiryStampForTest = async () =>
+        {
+            await Task.Delay(50);
+            harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
+            await copyB.SignInAsync(CancellationToken.None); // lands after A's stamp, before A's update
+        };
+
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => copyA.GetAccessTokenAsync(CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.SigninExpired);
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the fresh token is not deleted");
+        harness.NewService().IsSignedIn.ShouldBeTrue("the fresh sign-in stands: the stale mark did not set NeedsSignIn");
+    }
+
+    [Fact]
+    public async Task A_sign_in_of_the_same_account_during_the_revoke_of_a_sign_out_keeps_its_new_token()
+    {
+        using var harness = new AuthHarness();
+        var copyA = await harness.SignedInAsync("1001", "first@example.test");
+        var copyB = harness.NewService();
+        harness.Google.RevokeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var signOut = copyA.SignOutAsync(CancellationToken.None);
+        await harness.Google.RevokeStarted.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
+        await copyB.SignInAsync(CancellationToken.None);
+        harness.Google.RevokeGate.SetResult();
+        await signOut;
+
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the sign-out deletes only the token it found, not the one signed in meanwhile");
+        harness.NewService().IsSignedIn.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_damaged_file_the_folder_will_not_let_us_set_aside_is_a_folder_problem_even_when_found_by_a_change()
+    {
+        using var harness = new AuthHarness();
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        File.WriteAllBytes(AccountsPath(harness), Damaged);
+
+        using (new FileStream(AccountsPath(harness), FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SelectProjectAsync("deg-proj-one", CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.StorageFailed, "Try again would never fix a folder that will not let the file move");
+            service.IsSignedIn.ShouldBeFalse("the cached list was dropped: the file is damaged, not the list we hold");
+        }
     }
 }
