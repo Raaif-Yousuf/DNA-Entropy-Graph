@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -220,6 +221,34 @@ public class BudgetServiceTests
         // Issue #148 review M1: the missing right is on the PROJECT (switch the API on), not a billing role, so it has its own code.
         ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiEnablePermission);
         gcp.BudgetUpsertCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Not_being_allowed_to_read_whether_the_API_is_on_also_names_the_project_not_a_billing_role_and_keeps_the_original_error()
+    {
+        // Issue #148 review round 3 (M): only the enable call was mapped; the read (no serviceusage.services.get) fell to the billing-administrator message.
+        var original = new CloudOperationException(new CloudError("PERMISSION_DENIED", 403, "raw google text"), CloudErrorKind.Permission);
+        var services = NSubstitute.Substitute.For<IServiceEnablementGateway>();
+        services.IsServiceEnabledAsync(Project, RequiredServices.BillingBudgets, Arg.Any<CancellationToken>()).Returns<Task<bool>>(_ => throw original);
+        var gcp = await LinkedAsync();
+        var service = new BudgetService(gcp, gcp, services, Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiEnablePermission);
+        ex.InnerException.ShouldBeSameAs(original);
+        gcp.BudgetUpsertCalls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_mapped_enable_refusal_keeps_the_original_error_as_its_inner_exception()
+    {
+        var gcp = (await LinkedAsync()).WithServiceDisabled(Project, RequiredServices.BillingBudgets).WithNotProjectOwner(Project);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.InnerException.ShouldBeOfType<CloudOperationException>().Error.Code.ShouldBe(SetupErrorCodes.NotProjectOwner);
     }
 
     [Theory]

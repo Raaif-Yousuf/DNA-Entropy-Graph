@@ -1529,7 +1529,7 @@ THEORY (unverified, ToTest #113): `instance.scheduling.maxRunDuration` comes bac
 - **Expiry classification (review L7).** THEORY (unverified): the real shape of an expired request is not measured; `CloudErrorClassifier` treats a code naming `FLEX_START`, and a message about capacity that was not available, not granted, not fulfilled (or "could not be fulfilled") or timed out, as `Stockout`; for a `FLEX_START` code a `requestValidForDuration` message that says the wait elapsed or expired also counts, never on an HTTP 400. The `FLEX_START` code counts only AFTER the quota, permission, 403 and org-policy rules and only when the code or message is about capacity (a `FLEX_START_QUOTA_EXCEEDED` is Quota, a 403 is Permission, an invalid field is Other). Round 3: a message that says "quota" never counts as a flex expiry (quota wins, even with "no capacity" or "exhausted" in it; "exhausted" alone is not capacity wording), plain "unavailable" counts only beside "resource", and connection phrasing ("connection", "could not reach", "network is unreachable") wins over capacity wording on the flex path as well and reads as Network. A message that merely names `requestValidForDuration` is not a stockout. ToTest #92 records the real one.
 - **Fake.** `FakeGcp.WithFlexStartHeld()` / `GrantFlexStart()` hold a queued request until the test grants it (the request lives on the fake's "server": a caller that gives up does not remove it), `WithQueuedRequestsHiddenFromLabelListing()` hides it from the label listing, `FakeGcp.WithFlexStartGrantedAfter(wait)` queues a flex create (the VM exists, PROVISIONING, from the first moment, as a pending request does; a stockout script does not turn a flex create away) and grants it after the wait; `WithFlexStartExpiringAfter(wait)` ends it as a stockout with nothing left; `FlexStartQueued` completes when the request is queued.
 
-## 21. The Cloud Billing budget (issues #148, #222)
+## 22. The Cloud Billing budget (issues #148, #222)
 
 #222 is the standing-costs-card half of #148 ("merges with the earlier budget issue; keep one"): one budget, one
 implementation, and the card (#219, not built) binds the same view model (`BudgetSettingsViewModel`: `SaveCommand`,
@@ -1557,7 +1557,7 @@ implementation, and the card (#219, not built) binds the same view model (`Budge
   a link to the account's console budgets page and a copyable request for the billing administrator; `Billing` (no account)
   links to the billing home. No new `SetupErrorCodes`: the group maps kinds itself, so the three-way code guard is untouched.
   Three refinements (review): a refusal to switch the Budget API on is a right on the PROJECT, so `BudgetService` rethrows it as `Permission` with
-  `BudgetErrorCodes.ApiEnablePermission` and the group says to ask a project owner (link to the API's page, no billing-administrator request); a
+  `BudgetErrorCodes.ApiEnablePermission` and the group offers the API's own page as its one action (no billing-administrator request); the same code is used when the read of the API's state is refused while saving, and the original error is kept as the inner exception; a
   refused Remove says so and links the budgets page (no create request); and a budget that follows last period's spend (`BudgetInfo.AmountKnown`
   false) is shown without an amount.
 - **Already exists.** Google allows two budgets with one display name, so there is no 409 to handle; idempotence is the

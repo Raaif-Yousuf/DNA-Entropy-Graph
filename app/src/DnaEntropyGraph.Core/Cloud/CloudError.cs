@@ -61,7 +61,13 @@ public enum CloudErrorKind
 public sealed class CloudOperationException : Exception
 {
     public CloudOperationException(CloudError error, CloudErrorKind kind)
-        : base(error.Message)
+        : this(error, kind, null)
+    {
+    }
+
+    /// <param name="inner">The failure this one re-labels (kept so a diagnosis can see what Google really said).</param>
+    public CloudOperationException(CloudError error, CloudErrorKind kind, Exception? inner)
+        : base(error.Message, inner)
     {
         Error = error;
         Kind = kind;

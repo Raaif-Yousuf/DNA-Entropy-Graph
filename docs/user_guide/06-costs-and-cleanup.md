@@ -174,6 +174,8 @@ who made the project is often not a billing administrator. If Google refuses, th
 offers two things: **Open the matching Google page** (the console page for your billing account) and
 **Copy a request for my administrator**, which you can paste into an email. Once they make
 the budget themselves or give you the Billing Account Costs Manager role, press the button again.
+The group also tells you what state the alert is in. If the alert follows last month's spend instead of a fixed amount (a budget made in Google's own console), it says so and shows no amount; press **Create or update the alert** to set a fixed one. If you press **Remove the alert** and there is nothing left to remove (it was already deleted elsewhere), it says there was nothing to remove rather than "removed". If a budget somehow has no email thresholds, it says Google sends no warnings and tells you to press **Create or update the alert**. If your Google account is not allowed to switch on the Cloud Billing Budget API, the group offers one thing: **Open the matching Google page**, where you switch it on.
+
 This alert only emails you; it does not stop anything from running. Use the spending cap in
 Settings to stop new runs.
 

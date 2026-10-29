@@ -112,6 +112,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         {
             _shownProject = project;
             _amountEdited = false;
+
+            // Text typed for the other project must not survive into this one (and be saved as its budget); an existing budget here replaces the default below.
+            SetAmount(Format(BudgetNaming.DefaultAmountUsd));
         }
 
         IsBusy = true;
@@ -161,7 +164,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             // What was saved (rounded to cents) replaces what was typed, and the box is Google's again.
             _amountEdited = false;
             Show(saved);
-            StatusText = string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetSaved"), Format(saved.AmountUsd));
+            StatusText = saved.ThresholdPercents.Count == 0
+                ? _strings.GetString("BudgetStatusNoThresholds")
+                : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetSaved"), Format(saved.AmountUsd), Thresholds(saved));
         }, project, cancellationToken);
     }
 
@@ -298,7 +303,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         if (!budget.AmountKnown)
         {
             // A budget that follows last month's spend has no amount to show, and "0 a month" would be wrong; the box keeps what it had.
-            StatusText = _strings.GetString("BudgetStatusExistsNoAmount");
+            StatusText = budget.ThresholdPercents.Count == 0
+                ? _strings.GetString("BudgetStatusNoThresholds")
+                : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExistsNoAmount"), Thresholds(budget));
             return;
         }
 
@@ -308,7 +315,16 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             SetAmount(Format(budget.AmountUsd));
         }
 
-        StatusText = string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExists"), Format(budget.AmountUsd));
+        StatusText = budget.ThresholdPercents.Count == 0
+            ? _strings.GetString("BudgetStatusNoThresholds")
+            : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExists"), Format(budget.AmountUsd), Thresholds(budget));
+    }
+
+    /// <summary>The percentages the budget really emails at, as a phrase: "50%", "50% and 90%", "50%, 90% and 100%". Read from the budget, never assumed.</summary>
+    private static string Thresholds(BudgetInfo budget)
+    {
+        var parts = budget.ThresholdPercents.Select(p => p.ToString("0.##", CultureInfo.CurrentCulture) + "%").ToList();
+        return parts.Count == 1 ? parts[0] : string.Join(", ", parts.Take(parts.Count - 1)) + " and " + parts[^1];
     }
 
     private void SetAmount(string text)

@@ -423,6 +423,65 @@ public sealed class BudgetSettingsTests
     }
 
     [Fact]
+    public async Task Switching_to_a_project_with_no_budget_clears_the_amount_typed_for_the_other_one()
+    {
+        // Issue #148 review round 3 (L): text typed for A must never be saved as B's budget.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        _budgets.GetAsync("other-lab", Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText = "99";
+
+        _account.SelectedProjectId.Returns("other-lab");
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBe("50", "the box goes back to the default instead of carrying the other project's typed amount");
+    }
+
+    [Fact]
+    public async Task The_status_names_the_thresholds_the_budget_really_has_and_does_not_say_Google_emails_you()
+    {
+        // Issue #148 review round 3 (L): the app sets no notification rule, so the mail goes to the billing administrators; the thresholds come from the budget.
+        _strings.GetString("BudgetStatusExists").Returns("with:{0}|{1}");
+        _strings.GetString("BudgetStatusExistsNoAmount").Returns("noamount:{0}");
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(75m) with { ThresholdPercents = [25, 75] });
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("with:" + 75m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) + "|25% and 75%");
+
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false, ThresholdPercents = [50, 90, 100] });
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("noamount:50%, 90% and 100%");
+    }
+
+    [Fact]
+    public async Task A_budget_with_no_thresholds_says_so_instead_of_naming_percentages()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(75m) with { ThresholdPercents = [] });
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("BudgetStatusNoThresholds");
+    }
+
+    [Fact]
+    public async Task A_saved_budget_reports_its_own_thresholds_not_a_fixed_three()
+    {
+        _strings.GetString("BudgetSaved").Returns("saved:{0}|{1}");
+        _budgets.SaveAsync(Project, 120m, Arg.Any<CancellationToken>()).Returns(Existing(120m));
+        var vm = Open();
+        vm.AmountText = "120";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("saved:120|50%, 90% and 100%");
+    }
+
+    [Fact]
     public async Task Refreshing_the_same_project_keeps_what_the_user_typed()
     {
         _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(20m));

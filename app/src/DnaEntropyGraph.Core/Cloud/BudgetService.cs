@@ -67,20 +67,16 @@ public sealed class BudgetService : IBudgetService
 
         var account = status.AccountId;
 
-        if (!await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false))
+        try
         {
-            try
+            if (!await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false))
             {
                 await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
             }
-            catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
-            {
-                // Not being allowed to switch an API on is a right on the project; the budget's own refusal (a billing role) is a different
-                // problem with a different person to ask, so it gets its own code.
-                throw new CloudOperationException(
-                    new CloudError(BudgetErrorCodes.ApiEnablePermission, ex.Error.HttpStatus, "Switching on the Cloud Billing Budget API was refused for this project."),
-                    CloudErrorKind.Permission);
-            }
+        }
+        catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
+        {
+            throw ApiPermission(ex);
         }
 
         var spec = new BudgetSpec(account, projectId, InstallationId.GetOrCreate(_settings), BudgetNaming.RoundToCents(amountUsd));
@@ -122,6 +118,10 @@ public sealed class BudgetService : IBudgetService
             return BudgetLinks.ForBillingAccount(null);
         }
     }
+
+    // A right on the PROJECT (read or switch on an API) when SAVING; a plain look keeps its own Permission, which the page words as "cannot see budgets"; the budget's own refusal (a billing role) is a different problem with a different person to ask, so it gets its own code.
+    private static CloudOperationException ApiPermission(CloudOperationException original)
+        => new(new CloudError(BudgetErrorCodes.ApiEnablePermission, original.Error.HttpStatus, "Switching on the Cloud Billing Budget API was refused for this project."), CloudErrorKind.Permission, original);
 
     private async Task<string?> LinkedAccountAsync(string projectId, CancellationToken cancellationToken)
     {
