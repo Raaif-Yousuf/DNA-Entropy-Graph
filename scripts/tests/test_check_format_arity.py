@@ -74,7 +74,7 @@ def test_escaped_braces_are_not_placeholders(tmp_path):
 
 
 def test_dynamic_key_and_params_spread_are_skipped_and_counted(tmp_path):
-    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);\nvar t = string.Format(_strings.GetString("A"), args);'  # noqa: E501
+    cs = 'void F(object[] args) {}\nvar s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);\nvar t = string.Format(_strings.GetString("A"), args);'  # noqa: E501
     result = cfa.scan_repo(_tree(tmp_path, _resw(A="{0}"), cs), known_dynamic={VM: 2})
     assert result.findings == [] and result.checked == 0 and result.skipped == 2
 
@@ -195,3 +195,126 @@ def test_escaped_string_literal_before_a_format_call_does_not_desync_literal_pai
         'var t = "\\"q\\"" + string.Format(CultureInfo.CurrentCulture, _strings.GetString("B"), b);',
     )
     assert _codes(root) == []
+
+
+HELPER = (
+    "private string Format(string key, params object[] args)\n    => string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);\n"
+)
+
+
+def test_planted_mismatch_through_a_wrapper_helper_fails(tmp_path):
+    root = _tree(tmp_path, _resw(NewRunGpuLocked="x {0}"), HELPER + 'var s = Format("NewRunGpuLocked", a, b, c);')
+    assert _codes(root) == [("TOO-MANY-ARGS", "NewRunGpuLocked")]
+
+
+def test_planted_too_few_args_through_a_wrapper_helper_fails(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0} {1}"), HELPER + 'var s = Format("A", a);')
+    assert _codes(root) == [("TOO-FEW-ARGS", "A")]
+
+
+def test_correct_wrapper_helper_call_passes_and_its_body_is_not_a_dynamic_site(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0} {1}"), HELPER + 'var s = Format("A", a, b);')
+    assert _codes(root) == []
+    result = cfa.scan_repo(root, known_dynamic={})
+    assert result.checked == 1 and result.skipped == 0
+
+
+def test_wrapper_helper_with_a_non_literal_key_is_dynamic(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0}"), HELPER + 'var s = Format(someKey, a);\nvar t = Format("A", a);')
+    assert [c for c, _ in _codes(root)] == ["UNEXPECTED-DYNAMIC"]
+
+
+def test_helper_with_a_const_key_is_resolved(tmp_path):
+    root = _tree(
+        tmp_path,
+        _resw(A="x {0}"),
+        HELPER + "var s = Format(Keys.Gpu, a, b);",
+        extra_cs='static class Keys { public const string Gpu = "A"; }',
+    )
+    assert _codes(root) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_spread_of_any_object_array_variable_is_dynamic_not_one_argument(tmp_path):
+    cs = 'var parts = new object[] { a, b };\nvar s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), parts);'
+    root = _tree(tmp_path, _resw(A="x {0} {1}"), cs)
+    result = cfa.scan_repo(root, known_dynamic=None)
+    assert result.findings == [] and result.checked == 0 and result.skipped == 1
+
+
+def test_a_single_non_array_argument_is_still_one_argument(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0} {1}"), 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), count);')
+    assert _codes(root) == [("TOO-FEW-ARGS", "A")]
+
+
+def test_get_string_wrapped_in_another_call_is_not_a_key_argument(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0}"), 'var s = string.Format(CultureInfo.CurrentCulture, Wrap(_strings.GetString("A")), x, y);')
+    result = cfa.scan_repo(root, known_dynamic=None)
+    assert result.checked == 0 and result.skipped == 1
+
+
+def test_string_literals_regular_verbatim_and_raw_are_tokenized_correctly():
+    text = 'var a = "x\\"y"; var b = @"C:\\dir\\"; var c = @"say ""hi"""; var d = """ raw "quoted" \\ """; var e = "K";'
+    assert cfa.string_literals(text) == ['x\\"y', "C:\\dir\\", 'say "hi"', ' raw "quoted" \\ ', "K"]
+
+
+def test_interpolated_verbatim_prefix_in_either_order_is_verbatim():
+    text = 'var a = $@"C:\\{x}\\"; var b = @$"D:\\"; var c = "K";'
+    assert cfa.string_literals(text)[-1] == "K" and len(cfa.string_literals(text)) == 3
+
+
+def test_verbatim_path_ending_in_backslash_does_not_hide_a_later_key_reference(tmp_path):
+    cs = (
+        'var p = @"C:\\dir\\";\nvar q = _strings.GetString("B");\nvar s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), x);'
+    )
+    root = _tree(tmp_path, _resw(A="x {0}", B="y {0}"), cs)
+    assert _codes(root) == []
+
+
+def test_raw_string_with_quotes_does_not_hide_a_later_key_reference(tmp_path):
+    cs = (
+        'var r = """ has "quotes" and \\ """;\nvar q = _strings.GetString("B");\n'
+        'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), x);'
+    )
+    root = _tree(tmp_path, _resw(A="x {0}", B="y {0}"), cs)
+    assert _codes(root) == []
+
+
+def test_a_stale_resw_copy_under_obj_or_bin_does_not_override_the_real_template(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0}"), 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a);')
+    for build in ("obj", "bin"):
+        stale = root / "app" / "src" / "ZZ.Stale" / build / "en-US"
+        stale.mkdir(parents=True)
+        (stale / "Resources.resw").write_text(_resw(A="x"), encoding="utf-8", newline="\n")
+    assert _codes(root) == []
+
+
+def test_product_code_under_app_tools_is_scanned(tmp_path):
+    root = _tree(tmp_path, _resw(A="x {0}"), 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a);')
+    tools = root / "app" / "tools" / "T"
+    tools.mkdir(parents=True)
+    (tools / "Cli.cs").write_text(
+        'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a, b);', encoding="utf-8", newline="\n"
+    )
+    (tools / "obj").mkdir()
+    (tools / "obj" / "Gen.cs").write_text(
+        'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a, b, c);', encoding="utf-8", newline="\n"
+    )
+    assert _codes(root) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_object_array_forms_with_spacing_and_implicit_arrays_count_each_element(tmp_path):
+    for form in ("new object [] { a, b }", "new[] { a, b }", "new object[]{a,b}"):
+        cs = f'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), {form});'
+        assert _codes(_tree(tmp_path / str(abs(hash(form))), _resw(A="x {0}"), cs)) == [("TOO-MANY-ARGS", "A")], form
+
+
+def test_helper_call_with_a_conditional_key_checks_every_branch(tmp_path):
+    cs = HELPER + 'var s = Format(on ? "A" : other ? "B" : "C", x);'
+    root = _tree(tmp_path, _resw(A="a {0}", B="b", C="c {0}"), cs)
+    assert _codes(root) == [("TOO-MANY-ARGS", "B")]
+    assert cfa.scan_repo(root, known_dynamic={}).checked == 3
+
+
+def test_parenthesised_receiver_before_get_string_is_still_a_key_argument(tmp_path):
+    cs = 'show(string.Format(CultureInfo.CurrentCulture, (strings ?? new Provider()).GetString("A"), x, y));'
+    assert _codes(_tree(tmp_path, _resw(A="a {0}"), cs)) == [("TOO-MANY-ARGS", "A")]

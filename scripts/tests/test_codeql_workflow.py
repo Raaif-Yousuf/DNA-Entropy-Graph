@@ -121,13 +121,15 @@ def _csharp_build_run() -> str:
 
 
 def test_csharp_build_is_product_code_only_not_the_solution():
-    # #761 / #653: the test projects hold stub IStringResourceProvider classes whose GetString(key) => key
-    # flowed into product string.Format calls (cs/invalid-string-formatting, alerts 1383/1417/1466/1467),
-    # and most cs/path-combine noise. Building only the App project (which references every app/src
-    # project) keeps tests out of the CodeQL database.
+    # #761 / #653: MEASURED 2026-10-28: test stubs `GetString(key) => key` flowed into product
+    # string.Format calls (cs/invalid-string-formatting, alerts 1383/1417/1466/1467) and most
+    # cs/path-combine noise. Building only product projects keeps tests out of the CodeQL database. That
+    # does NOT remove the product provider's own `return key` fallback as a flow source, which is why
+    # cs/invalid-string-formatting is also excluded (next test).
     run = _csharp_build_run()
-    assert ".sln" not in run and "tests" not in run
-    assert APP_PROJECT in run
+    # Exact project paths, not a "tests not in run" substring: restore and build name the same two projects.
+    assert re.findall(r"dotnet restore (\S+)", run) == [APP_PROJECT, TOOLS_PROJECT]
+    assert re.findall(r"dotnet build (\S+)", run) == [APP_PROJECT, TOOLS_PROJECT]
 
 
 def test_built_projects_reach_every_product_project_so_the_extractor_sees_all_product_code():
@@ -210,3 +212,13 @@ def test_cs_path_combine_and_catch_all_stay_on():
     text = CONFIG.read_text(encoding="utf-8")
     excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
     assert not {"cs/path-combine", "cs/catch-of-all-exceptions"} & excluded
+
+
+def test_invalid_string_formatting_is_excluded_because_the_arity_script_replaces_it():
+    # DECISION (agent-made, reversible): ReswStringResourceProvider.GetString returns `key` on an empty
+    # value and in its catch, the same flow source as the test stubs, so CodeQL can still raise the rule
+    # on correct product sites. scripts/check_format_arity.py reads the real template instead.
+    text = CONFIG.read_text(encoding="utf-8")
+    excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
+    assert "cs/invalid-string-formatting" in excluded
+    assert "check_format_arity.py" in text.partition("cs/invalid-string-formatting")[0].rpartition("DECISION")[2]

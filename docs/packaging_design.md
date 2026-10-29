@@ -301,12 +301,16 @@ solution: the App project references every `app/src` project and CloudCli (not r
 is built by name, so the extractor sees all product code and no test project
 (`test_codeql_workflow.py` checks both sets). MEASURED 2026-10-28: test stubs `IStringResourceProvider.GetString(key) => key`
 flowed into product `string.Format(..., GetString(Key), args)` calls and raised
-`cs/invalid-string-formatting` against correct sites (alerts 1383, 1417, 1466, 1467); the only
-product implementation (`ReswStringResourceProvider`) wraps `ResourceLoader`, which CodeQL cannot
-see through, so no query filter is needed. THEORY (unverified): the first CI run after this lands
-shows no new `cs/invalid-string-formatting`; if one fires from product-only flow, add a query-filter
-for that rule. `scripts/check_format_arity.py` is the real check (template placeholders vs argument
-count, plus unreferenced placeholder templates).
+`cs/invalid-string-formatting` against correct sites (alerts 1383, 1417, 1466, 1467). The product
+`ReswStringResourceProvider` has the same `return key` fallback (empty value, and its catch), so building
+product code only does not remove that flow source: MEASURED 2026-10-29: 5 open and 38 dismissed alerts of the
+rule, the 5 open ones all in product code. DECISION (agent-made, reversible): the rule is excluded in
+`codeql-config.yml` and `scripts/check_format_arity.py` replaces it.
+`scripts/check_format_arity.py` reads the real template and checks (scope: `app/src` and `app/tools`, never
+obj/bin): every `string.Format(..., GetString("Key" | Class.Const), args)`, every call of a detected wrapper helper
+`Name(string key, params object[] args)` in the same file (conditional keys check each branch), and that every
+placeholder template is referenced. MEASURED 2026-10-29: 110 sites checked, 11 left dynamic (variable or `switch`
+keys, spreads of an `object[]` variable, unparseable calls), each listed with an exact count in `KNOWN_DYNAMIC`.
 Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
 `scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
 and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining

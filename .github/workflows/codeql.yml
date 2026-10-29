@@ -70,9 +70,9 @@ jobs:
         working-directory: app
         # Product code only (#761, #653): the App project references every app/src project, and the
         # CloudCli tool (app/tools, not referenced by App) is built by name, so the extractor sees all
-        # product code but no test project. Tests hold stub IStringResourceProvider classes
-        # (GetString(key) => key) that CodeQL dataflow routed into product string.Format calls
-        # (cs/invalid-string-formatting false positives), plus most of the cs/path-combine noise.
+        # product code but no test project (test stubs `GetString(key) => key` raised
+        # cs/invalid-string-formatting and most cs/path-combine noise). The product provider has the same
+        # `return key` fallback, so that rule is also excluded in codeql-config.yml;
         # scripts/check_format_arity.py is the real template-vs-arguments check.
         run: |
           dotnet restore src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj

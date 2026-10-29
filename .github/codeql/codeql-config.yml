@@ -29,7 +29,18 @@ paths-ignore:
 # Style-only rules from the security-and-quality suite, triaged as noise in #488 and #491 (each hit
 # was read; none was a defect). P/Invoke is how the Windows shell code reaches the OS. Rules that can
 # flag a real defect (cs/path-combine, cs/catch-of-all-exceptions, cs/local-not-disposed) stay on.
+# DECISION (agent-made, reversible): scripts/check_format_arity.py replaces the CodeQL rule
+# cs/invalid-string-formatting (open and dismissed alerts all carry that one id). The product
+# ReswStringResourceProvider.GetString returns `key` itself on an empty value and in its catch (the same
+# flow source as the test stubs that raised alerts 1383/1417/1466/1467), so CodeQL can still trace a
+# placeholder-free key into a correct product string.Format. MEASURED 2026-10-29: 5 open and 38 dismissed
+# alerts of that rule; the 5 open ones are all product sites (PrototypeImportViewModel 106/139/142/147,
+# HistoryViewModel 313), each a literal or const key that check_format_arity.py resolves and finds
+# consistent with its template. THEORY (unverified): the provider fallback is the flow source for those
+# five. The script reads the real resw template and is a premerge gate; re-enable the rule if it is retired.
 query-filters:
+  - exclude:
+      id: cs/invalid-string-formatting
   - exclude:
       id: cs/xmldoc/missing-summary
   - exclude:

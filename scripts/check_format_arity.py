@@ -7,16 +7,28 @@ time: the template lives in a .resw file. Too few arguments throws FormatExcepti
 screen that shows the string; too many is silently ignored (CodeQL's cs/invalid-string-
 formatting). MEASURED 2026-10-28: CodeQL raised that rule against four correct call sites
 (alerts 1383, 1417, 1466, 1467), because a test stub `GetString(key) => key` flowed into
-the call; that noise is removed by building only app/src in codeql.yml, and THIS script is
-the real check CodeQL could never do: it reads the actual template.
+the call. The product provider has the same `return key` fallback, so codeql-config.yml
+excludes that rule and THIS script is the real check CodeQL could never do: it reads the actual
+template.
 
 WHAT IT CHECKS
 --------------
-For every `string.Format([culture,] <...>.GetString(<"literal" | Class.Const>), args...)` in
-app/src, the template's highest placeholder index + 1 must equal the argument count
-(TOO-MANY-ARGS / TOO-FEW-ARGS), and the key must exist (MISSING-KEY). Every resw value with a
-placeholder must be referenced by a string literal or const somewhere in app/src
-(UNREFERENCED-TEMPLATE), the "wired to nothing" shape for a template.
+Scope: every `.cs` file under app/src and app/tools (never obj/ or bin/); templates come from every
+app/src `en-US/Resources.resw` outside obj/ and bin/.
+
+1. `string.Format([culture,] <recv>.GetString(<"literal" | Class.Const>), args...)`: the template's
+   highest placeholder index + 1 must equal the argument count (TOO-MANY-ARGS / TOO-FEW-ARGS) and
+   the key must exist (MISSING-KEY). A parenthesised receiver `(a ?? b).GetString("K")` counts.
+2. Wrapper helpers: a method `Name(string key, params object[] args)` whose body does
+   `string.Format(..., GetString(key), args)` is detected, its body is not itself a site, and EVERY
+   call `Name("Key", a, b)` in the same file is checked like (1). A `Class.Const` key is resolved and a
+   conditional key `c ? "A" : "B"` checks every branch.
+3. Every resw value with a placeholder must be referenced by a string literal or const somewhere in
+   the scanned code (UNREFERENCED-TEMPLATE), the "wired to nothing" shape for a template.
+
+What stays DYNAMIC (cannot be checked, listed in KNOWN_DYNAMIC): a key that is a variable or a
+`switch` expression, an unparseable call, and a spread of any variable declared as `object[]` (it is
+not one argument). A wrapper helper defined in one file and called from another is not followed.
 
 HOW IT READS C# (and its limits)
 --------------------------------
@@ -43,13 +55,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CULTURE = re.compile(r"^(?:System\.Globalization\.)?CultureInfo\.(?:CurrentCulture|InvariantCulture|CurrentUICulture)$")
-KEY_ARG = re.compile(r'GetString\(\s*(?:"([^"\\]*)"|([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+))\s*\)$')
+KEY_ARG = re.compile(
+    r'^(?:(?:[A-Za-z_]\w*\.)*|\((?:[^()]|\([^()]*\))*\)\.)GetString\(\s*(?:"([^"\\]*)"|([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+))\s*\)$'
+)
+KEY_VAR_ARG = re.compile(r"^(?:[A-Za-z_]\w*\.)*GetString\(\s*([A-Za-z_]\w*)\s*\)$")
+LITERAL_KEY = re.compile(r'^"([^"\\]*)"$')
+DOTTED_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
+HELPER_DECL = re.compile(r"\b(\w+)\s*\(\s*string\s+(\w+)\s*,\s*params\s+object\s*\[\s*\]\s+(\w+)\s*\)")
+STRING_FORMAT = re.compile(r"\b[Ss]tring\.Format\(")
+ARRAY_DECL = re.compile(r"\bobject\s*\[\s*\]\s+(\w+)")
+ARRAY_VAR_INIT = re.compile(r"\bvar\s+(\w+)\s*=\s*new\s*(?:object\s*)?\[")
 PLACEHOLDER = re.compile(r"\{(\d+)(?:[,:][^{}]*)?\}")
 CONST = re.compile(r'\b(?:const|static\s+readonly)\s+string\s+(\w+)\s*=\s*"([^"\\]*)"')
 TYPE_DECL = re.compile(r"\b(?:class|record|struct|interface)\s+(\w+)")
-# Escapes are consumed pairwise, so "\n\n" is one literal; the alternatives are disjoint, so no backtracking.
-STRING_LITERAL = re.compile(r'"((?:[^"\\\r\n]|\\.)*)"')
-OBJECT_ARRAY = re.compile(r"^new\s+(?:object)?\s*\[\s*\]\s*\{(.*)\}$", re.DOTALL)
+OBJECT_ARRAY = re.compile(r"^new\s*(?:object\s*)?\[\s*\]\s*\{(.*)\}$", re.DOTALL)
 MIN_CHECKED = 20
 
 # Files with call sites the scanner cannot resolve (wrapper helpers taking the key as a parameter,
@@ -60,10 +79,8 @@ KNOWN_DYNAMIC: dict[str, int] = {
     "app/src/DnaEntropyGraph.Presentation/Services/LeftRunningGuard.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/RunStallCoordinator.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/CloudResourcesViewModel.cs": 1,
-    "app/src/DnaEntropyGraph.Presentation/ViewModels/GpuPlanViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/HistoryViewModel.cs": 2,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/InputPillItem.cs": 1,
-    "app/src/DnaEntropyGraph.Presentation/ViewModels/NewRunViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/PresetPickerViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/ResultsViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/SetupStepRow.cs": 1,
@@ -104,7 +121,7 @@ def _skip_string(text: str, i: int) -> int:
             n += 1
         end = text.find('"' * n, i + n)
         return len(text) if end < 0 else end + n
-    verbatim = i > 0 and text[i - 1] == "@"
+    verbatim = text[i - 1 : i] == "@" or text[i - 2 : i] == "@$"  # @"..." and $@"..."; @$"..." is the same prefix reversed
     j = i + 1
     while j < len(text):
         if verbatim:
@@ -205,9 +222,153 @@ def load_templates(resw_files: list[Path]) -> dict[str, str]:
     return templates
 
 
+def string_literals(text: str) -> list[str]:
+    """The contents of every string literal in `text` (comments already blanked): regular, verbatim
+    (`""` is a quote) and raw (triple-quote) literals, each ended by the same rules the C# lexer uses."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "'":
+            i = _skip_char(text, i)
+        elif c == '"':
+            j = _skip_string(text, i)
+            if text.startswith('"""', i):
+                q = 3
+                while text.startswith('"', i + q):
+                    q += 1
+                out.append(text[i + q : j - q])
+            elif text[i - 1 : i] == "@" or text[i - 2 : i] == "@$":
+                out.append(text[i + 1 : j - 1].replace('""', '"'))
+            else:
+                out.append(text[i + 1 : j - 1])
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def _is_build_dir(rel_parts: tuple[str, ...]) -> bool:
+    return bool({"obj", "bin"} & set(rel_parts))
+
+
 def _cs_files(root: Path) -> list[Path]:
+    """Product C#: app/src and app/tools, never build output."""
+    found: list[Path] = []
+    for sub in ("src", "tools"):
+        base = root / "app" / sub
+        if base.is_dir():
+            found.extend(p for p in base.rglob("*.cs") if not _is_build_dir(p.relative_to(base).parts))
+    return sorted(found)
+
+
+def _resw_files(root: Path) -> list[Path]:
     src = root / "app" / "src"
-    return sorted(p for p in src.rglob("*.cs") if not {"obj", "bin"} & set(p.relative_to(src).parts))
+    return sorted(p for p in src.rglob("en-US/Resources.resw") if not _is_build_dir(p.relative_to(src).parts))
+
+
+@dataclass(frozen=True)
+class Helper:
+    """A wrapper `Name(string key, params object[] args)` whose body is string.Format(..., GetString(key), args)."""
+
+    name: str
+    decl_start: int
+    body_range: tuple[int, int]
+
+
+def _find_helpers(text: str, code: str) -> list[Helper]:
+    helpers: list[Helper] = []
+    for m in HELPER_DECL.finditer(text):
+        key_param, arr_param = m.group(2), m.group(3)
+        i = m.end()
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if text.startswith("=>", i):
+            end = i
+            depth = 0
+            while end < len(code):
+                ch = code[end]
+                if ch in "([{":
+                    depth += 1
+                elif ch in ")]}":
+                    depth -= 1
+                elif ch == ";" and depth <= 0:
+                    break
+                end += 1
+        elif text[i : i + 1] == "{":
+            end, depth = i, 0
+            while end < len(code):
+                if code[end] == "{":
+                    depth += 1
+                elif code[end] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                end += 1
+        else:
+            continue
+        for fm in STRING_FORMAT.finditer(text, i, end):
+            parsed = split_args(text, fm.end())
+            args = parsed[0] if parsed else []
+            if args and CULTURE.match(args[0]):
+                args = args[1:]
+            kv = KEY_VAR_ARG.match(args[0]) if args else None
+            if len(args) == 2 and kv and kv.group(1) == key_param and args[1] == arr_param:
+                helpers.append(Helper(m.group(1), m.start(1), (i, end)))
+                break
+    return helpers
+
+
+def _ternary_split(arg: str) -> tuple[str, str] | None:
+    """Split `cond ? a : b` at its depth-0 `?` and the matching `:`; None when `arg` is not a conditional."""
+    depth, q, pending = 0, -1, 0
+    i = 0
+    while i < len(arg):
+        c = arg[i]
+        if c == '"':
+            i = _skip_string(arg, i)
+            continue
+        if c == "'":
+            i = _skip_char(arg, i)
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and c == "?" and arg[i + 1 : i + 2] not in ("?", ".", "["):
+            if q < 0:
+                q = i
+            else:
+                pending += 1
+        elif depth == 0 and c == ":" and q >= 0:
+            if pending == 0:
+                return arg[q + 1 : i].strip(), arg[i + 1 :].strip()
+            pending -= 1
+        i += 1
+    return None
+
+
+def _literal_keys(arg: str, consts: dict[str, str]) -> list[str] | None:
+    """Every resw key `arg` can be: a bare literal or const, or a conditional whose branches all are."""
+    one = _literal_key(arg, consts)
+    if one is not None:
+        return [one]
+    split = _ternary_split(arg)
+    if split is None:
+        return None
+    left, right = _literal_keys(split[0], consts), _literal_keys(split[1], consts)
+    return left + right if left is not None and right is not None else None
+
+
+def _literal_key(arg: str, consts: dict[str, str]) -> str | None:
+    """The resw key of a bare `"Key"` or `Class.Const` argument, else None."""
+    lit = LITERAL_KEY.match(arg)
+    if lit:
+        return lit.group(1)
+    if DOTTED_NAME.match(arg):
+        parts = arg.split(".")
+        return consts.get(arg) or consts.get(".".join(parts[-2:]))
+    return None
 
 
 def _type_spans(code: str) -> list[tuple[int, int, str]]:
@@ -249,10 +410,9 @@ def _object_array_args(arg: str) -> list[str] | None:
 
 
 def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) -> Result:
-    """Scan app/src. `known_dynamic=None` turns the dynamic-site allowlist check off."""
+    """Scan app/src and app/tools. `known_dynamic=None` turns the dynamic-site allowlist check off."""
     result = Result()
-    resw_files = sorted((root / "app" / "src").rglob("en-US/Resources.resw"))
-    templates = load_templates(resw_files)
+    templates = load_templates(_resw_files(root))
     files = []
     for p in _cs_files(root):
         no_comments, code = mask(p.read_text(encoding="utf-8-sig"))
@@ -261,15 +421,41 @@ def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) 
     consts: dict[str, str] = {}
     literals: set[str] = set()
     for _path, no_comments, code in files:
-        literals.update(STRING_LITERAL.findall(no_comments))
+        literals.update(string_literals(no_comments))
         _collect_consts(no_comments, code, consts)
     literals.update(consts.values())
 
     dynamic: dict[str, list[int]] = {}
-    for path, text, _code in files:
+
+    def check(key: str, rest: list[str], rel: str, line: int) -> None:
+        if key not in templates:
+            result.findings.append(Finding("MISSING-KEY", key, rel, line, "no such entry in any Resources.resw"))
+            return
+        result.checked += 1
+        need = placeholder_count(templates[key])
+        if len(rest) > need:
+            result.findings.append(Finding("TOO-MANY-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
+        elif len(rest) < need:
+            result.findings.append(Finding("TOO-FEW-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
+
+    for path, text, code in files:
         rel = path.relative_to(root).as_posix()
-        for m in re.finditer(r"\b[Ss]tring\.Format\(", text):
-            line = text.count("\n", 0, m.start()) + 1
+        array_vars = set(ARRAY_DECL.findall(code)) | set(ARRAY_VAR_INIT.findall(code))
+        helpers = _find_helpers(text, code)
+
+        def args_after(args: list[str]) -> list[str]:
+            rest = args[1:]
+            if len(rest) == 1 and (expanded := _object_array_args(rest[0])) is not None:
+                rest = expanded
+            return rest
+
+        def line_of(index: int, text: str = text) -> int:
+            return text.count("\n", 0, index) + 1
+
+        for m in STRING_FORMAT.finditer(text):
+            if any(h.body_range[0] <= m.start() < h.body_range[1] for h in helpers):
+                continue  # the wrapper's own body: its call sites are checked below
+            line = line_of(m.start())
             parsed = split_args(text, m.end())
             if parsed is None:
                 dynamic.setdefault(rel, []).append(line)
@@ -279,30 +465,32 @@ def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) 
                 args = args[1:]
             if not args:
                 continue
-            key_match = KEY_ARG.search(args[0])
-            rest = args[1:]
-            if len(rest) == 1 and (expanded := _object_array_args(rest[0])) is not None:
-                rest = expanded
-            if not key_match or (len(rest) == 1 and rest[0] == "args"):
+            key_match = KEY_ARG.match(args[0])
+            rest = args_after(args)
+            if not key_match or (len(rest) == 1 and rest[0] in array_vars):
                 dynamic.setdefault(rel, []).append(line)
                 continue
             key = key_match.group(1)
             if key is None:
-                dotted = key_match.group(2)
-                parts = dotted.split(".")
-                key = consts.get(dotted) or consts.get(".".join(parts[-2:]))
+                key = _literal_key(key_match.group(2), consts)
                 if key is None:
                     dynamic.setdefault(rel, []).append(line)
                     continue
-            if key not in templates:
-                result.findings.append(Finding("MISSING-KEY", key, rel, line, "no such entry in any Resources.resw"))
-                continue
-            result.checked += 1
-            need = placeholder_count(templates[key])
-            if len(rest) > need:
-                result.findings.append(Finding("TOO-MANY-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
-            elif len(rest) < need:
-                result.findings.append(Finding("TOO-FEW-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
+            check(key, rest, rel, line)
+
+        for h in helpers:
+            for m in re.finditer(rf"(?<![\w.]){re.escape(h.name)}\s*\(", text):
+                if m.start() == h.decl_start:
+                    continue
+                line = line_of(m.start())
+                parsed = split_args(text, m.end())
+                keys = _literal_keys(parsed[0][0], consts) if parsed and parsed[0] else None
+                rest = args_after(parsed[0]) if parsed and parsed[0] else []
+                if keys is None or (len(rest) == 1 and rest[0] in array_vars):
+                    dynamic.setdefault(rel, []).append(line)
+                    continue
+                for key in keys:
+                    check(key, rest, rel, line)
 
     result.skipped = sum(len(v) for v in dynamic.values())
     if known_dynamic is not None:
