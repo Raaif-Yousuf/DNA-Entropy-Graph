@@ -587,10 +587,10 @@
     <value>There is no cost estimate because the price list that comes with this app could not be read. Reinstall the app to bring it back. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoPrice" xml:space="preserve">
-    <value>There is no cost estimate for this kind of computer yet, because the price list that comes with this app has no price for it. You can still press Run.</value>
+    <value>There is no cost estimate for this kind of computer yet, because the price list this app uses has no price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoSpotPrice" xml:space="preserve">
-    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list that comes with this app has no Spot price for it. You can still press Run.</value>
+    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list this app uses has no Spot price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateModelPoint" xml:space="preserve">
     <value>Estimate: about {0}, about {1}, because you have no earlier runs on this PC yet. This is a guess, not a bill.</value>
@@ -2168,6 +2168,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="CloudPage_NoProject" xml:space="preserve">
     <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
   </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
+  </data>
   <data name="CloudPage_ListFailed" xml:space="preserve">
     <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
   </data>
@@ -2903,8 +2906,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
     <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
-    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
   <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
     <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
@@ -2932,5 +2933,65 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="PageTitle_Results" xml:space="preserve">
     <value>Results</value>
+  </data>
+  <data name="RunError_proxy_blocked" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
+  </data>
+  <data name="RunError_network_certificate" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
+  </data>
+  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
+  </data>
+  <data name="SettingsProxyExpander.Header" xml:space="preserve">
+    <value>Network proxy</value>
+  </data>
+  <data name="ProxyExplainer.Text" xml:space="preserve">
+    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
+  </data>
+  <data name="ProxyModeBox.Header" xml:space="preserve">
+    <value>How to reach the internet</value>
+  </data>
+  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
+    <value>Use the Windows settings (recommended)</value>
+  </data>
+  <data name="ProxyModeManualItem.Content" xml:space="preserve">
+    <value>Use a proxy I type</value>
+  </data>
+  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
+    <value>No proxy</value>
+  </data>
+  <data name="ProxyAddressBox.Header" xml:space="preserve">
+    <value>Proxy address (host:port)</value>
+  </data>
+  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
+    <value>proxy.example.edu:8080</value>
+  </data>
+  <data name="ProxyUserNameBox.Header" xml:space="preserve">
+    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
+  </data>
+  <data name="ProxyPasswordBox.Header" xml:space="preserve">
+    <value>Proxy password</value>
+  </data>
+  <data name="ProxySignInSaved.Text" xml:space="preserve">
+    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
+  </data>
+  <data name="ProxyApplyButton.Content" xml:space="preserve">
+    <value>Apply</value>
+  </data>
+  <data name="ProxySaved" xml:space="preserve">
+    <value>Saved. The next connection uses this setting.</value>
+  </data>
+  <data name="ProxyAddressInvalid" xml:space="preserve">
+    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
+  </data>
+  <data name="ProxyPasswordNeeded" xml:space="preserve">
+    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
+  </data>
+  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
 </root>

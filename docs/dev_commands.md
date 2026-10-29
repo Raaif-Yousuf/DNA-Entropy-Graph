@@ -160,6 +160,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
   and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
   naming an unknown gate, is exit 2, never a green run.
+- **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
+  (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
+  old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT`. A timed-out pytest gate is
+  `ERROR` (never `PASS`, never `FAIL`) with its own text, `timed out after Ns with N passed and N failed so far (NOT a pass; ...)`,
+  counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. The timeout
+  kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
+  uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
+  returned only after the grandchild (a 120 s sleeper in the test) exited.
+  `premerge.py` turns SIGTERM and SIGHUP into the same interrupt path (each gate runs in its own session on POSIX), so an
+  aborted run kills every gate's tree. A gate's stdout and stderr stay separate pipes, joined stdout then stderr.
 - **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
   `app/tests/*/*.csproj` is discovered, not listed. An audit fails the run when a workflow runs a
   `scripts/*.py|ps1` that `premerge.py` does not (add a gate in `build_gates()` or an entry with a
@@ -392,6 +402,7 @@ python scripts\check_em_dash.py              # no em dash in user-facing copy: d
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
+python scripts\check_format_arity.py          # string.Format(..., GetString("Key"), args) arity vs the Resources.resw template (#761), a conditional key `GetString(c ? A : B)` checks every branch; unreferenced placeholder templates
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
 python scripts\check_pyright.py               # static types: pinned uvx pyright==1.1.407 over worker/src, worker/tests and scripts; a per-file RATCHET (see below). Run with the worker venv's python
 python scripts\check_pyright.py --self-test    # plant each violation, no pyright needed

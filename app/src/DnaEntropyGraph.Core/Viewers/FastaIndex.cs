@@ -399,6 +399,7 @@ public sealed class FastaIndexStore(string directory, Action<string>? buildObser
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Housekeeping only: a failed touch only means the cache entry looks older than it is.
         }
     }
 
@@ -410,6 +411,7 @@ public sealed class FastaIndexStore(string directory, Action<string>? buildObser
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Housekeeping only: a locked file is swept next time.
         }
     }
 }

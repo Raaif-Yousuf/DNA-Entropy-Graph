@@ -6,6 +6,9 @@ public sealed class GoogleCloudOptions
     /// <summary>When set, every request goes through this handler instead of the network: the scripted HTTP fake in tests.</summary>
     public HttpMessageHandler? HttpHandler { get; init; }
 
+    /// <summary>The proxy choice every request follows (issue #239). Null is the system default (Windows settings, PAC, the Windows sign-in). Ignored when <see cref="HttpHandler"/> is set.</summary>
+    public DnaEntropyGraph.Core.Net.IProxyPolicy? Proxy { get; init; }
+
     /// <summary>The wait between polls of a long-running operation. Null waits for real; a test passes an instant one.</summary>
     public Func<TimeSpan, CancellationToken, Task>? Delay { get; init; }
 
