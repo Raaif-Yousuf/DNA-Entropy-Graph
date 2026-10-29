@@ -65,6 +65,9 @@ public sealed class LocalJobRunner
     /// <summary>How often <c>status.json</c> is read while the worker runs.</summary>
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>Where a run's output folder lives when its options name none (the Downloads default). Null means such a row cannot be trusted on relaunch.</summary>
+    public Func<string>? DefaultOutputParent { get; init; }
+
     /// <summary>The clock every deadline below runs on (virtual in tests, #525).</summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
@@ -214,6 +217,24 @@ public sealed class LocalJobRunner
         return judged;
     }
 
+    /// <summary>
+    /// The finish step copies result files into <c>row.OutputDir</c>, and that text comes from the history database. It is only trusted
+    /// when it lies strictly inside the run's output root (the run's own choice, else <see cref="DefaultOutputParent"/>); with no root to
+    /// check against it is not trusted (Hard Rule 14). A row that fails this is failed as interrupted and its files stay in the job folder.
+    /// </summary>
+    private bool OutputDirIsUnderOutputRoot(RunRecord row)
+    {
+        try
+        {
+            var root = RunOutputRoot.Resolve(row, () => DefaultOutputParent?.Invoke() ?? string.Empty);
+            return !string.IsNullOrWhiteSpace(root) && RunOutputRoot.IsSafelyInside(row.OutputDir!, root);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
     private async Task ReconcileOneAsync(RunRecord row)
     {
         if (row.Phase == JobPhase.Cancelling)
@@ -226,7 +247,8 @@ public sealed class LocalJobRunner
         var finished = RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory)
             && File.Exists(Path.Combine(jobDir, "result.json"))
             && !string.IsNullOrEmpty(row.OutputDir)
-            && Directory.Exists(row.OutputDir);
+            && Directory.Exists(row.OutputDir)
+            && OutputDirIsUnderOutputRoot(row);
         if (finished)
         {
             await FinishAsync(row.JobId, jobDir, row.OutputDir!, exitCode: 0).ConfigureAwait(false);

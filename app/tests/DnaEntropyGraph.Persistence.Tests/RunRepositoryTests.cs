@@ -220,9 +220,19 @@ public class RunRepositoryTests
             command.ExecuteNonQuery();
         }
 
-        var back = await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper).GetAllAsync(CancellationToken.None);
+        var log = new CapturingLog();
+        var back = await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper, log).GetAllAsync(CancellationToken.None);
 
         back.Single().OutputDir.ShouldBeNull();
+        // Ids and a fixed class name only: never the stored path text (CLAUDE.md "Logs").
+        log.Entries.ShouldBe([("run-repository", "job-x", "OutputDirOutsidePortableFolder")]);
+    }
+
+    private sealed class CapturingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
     }
 
     private static string RawOutputDir(string databasePath)

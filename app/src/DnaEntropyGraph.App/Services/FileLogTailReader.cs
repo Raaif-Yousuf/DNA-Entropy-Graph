@@ -28,8 +28,17 @@ public sealed class FileLogTailReader : ILogTailReader
         _rootPath = rootPath;
     }
 
+    /// <summary>One folder name: no separator, colon, NUL or dot segments. "x\..\y" would resolve inside the runs folder but name a different job.</summary>
+    private static bool IsPlainName(string jobId)
+        => !string.IsNullOrWhiteSpace(jobId) && jobId is not ("." or "..") && jobId.IndexOfAny(['/', '\\', ':', '\0']) < 0;
+
     public IReadOnlyList<string> ReadLines(string jobId)
     {
+        if (!IsPlainName(jobId))
+        {
+            return Array.Empty<string>();
+        }
+
         var path = Path.Combine(_rootPath, jobId, "logs", "worker.log");
         // The job id is a run row's text: a rooted or climbing one must not point this read outside the runs folder.
         // A name the file system cannot parse (a NUL, a stray colon) throws from GetFullPath: that is "no log" too.

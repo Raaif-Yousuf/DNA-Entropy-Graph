@@ -31,4 +31,31 @@ public class RunOutputRootTests
     {
         RunOutputRoot.Overlaps(a, b).ShouldBe(expected);
     }
+
+    [Theory]
+    [InlineData(@"C:\", true)]
+    [InlineData(@"\\server\share", true)]
+    [InlineData(@"\\server\share\", true)]
+    [InlineData(@"\\server\share\x", false)]
+    [InlineData(@"C:\x", false)]
+    public void IsVolumeRoot_names_drive_and_share_roots(string path, bool expected)
+    {
+        RunOutputRoot.IsVolumeRoot(path).ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Windows\Temp\x", @"C:\")]
+    [InlineData(@"\\server\share\x", @"\\server\share")]
+    public void IsSafelyInside_never_treats_a_volume_root_as_the_output_root(string path, string root)
+    {
+        RunOutputRoot.IsStrictlyInside(path, root).ShouldBeTrue("the read-only containment answer stays correct");
+        RunOutputRoot.IsSafelyInside(path, root).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void IsSafelyInside_still_accepts_an_ordinary_subfolder_root()
+    {
+        RunOutputRoot.IsSafelyInside(@"C:\out\run", @"C:\out").ShouldBeTrue();
+        RunOutputRoot.IsSafelyInside(@"C:\out2\run", @"C:\out").ShouldBeFalse();
+    }
 }

@@ -7,6 +7,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Runs;
 using Shouldly;
 using Xunit;
 
@@ -589,7 +590,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
         var outputDir = Path.Combine(OutputParent, "locus");
         Directory.CreateDirectory(outputDir);
-        _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir));
+        _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(OutputParent)));
 
         await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
 
@@ -597,6 +598,29 @@ public sealed class LocalJobRunnerTests : IDisposable
         File.ReadAllText(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBe("locus 0 12 1.5\n");
     }
 
+    private static string OptionsFor(string outputFolder)
+        => RunOptionsJson.Serialize(new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor, OutputFolder = outputFolder });
+
+    [Theory]
+    [InlineData("..\\victim")]
+    [InlineData("..\\out2\\victim")]
+    public async Task On_launch_a_finished_row_whose_output_folder_is_outside_the_output_root_copies_nothing_there_and_is_failed(string relative)
+    {
+        // Hard Rule 14: OutputDir comes from the history database; a corrupt row must not make the finish step write into any folder.
+        var jobDir = Path.Combine(RunsDirectory, "old-4");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var victim = Path.GetFullPath(Path.Combine(OutputParent, relative));
+        Directory.CreateDirectory(victim);
+        Directory.CreateDirectory(OutputParent);
+        _runs.Seed(new RunRecord("old-4", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: victim, OptionsJson: OptionsFor(OutputParent)));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        Directory.EnumerateFileSystemEntries(victim).ShouldBeEmpty();
+        _runs.Latest("old-4").Phase.ShouldBe(JobPhase.Failed);
+        _runs.Latest("old-4").ErrorCode.ShouldBe(RunErrorCodes.LocalRunInterrupted);
+    }
     [Fact]
     public async Task On_launch_a_Cancelling_local_run_becomes_Cancelled_and_cloud_and_finished_rows_are_left_alone()
     {

@@ -68,10 +68,12 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
     private readonly SqliteDatabase _database;
 
     private readonly DataPathMapper _paths;
+    private readonly IDiagnosticsLog _log;
 
     /// <param name="paths">Portable mode (issue #144): stores paths under the portable folder relative to it. Null stores every path as given.</param>
-    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null)
+    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null, IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _database = database;
         _paths = paths ?? new DataPathMapper(null);
     }
@@ -142,6 +144,21 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A stored output folder that does not expand inside the portable folder reads back as null. The next upsert of the row writes that
+    /// null over the stored text, so the loss is logged once here: the run id and a fixed class name, never the stored text.
+    /// </summary>
+    private string? MapOutputDir(RunRow row)
+    {
+        var mapped = _paths.FromStored(row.OutputDir);
+        if (mapped is null && row.OutputDir is not null)
+        {
+            _log.Warning("run-repository", row.Id, "OutputDirOutsidePortableFolder");
+        }
+
+        return mapped;
+    }
+
     private RunRecord ToRecord(RunRow row) => new(
         JobId: row.Id,
         Phase: Enum.Parse<JobPhase>(row.Phase),
@@ -168,7 +185,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq: (int)row.LastProgressSeq,
         LastHeartbeatAt: Iso.Parse(row.LastHeartbeatAt),
         StatusGeneration: row.StatusGeneration is null ? null : (int)row.StatusGeneration,
-        OutputDir: _paths.FromStored(row.OutputDir),
+        OutputDir: MapOutputDir(row),
         EstimatedCostUsd: row.EstimatedCostUsd,
         ActualCostUsd: row.ActualCostUsd,
         VmSeconds: row.VmSeconds,
