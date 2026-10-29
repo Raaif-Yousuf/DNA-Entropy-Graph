@@ -27,6 +27,10 @@ public sealed partial class SettingsPage : Page
     public UpdateViewModel Updates { get; }
 
     public BudgetSettingsViewModel Budget { get; }
+    public CloudActivityLogSettingsViewModel CloudActivity { get; }
+
+    public ProxySettingsViewModel Proxy { get; }
+
     public SettingsTransferViewModel Transfer { get; }
     public TourViewModel Tour { get; }
 
@@ -35,6 +39,7 @@ public sealed partial class SettingsPage : Page
     public SettingsPage()
     {
         Budget = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<BudgetSettingsViewModel>();
+        CloudActivity = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudActivityLogSettingsViewModel>();
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
@@ -45,6 +50,7 @@ public sealed partial class SettingsPage : Page
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
+        Proxy = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ProxySettingsViewModel>();
         Transfer = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsTransferViewModel>();
         PrototypeImport = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<PrototypeImportViewModel>();
         Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();

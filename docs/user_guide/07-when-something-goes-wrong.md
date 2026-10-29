@@ -24,6 +24,14 @@ as `<user>` or `<path>`. If the app finds anything in the file that looks like s
 sign-in code it refuses to save and tells you so; describe the problem in the issue without a file
 instead. The app does not write its own log file yet; when it does, the same button will include it.
 
+## What the app did in your Google Cloud project
+
+If you want to see exactly what the app changed in your project (and when), open **Settings**, find **Diagnostics**, and choose
+**Open cloud activity log**. Each line is one change: starting, stopping or deleting a rented computer, creating or writing to the
+results storage bucket, or turning on a Google service. It shows the time, which run it was for, whether it worked, and how long it took.
+It never holds your sequences, your file names or your email address. Changes made by the developer-only command line tool (not part of the installed app) are not listed. The same file is included inside the zip when you choose
+**Save diagnostics**, so support can see it. If nothing is listed yet, no cloud run has made a change on this computer.
+
 ## Signing in
 
 **"Your Google sign-in expired"**, this happens on its own, roughly once a week, while
@@ -45,6 +53,18 @@ the app cannot create or start your rented computer without it. *(`CONSENT_INCOM
 **"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
 online, then click **Try again**. *(`SIGNIN_NETWORK`)*
 
+**"Your network's proxy refused the connection to Google"**, many universities and companies send
+internet traffic through a proxy. Your sign-in is unchanged. Open **Settings**, open **Advanced**,
+then **Network proxy**. The default, **Use the Windows settings**, works for most computers, including
+ones that use an automatic proxy script and your Windows sign-in. If your IT help desk gave you a proxy
+address, choose **Use a proxy I type**, enter it as `host:port` (for example `proxy.example.edu:8080`),
+add the user name and password only if they say the proxy needs one, and click **Apply**. Then click
+**Try again**. Some proxies accept the password without encrypting it on your local network, so type only the proxy your institution gave you. *(`SIGNIN_PROXY`; a run says the same thing under `proxy_blocked`)*
+
+**"A program on your network is replacing Google's security certificate"**, some networks inspect
+encrypted traffic and use their own certificate, which this computer does not trust yet. Ask your
+network administrator to install your organization's certificate on this computer. The app will not
+bypass the check. *(`SIGNIN_CERTIFICATE`; a run says the same thing under `network_certificate`)*
 **"This copy of the app was built without its Google sign-in details"**, download the
 latest installer from the app's download page and install it over this copy.
 *(`OAUTH_CLIENT_MISSING`, `OAUTH_CLIENT_INVALID`)*

@@ -37,6 +37,9 @@ public static partial class DiagnosticsBundleBuilder
         Result,
         Progress,
         Log,
+
+        /// <summary>Issue #245: the cloud audit log (both generations), copied under its own name and redacted like a log.</summary>
+        CloudAudit,
     }
 
     private sealed record Loaded(string Path, FileKind Kind, string Text, bool Truncated);
@@ -49,6 +52,9 @@ public static partial class DiagnosticsBundleBuilder
 
     [GeneratedRegex(@"^(?:logs/[A-Za-z0-9_.-]{1,100}|runs/[A-Za-z0-9_-]{1,64}/logs/[A-Za-z0-9_.-]{1,100})\.(?:log|txt)$")]
     private static partial Regex LogFile();
+
+    [GeneratedRegex(@"^logs/cloud-audit(?:\.1)?\.jsonl$")]
+    private static partial Regex CloudAuditFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
     public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
@@ -100,6 +106,7 @@ public static partial class DiagnosticsBundleBuilder
                 os = info.OsDescription,
                 dotNet = info.DotNetVersion,
                 webView2 = info.WebView2Version ?? "not found",
+                proxyMode = info.ProxyMode ?? "unknown",
                 installationId = settings.InstallationId,
                 createdUtc = info.CreatedUtc,
             },
@@ -153,6 +160,11 @@ public static partial class DiagnosticsBundleBuilder
         if (RunJsonLines().IsMatch(path))
         {
             return FileKind.Progress;
+        }
+
+        if (CloudAuditFile().IsMatch(path))
+        {
+            return FileKind.CloudAudit;
         }
 
         return LogFile().IsMatch(path) ? FileKind.Log : null;
@@ -258,9 +270,12 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
-        var text = file.Truncated ? file.Text[(file.Text.IndexOf('\n', StringComparison.Ordinal) + 1)..] : file.Text;
+        // A tail with no newline at all is one partial line: dropped whole (IndexOf -1 would keep it from its start).
+        var cut = file.Truncated ? file.Text.IndexOf('\n', StringComparison.Ordinal) : -1;
+        var text = file.Truncated ? (cut < 0 ? string.Empty : file.Text[(cut + 1)..]) : file.Text;
         var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!, ids.Rewrite, ids.ExactPlaceholder) : redactor.RedactText(ids.Rewrite(text));
-        return file.Truncated ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;
+        // A .jsonl file stays one JSON value per line: the partial first line is already dropped above, and no note line is added (issue #245 review L5).
+        return file.Truncated && file.Kind != FileKind.CloudAudit ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;
     }
 
     private static (string? InstallationId, SortedDictionary<string, string> Values) RedactSettings(IDiagnosticsSource source, DiagnosticsRedactor redactor)

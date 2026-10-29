@@ -6,9 +6,11 @@ using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cloud.Audit;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Net;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Setup;
 using DnaEntropyGraph.LocalEngine;
@@ -111,6 +113,13 @@ public static class ServiceRegistration
         services.AddSingleton<WindowPlacementService>();
         services.AddSingleton<ILogTailReader, FileLogTailReader>();
 
+        // Issue #239: the one network proxy policy (follow Windows, a typed proxy, or none) and the encrypted file for a proxy sign-in. Every real HTTP client (Google sign-in,
+        // the Google gateways, the Velopack update check) holds a PolicyWebProxy over this one object, so a change in Settings reaches the next request.
+        services.AddSingleton<IProxyCredentialStore>(_ => new ProxyCredentialFile(Path.Combine(root.AuthDirectory, "proxy.cred"), new DpapiSecretProtector()));
+        services.AddSingleton<ProxyPolicy>(sp => new ProxyPolicy(sp.GetRequiredService<ISettingsStore>(), sp.GetRequiredService<IProxyCredentialStore>()));
+        services.AddSingleton<IProxyPolicy>(sp => sp.GetRequiredService<ProxyPolicy>());
+        services.AddTransient<ProxySettingsViewModel>();
+
         // Cloud (Hard Rule 7: the only project allowed to reference Google.*). Issue #48: the account is the real Google sign-in
         // (loopback + PKCE, DPAPI token files keyed by sub), in both backends. A build with no
         // oauth_client.local.json cannot sign in and says so by code (OAUTH_CLIENT_MISSING), never by crashing.
@@ -122,6 +131,7 @@ public static class ServiceRegistration
                 ? [Path.Combine(root.Path, OAuthClientLoader.FileName)]
                 : OAuthClientLoader.DefaultCandidates(root.Path, AppContext.BaseDirectory)),
             Browser = new SystemBrowserLauncher(),
+            Proxy = sp.GetRequiredService<IProxyPolicy>(),
 
             // Only the fake backend answers a project nobody chose (a project the account chose wins, #520). The Google backend
             // answers null: no chosen project means a run fails with no_project, which names the one way out (#609).
@@ -173,6 +183,9 @@ public static class ServiceRegistration
         {
             AddGoogleCloud(services);
         }
+
+        // Issue #245: the audit of every cloud mutation wraps whichever gateways the switch above registered.
+        CloudAuditRegistration.Add(services, root);
 
         // Persistence (issue #67: real SQLite + settings.json under
         // %LOCALAPPDATA%\DNAEntropyGraph\, docs/architecture.md section 6).
@@ -239,7 +252,7 @@ public static class ServiceRegistration
         services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
             new FolderDiagnosticsSource(root.Path),
             sp.GetRequiredService<IRunRepository>(),
-            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>(), sp.GetRequiredService<IProxyPolicy>())));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());
@@ -372,16 +385,15 @@ public static class ServiceRegistration
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
-        services.AddSingleton<IAccessionLookup>(_ =>
+        services.AddSingleton<IAccessionLookup>(sp =>
         {
             if (cloud != CloudBackend.Google)
             {
                 return new ScriptedAccessionLookup();
             }
 
-            var http = new HttpClient { MaxResponseContentBufferSize = 1024 * 1024 };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("dna-entropy-graph");
-            return new NcbiAccessionLookup(http);
+            // Issue #239: through the one proxy policy, like every other outbound client (a bare HttpClient would ignore a typed proxy).
+            return new NcbiAccessionLookup(DnaEntropyGraph.Cloud.Net.ProxiedHttpClient.Create(sp.GetRequiredService<IProxyPolicy>(), 1024 * 1024, "dna-entropy-graph"));
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());
@@ -417,6 +429,7 @@ public static class ServiceRegistration
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<RunDefaultsSettingsViewModel>();
         services.AddTransient<FilesSettingsViewModel>();
+        services.AddTransient<CloudActivityLogSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
@@ -487,6 +500,7 @@ public static class ServiceRegistration
                 }
             },
             AppVersion = JobEngine.AppVersion(),
+            Proxy = sp.GetRequiredService<IProxyPolicy>(),
             // Issue #114: the saved "Cloud results retention", read at each use so a change patches the bucket rule on the next run.
             ResultsRetentionDaysSource = () => ResultsRetentionSetting.Days(sp.GetRequiredService<ISettingsStore>()),
         });
@@ -529,6 +543,54 @@ public static class ServiceRegistration
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
+    }
+}
+
+internal static class CloudAuditRegistration
+{
+    /// <summary>
+    /// Issue #245: replaces each registered gateway that has a mutating call with an audited wrapper around the one that was there
+    /// (the Resilient* wrapper over the fake, or the real Google gateway), so every mutation is one entry in the audit file whichever
+    /// backend is built. Reads pass through. The log file is first touched when the first mutation happens.
+    /// </summary>
+    public static void Add(IServiceCollection services, AppDataRoot root)
+    {
+        services.AddSingleton<ICloudAuditLog>(_ => new JsonLinesCloudAuditLog(root.CloudAuditLogFile));
+        services.AddSingleton<CloudAuditor>(sp => new CloudAuditor(
+            sp.GetRequiredService<ICloudAuditLog>(),
+            () =>
+            {
+                try
+                {
+                    return InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
+                }
+                catch (InstallationIdUnusableException)
+                {
+                    return null;
+                }
+            },
+            sp.GetRequiredService<TimeProvider>()));
+
+        Decorate<IComputeGateway>(services, (inner, auditor) => new AuditedComputeGateway(inner, auditor));
+        Decorate<IStorageGateway>(services, (inner, auditor) => new AuditedStorageGateway(inner, auditor));
+        Decorate<IProjectSetupGateway>(services, (inner, auditor) => new AuditedProjectSetupGateway(inner, auditor));
+        Decorate<IWorkerIdentityGateway>(services, (inner, auditor) => new AuditedWorkerIdentityGateway(inner, auditor));
+        Decorate<IServiceEnablementGateway>(services, (inner, auditor) => new AuditedServiceEnablementGateway(inner, auditor));
+        Decorate<IBillingGateway>(services, (inner, auditor) => new AuditedBillingGateway(inner, auditor));
+        Decorate<IProjectCatalogGateway>(services, (inner, auditor) => new AuditedProjectCatalogGateway(inner, auditor));
+        Decorate<IQuotaGateway>(services, (inner, auditor) => new AuditedQuotaGateway(inner, auditor));
+        Decorate<IPricingCatalogGateway>(services, (inner, auditor) => new AuditedPricingCatalogGateway(inner, auditor));
+    }
+
+    private static void Decorate<T>(IServiceCollection services, Func<T, CloudAuditor, T> wrap)
+        where T : class
+    {
+        var existing = services.LastOrDefault(d => d.ServiceType == typeof(T))
+            ?? throw new InvalidOperationException($"{typeof(T).Name} is not registered, so it cannot be audited.");
+        var factory = existing.ImplementationFactory
+            ?? throw new InvalidOperationException($"{typeof(T).Name} must be registered with a factory so the audit can wrap it.");
+        services.Remove(existing);
+        services.Add(new ServiceDescriptor(typeof(T), sp => wrap((T)factory(sp), sp.GetRequiredService<CloudAuditor>()), existing.Lifetime));
     }
 }
 

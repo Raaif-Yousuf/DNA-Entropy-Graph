@@ -285,6 +285,19 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void The_proxy_mode_is_recorded_and_never_the_proxy_address_or_a_sign_in()
+    {
+        var folder = SeededFolder();
+        folder["settings.json"] = """{"Theme":"Dark","proxy_mode":"manual","proxy_address":"proxy.secret-uni.edu:8080"}""";
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }));
+
+        using var document = JsonDocument.Parse(entries["versions.json"]);
+        document.RootElement.GetProperty("proxyMode").GetString().ShouldBe("manual");
+        entries.Values.ShouldAllBe(text => !text.Contains("secret-uni", StringComparison.Ordinal));
+        BuildSeeded().TryGetValue("versions.json", out var plain).ShouldBeTrue();
+        JsonDocument.Parse(plain!).RootElement.GetProperty("proxyMode").GetString().ShouldBe("unknown");
+    }
+    [Fact]
     public void Log_lines_keep_their_meaning()
     {
         var log = BuildSeeded()["files/logs/log-01.log"];
@@ -433,6 +446,42 @@ public class DiagnosticsBundleBuilderTests
         entries["files/logs/log-01.log"].ShouldContain("line three");
         entries["files/logs/log-01.log"].ShouldNotContain("partial first line");
         entries["files/runs/20261001-080000-abc234/status.json"].ShouldBe("<omitted: file too large>");
+    }
+
+    [Fact]
+    public void A_truncated_cloud_audit_file_keeps_every_line_valid_json_with_no_note_line()
+    {
+        // Issue #245 review L5: a "[truncated: ...]" first line would make the .jsonl unparseable line by line.
+        var folder = new Dictionary<string, string>
+        {
+            ["logs/cloud-audit.jsonl"] = "{\"operation\":\"A\",\"n\":1}\n{\"operation\":\"B\",\"n\":2}\n{\"operation\":\"C\",\"n\":3}\n",
+        };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 40), [], Info));
+
+        var text = entries["files/logs/cloud-audit.jsonl"];
+        text.ShouldContain("\"C\"");
+        text.ShouldNotContain("[truncated");
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.ShouldNotBeEmpty();
+        foreach (var line in lines)
+        {
+            Should.NotThrow(() => System.Text.Json.JsonDocument.Parse(line));
+        }
+    }
+
+    [Fact]
+    public void A_truncated_cloud_audit_tail_with_no_newline_is_dropped_whole_not_kept_as_a_partial_line()
+    {
+        // Issue #245 review round 2 (L): IndexOf of a missing newline is -1, which kept the cut line from its start.
+        var folder = new Dictionary<string, string>
+        {
+            ["logs/cloud-audit.jsonl"] = "{\"operation\":\"A\",\"n\":1,\"padding\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 20), [], Info));
+
+        entries["files/logs/cloud-audit.jsonl"].ShouldBeEmpty();
     }
 
     [Fact]
