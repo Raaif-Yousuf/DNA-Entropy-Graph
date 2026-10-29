@@ -27,6 +27,7 @@ public sealed partial class SettingsPage : Page
     public UpdateViewModel Updates { get; }
 
     public CloudActivityLogSettingsViewModel CloudActivity { get; }
+    public SettingsTransferViewModel Transfer { get; }
     public TourViewModel Tour { get; }
 
     public SettingsPage()
@@ -42,6 +43,7 @@ public sealed partial class SettingsPage : Page
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
+        Transfer = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsTransferViewModel>();
         Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();
         InitializeComponent();
     }

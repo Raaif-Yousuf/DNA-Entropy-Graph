@@ -14,11 +14,11 @@ internal static class FixturePaths
 
     public static string CloudErrorClassificationJson => Path.Combine(RepoRoot, "tests", "contract-fixtures", "cloud_error_classification.json");
 
-    // Walks up from the test binary first, then from this source file: a build with a private --artifacts-path (every
+    // Walks up from this source file first (the tree actually compiled, #874), then from the test binary: a build with a private --artifacts-path (every
     // parallel lane) puts the binary under %TEMP%, which has no repo ancestor (#495, MEASURED 2026-10-02).
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
     {
-        foreach (var start in new[] { AppContext.BaseDirectory, Path.GetDirectoryName(thisFile) })
+        foreach (var start in new[] { Path.GetDirectoryName(thisFile), AppContext.BaseDirectory })
         {
             var dir = string.IsNullOrEmpty(start) ? null : new DirectoryInfo(start);
             while (dir is not null)

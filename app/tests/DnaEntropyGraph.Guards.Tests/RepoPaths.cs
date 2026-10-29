@@ -28,11 +28,15 @@ internal static class RepoPaths
             && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
         .ToArray();
 
+    // MEASURED 2026-10-28 (#874): a worktree lane running the primary's heavy.py got its binary under the PRIMARY's
+    // app/.artifacts, so walking up from BaseDirectory first scanned the primary's tree. The compile-time path of this
+    // file is the source tree actually built, so it goes first; BaseDirectory is only the fallback (a CI build whose
+    // sources moved, if any). Deterministic does not rewrite CallerFilePath (no PathMap anywhere; RepoPathsTests proves it).
     // MEASURED 2026-10-02: under `dotnet test --artifacts-path <dir outside the repo>` (the per-lane
     // convention for concurrent agents) the output directory is not under app/, so walking up from it
     // found nothing and 9 guards threw. The compile-time path of this source file is the fallback.
-    private static string FindAppRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
-        => FindSlnAbove(AppContext.BaseDirectory) ?? FindSlnAbove(Path.GetDirectoryName(thisFile))
+    public static string FindAppRoot([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
+        => FindSlnAbove(Path.GetDirectoryName(thisFile)) ?? FindSlnAbove(AppContext.BaseDirectory)
         ?? throw new InvalidOperationException(
             $"Could not find DnaEntropyGraph.sln by walking up from {AppContext.BaseDirectory} or {thisFile}. " +
             "A guard that cannot find the app/ tree would silently scan nothing and pass for the wrong reason.");
