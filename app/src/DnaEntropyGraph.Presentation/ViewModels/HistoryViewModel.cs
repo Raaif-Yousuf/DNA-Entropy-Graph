@@ -55,6 +55,8 @@ public sealed partial class HistoryViewModel : ObservableObject
 
     private readonly Func<string?, bool>? _hasSpotPrice;
 
+    private readonly IRunCostSource? _costs;
+
     private readonly IMessenger? _messenger;
 
     public HistoryViewModel(
@@ -74,10 +76,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         IRunImporter? importer = null,
         ImportedRunDismissals? dismissals = null,
         IPricingSource? pricing = null,
+        IRunCostSource? costs = null,
         IMessenger? messenger = null,
         IDispatcher? dispatcher = null)
     {
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
+        _costs = costs;
         _messenger = messenger;
         if (messenger is not null && dispatcher is not null)
         {
@@ -208,7 +212,13 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return;
             }
 
-            _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken);
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
+            _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder, booked.TryGetValue(r.Run.JobId, out var usd) ? usd : null))];
             ApplyFilter();
             SparklineWork = LoadSparklinesAsync(_items, generation, cancellationToken);
         }
@@ -313,7 +323,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             : day == today.AddDays(-1) ? _strings.GetString(RunsCopy.GroupYesterday)
             : day.ToString("D", CultureInfo.CurrentCulture);
 
-    private RunListItem BuildItem(RunRecord run, bool hasFolder)
+    private RunListItem BuildItem(RunRecord run, bool hasFolder, double? bookedUsd)
     {
         var local = TimeZoneInfo.ConvertTime(run.CreatedUtc, _time.LocalTimeZone);
         var (status, statusKey) = Classify(run.Phase);
@@ -338,7 +348,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
-            CostText = RunCostText.Short(run, _strings, _hasSpotPrice),
+            CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
             IsImported = run.Imported,
             ImportedText = run.Imported ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),

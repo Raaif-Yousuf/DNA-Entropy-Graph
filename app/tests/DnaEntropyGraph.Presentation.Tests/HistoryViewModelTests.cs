@@ -34,18 +34,21 @@ public sealed class HistoryViewModelTests
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
     private readonly IShellLauncher _launcher = Substitute.For<IShellLauncher>();
     private readonly IGcpAccount _account = Substitute.For<IGcpAccount>();
+    private readonly IRunCostSource _costs = Substitute.For<IRunCostSource>();
+    private Dictionary<string, double> _booked = [];
     private List<RunRecord> _rows = [];
 
     public HistoryViewModelTests()
     {
         _strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
         _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => _rows);
+        _costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult<IReadOnlyDictionary<string, double>>(_booked));
         _dialogs.ConfirmAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs(true);
         _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(true);
         _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(true);
     }
 
-    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock());
+    private HistoryViewModel Make() => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), costs: _costs);
 
     private static RunRecord Row(string id, JobPhase phase = JobPhase.Completed, DateTimeOffset? created = null, string? name = null, string? outputDir = null, string? options = null, string? notes = null)
         => new(id, phase, created ?? Now.AddHours(-1), Name: name, OutputDir: outputDir, OptionsJson: options ?? "{}", Notes: notes, Bucket: "b", JobPrefix: $"jobs/{id}/");
@@ -70,7 +73,8 @@ public sealed class HistoryViewModelTests
         _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
         _strings.GetString(ResultsCopy.CostShortNoCloud).Returns("none");
 
-        var vm = await Loaded(Row("paid") with { EstimatedCostUsd = 0.5 }, Row("unbooked"), Row("pc") with { Target = "local" });
+        _booked = new() { ["paid"] = 0.5 };
+        var vm = await Loaded(Row("paid"), Row("unbooked"), Row("pc") with { Target = "local" });
 
         Item(vm, "paid").CostText.ShouldBe("about $0.50");
         Item(vm, "paid").HasCost.ShouldBeTrue();
@@ -89,11 +93,12 @@ public sealed class HistoryViewModelTests
         _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
         CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
         _rows = [Row("live", JobPhase.Running)];
-        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: new InlineDispatcher());
+        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), costs: _costs, messenger: messenger, dispatcher: new InlineDispatcher());
         await vm.RefreshCommand.ExecuteAsync(null);
         Item(vm, "live").HasCost.ShouldBeFalse();
 
-        _rows = [Row("live") with { EstimatedCostUsd = 0.5 }];
+        _rows = [Row("live")];
+        _booked = new() { ["live"] = 0.5 };
         messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Completed));
         for (var i = 0; i < 200 && !Item(vm, "live").HasCost; i++)
         {
@@ -115,30 +120,39 @@ public sealed class HistoryViewModelTests
     }
 
     private HistoryViewModel MakeListening(CommunityToolkit.Mvvm.Messaging.IMessenger messenger, IDispatcher dispatcher)
-        => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: dispatcher);
+        => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), costs: _costs, messenger: messenger, dispatcher: dispatcher);
 
     [Fact]
     public async Task A_phase_change_that_is_not_an_end_does_not_reload_the_list_but_an_end_does()
     {
-        // Deterministic, no clock: the dispatcher counts what the handler asks of the UI thread, and the repository substitute answers synchronously.
+        // The reload is awaited through a signal the repository raises when it is read again, never assumed to have finished by the time Send returns.
+        var reads = 0;
+        var reloaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            if (Interlocked.Increment(ref reads) > 1)
+            {
+                reloaded.TrySetResult();
+            }
+
+            return Task.FromResult<IReadOnlyList<RunRecord>>(_rows);
+        });
         CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
         _rows = [Row("live", JobPhase.Running)];
         var dispatcher = new CountingDispatcher();
         var vm = MakeListening(messenger, dispatcher);
         await vm.RefreshCommand.ExecuteAsync(null);
-        var loads = _repository.ReceivedCalls().Count();
+        reads.ShouldBe(1);
 
         messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Running));
-
         dispatcher.Enqueued.ShouldBe(0, "only an ended run changes what a row shows");
-        _repository.ReceivedCalls().Count().ShouldBe(loads);
 
         messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Completed));
+        await reloaded.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        dispatcher.Enqueued.ShouldBe(1, "an end asks the UI thread for one reload");
-        _repository.ReceivedCalls().Count().ShouldBeGreaterThan(loads, "and the reload read the table");
+        dispatcher.Enqueued.ShouldBe(1, "an end asks the UI thread for one reload, and the earlier non-end asked for none");
+        Volatile.Read(ref reads).ShouldBe(2, "the reload read the table once");
     }
-
     [Fact]
     public async Task A_page_that_was_left_stops_reloading_on_a_run_end_while_a_page_still_open_does()
     {
@@ -165,14 +179,15 @@ public sealed class HistoryViewModelTests
     {
         _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
         _strings.GetString(ResultsCopy.CostShortSpot).Returns("about spot ${0}");
-        _rows = [Row("spot") with { EstimatedCostUsd = 1.0, IsSpot = true, MachineType = "g2-standard-8" }];
+        _rows = [Row("spot") with { IsSpot = true, MachineType = "g2-standard-8" }];
+        _booked = new() { ["spot"] = 1.0 };
         var noSpot = DnaEntropyGraph.Core.Cost.PricingTable.Parse("""
             {"schema":1,"asOf":"2026-10-01","currency":"USD","region":"us-central1","source":"test","disk":{"usdPerGbMonth":0.073},
              "machines":{"g2-standard-8":{"accelerator":"L4","onDemandUsdPerHour":1.0}}}
             """);
         var pricing = Substitute.For<DnaEntropyGraph.Core.Cost.IPricingSource>();
         pricing.Load().Returns(noSpot);
-        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), pricing: pricing);
+        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), pricing: pricing, costs: _costs);
 
         await vm.RefreshCommand.ExecuteAsync(null);
 

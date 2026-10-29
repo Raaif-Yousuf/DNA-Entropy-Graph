@@ -64,35 +64,13 @@ public sealed class SpendLedger : ISpendCapGate
             || !JobStateMachine.IsTerminal(run.Phase)
             || run.VmReadyAt is not { } vmStart
             || run.FinishedAt is not { } finished
-            || (BookedUsd(run) ?? UsdFor(run, vmStart, finished)) is not { } usd)
+            || UsdFor(run, vmStart, finished) is not { } usd)
         {
             return null;
         }
 
         return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished, UsdEst: usd);
     }
-
-    /// <summary>
-    /// The figure an ended row already carries (first write wins: a later pricing change or a stale copy never re-quotes it), or null. A figure whose
-    /// own VM seconds disagree with the row's span (a stale copy carried onto a row whose start or end has since moved) is not trusted and is priced again.
-    /// </summary>
-    private static double? BookedUsd(RunRecord run)
-    {
-        if (run.EstimatedCostUsd is not { } usd || !double.IsFinite(usd) || usd < 0)
-        {
-            return null;
-        }
-
-        if (run.VmSeconds is { } seconds && run.VmReadyAt is { } start && run.FinishedAt is { } end && Math.Abs((end - start).TotalSeconds - seconds) > 1)
-        {
-            return null;
-        }
-
-        return usd;
-    }
-
-    /// <summary>Appends an already-quoted entry once (the decorator's kept-figure path: the quote is the one the stored row carries, never repriced here).</summary>
-    public Task<CostLedgerEntry?> RecordEntryAsync(CostLedgerEntry entry, CancellationToken cancellationToken) => _ledger.TryAppendAsync(entry, cancellationToken);
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
@@ -229,21 +207,19 @@ public sealed class SpendLedger : ISpendCapGate
 
 /// <summary>
 /// Wraps the run repository so every writer of a run row (the runner, the reconciler, the cleanup) feeds the ledger when a row first
-/// reaches an ended phase, without any of them knowing. The row is stored FIRST (carrying the cost and VM seconds, which are deterministic
-/// from the row), then the ledger row is appended: a store that throws leaves no ledger row, so the retry books it once, and a ledger
-/// append is idempotent (unique index), so a retry after a failed append books it too. A ledger failure never fails the run row.
+/// reaches an ended phase, without any of them knowing. The row is stored FIRST, then the ledger row is appended: a store that throws
+/// leaves no ledger row, so the retry books it once, and a ledger append is idempotent (unique index, first write wins), so a retry after
+/// a failed append books it too. A ledger failure never fails the run row. The ledger entry is the only record of what a run cost: nothing
+/// is written onto the run row (issues #100 and #557 read the figure from the ledger).
 /// </summary>
 public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedger ledger) : IRunRepository
 {
     public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => inner.GetAllAsync(cancellationToken);
 
-    public Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.GetByJobIdAsync(jobId, cancellationToken);
-
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
-        var (stamped, quote) = await PrepareAsync(run, cancellationToken).ConfigureAwait(false);
-        await inner.UpsertAsync(stamped, cancellationToken).ConfigureAwait(false);
-        await BookAsync(stamped, quote).ConfigureAwait(false);
+        await inner.UpsertAsync(run, cancellationToken).ConfigureAwait(false);
+        await BookAsync(run).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -253,60 +229,24 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
     /// </summary>
     public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
     {
-        var (stamped, quote) = await PrepareAsync(run, cancellationToken).ConfigureAwait(false);
-        if (!await inner.TryUpsertIfPhaseAsync(stamped, expectedPhase, cancellationToken).ConfigureAwait(false))
+        if (!await inner.TryUpsertIfPhaseAsync(run, expectedPhase, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
 
-        await BookAsync(stamped, quote).ConfigureAwait(false);
+        await BookAsync(run).ConfigureAwait(false);
         return true;
     }
 
-    /// <summary>
-    /// What the row to store carries, and the ledger row it stands for. First write wins, same as the ledger: a job whose stored row already carries its
-    /// booked cost keeps that figure and VM seconds whatever the incoming copy says (an older copy, a price list change, a different figure), so the run
-    /// pages and the month total can never disagree. Read per job (<see cref="IRunRepository.GetByJobIdAsync"/>), never the whole table.
-    /// </summary>
-    private async Task<(RunRecord Run, CostLedgerEntry? Quote)> PrepareAsync(RunRecord run, CancellationToken cancellationToken)
+    private async Task BookAsync(RunRecord stored)
     {
-        if (JobStateMachine.IsTerminal(run.Phase)
-            && await inner.GetByJobIdAsync(run.JobId, cancellationToken).ConfigureAwait(false) is { EstimatedCostUsd: { } kept } stored
-            && double.IsFinite(kept) && kept >= 0)
-        {
-            // First terminal figure wins for the row AND the ledger: the ledger entry is built from the incoming row (its span may differ from the stored one) but carries
-            // the kept figure, never a repriced one, so the run pages and the month total cannot disagree.
-            run = run with { EstimatedCostUsd = kept, VmSeconds = stored.VmSeconds };
-            return (run, ledger.Quote(run) is { } keptQuote ? keptQuote with { UsdEst = kept } : null);
-        }
-
-        // No usable kept figure (none yet, or a stored one that is NaN, infinite or negative: priced again, which repairs the row). A figure that cannot be priced
-        // is cleared rather than carried as junk.
-        var quote = ledger.Quote(run);
-        if (quote is not null)
-        {
-            return (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
-        }
-
-        return run.EstimatedCostUsd is { } carried && (!double.IsFinite(carried) || carried < 0)
-            ? (run with { EstimatedCostUsd = null, VmSeconds = null }, null)
-            : (run, null);
-    }
-
-    private async Task BookAsync(RunRecord stored, CostLedgerEntry? quote)
-    {
-        if (quote is null)
-        {
-            return;
-        }
-
         try
         {
-            await ledger.RecordEntryAsync(quote, CancellationToken.None).ConfigureAwait(false);
+            await ledger.RecordRunAsync(stored, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             System.Diagnostics.Trace.TraceWarning($"cost_ledger_write_failed: {ex.GetType().Name}");
         }
     }
-}
+}

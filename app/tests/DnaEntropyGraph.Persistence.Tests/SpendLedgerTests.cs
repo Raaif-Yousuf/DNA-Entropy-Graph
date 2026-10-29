@@ -43,20 +43,9 @@ public class SpendLedgerTests
         /// <summary>When above zero, that many upserts throw before one succeeds.</summary>
         public int FailNext { get; set; }
 
-        public int GetAllCalls { get; private set; }
-
-        public int GetByJobIdCalls { get; private set; }
-
         public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
         {
-            GetAllCalls++;
             return Task.FromResult<IReadOnlyList<RunRecord>>(Rows.ToList());
-        }
-
-        public Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken)
-        {
-            GetByJobIdCalls++;
-            return Task.FromResult(Rows.Where(r => r.JobId == jobId).OrderBy(r => r.CreatedUtc).LastOrDefault());
         }
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
@@ -430,7 +419,6 @@ public class SpendLedgerTests
             var doubled = new SpendLedger(repo, new Pricing2(PricingJson.Replace("\"onDemandUsdPerHour\":1.0", "\"onDemandUsdPerHour\":2.0", StringComparison.Ordinal)), settings, new FixedTime(Now), TimeZoneInfo.Utc, runs);
             await new LedgerRecordingRunRepository(runs, doubled).UpsertAsync(Finished("r1", 1), CancellationToken.None);
 
-            runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(booked, 1e-12, "the run row keeps what the ledger booked");
             (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(booked, 1e-12);
         }
     }
@@ -452,118 +440,8 @@ public class SpendLedgerTests
             await decorated.UpsertAsync(run, CancellationToken.None);
 
             (await repo.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1);
-            var stored = runs.Rows.Single();
-            stored.EstimatedCostUsd.ShouldNotBeNull().ShouldBe(1.015, 1e-9);
-            stored.VmSeconds.ShouldBe(3600);
+            runs.Rows.Single().EstimatedCostUsd.ShouldBeNull("nothing is written onto the run row: the ledger entry is the only record of the cost");
         }
-    }
-
-    [Fact]
-    public async Task A_terminal_upsert_reads_the_one_job_not_the_whole_table()
-    {
-        var runs = new MemoryRuns();
-        var (ledger, _, _, paths) = Make();
-        using (paths)
-        {
-            for (var i = 0; i < 5; i++)
-            {
-                runs.Rows.Add(Finished("other" + i, 1));
-            }
-
-            var decorated = new LedgerRecordingRunRepository(runs, ledger);
-            runs.Rows.Add(Finished("r9", 1) with { Phase = JobPhase.Running, FinishedAt = null });
-            var before = runs.GetAllCalls;
-
-            await decorated.UpsertAsync(Finished("r9", 1), CancellationToken.None);
-
-            runs.GetAllCalls.ShouldBe(before, "the stored-figure look is per job");
-            runs.GetByJobIdCalls.ShouldBe(1);
-        }
-    }
-
-    [Fact]
-    public async Task An_upsert_carrying_a_different_figure_keeps_the_booked_one_on_the_row_so_row_and_ledger_agree()
-    {
-        var runs = new MemoryRuns();
-        var (ledger, repo, _, paths) = Make();
-        using (paths)
-        {
-            var decorated = new LedgerRecordingRunRepository(runs, ledger);
-            await decorated.UpsertAsync(Finished("r7", 1), CancellationToken.None);
-            var booked = runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull();
-
-            await decorated.UpsertAsync(Finished("r7", 1) with { EstimatedCostUsd = 99, VmSeconds = 7 }, CancellationToken.None);
-
-            runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(booked, 1e-12, "the ledger is first-write-wins, so the row is too");
-            runs.Rows.Single().VmSeconds.ShouldBe(3600);
-            (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(booked, 1e-12);
-        }
-    }
-
-    [Fact]
-    public async Task A_kept_figure_is_the_one_the_ledger_books_even_when_the_incoming_span_differs()
-    {
-        // The row carries a booked figure (one hour) but no ledger row exists (its append never landed). The next write of the ended row has a LATER end, so a
-        // repriced quote would be two hours: the row would show one figure and the ledger book another.
-        var runs = new MemoryRuns();
-        var (ledger, repo, _, paths) = Make();
-        using (paths)
-        {
-            runs.Rows.Add(Finished("r1", 1) with { EstimatedCostUsd = 1.015, VmSeconds = 3600 });
-            var decorated = new LedgerRecordingRunRepository(runs, ledger);
-
-            await decorated.UpsertAsync(Finished("r1", 1) with { FinishedAt = Now.AddHours(1) }, CancellationToken.None);
-
-            var rowFigure = runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull();
-            rowFigure.ShouldBe(1.015, 1e-9, "never reprice a kept figure");
-            (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(rowFigure, 1e-12, "row and ledger carry one figure");
-        }
-    }
-
-    [Theory]
-    [InlineData(double.NaN)]
-    [InlineData(double.PositiveInfinity)]
-    [InlineData(-3.0)]
-    public async Task A_stored_figure_that_is_not_finite_and_non_negative_is_repriced_and_the_row_repaired(double bad)
-    {
-        var runs = new MemoryRuns();
-        var (ledger, repo, _, paths) = Make();
-        using (paths)
-        {
-            runs.Rows.Add(Finished("r1", 1) with { EstimatedCostUsd = bad, VmSeconds = 3600 });
-            var decorated = new LedgerRecordingRunRepository(runs, ledger);
-
-            await decorated.UpsertAsync(Finished("r1", 1), CancellationToken.None);
-
-            runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(1.015, 1e-9, "a bad kept figure is not frozen forever");
-            (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(1.015, 1e-9);
-        }
-    }
-
-    [Fact]
-    public void A_carried_figure_whose_VM_seconds_disagree_with_the_rows_span_is_priced_again()
-    {
-        var (ledger, _, _, paths) = Make();
-        using (paths)
-        {
-            var stale = Finished("re-end", 2) with { EstimatedCostUsd = 0.5, VmSeconds = 1800 };
-            ledger.Quote(stale).ShouldNotBeNull().UsdEst.ShouldNotBeNull().ShouldBe(2 * 1.015, 1e-9, "a span of two hours is not the half hour the stale figure was booked for");
-
-            var honest = Finished("same-span", 2) with { EstimatedCostUsd = 0.5, VmSeconds = 7200 };
-            ledger.Quote(honest).ShouldNotBeNull().UsdEst.ShouldNotBeNull().ShouldBe(0.5, 1e-12, "a figure that matches its own span stays first-write-wins");
-        }
-    }
-
-    [Fact]
-    public async Task The_real_repository_reads_one_job_by_id()
-    {
-        using var paths = new TempPaths();
-        var real = new RunRepository(new SqliteDatabase(paths.DatabasePath));
-        await real.UpsertAsync(Finished("a", 1), CancellationToken.None);
-        await real.UpsertAsync(Finished("b", 2), CancellationToken.None);
-
-        (await real.GetByJobIdAsync("b", CancellationToken.None)).ShouldNotBeNull().JobId.ShouldBe("b");
-        (await real.GetByJobIdAsync("missing", CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
@@ -599,7 +477,6 @@ public class SpendLedgerTests
 
             (await decorated.TryUpsertIfPhaseAsync(Finished("r2", 1), JobPhase.Running, CancellationToken.None)).ShouldBeTrue();
             (await repo.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1);
-            (await real.GetAllAsync(CancellationToken.None)).Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(1.015, 1e-9);
         }
     }
 

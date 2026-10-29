@@ -64,6 +64,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private readonly Func<string?, bool>? _hasSpotPrice;
 
+    private readonly IRunCostSource? _costs;
+
     public ResultsViewModel(
         IRunRepository runRepository,
         IRunOutputReader outputReader,
@@ -73,8 +75,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
         IOverviewImageExporter? imageExporter = null,
-        IPricingSource? pricing = null)
+        IPricingSource? pricing = null,
+        IRunCostSource? costs = null)
     {
+        _costs = costs;
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
@@ -137,7 +141,13 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
-            CostText = RunCostText.Header(run, _strings, _hasSpotPrice) ?? string.Empty;
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken);
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
+            CostText = RunCostText.Header(run, booked.TryGetValue(run.JobId, out var usd) ? usd : null, _strings, _hasSpotPrice) ?? string.Empty;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
