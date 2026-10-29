@@ -331,7 +331,8 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                     throw new TokenStorageException(deleteFailure);
                 }
             }
-        }        catch (TokenStorageException ex)
+        }
+        catch (TokenStorageException ex)
         {
             throw StorageFailure(ex);
         }
