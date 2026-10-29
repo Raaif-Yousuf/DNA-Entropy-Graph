@@ -7,6 +7,25 @@ namespace DnaEntropyGraph.Core.Cloud.Audit;
 public static class CloudAuditContext
 {
     private static readonly AsyncLocal<Holder?> Current = new();
+    private static readonly AsyncLocal<CancellationToken?> Caller = new();
+
+    /// <summary>
+    /// Names the token the CALLER of the next audited gateway call holds. A caller that gives the gateway a linked deadline token (GatewayCalls) calls this around the call,
+    /// so a cancellation of that linked token is told apart: the caller's own token cancelled is "cancelled", only the app's deadline firing is "timeout".
+    /// </summary>
+    public static IDisposable CallerScope(CancellationToken callerToken)
+    {
+        var previous = Caller.Value;
+        Caller.Value = callerToken;
+        return new CallerRestore(previous);
+    }
+
+    internal static CancellationToken? CurrentCaller => Caller.Value;
+
+    private sealed class CallerRestore(CancellationToken? previous) : IDisposable
+    {
+        public void Dispose() => Caller.Value = previous;
+    }
 
     /// <summary>Records the request id the call sent and/or the operation name Google answered with. A null keeps what is already noted.</summary>
     public static void Note(string? requestId, string? operationId)

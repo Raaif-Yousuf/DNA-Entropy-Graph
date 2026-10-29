@@ -35,6 +35,9 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
     public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false, bool mintRequestId = false, CancellationToken cancellationToken = default)
     {
         var start = time.GetTimestamp();
+
+        // The caller's own token when GatewayCalls named it (the one passed here is then its linked deadline token, cancelled by the app's timeout too).
+        var callerToken = CloudAuditContext.CurrentCaller ?? cancellationToken;
         using var scope = CloudAuditContext.Begin();
         if (mintRequestId)
         {
@@ -69,7 +72,7 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
             var (outcome, code) = ex switch
             {
                 CloudOperationException cloud => (Name(cloud.Kind), cloud.Error.Code),
-                OperationCanceledException => (cancellationToken.IsCancellationRequested ? "cancelled" : "timeout", null),
+                OperationCanceledException => (callerToken.IsCancellationRequested ? "cancelled" : "timeout", null),
                 _ => ("other", null),
             };
             Record(operation, resource, jobId, scope.Holder, outcome, code, start, "finished", correlation);

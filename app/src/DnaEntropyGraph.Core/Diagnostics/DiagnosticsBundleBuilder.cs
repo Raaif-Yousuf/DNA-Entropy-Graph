@@ -269,7 +269,9 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
-        var text = file.Truncated ? file.Text[(file.Text.IndexOf('\n', StringComparison.Ordinal) + 1)..] : file.Text;
+        // A tail with no newline at all is one partial line: dropped whole (IndexOf -1 would keep it from its start).
+        var cut = file.Truncated ? file.Text.IndexOf('\n', StringComparison.Ordinal) : -1;
+        var text = file.Truncated ? (cut < 0 ? string.Empty : file.Text[(cut + 1)..]) : file.Text;
         var body = file.Kind == FileKind.Progress ? redactor.RedactJsonLines(text, spec!, ids.Rewrite, ids.ExactPlaceholder) : redactor.RedactText(ids.Rewrite(text));
         // A .jsonl file stays one JSON value per line: the partial first line is already dropped above, and no note line is added (issue #245 review L5).
         return file.Truncated && file.Kind != FileKind.CloudAudit ? $"[truncated: only the last {MaxFileBytes} bytes were read]\n{body}" : body;

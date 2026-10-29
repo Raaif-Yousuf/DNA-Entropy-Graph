@@ -145,6 +145,59 @@ public class CloudAuditTests
         log.Entries.Select(e => e.Outcome).ShouldBe(["timeout", "cancelled"]);
     }
 
+    private static async Task<CloudAuditEntry> SingleEntryAsync(MemoryLog log)
+    {
+        // The decorator records when the abandoned inner call finally ends, which can be after the caller already saw the failure.
+        for (var i = 0; i < 500 && log.Entries.Count == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return log.Entries.Single();
+    }
+
+    [Fact]
+    public async Task The_apps_own_call_deadline_through_GatewayCalls_is_recorded_as_timeout_not_cancelled()
+    {
+        // Issue #245 review round 2 (M): GatewayCalls hands the gateway a LINKED deadline token, so the deadline firing made the auditor's token cancelled.
+        var log = new MemoryLog();
+        var inner = Substitute.For<IComputeGateway>();
+        inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(ci => Task.Delay(Timeout.Infinite, ci.Arg<CancellationToken>()));
+        var gateway = new AuditedComputeGateway(inner, new CloudAuditor(log, () => null, TimeProvider.System));
+        var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromMilliseconds(50) }, new FakeGcp());
+
+        var failure = await Should.ThrowAsync<CloudOperationException>(() => calls.CallAsync(async token =>
+            {
+                await gateway.StopVmAsync("deg-j", "z", token);
+                return 0;
+            }, CancellationToken.None));
+
+        failure.Error.Code.ShouldBe("TIMEOUT");
+        (await SingleEntryAsync(log)).Outcome.ShouldBe("timeout");
+    }
+
+    [Fact]
+    public async Task A_user_cancel_through_GatewayCalls_is_still_recorded_as_cancelled()
+    {
+        var log = new MemoryLog();
+        using var cts = new CancellationTokenSource();
+        var inner = Substitute.For<IComputeGateway>();
+
+        // Ends on the USER's token: whether GatewayCalls also cancels its linked deadline before the caller's wait unwinds is a race this test does not depend on.
+        inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(_ => Task.Delay(Timeout.Infinite, cts.Token));
+        var gateway = new AuditedComputeGateway(inner, new CloudAuditor(log, () => null, TimeProvider.System));
+        var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromSeconds(30) }, new FakeGcp());
+
+        var pending = calls.CallAsync(async token =>
+            {
+                await gateway.StopVmAsync("deg-j", "z", token);
+                return 0;
+            }, cts.Token);
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => pending);
+        (await SingleEntryAsync(log)).Outcome.ShouldBe("cancelled");
+    }
     [Fact]
     public async Task The_installation_id_is_read_once_and_a_null_is_retried_not_cached()
     {

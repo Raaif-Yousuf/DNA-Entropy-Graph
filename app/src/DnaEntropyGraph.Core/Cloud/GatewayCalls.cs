@@ -24,7 +24,11 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
         Task<T>? task = null;
         try
         {
-            task = call(deadline.Token);
+            // Issue #245: the audit decorator sees the linked deadline token; this tells it which token is the caller's own.
+            using (Audit.CloudAuditContext.CallerScope(cancellationToken))
+            {
+                task = call(deadline.Token);
+            }
 
             // WaitAsync, not just a token the callee may ignore: a call that never looks at its token (a stuck
             // socket under a library that does not check) must still be cut at the deadline.
