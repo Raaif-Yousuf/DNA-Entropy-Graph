@@ -169,7 +169,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                             // token (the same instant, so the poller's would win and hide the abandoned create).
                             progress.VmStartMark = settings.StartClock();
                             createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
-                            _ownedCreates[createTask] =request.JobId;
+                            _ownedCreates[createTask] = request.JobId;
                             state.Create = createTask;
                             var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
                             return new OperationPoll<VmDescriptor>(true, vm, null);
