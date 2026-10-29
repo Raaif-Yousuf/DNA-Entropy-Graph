@@ -12,7 +12,8 @@ public interface IDiagnosticsExporter
     /// left exactly as it was.
     /// </summary>
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction.</exception>
-    Task ExportAsync(string destinationPath, CancellationToken cancellationToken);
+    /// <param name="includeNotesAndTags">Issue #141: put the user's own notes and tags in the run history of the bundle. Off unless the user ticked the box.</param>
+    Task ExportAsync(string destinationPath, CancellationToken cancellationToken, bool includeNotesAndTags = false);
 }
 
 /// <summary>
@@ -21,7 +22,7 @@ public interface IDiagnosticsExporter
 /// </summary>
 public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepository runs, Func<DiagnosticsInfo> infoFactory) : IDiagnosticsExporter
 {
-    public async Task ExportAsync(string destinationPath, CancellationToken cancellationToken)
+    public async Task ExportAsync(string destinationPath, CancellationToken cancellationToken, bool includeNotesAndTags = false)
     {
         var temp = destinationPath + ".tmp-" + Guid.NewGuid().ToString("n");
         try
@@ -29,7 +30,7 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
             // Inside the try, so a token cancelled before the first await still reaches the cleanup below.
             cancellationToken.ThrowIfCancellationRequested();
             var history = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
-            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory());
+            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), includeNotesAndTags);
             await File.WriteAllBytesAsync(temp, zip, cancellationToken).ConfigureAwait(false);
             File.Move(temp, destinationPath, overwrite: true);
         }

@@ -10,19 +10,51 @@ public sealed class OverviewPngExporter : IOverviewImageExporter
     private const int Width = 1600;
     private const int Height = 480;
 
-    public bool Export(EntropyContig contig, string path)
+    private readonly Action<ScottPlot.Plot, string, int, int> _save;
+
+    public OverviewPngExporter()
+        : this((plot, path, width, height) => plot.SavePng(path, width, height))
     {
+    }
+
+    /// <summary>Takes the save step as a seam so a test can make it fail half way.</summary>
+    public OverviewPngExporter(Action<ScottPlot.Plot, string, int, int> save) => _save = save;
+
+    public bool Export(EntropyContig contig, OverviewImageLabels labels, string path)
+    {
+        // Only a file this call is about to create may be taken away again if the save fails half way; one already there is the user's.
+        var existed = Path.Exists(path);
         try
         {
             var plot = EntropyPlotBuilder.Build(contig, dark: false);
             plot.FigureBackground.Color = ScottPlot.Colors.White;
             plot.DataBackground.Color = ScottPlot.Colors.White;
-            plot.SavePng(path, Width, Height);
+            plot.Title(labels.Title);
+            plot.XLabel(labels.XAxis);
+            plot.YLabel(labels.YAxis);
+            _save(plot, path, Width, Height);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            return false;
+            if (!existed)
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+                {
+                    // Nothing more can be done about it; the caller still gets the failure.
+                }
+            }
+
+            if (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+
+            throw;
         }
     }
 }

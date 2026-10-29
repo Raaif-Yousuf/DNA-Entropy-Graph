@@ -173,6 +173,8 @@
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock x:Uid="SettingsDiagnosticsExplainer" TextWrapping="Wrap" />
+                        <!-- Issue #141: off unless ticked; it unticks itself after each saved file. -->
+                        <CheckBox x:Uid="DiagnosticsIncludeNotesBox" IsChecked="{x:Bind ViewModel.IncludeNotesAndTags, Mode=TwoWay}" />
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <Button x:Uid="SaveDiagnosticsButton" Command="{x:Bind ViewModel.SaveDiagnosticsCommand}" />
                             <Button x:Uid="DiagnosticsOpenFolderButton" Command="{x:Bind ViewModel.OpenDiagnosticsFolderCommand}" />

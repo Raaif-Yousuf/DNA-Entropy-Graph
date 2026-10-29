@@ -54,6 +54,7 @@ public partial class GatewayDeadlineGuardTests
     {
         ["src/DnaEntropyGraph.Core/Cloud/JobReconciler.cs"] = (3, "links two CALLER tokens (the row's cancel and the pass's); no timer; the per-call deadline inside it is a DeadlineSource"),
         ["src/DnaEntropyGraph.Core/Cloud/VmProvisioner.cs"] = (1, "pre-existing caller link (batchCts) whose token reaches compute.CreateVmAsync raw, so a throwing callee callback can still surface out of the user's Cancel() through it; tracked in #961, not fixed here"),
+        ["src/DnaEntropyGraph.Presentation/ViewModels/CloudResourcesViewModel.cs"] = (1, "links the caller's token so a project switch can cancel the in-flight listing (issue #828); no timer; reached from main, reviewed at the 245 re-merge"),
         ["src/DnaEntropyGraph.Core/Cloud/ResultWaiter.cs"] = (1, "links the run's token for the waiter's own stop; no timer; each read goes through GatewayCalls"),
     };
 
