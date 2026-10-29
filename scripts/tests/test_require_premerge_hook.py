@@ -256,7 +256,7 @@ def test_record_landed_prunes_expired_merges_and_leaves_no_temp_or_lock(repo):
     stamp.record_landed(repo, "3", SHA)
     data = json.loads(stamp.landed_path(repo).read_text(encoding="utf-8"))
     assert sorted(data) == ["2", "3"]
-    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*")) == ["landed-prs.json"]
+    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".lock") == ["landed-prs.json"]
 
 
 def test_concurrent_record_landed_loses_nothing(repo):
@@ -370,7 +370,7 @@ def test_os_replace_that_never_succeeds_raises_and_leaves_no_temp(repo, monkeypa
     monkeypatch.setattr(stamp.time, "sleep", lambda _s: None)
     with pytest.raises(PermissionError):
         stamp.record_landed(repo, "4", SHA)
-    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*")) == []
+    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".lock") == []
 
 
 def test_unreadable_landed_file_is_no_record_not_a_crash(repo, monkeypatch):
@@ -382,37 +382,120 @@ def test_unreadable_landed_file_is_no_record_not_a_crash(repo, monkeypatch):
     assert hook.verdict(f"gh pr merge 77 --match-head-commit {SHA}", repo) is not None
 
 
-def test_lock_waiter_outlasts_the_stale_age():
-    assert stamp._LOCK_WAIT_SECONDS > stamp._LOCK_STALE_SECONDS
+# --- landed-prs record race (MEASURED 2026-10-29: concurrent test failed once under load) -------------
 
 
-def test_stale_lock_takeover_renames_it_away_first(repo, monkeypatch):
-    lock = stamp.landed_path(repo).with_name("landed-prs.lock")
-    lock.write_text("x", encoding="utf-8")
-    old = time.time() - 300
-    os.utime(lock, (old, old))
-    renames = []
-    real = os.rename
-    monkeypatch.setattr(stamp.os, "rename", lambda a, b: (renames.append((Path(a).name, Path(b).name)), real(a, b))[1])
-    stamp.record_landed(repo, "9", SHA)
-    assert len(renames) == 1 and renames[0][0] == "landed-prs.lock" and renames[0][1] != "landed-prs.lock"
-    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*")) == ["landed-prs.json"]
+def _landed(repo) -> Path:
+    path = stamp.landed_path(repo)
+    assert path is not None
+    return path
 
 
-def test_a_fresh_lock_is_never_taken_over(repo, monkeypatch):
-    lock = stamp.landed_path(repo).with_name("landed-prs.lock")
-    lock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(stamp, "_LOCK_WAIT_SECONDS", 0.2)
-    with pytest.raises(TimeoutError):
-        stamp.record_landed(repo, "9", SHA)
-    assert lock.exists()
+def _records_after_threads(repo, count):
+    import threading
+
+    errors: list[BaseException] = []
+
+    def run(n):
+        try:
+            stamp.record_landed(repo, str(n), SHA)
+        except BaseException as exc:  # noqa: BLE001 - collected, asserted by the caller
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in range(1, count + 1)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    return errors, json.loads(_landed(repo).read_text(encoding="utf-8"))
+
+
+def test_a_holder_slower_than_the_old_stale_age_still_loses_nothing(repo, monkeypatch):
+    """A writer stalled inside the critical section (a loaded machine) must not have its lock broken."""
+    monkeypatch.setattr(stamp, "_LOCK_STALE_SECONDS", 0.15, raising=False)
+    monkeypatch.setattr(stamp, "_LOCK_WAIT_SECONDS", 30.0)
+    real = stamp._read_landed
+
+    def slow(path):
+        records = real(path)
+        time.sleep(0.4)  # stalled between the read and the write
+        return records
+
+    monkeypatch.setattr(stamp, "_read_landed", slow)
+    errors, data = _records_after_threads(repo, 4)
+    assert errors == []
+    assert sorted(data, key=int) == ["1", "2", "3", "4"]
+
+
+def test_a_transient_read_error_never_wipes_the_other_records(repo, monkeypatch):
+    """_read_landed turned ANY OSError into {} and the writer then published only its own record."""
+    for n in ("1", "2", "3"):
+        stamp.record_landed(repo, n, SHA)
+    real = Path.read_text
+    seen = {"n": 0}
+
+    def flaky(self, *a, **k):
+        if self.name == "landed-prs.json" and seen["n"] < 1:
+            seen["n"] += 1
+            raise PermissionError("sharing violation")
+        return real(self, *a, **k)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "read_text", flaky)
+        m.setattr(stamp.time, "sleep", lambda _s: None)
+        stamp.record_landed(repo, "4", SHA)
+    data = json.loads(_landed(repo).read_text(encoding="utf-8"))
+    assert sorted(data, key=int) == ["1", "2", "3", "4"]
+
+
+def test_a_persistent_read_error_fails_loudly_and_changes_nothing(repo, monkeypatch):
+    stamp.record_landed(repo, "1", SHA)
+    before = _landed(repo).read_text(encoding="utf-8")
+    real = Path.read_text
+
+    def broken(self, *a, **k):
+        if self.name == "landed-prs.json":
+            raise PermissionError("held")
+        return real(self, *a, **k)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "read_text", broken)
+        m.setattr(stamp.time, "sleep", lambda _s: None)
+        with pytest.raises(OSError):
+            stamp.record_landed(repo, "2", SHA)
+    assert _landed(repo).read_text(encoding="utf-8") == before
+
+
+def test_separate_processes_lose_nothing(repo):
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; import premerge_stamp as s; "
+        "s.record_landed(Path(sys.argv[2]), sys.argv[3], sys.argv[4])"
+    )
+    procs = [
+        subprocess.Popen([sys.executable, "-c", code, str(SCRIPTS_DIR), str(repo), str(n), SHA], stderr=subprocess.PIPE) for n in range(1, 9)
+    ]
+    for p in procs:
+        assert p.wait(timeout=120) == 0, (p.stderr.read() if p.stderr else b"").decode()
+    data = json.loads(_landed(repo).read_text(encoding="utf-8"))
+    assert sorted(data, key=int) == [str(n) for n in range(1, 9)]
+
+
+def test_an_unlocked_leftover_lock_file_wedges_nothing_but_a_held_lock_blocks(repo, monkeypatch):
+    lock = _landed(repo).with_name("landed-prs.lock")
+    lock.write_text("dead-owner", encoding="utf-8")
+    stamp.record_landed(repo, "9", SHA)  # an unlocked leftover file is not a held lock
+    assert stamp.landed_head(repo, "9") == SHA
+    monkeypatch.setattr(stamp, "_LOCK_WAIT_SECONDS", 0.3)
+    with stamp._landed_lock(_landed(repo)), pytest.raises(TimeoutError):
+        stamp.record_landed(repo, "10", SHA)
+    assert stamp.landed_head(repo, "10") is None
 
 
 @pytest.mark.parametrize("sha", ["abc", "a1b2c3d4e5f6", "z" * 40, SHA + "0", ""])
 def test_record_landed_refuses_anything_but_a_full_hex_sha(repo, sha):
     with pytest.raises(ValueError):
         stamp.record_landed(repo, "77", sha)
-    assert not stamp.landed_path(repo).exists()
+    assert not _landed(repo).exists()
 
 
 @pytest.mark.parametrize(
