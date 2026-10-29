@@ -321,6 +321,22 @@ public sealed class BudgetSettingsTests
     }
 
     [Fact]
+    public async Task Losing_the_known_state_tells_Save_and_Remove_to_look_again_before_anything_else_changes()
+    {
+        var vm = await OpenKnownAsync();
+        _account.SelectedProjectId.Returns((string?)null);
+        var save = 0;
+        var remove = 0;
+        vm.SaveCommand.CanExecuteChanged += (_, _) => save++;
+        vm.RemoveCommand.CanExecuteChanged += (_, _) => remove++;
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        // HasProject (true to false) raises one each; the lost known state is a second, separate raise on both.
+        save.ShouldBe(2);
+        remove.ShouldBe(2);
+    }
+    [Fact]
     public async Task With_no_project_chosen_nothing_can_be_saved_and_the_page_says_to_set_one_up()
     {
         _account.SelectedProjectId.Returns((string?)null);

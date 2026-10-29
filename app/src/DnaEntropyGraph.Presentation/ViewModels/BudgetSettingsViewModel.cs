@@ -49,10 +49,24 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     private bool _hasProject;
 
     // True only while the LAST read of the budget state succeeded. Save and Remove need it: blind, they could overwrite or delete a budget the page never showed.
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
-    [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
     private bool _stateKnown;
+
+    // Plain state, not an observable property: no view binds it, only Save and Remove gate on it, so a change raises their CanExecuteChanged directly.
+    private bool StateKnown
+    {
+        get => _stateKnown;
+        set
+        {
+            if (_stateKnown == value)
+            {
+                return;
+            }
+
+            _stateKnown = value;
+            SaveCommand.NotifyCanExecuteChanged();
+            RemoveCommand.NotifyCanExecuteChanged();
+        }
+    }
 
     // The project that successful read was FOR. The selection can change without a Refresh, and Save and Remove re-read the live selection, so they also need it to equal the known project.
     private string? _knownProject;
