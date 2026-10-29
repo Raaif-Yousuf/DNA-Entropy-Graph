@@ -54,9 +54,18 @@ public sealed class DataPathMapperTests
     [InlineData(@"portable:C:\Windows\x")]
     [InlineData(@"portable:\\server\share\x")]
     [InlineData(@"portable:\x")]
-    public void A_stored_path_that_would_expand_outside_the_portable_folder_is_left_unexpanded(string stored)
+    public void A_stored_path_that_would_expand_outside_the_portable_folder_has_no_path_at_all(string stored)
     {
-        // A corrupt or hand-edited history row must not make the app read or write outside the stick (Hard Rule 14).
-        new DataPathMapper(@"D:\stick").FromStored(stored).ShouldBe(stored);
+        // A corrupt or hand-edited history row must not make the app read or write outside the stick (Hard Rule 14); null means "no output folder", which every consumer already handles.
+        new DataPathMapper(@"D:\stick").FromStored(stored).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_drive_root_portable_folder_still_maps_both_ways()
+    {
+        var mapper = new DataPathMapper(@"D:\");
+
+        mapper.ToStored(@"D:\outputs\run").ShouldBe(@"portable:outputs\run");
+        mapper.FromStored(@"portable:outputs\run").ShouldBe(@"D:\outputs\run");
     }
 }

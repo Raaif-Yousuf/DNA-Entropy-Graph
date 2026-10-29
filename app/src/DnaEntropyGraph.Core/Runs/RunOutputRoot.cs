@@ -14,12 +14,22 @@ public static class RunOutputRoot
         return string.IsNullOrWhiteSpace(chosen) ? defaultParent() : chosen;
     }
 
-    /// <summary>True when <paramref name="path"/> is strictly below <paramref name="root"/> once both are fully resolved (so <c>..</c> cannot climb out and a lookalike sibling name does not match).</summary>
+    /// <summary>The fully resolved path with exactly one trailing separator, whether or not it was a drive root (<c>D:\</c> already ends with one).</summary>
+    public static string WithTrailingSeparator(string path)
+    {
+        var trimmed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        return trimmed.EndsWith(Path.DirectorySeparatorChar) ? trimmed : trimmed + Path.DirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> is strictly below <paramref name="root"/> once both are fully resolved (so <c>..</c> cannot climb out and a lookalike sibling name does not match).
+    /// The test is lexical: a junction or symlink inside the root is not followed (see <c>LocalRunFiles</c> for the reparse-point check).
+    /// </summary>
     public static bool IsStrictlyInside(string path, string root)
     {
         var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        return fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        var prefix = WithTrailingSeparator(root);
+        return fullPath.Length > prefix.Length && fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>True when the two resolved paths are the same or either contains the other.</summary>

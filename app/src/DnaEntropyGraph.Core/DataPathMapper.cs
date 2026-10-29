@@ -26,14 +26,14 @@ public sealed class DataPathMapper(string? portableBase)
             return path;
         }
 
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(portableBase));
-        if (string.Equals(Path.TrimEndingDirectorySeparator(full), root, StringComparison.OrdinalIgnoreCase))
+        var root = Runs.RunOutputRoot.WithTrailingSeparator(portableBase);
+        if (string.Equals(Runs.RunOutputRoot.WithTrailingSeparator(full), root, StringComparison.OrdinalIgnoreCase))
         {
             return Prefix;
         }
 
-        return full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            ? Prefix + full[(root.Length + 1)..]
+        return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            ? Prefix + full[root.Length..]
             : path;
     }
 
@@ -52,8 +52,17 @@ public sealed class DataPathMapper(string? portableBase)
         }
 
         // The stored text comes from the history database. A rooted or climbing remainder ("portable:..\..\x", "portable:C:\x")
-        // must not expand to a place outside the portable folder (Hard Rule 14), so it is left as stored: not a path that exists.
-        var expanded = Path.Combine(root, relative);
-        return Runs.RunOutputRoot.IsStrictlyInside(expanded, root) ? expanded : stored;
+        // must not expand to a place outside the portable folder (Hard Rule 14). It reads back as null, "no output folder". MEASURED 2026-10-29 by grep: the consumers of RunRecord.OutputDir
+        // (RunCloudResults, LocalRunFiles, JobReconciler, RunCompletionActions, LocalJobRunner) test for null or empty, whereas
+        // the raw text would be a cwd-relative path with a colon in it.
+        try
+        {
+            var expanded = Path.Combine(root, relative);
+            return Runs.RunOutputRoot.IsStrictlyInside(expanded, root) ? expanded : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

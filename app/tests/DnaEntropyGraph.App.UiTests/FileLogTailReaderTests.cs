@@ -46,7 +46,6 @@ public class FileLogTailReaderTests
     [InlineData(@"..\outside")]
     [InlineData(@"C:\outside")]
     [InlineData(@"\\server\share")]
-    [InlineData("a:stream")]
     public void A_job_id_that_leaves_the_runs_folder_reads_nothing(string jobId)
     {
         var parent = Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}");
@@ -67,4 +66,15 @@ public class FileLogTailReaderTests
         {
             Directory.Delete(parent, recursive: true);
         }
-    }}
+    }
+
+    [Theory]
+    [InlineData("a\0b")]
+    [InlineData("a:stream")]
+    public void A_job_id_with_a_nul_or_a_colon_that_names_no_log_returns_empty_and_does_not_throw(string jobId)
+    {
+        var reader = new FileLogTailReader(Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}"));
+
+        Should.NotThrow(() => reader.ReadLines(jobId)).ShouldBeEmpty();
+    }
+}

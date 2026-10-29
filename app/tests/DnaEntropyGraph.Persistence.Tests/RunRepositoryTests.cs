@@ -202,6 +202,29 @@ public class RunRepositoryTests
         (await repository.GetAllAsync(CancellationToken.None)).Single().OutputDir.ShouldBe(@"D:\stick\outputs\x");
     }
 
+    [Theory]
+    [InlineData(@"portable:..\..\x")]
+    [InlineData(@"portable:C:\Windows\x")]
+    public async Task A_poisoned_portable_output_folder_reads_back_as_no_output_folder(string poisoned)
+    {
+        using var paths = new TempPaths();
+        var mapper = new DataPathMapper(@"D:\stick");
+        await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper)
+            .UpsertAsync(new RunRecord("job-x", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = @"D:\stick\outputs\ok" }, CancellationToken.None);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={paths.DatabasePath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE Runs SET OutputDir = $v;";
+            command.Parameters.AddWithValue("$v", poisoned);
+            command.ExecuteNonQuery();
+        }
+
+        var back = await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper).GetAllAsync(CancellationToken.None);
+
+        back.Single().OutputDir.ShouldBeNull();
+    }
+
     private static string RawOutputDir(string databasePath)
     {
         using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={databasePath}");
