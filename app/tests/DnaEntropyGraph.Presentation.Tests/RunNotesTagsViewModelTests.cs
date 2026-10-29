@@ -239,8 +239,12 @@ public sealed class RunNotesTagsViewModelTests
         var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
 
         vm.SaveAnnotationsCommand.CanExecute(null).ShouldBeFalse();
+        vm.NotesText = "first, then more";
         vm.SaveAnnotationsCommand.Execute(null);
         var second = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        // The refused call is not silent (cold review round 5): it says the text typed since the save began was not stored.
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesEditedDuringSave);
         gate.SetResult(true);
         await saving;
         await second;

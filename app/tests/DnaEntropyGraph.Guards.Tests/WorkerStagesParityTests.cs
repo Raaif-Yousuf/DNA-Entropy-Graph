@@ -119,35 +119,80 @@ public sealed partial class WorkerStagesParityTests
         ShellStageLiterals("# status commented\nstatus zzz-new\nstatus failed '{}'\n  status \"done\"\n").ShouldBe(["zzz-new", "failed", "done"], ignoreOrder: true);
     }
 
-    /// <summary>Lines in the C# that mean "a worker stage", where a private copy of the string can drift from <see cref="WorkerStages"/>.</summary>
-    [Theory]
-    [InlineData("DnaEntropyGraph.Core", "Cloud/HeartbeatWatch.cs")]
-    [InlineData("DnaEntropyGraph.Cloud", "FakeGcp.cs")]
-    [InlineData("DnaEntropyGraph.Cloud", "FakeGcp.Control.cs")]
-    public void The_C_sharp_stage_consumers_use_the_WorkerStages_constants_not_their_own_strings(string project, string file)
+    // A bare or escaped (inside a C# string holding JSON) double quote.
+    private const string Q = @"\\?""";
+
+    // A literal that is one of the stage names, on a line that also talks about a stage.
+    private static readonly Regex StageNameLiteral = new(Q + "(" + string.Join('|', WorkerStages.All.Select(Regex.Escape)) + ")" + Q, RegexOptions.Compiled);
+
+    // A stage being compared with or assigned ANY literal: "stage":"x" / ["stage"] = "x" (bare or escaped quotes), Stage = "x", Stage: "x", Stage is "x".
+    private static readonly Regex StageAssignedLiteral = new(
+        @"(?:" + Q + @"stage" + Q + @"\s*\]?\s*[:=]|\bStage\s*(?:[:=]|==|!=|\bis\b(?:\s+not)?))\s*" + Q + "(?-i:[a-z][a-z-]*)" + Q,
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The lines of C# source that spell a worker stage as a string instead of using <see cref="WorkerStages"/>: a stage-name literal on a line that
+    /// mentions a stage, or any literal compared with or assigned to a stage member or JSON key. Comment lines are skipped. A per-input
+    /// <c>status</c> (done/failed in result.json) is a different vocabulary and never mentions a stage, so it is not touched. NOT seen: single-quoted,
+    /// positional, or dynamically built stage strings.
+    /// </summary>
+    internal static IReadOnlyList<string> StageStringOffenders(string text)
     {
-        var path = Path.Combine(RepoPaths.AppRoot, "src", project, file.Replace('/', Path.DirectorySeparatorChar));
         var offenders = new List<string>();
-        var names = string.Join('|', WorkerStages.All.Select(Regex.Escape));
-        var literal = new Regex("\"(" + names + ")\"");
-        foreach (var (line, index) in File.ReadAllLines(path).Select((l, i) => (l, i)))
+        foreach (var line in text.Split('\n'))
         {
             var code = line.TrimStart();
-            if (code.StartsWith("//") || code.StartsWith('*') || code.StartsWith("///"))
+            if (code.StartsWith("//") || code.StartsWith('*') || code.StartsWith("/*"))
             {
                 continue;
             }
 
-            // result.json / input entries carry a per-input "status" (done/failed), which is a different vocabulary that shares two words.
-            if (code.Contains("[\"status\"]", StringComparison.Ordinal) || !literal.IsMatch(line))
+            if (StageAssignedLiteral.IsMatch(line) || (line.Contains("stage", StringComparison.OrdinalIgnoreCase) && StageNameLiteral.IsMatch(line)))
             {
-                continue;
+                offenders.Add(code);
             }
-
-            offenders.Add($"{file}:{index + 1}: {code}");
         }
 
+        return offenders;
+    }
+
+    [Fact]
+    public void No_app_source_file_spells_a_worker_stage_as_a_string()
+    {
+        var files = RepoPaths.AllCSharpFiles.Where(f => !string.Equals(Path.GetFileName(f), "WorkerStages.cs", StringComparison.Ordinal)).ToList();
+        var offenders = files.SelectMany(f => StageStringOffenders(File.ReadAllText(f)).Select(l => $"{Path.GetFileName(f)}: {l}")).ToList();
+
+        files.Count.ShouldBeGreaterThan(100, "the scan found almost no app source: it is looking in the wrong place");
+        files.Sum(f => Regex.Matches(File.ReadAllText(f), @"WorkerStages\.[A-Z]\w+").Count).ShouldBeGreaterThanOrEqualTo(8, "the constants are not used where the stage strings were");
         offenders.ShouldBeEmpty("use WorkerStages.<Name> instead of a private stage string:" + Environment.NewLine + string.Join(Environment.NewLine, offenders));
+    }
+
+    [Theory]
+    [InlineData("=> \"{\\\"seq\\\":1,\\\"stage\\\":\\\"restoring-cachx\\\",\\\"level\\\":\\\"notice\\\"}\\n\";")]
+    [InlineData("=> \"{\\\"seq\\\":1,\\\"stage\\\":\\\"restoring-cache\\\"}\";")]
+    [InlineData("private static bool IsTerminal(WorkerStatusSnapshot status) => status.Stage is \"done\" or \"failed\" or \"cancelled\";")]
+    [InlineData("if (status.Stage == \"running\") { }")]
+    [InlineData("if (status.Stage is not \"zzz-new\") { }")]
+    [InlineData("[\"stage\"] = \"failed\",")]
+    [InlineData("[\"stage\"] = \"zzz-new\",")]
+    [InlineData("new LiveWorker(id, 1, Stage: \"model-loading\");")]
+    [InlineData("var stage = isStuck ? \"model-loading\" : \"running\";")]
+    public void The_stage_string_scan_catches_a_planted_literal_in_any_of_its_forms(string line)
+    {
+        StageStringOffenders(line).Count.ShouldBe(1, line);
+    }
+
+    [Theory]
+    [InlineData("if (entry.Status is \"done\" or \"failed\") { }")]
+    [InlineData("[\"status\"] = wholeFailure ? \"failed\" : \"done\",")]
+    [InlineData("// the stage is \"done\" here")]
+    [InlineData("/// <c>\"stage\": \"done\"</c>")]
+    [InlineData("var stage = WorkerStages.Running;")]
+    [InlineData("if (status.Stage is WorkerStages.Done or WorkerStages.Failed) { }")]
+    [InlineData("var label = \"the stage name\";")]
+    public void The_stage_string_scan_leaves_other_vocabularies_and_the_constants_alone(string line)
+    {
+        StageStringOffenders(line).ShouldBeEmpty(line);
     }
 
     [Fact]

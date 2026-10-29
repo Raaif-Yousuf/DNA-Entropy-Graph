@@ -6,16 +6,34 @@ using Xunit;
 namespace DnaEntropyGraph.Guards.Tests;
 
 /// <summary>
-/// Issue #141: "the app never logs a note or a tag" is the premise of the support bundle not scrubbing a tag that is a log word. A logging
-/// call (Serilog, ILogger, Trace, Debug, Console, or any receiver's Warning/Error/Information/Debug/Verbose/Fatal/Log*/Write* method) whose
-/// statement names a note or tag identifier breaks that premise. The identifier match is case-insensitive and word-wise (notes, runTags,
-/// _tagList, TagsJson, annotation); string literal text is prose and ignored, but an interpolation hole or a Serilog placeholder name counts.
-/// The statement ends at the first semicolon outside a string, char, raw string or comment, so a semicolon inside a message does not hide a later argument.
+/// Issue #141: "the app never logs a note or a tag" is the premise of the support bundle not scrubbing a tag that is a log word. A real logging
+/// sink whose statement names a note or tag identifier breaks that premise. A sink is: Trace.Trace*/Trace.Write*, Debug.Write*/Debug.Print,
+/// Console.Write*/Console.Error.Write*, or a Warning/Error/Information/Debug/Verbose/Fatal/Log*/Write* call on a receiver that is a logger: named
+/// log/logger (any case, optional leading underscore, so Serilog's static <c>Log</c> too) or declared in the same file as IDiagnosticsLog, ILogger,
+/// CloudRetryLog or FileDiagnosticsLog. Other receivers (File.WriteAllText, a Utf8JsonWriter, Debug.Assert) are not logging. The identifier match is
+/// case-insensitive and word-wise (notes, runTags, _tagList, TagsJson, annotation); string literal text is prose and ignored, but an interpolation hole
+/// or a Serilog placeholder name counts, and a name declared inside the statement itself (a lambda's <c>var notes</c>) is not user text. The statement
+/// ends at the first semicolon outside a string, char, raw string or comment. NOT seen: a logger reached through an unnamed receiver (a property chain,
+/// a method result) or passed to a helper that logs.
 /// </summary>
 public sealed partial class NotesTagsNeverLoggedGuardTests
 {
-    [GeneratedRegex(@"(?:\b(?:Trace|Debug|Console)\s*\.\s*\w+|\.\s*(?:Warning|Error|Information|Debug|Verbose|Fatal|Log\w*|Write\w*))\s*(?:<[^>()]*>\s*)?\(")]
-    private static partial Regex LogCall();
+    // Fixed sinks that need no receiver check.
+    [GeneratedRegex(@"\b(?:Trace\s*\.\s*(?:Trace|Write)\w*|Debug\s*\.\s*(?:Write\w*|Print)|Console\s*\.\s*(?:Error\s*\.\s*)?Write\w*)\s*\(")]
+    private static partial Regex FixedSink();
+
+    // A logging-named method on some receiver; the receiver is checked afterwards.
+    [GeneratedRegex(@"(?<recv>[A-Za-z_]\w*)\s*\??\s*\.\s*(?:Warning|Error|Information|Debug|Verbose|Fatal|Log\w*|Write\w*)\s*(?:<[^>()]*>\s*)?\(")]
+    private static partial Regex LoggerMethod();
+
+    [GeneratedRegex(@"^_?(?:log|logger)$", RegexOptions.IgnoreCase)]
+    private static partial Regex LoggerName();
+
+    [GeneratedRegex(@"\b(?:IDiagnosticsLog|NullDiagnosticsLog|FileDiagnosticsLog|CloudRetryLog|ILogger(?:<[^>]*>)?)\??\s+(_?\w+)")]
+    private static partial Regex LoggerDeclaration();
+
+    [GeneratedRegex(@"\b(?:var|string|int|long|bool|double|object)\s+(\w+)\s*(?:=(?!=)|;|,|\))")]
+    private static partial Regex LocalDeclaration();
 
     [GeneratedRegex(@"[A-Za-z_][A-Za-z0-9_]*")]
     private static partial Regex Identifier();
@@ -36,8 +54,15 @@ public sealed partial class NotesTagsNeverLoggedGuardTests
     /// <summary>Whether <paramref name="code"/> (string text already blanked) names a user note/tag/annotation identifier, any case.</summary>
     internal static bool NamesUserText(string code)
     {
+        // A name the statement declares itself (a block lambda's `var notes = ...`) is a local of that lambda, not the user's text.
+        var declared = LocalDeclaration().Matches(code).Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
         foreach (Match token in Identifier().Matches(code))
         {
+            if (declared.Contains(token.Value))
+            {
+                continue;
+            }
+
             if (UserTextWholeTokens.Contains(token.Value.Trim('_')) || UserTextWords.Contains(token.Value.Trim('_')))
             {
                 return true;
@@ -233,10 +258,21 @@ public sealed partial class NotesTagsNeverLoggedGuardTests
     /// <summary>Every logging statement in <paramref name="text"/> (from the call to its closing semicolon), with whether it names a note or tag identifier.</summary>
     internal static IReadOnlyList<(string Statement, bool NamesUserText)> Scan(string text)
     {
-        var found = new List<(string, bool)>();
-        foreach (Match call in LogCall().Matches(text))
+        var loggers = LoggerDeclaration().Matches(text).Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        var starts = FixedSink().Matches(text).Select(m => m.Index).ToList();
+        foreach (Match call in LoggerMethod().Matches(text))
         {
-            var (statement, code) = ReadStatement(text, call.Index);
+            var receiver = call.Groups["recv"].Value;
+            if (LoggerName().IsMatch(receiver) || loggers.Contains(receiver))
+            {
+                starts.Add(call.Index);
+            }
+        }
+
+        var found = new List<(string, bool)>();
+        foreach (var start in starts.Distinct().Order())
+        {
+            var (statement, code) = ReadStatement(text, start);
             found.Add((statement, NamesUserText(code)));
         }
 
@@ -257,34 +293,27 @@ public sealed partial class NotesTagsNeverLoggedGuardTests
     [InlineData("_logger.LogWarning(\"tags {T}\", run.TagsJson);")]
     [InlineData("System.Diagnostics.Trace.TraceError($\"bad {NotesText}\");")]
     [InlineData("Debug.WriteLine(TagsText);")]
-    // New shapes (cold review round 4).
     [InlineData("_log.Warning(\"x\", null, notes);")]
-    [InlineData("_diag.Verbose(\"x\", tags);")]
+    [InlineData("_log?.Warning(\"x\", null, notes);")]
+    [InlineData("log.Verbose(\"x\", tags);")]
     [InlineData("logger.Error(ex, \"x {A}\", tagList);")]
-    [InlineData("sink.Write(notesText);")]
+    [InlineData("Log.Fatal(notesText);")]
     [InlineData("Console.WriteLine(annotations);")]
+    [InlineData("Console.Error.WriteLine(annotations);")]
     [InlineData("Trace.WriteLine(note);")]
     [InlineData("Debug.Print(runTags);")]
-    [InlineData("_trace.Fatal(annotation);")]
-    [InlineData("writer.LogCustom(tagsJson);")]
+    [InlineData("IDiagnosticsLog diag = null; diag.Warning(\"x\", null, tagsJson);")]
+    [InlineData("private readonly CloudRetryLog retries; void M() { retries.LogCustom(tagsJson); }")]
     [InlineData("Log.Information(\"a;b\", notes);")]
     [InlineData("Log.Information(\"a;b\", '\\'', \";\", tags);")]
     [InlineData("Log.Information(@\"a;\"\"b\", notes);")]
     [InlineData("Log.Information(\"\"\"a;b\"\"\", notes);")]
     [InlineData("Log.Information($\"saved {notes}\");")]
     [InlineData("Log.Information($\"saved {string.Join(\",\", tags)}\");")]
-    [InlineData("Log.Information(\"x\"); /* ; */")]
+    [InlineData("_log.Warning(\"x\", items.Select(i => { var other = 1; return other; }), notes);")]
     public void The_scanner_catches_a_planted_violation(string source)
     {
-        var rows = Scan("void M() { " + source + " }");
-
-        if (source == "Log.Information(\"x\"); /* ; */")
-        {
-            rows.ShouldAllBe(r => !r.NamesUserText);
-            return;
-        }
-
-        rows.ShouldContain(r => r.NamesUserText, $"not caught: {source}");
+        Scan("void M() { " + source + " }").ShouldContain(r => r.NamesUserText, $"not caught: {source}");
     }
 
     [Theory]
@@ -294,7 +323,17 @@ public sealed partial class NotesTagsNeverLoggedGuardTests
     [InlineData("Console.WriteLine(footnote);")]
     [InlineData("Log.Debug(\"x\", stage); var notes = 1;")]
     [InlineData("Log.Information(\"a;b\", id); var tags = 2;")]
-    public void The_scanner_ignores_a_log_call_that_names_neither(string source)
+    [InlineData("Log.Information(\"x\"); /* ; */")]
+    // Not logging sinks: narrow by design, so ordinary code never trips the guard.
+    [InlineData("Debug.Assert(notes != null);")]
+    [InlineData("File.WriteAllText(path, tagsJson);")]
+    [InlineData("utf8Writer.WriteString(\"tags\", tags);")]
+    [InlineData("sink.Write(notesText);")]
+    [InlineData("results.Error(annotations);")]
+    [InlineData("Volatile.Write(ref _annotationFlag, 0);")]
+    // A block-bodied lambda argument that declares its own `notes` is not the user's text.
+    [InlineData("_log.Warning(\"x\", items.Select(i => { var notes = i.ToString(); return notes.Length; }), id);")]
+    public void The_scanner_ignores_a_log_call_that_names_neither_and_calls_that_are_not_logging(string source)
     {
         Scan("void M() { " + source + " }").ShouldAllBe(r => !r.NamesUserText);
     }

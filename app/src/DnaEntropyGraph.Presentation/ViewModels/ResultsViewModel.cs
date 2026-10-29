@@ -413,8 +413,10 @@ public sealed partial class ResultsViewModel : ObservableObject
 
         // Not re-entrant (cold review round 4): two writes in flight could finish out of order and leave the older text stored. The command's
         // own concurrency option is not relied on alone; this flag also refuses a call that arrives through Execute or ExecuteAsync directly.
+        // The button cannot reach this (CanExecute is false while saving); a direct call is told, not ignored: its text is not stored by the save in flight.
         if (Interlocked.Exchange(ref _saveInFlight, 1) == 1)
         {
+            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesEditedDuringSave);
             return;
         }
 

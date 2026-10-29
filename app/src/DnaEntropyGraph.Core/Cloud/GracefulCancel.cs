@@ -118,7 +118,7 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
         return look < window ? look : window;
     }
 
-    private static bool IsTerminal(WorkerStatusSnapshot status) => status.Stage is "done" or "failed" or "cancelled";
+    private static bool IsTerminal(WorkerStatusSnapshot status) => status.Stage is WorkerStages.Done or WorkerStages.Failed or WorkerStages.Cancelled;
 
     private async Task<WorkerStatusSnapshot?> ReadStatusAsync(string bucket, string prefix, CancellationToken cancellationToken)
     {

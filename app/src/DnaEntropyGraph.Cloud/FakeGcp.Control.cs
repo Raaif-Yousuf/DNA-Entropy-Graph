@@ -45,7 +45,7 @@ public sealed partial class FakeGcp
     }
 
     private static string WorkerWarmupProgressLine()
-        => "{\"seq\":1,\"stage\":\"restoring-cache\",\"level\":\"notice\",\"message\":\"restoring the model cache\"}\n";
+        => "{\"seq\":1,\"stage\":\"" + WorkerStages.RestoringCache + "\",\"level\":\"notice\",\"message\":\"restoring the model cache\"}\n";
 
     private void ThrowIfUploadScripted(string objectKey)
     {
