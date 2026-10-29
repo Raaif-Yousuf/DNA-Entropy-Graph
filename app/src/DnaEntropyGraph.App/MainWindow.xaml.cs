@@ -65,6 +65,7 @@ public sealed partial class MainWindow : Window
         // Issue #143: the first-launch tour opens once layout has run, so the nav items it points at have a size; the pane layout is told first.
         ViewModel.OnNavigationDisplayModeChanged((int)RootNavigationView.DisplayMode);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => _ = ViewModel.OnWindowLoadedAsync());
+        await ViewModel.RunStartupOffersAsync(CancellationToken.None);
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

@@ -34,6 +34,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly SimulatedCloudMode? _simulatedCloud;
     private readonly BuildIdentity? _build;
     private readonly SessionRestorer? _session;
+    private readonly PrototypeImportViewModel? _prototypeImport;
     private SessionTarget? _pendingRestore;
     private bool _userNavigated;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
@@ -61,7 +62,28 @@ public sealed partial class ShellViewModel : ObservableObject
     public TourViewModel? Tour { get; }
 
     /// <summary>Called once the window and its first page are up: shows the first-launch tour on a profile that has not seen it (issue #143).</summary>
-    public Task OnWindowLoadedAsync() => Tour?.StartIfFirstLaunchAsync() ?? Task.CompletedTask;
+    /// <remarks>Issue #243 follow-up: the tour waits for the startup offers (a modal dialog) to finish, so the two never stack.</remarks>
+    public async Task OnWindowLoadedAsync()
+    {
+        try
+        {
+            // Starts the offers if the window has not yet (order-independent), else joins the same task: the tour never opens over a dialog.
+            await RunStartupOffersAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // However the offers ended (cancelled, faulted), the tour still starts, and nothing escapes a fire-and-forget call.
+            System.Diagnostics.Trace.TraceWarning($"startup offers ended early: {ex.GetType().Name}");
+        }
+
+        if (Tour is not null)
+        {
+            await Tour.StartIfFirstLaunchAsync();
+        }
+    }
+
+    // The one offers task, started by whichever of RunStartupOffersAsync and OnWindowLoadedAsync is called first.
+    private Task? _startupOffers;
 
     /// <summary>NavigationViewDisplayMode.Minimal: the pane is hidden behind a button, so the tour's tips have nothing to point at.</summary>
     public const int MinimalNavigationDisplayMode = 0;
@@ -75,8 +97,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
     public Uri HelpUri => UserGuideLinks.UriFor(_helpPageKey, _build);
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, TourViewModel? tour = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, PrototypeImportViewModel? prototypeImport = null, TourViewModel? tour = null)
     {
+        _prototypeImport = prototypeImport;
         _session = session;
         Updates = updates;
         Tour = tour;
@@ -172,6 +195,28 @@ public sealed partial class ShellViewModel : ObservableObject
         if (pending is { SubPage: not null } && pending.NavKey == pageKey)
         {
             _navigator.NavigateTo(pending.SubPage, pending.Parameter);
+        }
+    }
+
+    /// <summary>First-launch offers, run once the window is showing (issue #243: bring in the earlier version's runs). Never throws.</summary>
+    public Task RunStartupOffersAsync(CancellationToken cancellationToken)
+        => (_startupOffers ??= RunOffersOnceAsync()).WaitAsync(cancellationToken);
+
+    // The offers run on the shell's own lifetime, not the first caller's token: that token only ends that caller's wait (WaitAsync above).
+    // Never throws: MainWindow awaits this in an async void handler, where an escaped exception would end the app.
+    private async Task RunOffersOnceAsync()
+    {
+        try
+        {
+            if (_prototypeImport is not null)
+            {
+                await _prototypeImport.OfferOnFirstLaunchAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Only the class is traced (a message can carry a path).
+            System.Diagnostics.Trace.TraceWarning($"startup offers failed: {ex.GetType().Name}");
         }
     }
 
