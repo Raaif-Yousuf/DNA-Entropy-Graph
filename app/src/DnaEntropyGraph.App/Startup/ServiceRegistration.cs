@@ -432,6 +432,9 @@ public static class ServiceRegistration
         // Issues #148 and #222: the Settings "Budget alert" group. The service is the policy (account, API, installation id); the gateway is Google or the fake.
         services.AddSingleton<IBudgetService, BudgetService>();
         services.AddTransient<BudgetSettingsViewModel>();
+        // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
+        services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
+        services.AddTransient<SettingsTransferViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {

@@ -145,6 +145,7 @@ public sealed class RunStallCoordinator
         {
             RunNoticeKind.SlowStage => string.Format(CultureInfo.CurrentCulture, _strings.GetString("RunNotice_Slow"), stage, Math.Max(1, (int)Math.Round(notice.InStage.TotalMinutes))),
             RunNoticeKind.StallDetected => string.Format(CultureInfo.CurrentCulture, _strings.GetString("RunNotice_Stalled"), stage, 0),
+            RunNoticeKind.WaitingForGpu => _strings.GetString("RunNotice_WaitingForGpu"),
             _ => string.Empty,
         };
         _messenger.Send(new RunNoticeMessage(notice.JobId, text));

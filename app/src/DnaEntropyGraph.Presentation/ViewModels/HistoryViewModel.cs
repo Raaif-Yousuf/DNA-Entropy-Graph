@@ -304,7 +304,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)),
-            OwnerRequestFor(run))
+            OwnerRequestFor(run),
+            WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
             IsImported = run.Imported,
@@ -334,6 +335,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
 
         var hasCode = !string.IsNullOrWhiteSpace(run.ErrorCode);
+        // Issue #92: a stockout after the run already waited cannot say "press Wait"; it says the wait ran out.
+        if (run.Phase == JobPhase.Failed && IsStockout(run) && RunOptionsJson.TryDeserialize(run.OptionsJson)?.WaitForGpu == true)
+        {
+            return _strings.GetString("RunError_stockout_waited");
+        }
+
         return run.Phase == JobPhase.Failed || hasCode ? _strings.GetString(RunErrorCodes.ResourceKey(run.ErrorCode)) : null;
     }
 
@@ -405,7 +412,18 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
     }
 
-    private Task RerunAsync(RunRecord run) => ActAsync(
+    private static bool IsStockout(RunRecord run) => run.ErrorCode == RunErrorCodes.For(CloudErrorKind.Stockout);
+
+    /// <summary>
+    /// Issue #92: the "Wait for a graphics card" action of a run that failed with a stockout and did not already wait. Null for every other run, and for one whose
+    /// options cannot be read (the ordinary Run again reports that).
+    /// </summary>
+    private AsyncRelayCommand? WaitForGpuFor(RunRecord run)
+        => run.Phase == JobPhase.Failed && IsStockout(run) && RunOptionsJson.TryDeserialize(run.OptionsJson) is { WaitForGpu: false }
+            ? new AsyncRelayCommand(() => RerunAsync(run, waitForGpu: true))
+            : null;
+
+    private Task RerunAsync(RunRecord run, bool waitForGpu = false) => ActAsync(
         async () =>
         {
             // A run still going owns its VM; starting another from its row would rent a second one.
@@ -438,7 +456,7 @@ public sealed partial class HistoryViewModel : ObservableObject
                 }
             }
 
-            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation }, CancellationToken.None);
+            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation, WaitForGpu = waitForGpu || options.WaitForGpu }, CancellationToken.None);
             _navigator.NavigateTo("RunProgress", jobId);
             return null;
         },
