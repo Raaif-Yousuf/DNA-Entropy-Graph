@@ -67,11 +67,13 @@ public sealed partial class ShellViewModel : ObservableObject
     {
         try
         {
-            await (_startupOffers ?? Task.CompletedTask);
+            // Starts the offers if the window has not yet (order-independent), else joins the same task: the tour never opens over a dialog.
+            await RunStartupOffersAsync(CancellationToken.None);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
-            System.Diagnostics.Trace.TraceWarning($"startup offers failed: {ex.GetType().Name}");
+            // However the offers ended (cancelled, faulted), the tour still starts, and nothing escapes a fire-and-forget call.
+            System.Diagnostics.Trace.TraceWarning($"startup offers ended early: {ex.GetType().Name}");
         }
 
         if (Tour is not null)
@@ -80,7 +82,7 @@ public sealed partial class ShellViewModel : ObservableObject
         }
     }
 
-    // Set synchronously by RunStartupOffersAsync, before its first await, so a Low-priority OnWindowLoadedAsync always sees it.
+    // The one offers task, started by whichever of RunStartupOffersAsync and OnWindowLoadedAsync is called first.
     private Task? _startupOffers;
 
     /// <summary>NavigationViewDisplayMode.Minimal: the pane is hidden behind a button, so the tour's tips have nothing to point at.</summary>
@@ -198,7 +200,7 @@ public sealed partial class ShellViewModel : ObservableObject
 
     /// <summary>First-launch offers, run once the window is showing (issue #243: bring in the earlier version's runs). Never throws.</summary>
     public Task RunStartupOffersAsync(CancellationToken cancellationToken)
-        => _startupOffers = _prototypeImport is null ? Task.CompletedTask : _prototypeImport.OfferOnFirstLaunchAsync(cancellationToken);
+        => _startupOffers ??= _prototypeImport is null ? Task.CompletedTask : _prototypeImport.OfferOnFirstLaunchAsync(cancellationToken);
 
     /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run; null when the user already chose a page. Valid after <see cref="PrepareSessionAsync"/>.</summary>
     public string? StartupNavKey { get; private set; } = InitialPageKeyValue;

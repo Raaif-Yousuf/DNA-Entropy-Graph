@@ -372,6 +372,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
 
         var key = run.IsCloudImport ? RunsCopy.DeleteCloudHintImported
+            : run.IsPrototypeImport ? RunsCopy.DeleteCloudHintPrototype
             : !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
             : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
             : RunsCopy.DeleteCloudHintNotConnected;

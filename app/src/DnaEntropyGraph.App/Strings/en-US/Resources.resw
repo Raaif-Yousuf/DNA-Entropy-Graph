@@ -2811,6 +2811,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_Imported_Badge" xml:space="preserve">
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
   <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
     <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
   </data>

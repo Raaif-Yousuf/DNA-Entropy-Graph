@@ -332,7 +332,7 @@ with `last_zone` and `ssh_key_file`, and `%USERPROFILE%\Downloads\<name>\<name>.
 Windows known folder). It never writes there. An imported row is `Completed`, `Imported = true`, target `local`, with no bucket,
 prefix or VM, so every cloud action is off; its `OutputDir` is the folder it was found in. Ids are `legacy-` plus a hash of the
 folder, so a second import adds nothing. A folder holding `provenance.json` was written by this app and is skipped.
-`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog.
+`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog, in either call order (whichever of the two runs first starts the one offers task; the tour starts however it ended). A prototype row's Delete cloud copy tooltip is its own string (`Runs_DeleteCloud_Hint_Prototype`, pointing to Open).
 
 ## 11. The setup wizard (issue #99)
 
