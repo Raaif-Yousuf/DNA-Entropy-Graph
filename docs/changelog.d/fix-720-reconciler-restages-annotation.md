@@ -1,0 +1,1 @@
+- A reattached run that was paired with a GFF3 keeps the pairing: the reconciler re-uploads the annotation after the FASTA (the app's copy, else the original) and the rebuilt manifest names it, and a paired run whose GFF3 is gone everywhere fails as a missing input instead of running with the worker's own genes (#720).
