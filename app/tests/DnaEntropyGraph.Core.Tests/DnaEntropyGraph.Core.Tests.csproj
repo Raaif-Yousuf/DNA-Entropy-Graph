@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\DnaEntropyGraph.Cloud.Tests\VirtualTimeProvider.cs" Link="VirtualTimeProvider.cs" />
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
   </ItemGroup>
 

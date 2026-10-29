@@ -160,6 +160,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
   and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
   naming an unknown gate, is exit 2, never a green run.
+- **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
+  (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
+  old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT` (kept at 1800 s after #959: the parallel run measured 549 s, 3.3x headroom). A timed-out pytest gate is
+  `ERROR` (never `PASS`, never `FAIL`) with its own text, `timed out after Ns with N passed and N failed so far (NOT a pass; ...)`,
+  counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. The timeout
+  kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
+  uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
+  returned only after the grandchild (a 120 s sleeper in the test) exited.
+  `premerge.py` turns SIGTERM and SIGHUP into the same interrupt path (each gate runs in its own session on POSIX), so an
+  aborted run kills every gate's tree. A gate's stdout and stderr stay separate pipes, joined stdout then stderr.
 - **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
   `app/tests/*/*.csproj` is discovered, not listed. An audit fails the run when a workflow runs a
   `scripts/*.py|ps1` that `premerge.py` does not (add a gate in `build_gates()` or an entry with a
@@ -378,7 +388,7 @@ Thirteen exist as of this revision (`scripts/premerge.py --list` always has the 
 
 ```powershell
 python scripts\check_docs_index.py            # every docs/*.md is reachable from docs/README.md's index
-python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, real commit shas, and no duplicate issue + Do-this rows (--max-age-days 45 default)
+python scripts\check_totest_format.py         # docs/ToTest.md row shape, Needs values, real commit shas, no duplicate issue + Do-this rows, and no stray line or row without a closing pipe inside the queue table (--max-age-days 45 default)
 python scripts\check_user_home_paths.py       # no literal absolute user-home path in a tracked file (use %USERPROFILE%/$HOME instead)
 python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness (needs dotnet AND the worker venv: runs in premerge full mode and in .github/workflows/ci-notices.yml, #416)
 # (vendored web assets, e.g. igv.js, are declared in `scripts/vendored_assets.json`; the generator verifies each sha256 + licence and emits the notices section from it)
@@ -392,6 +402,7 @@ python scripts\check_em_dash.py              # no em dash in user-facing copy: d
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
+python scripts\check_format_arity.py          # string.Format(..., GetString("Key"), args) arity vs the Resources.resw template (#761), a conditional key `GetString(c ? A : B)` checks every branch; unreferenced placeholder templates
 python scripts\check_unused_fields.py         # a worker dataclass field that is parsed, stored and never read (the #304/#306 shape)
 python scripts\check_pyright.py               # static types: pinned uvx pyright==1.1.407 over worker/src, worker/tests and scripts; a per-file RATCHET (see below). Run with the worker venv's python
 python scripts\check_pyright.py --self-test    # plant each violation, no pyright needed
@@ -437,11 +448,12 @@ name-matched, not type-resolved, and it says so in detail.
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
 
 ```powershell
-uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
+uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts\tests -q -n auto
 ```
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
+**Parallel (#959):** `scripts/tests` runs under pytest-xdist (MIT, a dev-only `uv run --with`, like pyyaml, so not in `THIRD-PARTY-NOTICES.md`, which lists the `[dev]` extra only). `premerge.py` passes `-n scripts_test_workers()` (half the CPUs, 2 to 8, so 8 on a 16-core box; the log shows `created: N/N workers`), `ci-docs.yml` passes `-n auto`. MEASURED 2026-10-29: serial `1874 passed, 19 skipped in 1600.06s` vs `-n 8` `1879 passed, 19 skipped in 549.17s` under the same agent load. `--basetemp` becomes per-worker (`popen-gwN`). To debug one test, run it serially without `-n`. Running in parallel exposed a landed-PR lock race in the old O_EXCL `premerge_stamp` lock (PermissionError on a delete-pending lock); it is superseded by the OS byte-range lock of `fix/landed-prs-record-race`.
 **Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
 (`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
 `scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
