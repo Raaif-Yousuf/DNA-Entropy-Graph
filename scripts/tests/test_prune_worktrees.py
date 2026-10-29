@@ -14,6 +14,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -65,7 +66,7 @@ class World:
             self.git_calls.append(args)
             return pw.git(cwd, *args, **kwargs)
 
-        defaults = dict(
+        defaults: dict[str, Any] = dict(
             repo=self.clone,
             tmp_root=self.tmp_root,
             min_age_hours=0.0,
@@ -404,7 +405,7 @@ def _leftover(world: World, name: str, *, record_sha: str | bool = True, with_ju
         subprocess.run(["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, check=False).returncode != 0
     )  # unreadable, like the real thing
     (world.tmp_root / "locks").mkdir(exist_ok=True)
-    record = {"pid": 0, "start": 0}
+    record: dict[str, int | str] = {"pid": 0, "start": 0}
     if sha:
         record["sha"] = sha
     (world.tmp_root / "locks" / f"{name}.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
@@ -530,7 +531,7 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     _git(world.clone, "branch", "fresh-lane", "origin/main")  # pre-created lane: points exactly at origin/main
     report = _run(world, apply=False, delete_merged_branches=True)
     assert "feat-merged" in world.branches()  # dry run
-    assert sorted(b.branch for b in report.branches_deleted) == sorted(["feat-merged", "lane-x"])
+    assert sorted(str(b.branch) for b in report.branches_deleted) == sorted(["feat-merged", "lane-x"])
     _run(world, apply=True, delete_merged_branches=True)
     left = world.branches()
     for gone in ("feat-merged", "lane-x"):
@@ -948,7 +949,7 @@ def test_a_superseded_attempt_whose_content_landed_under_another_name_is_deleted
     r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})  # different commit, same content
     world.merge_into_main(r2)
     report = _run(world, apply=True, delete_merged_branches=True)
-    assert sorted(b.branch for b in report.branches_deleted) == ["feat-r1", "feat-r2"]
+    assert sorted(str(b.branch) for b in report.branches_deleted) == ["feat-r1", "feat-r2"]
     assert "feat-r1" not in world.branches()
 
 
@@ -1072,7 +1073,7 @@ def test_remote_mode_is_a_dry_run_by_default_and_names_the_contained_branches(wo
     _push_remote(world, "feat-uniq", {"u.txt": b"unique\n"})
     world.merge_into_main(r2)
     report = _run(world, apply=False, remote=True, gh=world.gh_stub([]))
-    assert sorted(d.branch for d in report.remote_deleted) == ["feat-r1", "feat-r2"]
+    assert sorted(str(d.branch) for d in report.remote_deleted) == ["feat-r1", "feat-r2"]
     assert _remote_heads(world) == ["feat-r1", "feat-r2", "feat-uniq", "main"]
 
 
@@ -1086,7 +1087,7 @@ def test_remote_apply_deletes_contained_remote_branches_only(world):
     world.merge_into_main(r2)
     prs = [{"headRefName": "feat-open", "state": "OPEN", "headRefOid": "0" * 40, "baseRefName": "main"}]
     report = _run(world, apply=True, remote=True, contained_in=["origin/queued"], gh=world.gh_stub(prs))
-    assert sorted(d.branch for d in report.remote_deleted) == ["feat-r1", "feat-r2", "feat-sub"]
+    assert sorted(str(d.branch) for d in report.remote_deleted) == ["feat-r1", "feat-r2", "feat-sub"]
     assert _remote_heads(world) == ["feat-open", "feat-uniq", "main", "queued"]
 
 
