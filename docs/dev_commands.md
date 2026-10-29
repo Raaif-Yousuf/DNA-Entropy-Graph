@@ -448,8 +448,10 @@ name-matched, not type-resolved, and it says so in detail.
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
 
 ```powershell
-uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts\tests -q -n auto
+uv run --with pytest --with pytest-xdist --with pytest-timeout --with pyyaml python -m pytest scripts\tests -q -n auto --timeout=300
 ```
+
+A hung test now fails after 300 s with every thread's traceback (pytest-timeout, #840), instead of stalling the gate until its 1800 s bound.
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
