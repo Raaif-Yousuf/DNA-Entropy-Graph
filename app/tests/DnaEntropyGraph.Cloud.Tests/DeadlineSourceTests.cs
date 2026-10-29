@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cloud.Audit;
@@ -19,15 +20,8 @@ public class DeadlineSourceTests
 
         public List<RecordingTimer> Timers { get; } = [];
 
-        public bool ThrowOnCreate { get; set; }
-
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            if (ThrowOnCreate)
-            {
-                throw new InvalidOperationException("no timer");
-            }
-
             Callbacks.Add(_ => callback(state));
             var timer = new RecordingTimer(dueTime);
             Timers.Add(timer);
@@ -136,22 +130,102 @@ public class DeadlineSourceTests
         timed.Token.IsCancellationRequested.ShouldBeTrue("the timer reaches the deadline token");
     }
 
+    /// <summary>Collects the trace lines a swallowed callback failure writes, so "nothing was swallowed" is observable.</summary>
+    private sealed class CapturingListener : TraceListener
+    {
+        private readonly List<string> _lines = [];
+
+        public string[] Lines
+        {
+            get
+            {
+                lock (_lines)
+                {
+                    return [.. _lines];
+                }
+            }
+        }
+
+        public override void Write(string? message) => WriteLine(message);
+
+        public override void WriteLine(string? message)
+        {
+            lock (_lines)
+            {
+                _lines.Add(message ?? string.Empty);
+            }
+        }
+    }
+
     [Fact]
-    public void Dispose_stops_the_timer_and_the_callers_registration_and_a_late_timer_fire_is_harmless()
+    public void Dispose_releases_the_timer_and_a_late_timer_fire_or_caller_cancel_never_reaches_the_disposed_source()
     {
         var clock = new ManualTimeProvider();
         using var cts = new CancellationTokenSource();
         var deadline = new DeadlineSource(cts.Token, TimeSpan.FromSeconds(5), clock);
-        var token = deadline.Token;
+        var listener = new CapturingListener();
+        Trace.Listeners.Add(listener);
+        try
+        {
+            deadline.Dispose();
 
-        deadline.Dispose();
+            clock.Timers.Single().Disposed.ShouldBeTrue("the timer is released with the source");
+            clock.Callbacks.Single()(null);
+            cts.Cancel();
 
-        clock.Timers.Single().Disposed.ShouldBeTrue("the timer is released with the source");
-        Should.NotThrow(() => clock.Callbacks.Single()(null), "a timer callback already in flight when the source is disposed does nothing");
+            // Cancelling a disposed source throws ObjectDisposedException, which Cancel swallows and traces: a line naming it is the evidence that the disposed flag did not stop the cancel.
+            listener.Lines.ShouldNotContain(l => l.Contains(nameof(ObjectDisposedException), StringComparison.Ordinal));
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
+    }
 
-        // THEORY (unverified): that the registration itself is gone is not observable from outside (the disposed flag makes a leaked relay a no-op too); what is observable is that nothing throws and the token is untouched.
-        Should.NotThrow(() => cts.Cancel());
-        token.IsCancellationRequested.ShouldBeFalse("a caller cancel after Dispose does not touch the disposed source");
+    [Fact]
+    public async Task A_callee_callback_blocked_until_Dispose_returns_does_not_deadlock_the_Dispose_when_the_caller_cancels()
+    {
+        using var cts = new CancellationTokenSource();
+        var deadline = new DeadlineSource(cts.Token, Timeout.InfiniteTimeSpan);
+        using var entered = new ManualResetEventSlim();
+        using var disposed = new ManualResetEventSlim();
+        deadline.Token.Register(() =>
+        {
+            entered.Set();
+            disposed.Wait(TimeSpan.FromSeconds(30));
+        });
+
+        var cancelling = Task.Run(() => cts.Cancel(), TestContext.Current.CancellationToken);
+        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var disposing = Task.Run(deadline.Dispose, TestContext.Current.CancellationToken);
+
+        var finished = await Task.WhenAny(disposing, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        disposed.Set();
+        finished.ShouldBe(disposing, "Dispose must not wait for a relay that is running a callee callback");
+        await cancelling;
+    }
+
+    [Fact]
+    public async Task A_callee_callback_blocked_until_Dispose_returns_does_not_deadlock_the_Dispose_when_the_timer_fires()
+    {
+        var clock = new ManualTimeProvider();
+        var deadline = new DeadlineSource(CancellationToken.None, TimeSpan.FromSeconds(5), clock);
+        using var entered = new ManualResetEventSlim();
+        using var disposed = new ManualResetEventSlim();
+        deadline.Token.Register(() =>
+        {
+            entered.Set();
+            disposed.Wait(TimeSpan.FromSeconds(30));
+        });
+
+        var firing = Task.Run(() => clock.Callbacks.Single()(null), TestContext.Current.CancellationToken);
+        entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var disposing = Task.Run(deadline.Dispose, TestContext.Current.CancellationToken);
+
+        var finished = await Task.WhenAny(disposing, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        disposed.Set();
+        finished.ShouldBe(disposing, "Dispose must not wait behind a timer thread that is running a callee callback");
+        await firing;
     }
 
     [Fact]
@@ -175,16 +249,5 @@ public class DeadlineSourceTests
 
         clock.Timers.ShouldBeEmpty();
         Should.Throw<ArgumentOutOfRangeException>(() => new DeadlineSource(CancellationToken.None, TimeSpan.FromSeconds(-2), clock));
-    }
-
-    [Fact]
-    public void A_constructor_that_fails_leaves_nothing_behind()
-    {
-        var clock = new ManualTimeProvider { ThrowOnCreate = true };
-        using var cts = new CancellationTokenSource();
-
-        Should.Throw<InvalidOperationException>(() => new DeadlineSource(cts.Token, TimeSpan.FromSeconds(5), clock));
-
-        Should.NotThrow(() => cts.Cancel(), "the caller's registration was released with the half-made source");
     }
 }

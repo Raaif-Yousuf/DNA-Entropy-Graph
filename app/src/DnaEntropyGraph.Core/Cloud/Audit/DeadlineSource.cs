@@ -10,11 +10,10 @@ namespace DnaEntropyGraph.Core.Cloud.Audit;
 /// </summary>
 public sealed class DeadlineSource : IDisposable
 {
-    private readonly object _gate = new();
     private readonly CancellationTokenSource _source = new();
     private readonly CancellationTokenRegistration _callerRegistration;
     private readonly ITimer? _timer;
-    private bool _disposed;
+    private int _disposed;
 
     /// <param name="callerToken">The caller's own token; its cancel reaches <see cref="Token"/>.</param>
     /// <param name="timeout">
@@ -56,35 +55,29 @@ public sealed class DeadlineSource : IDisposable
     /// <summary>The underlying source, for <see cref="CloudAuditContext.StopAbandonedAsync"/>. Do not dispose it.</summary>
     public CancellationTokenSource Source => _source;
 
-    /// <summary>Cancels the token. Never throws: a callee's callback that throws is traced by class only, and a source already disposed is left alone.</summary>
+    /// <summary>Cancels the token. Never throws: a callee's callback that throws is traced by class only, and a source already disposed is left alone. Holds no lock while callee callbacks run.</summary>
     public void Cancel()
     {
-        lock (_gate)
+        if (Volatile.Read(ref _disposed) != 0)
         {
-            if (_disposed)
-            {
-                return;
-            }
-
-            CloudAuditContext.CancelSwallowing(_source);
+            return;
         }
+
+        // A Dispose that lands right here makes the cancel hit a disposed source; CancelSwallowing swallows that (and traces its class).
+        CloudAuditContext.CancelSwallowing(_source);
     }
 
     public void Dispose()
     {
-        // The registration's Dispose waits for a relay running on another thread (which takes the gate), so it must not be called while holding it.
-        _callerRegistration.Dispose();
-        _timer?.Dispose();
-        lock (_gate)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            if (_disposed)
-            {
-                return;
-            }
-
-            // A timer callback already in flight finds the flag and does nothing.
-            _disposed = true;
-            _source.Dispose();
+            return;
         }
+
+        // Neither step waits for a relay running on another thread: a callee callback that is blocked on this call's own continuation would otherwise deadlock the Dispose.
+        // A relay already in flight finds the flag set, or a disposed source whose exception is swallowed.
+        _callerRegistration.Unregister();
+        _timer?.Dispose();
+        _source.Dispose();
     }
 }
