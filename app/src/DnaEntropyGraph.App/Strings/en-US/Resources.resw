@@ -2231,6 +2231,15 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
     <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
   </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
   <data name="RunError_worker_progress_stalled" xml:space="preserve">
     <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
   </data>
@@ -2811,9 +2820,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_Imported_Badge" xml:space="preserve">
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
-  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
-    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
   <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
     <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
   </data>
@@ -2828,6 +2834,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
   </data>
   <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
     <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
