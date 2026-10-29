@@ -24,6 +24,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     private readonly InstallationCleanup _cleanup;
     private readonly ISettingsStore _settings;
     private readonly IPricingSource? _pricing;
+    private readonly IDispatcher? _dispatcher;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasError))]
@@ -47,7 +48,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     [ObservableProperty]
     private bool _isEmpty;
 
-    public CloudResourcesViewModel(IGcpAccount account, IDialogService dialogs, IStringResourceProvider strings, IComputeGateway compute, InstallationCleanup cleanup, ISettingsStore settings, IPricingSource? pricing = null)
+    public CloudResourcesViewModel(IGcpAccount account, IDialogService dialogs, IStringResourceProvider strings, IComputeGateway compute, InstallationCleanup cleanup, ISettingsStore settings, IPricingSource? pricing = null, IDispatcher? dispatcher = null)
     {
         _account = account;
         _dialogs = dialogs;
@@ -56,6 +57,52 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         _cleanup = cleanup;
         _settings = settings;
         _pricing = pricing;
+        _dispatcher = dispatcher;
+        // Issue #828: a project switch while this page is open must not leave the old project's rows on screen with live buttons.
+        _account.AccountChanged += (_, _) => OnUiThread(OnAccountChanged);
+    }
+
+    /// <summary>The project the rows on screen were listed for. Every action compares it with the project chosen NOW (#828).</summary>
+    private string? _listedProject;
+
+    private void OnAccountChanged()
+    {
+        if (string.Equals(_account.SelectedProjectId, _listedProject, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Vms.Clear();
+        Disks.Clear();
+        _listedProject = null;
+        IsEmpty = false;
+        SummaryText = string.Empty;
+        BannerText = string.Empty;
+        // No network from here: this view model is transient and the event is the account's, so a call per abandoned page would be waste. Refresh lists the new project.
+        ErrorText = Format("CloudPage_ProjectChanged");
+    }
+
+    private void OnUiThread(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        _dispatcher.Enqueue(action);
+    }
+
+    /// <summary>The gateway has no project parameter (it reads the chosen project per call), so an action is only safe while the project it was listed for is still the chosen one.</summary>
+    private bool StillListedProject(string listedProject)
+    {
+        if (string.Equals(_account.SelectedProjectId, listedProject, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        ErrorText = Format("CloudPage_ProjectChanged");
+        return false;
     }
 
     public ObservableCollection<CloudVmRow> Vms { get; } = [];
@@ -92,10 +139,20 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             var everyone = await _compute.ListAppVmsAsync(cancellationToken);
             var pricing = LoadPricing();
 
+            // The project changed while Google was answering: these lists belong to the old one. Show nothing of them; the account-changed handler lists again.
+            if (!string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
+            {
+                Vms.Clear();
+                Disks.Clear();
+                _listedProject = null;
+                return;
+            }
+
+            _listedProject = project;
             Vms.Clear();
             foreach (var vm in inventory.Vms)
             {
-                Vms.Add(OwnRow(vm, inventory.Disks, pricing));
+                Vms.Add(OwnRow(vm, inventory.Disks, pricing, project));
             }
 
             var ownNames = inventory.Vms.Select(v => (v.Name, v.Zone)).ToHashSet();
@@ -173,6 +230,11 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
                 return;
             }
 
+            if (!StillListedProject(project))
+            {
+                return;
+            }
+
             CleanupReport report;
             try
             {
@@ -236,7 +298,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         };
     }
 
-    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing)
+    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing, string listedProject)
     {
         var running = IsRunning(vm);
         var stopped = !running && IsStopped(vm);
@@ -257,25 +319,36 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
 
         return new CloudVmRow(vm.Name, vm.Zone, StatusOf(vm), cost, string.Empty, isAnotherComputer: false)
         {
-            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, () => _compute.StopVmAsync(vm.Name, vm.Zone, ct), ct), () => running),
-            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, () => _compute.StartVmAsync(vm.Name, vm.Zone, ct), ct), () => stopped),
-            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, ct)),
+            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StopVmAsync(vm.Name, vm.Zone, ct), ct), () => running),
+            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StartVmAsync(vm.Name, vm.Zone, ct), ct), () => stopped),
+            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, listedProject, ct)),
         };
     }
 
-    private async Task DeleteOneAsync(VmDescriptor vm, CancellationToken cancellationToken)
+    private async Task DeleteOneAsync(VmDescriptor vm, string listedProject, CancellationToken cancellationToken)
     {
+        if (!StillListedProject(listedProject))
+        {
+            return;
+        }
+
         if (!await _dialogs.ConfirmAsync(Format("CloudDeleteVm_Title"), Format("CloudDeleteVm_Body", vm.Name), cancellationToken))
         {
             return;
         }
 
-        await ActAsync(vm, () => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), cancellationToken);
+        await ActAsync(vm, listedProject, () => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), cancellationToken);
     }
 
     /// <summary>One button's call, then a fresh listing so the row shows what Google says now. A refusal names the computer and the action.</summary>
-    private async Task ActAsync(VmDescriptor vm, Func<Task> call, CancellationToken cancellationToken)
+    private async Task ActAsync(VmDescriptor vm, string listedProject, Func<Task> call, CancellationToken cancellationToken)
     {
+        // Checked again here as well as before the confirm: the project can change while the confirm is open.
+        if (!StillListedProject(listedProject))
+        {
+            return;
+        }
+
         try
         {
             await call();

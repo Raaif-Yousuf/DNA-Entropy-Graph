@@ -392,4 +392,87 @@ public class CloudResourcesViewModelTests
         Vms(Vm("deg-job-2", "TERMINATED", Mine, "job-2"));
         (await LoadedAsync()).HasBanner.ShouldBeFalse();
     }
+
+    // Issue #828: the page must never list or act on a project other than the one chosen NOW.
+    private const string NewProject = "other-project-99";
+
+    [Fact]
+    public async Task After_a_project_switch_the_next_refresh_lists_the_new_project()
+    {
+        var viewModel = await LoadedAsync();
+        _account.SelectedProjectId.Returns(NewProject);
+        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        await _storage.Received(1).ListBucketsAsync(NewProject, Arg.Any<CancellationToken>());
+        await _storage.Received().ListBucketsAsync(Project, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_project_switch_while_the_page_is_open_clears_the_old_rows_and_says_to_refresh()
+    {
+        var viewModel = await LoadedAsync();
+        viewModel.Vms.Count.ShouldBe(2);
+        _account.SelectedProjectId.Returns(NewProject);
+        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        Vms();
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.Disks.ShouldBeEmpty();
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+        await _storage.DidNotReceive().ListBucketsAsync(NewProject, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Stop_and_Delete_on_a_row_listed_for_the_old_project_call_nothing_after_a_switch()
+    {
+        var viewModel = await LoadedAsync();
+        var running = viewModel.Vms[0];
+        var stopped = viewModel.Vms[1];
+        _account.SelectedProjectId.Returns(NewProject);
+
+        await running.StopCommand!.ExecuteAsync(null);
+        await stopped.DeleteCommand!.ExecuteAsync(null);
+
+        await _compute.DidNotReceiveWithAnyArgs().StopVmAsync(default!, default!, Arg.Any<CancellationToken>());
+        await _compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
+        await _dialogs.DidNotReceiveWithAnyArgs().ConfirmAsync(default!, default!, Arg.Any<CancellationToken>());
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+    }
+
+    [Fact]
+    public async Task Delete_everything_aborts_when_the_project_changed_while_the_confirm_was_open()
+    {
+        var viewModel = await LoadedAsync();
+        _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            _account.SelectedProjectId.Returns(NewProject);
+            return Task.FromResult(true);
+        });
+
+        await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
+
+        await _compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
+        await _storage.DidNotReceiveWithAnyArgs().DeletePrefixAsync(default!, default!, Arg.Any<CancellationToken>());
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+    }
+
+    [Fact]
+    public async Task A_listing_that_straddles_a_project_switch_is_discarded_not_shown()
+    {
+        var viewModel = NewViewModel();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            _account.SelectedProjectId.Returns(NewProject);
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.Disks.ShouldBeEmpty();
+    }
 }

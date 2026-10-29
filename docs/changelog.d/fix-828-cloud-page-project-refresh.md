@@ -1,0 +1,1 @@
+- Cloud page: after a project switch the old project's rows are cleared and the page says to refresh, a Stop, Start or Delete listed for the old project does nothing, and a listing or Delete everything that straddles a switch is dropped instead of acting on the wrong project (#828).

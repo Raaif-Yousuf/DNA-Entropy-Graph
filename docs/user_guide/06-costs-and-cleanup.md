@@ -140,7 +140,7 @@ this app created.*
   this app created** to remove it all at once. That asks first and says exactly how many
   computers, disks and job folders will go. Afterwards it lists every item with what became
   of it, and says how many days Google keeps a deleted job folder in case you change your
-  mind.
+  mind. If you switch to another Google Cloud project while the page is open, it clears\n  the old list and does nothing to the old project's computers; press **Refresh** to list\n  the new project.
 - If someone else uses another copy of this app on the same Google project, their computers
   show up on your Cloud page tagged **Another computer**. You can see them (they cost money
   on the same bill) but not stop or delete them from here.

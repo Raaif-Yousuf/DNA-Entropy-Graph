@@ -2168,6 +2168,9 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="CloudPage_NoProject" xml:space="preserve">
     <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
   </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
+  </data>
   <data name="CloudPage_ListFailed" xml:space="preserve">
     <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
   </data>
