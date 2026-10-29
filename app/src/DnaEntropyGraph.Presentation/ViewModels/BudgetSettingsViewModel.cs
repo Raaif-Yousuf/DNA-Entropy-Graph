@@ -442,8 +442,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     /// </summary>
     private string Thresholds(BudgetInfo budget)
     {
-        var item = _strings.GetString("BudgetThresholdItem");
-        var parts = budget.ThresholdPercents.Select(p => string.Format(CultureInfo.CurrentCulture, item, p.ToString("0.##", CultureInfo.CurrentCulture))).ToList();
+        var parts = budget.ThresholdPercents.Select(p => string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetThresholdItem"), p.ToString("0.##", CultureInfo.CurrentCulture))).ToList();
         return parts.Count == 1
             ? parts[0]
             : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetThresholdsAnd"), string.Join(_strings.GetString("BudgetThresholdsJoiner"), parts.Take(parts.Count - 1)), parts[^1]);
