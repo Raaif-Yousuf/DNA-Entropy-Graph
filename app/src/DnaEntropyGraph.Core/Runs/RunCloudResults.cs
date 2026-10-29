@@ -248,7 +248,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
+        return RunOutputRoot.IsContained(folder, root) ? folder : null;
     }
 
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>
@@ -292,6 +292,12 @@ public sealed class RunCloudResults : IRunCloudResults
         if (!destination.StartsWith(folder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("A result file leaves the output folder.");
+        }
+
+        // Hard Rule 14: never write, rename or move through a junction or symlink below the run folder.
+        if (!RunOutputRoot.NoReparseBetween(folder, Path.GetDirectoryName(destination)!))
+        {
+            throw new InvalidDataException("A result file would be written through a linked folder.");
         }
 
         var exists = File.Exists(destination);
@@ -354,7 +360,7 @@ public sealed class RunCloudResults : IRunCloudResults
                     _mover.Move(aside, destination);
                     tally.Count--;
                 }
-                catch (IOException)
+                catch (Exception restoreFailure) when (restoreFailure is IOException or UnauthorizedAccessException)
                 {
                     // Could not put it back; it is still safe under its changed name, which the tally keeps reporting.
                 }

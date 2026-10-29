@@ -27,8 +27,9 @@ internal static partial class StalePartSweeper
         try
         {
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
-            if (!Directory.Exists(root))
+            if (!Directory.Exists(root) || new DirectoryInfo(root).Attributes.HasFlag(FileAttributes.ReparsePoint))
             {
+                // A root that is itself a junction or symlink could point anywhere: never sweep through it.
                 return;
             }
 
@@ -37,7 +38,7 @@ internal static partial class StalePartSweeper
             foreach (var sub in subDirectories.Where(s => !string.IsNullOrEmpty(s)).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(root, sub)));
-                if (full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && NoReparseBetween(root, full))
+                if (full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && RunOutputRoot.NoReparseBetween(root, full, requireExists: true))
                 {
                     SweepOne(full, cutoff);
                 }
@@ -47,24 +48,6 @@ internal static partial class StalePartSweeper
         {
             // A sweep is housekeeping; it never fails a download.
         }
-    }
-
-    /// <summary>True when <paramref name="path"/> exists and neither it nor any folder between <paramref name="root"/> and it is a junction or symlink.</summary>
-    internal static bool NoReparseBetween(string root, string path)
-    {
-        var current = path;
-        while (current.Length > root.Length)
-        {
-            var info = new DirectoryInfo(current);
-            if (!info.Exists || info.Attributes.HasFlag(FileAttributes.ReparsePoint))
-            {
-                return false;
-            }
-
-            current = Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(current) ?? root);
-        }
-
-        return true;
     }
 
     private static void SweepOne(string directory, DateTime cutoff)

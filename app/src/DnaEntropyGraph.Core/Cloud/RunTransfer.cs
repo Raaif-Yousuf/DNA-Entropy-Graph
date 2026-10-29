@@ -10,6 +10,12 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// Everything that moves bytes between the user's disk and the bucket: the input upload, the output download with its
 /// path-safety and checksum rules (Hard Rule 14), and the run's output folder.
 /// </summary>
+/// <summary>How many changed files a download renamed aside so far; it lives outside the download so the count survives a failure partway through (Hard Rule 14: the user must still hear about each one).</summary>
+internal sealed class DownloadTally
+{
+    public int KeptAside { get; set; }
+}
+
 internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, CloudRunSettings settings, RunRowStore rows, IRunFileMover? fileMover = null)
 {
     /// <summary>
@@ -94,13 +100,13 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
     /// the chosen output folder (Hard Rule 14), verifying each against the checksum <c>result.json</c>
     /// gives. A file lands under its final name only once complete and verified.
     /// </summary>
-    public async Task<int> DownloadAsync(CloudJobRequest request, string bucket, WorkerResultDocument result, CancellationToken cancellationToken)
+    public async Task<int> DownloadAsync(CloudJobRequest request, string bucket, WorkerResultDocument result, CancellationToken cancellationToken, DownloadTally? tally = null)
     {
         var runFolder = await ResolveRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
         var runFolderFull = Path.GetFullPath(runFolder);
         var prefix = WorkerManifestBuilder.JobPrefix(request.JobId);
         StalePartSweeper.Sweep(runFolderFull, result.Inputs.SelectMany(i => i.Files).Select(f => ResultSubDirectory(f.Path)));
-        var keptAside = 0;
+        tally ??= new DownloadTally();
 
         // Every input that listed files, whatever its status: a failed or cancelled input's partial files are kept
         // (docs/job_contract.md sections 6 and 7). Messages name the input id and file number, never the path, because
@@ -118,9 +124,15 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                     throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} leaves the output folder.");
                 }
 
+                // Hard Rule 14: a junction or symlink below the run folder would send the temp file, the rename and the final move somewhere else.
+                if (!RunOutputRoot.NoReparseBetween(runFolderFull, Path.GetDirectoryName(destination)!))
+                {
+                    throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
+                }
+
                 try
                 {
-                    keptAside += await DownloadFileAsync(bucket, prefix + file.Path, destination, file, label, cancellationToken).ConfigureAwait(false);
+                    await DownloadFileAsync(bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
                 {
@@ -130,7 +142,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             }
         }
 
-        return keptAside;
+        return tally.KeptAside;
     }
 
     /// <summary>The folder (relative to the run folder) a result file lands in; a path that is not a safe output path names none here, and fails with its own label when it is downloaded.</summary>
@@ -146,7 +158,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         }
     }
 
-    private async Task<int> DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, CancellationToken cancellationToken)
+    private async Task DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
         try
@@ -190,10 +202,11 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             {
                 if (new FileInfo(destination).Length == written && await FileSha256Async(destination, cancellationToken).ConfigureAwait(false) == actualHash)
                 {
-                    return 0;
+                    return;
                 }
 
                 aside = ChangedFileAside.Move(destination, settings.TimeProvider, Mover);
+                tally.KeptAside++;
             }
 
             try
@@ -206,16 +219,15 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 try
                 {
                     Mover.Move(aside, destination);
+                    tally.KeptAside--;
                 }
-                catch (IOException)
+                catch (Exception restoreFailure) when (restoreFailure is IOException or UnauthorizedAccessException)
                 {
                     // Could not put it back; it is still safe under its changed name.
                 }
 
                 throw;
             }
-
-            return aside is null ? 0 : 1;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -277,7 +289,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         var existing = (await rows.LatestRecordAsync(request.JobId, cancellationToken).ConfigureAwait(false))?.OutputDir;
         // Hard Rule 14 and the same containment RunCloudResults applies: a recorded folder is reused only while it is strictly inside the output folder this run was given
         // and is a real folder (a junction or symlink there could point anywhere).
-        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && RunOutputRoot.IsStrictlyInside(existing, request.OutputFolder) && StalePartSweeper.NoReparseBetween(Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputFolder)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(existing))))
+        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && RunOutputRoot.IsContained(existing, request.OutputFolder))
         {
             return existing;
         }

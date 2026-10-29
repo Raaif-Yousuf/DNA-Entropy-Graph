@@ -25,7 +25,7 @@ internal static class StreamedDownload
     /// <summary>The file's current length, or -1 when it does not exist yet. May throw <see cref="IOException"/> if the file vanishes or is locked mid-read.</summary>
     private static long ProbeLength(string path) => File.Exists(path) ? new FileInfo(path).Length : -1;
 
-    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken, Func<string, long>? lengthProbe = null)
+    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken, Func<string, long>? lengthProbe = null, TimeSpan? cancelGrace = null)
     {
         using var inner = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var cap = TotalCap(expectedBytes);
@@ -84,10 +84,31 @@ internal static class StreamedDownload
         }
 
         // The watcher fired: wait (bounded) for the callee to let go of the file, so the caller's delete cannot race a live writer.
-        await Task.WhenAny(download, Task.Delay(CancelGrace, clock)).ConfigureAwait(false);
+        await Task.WhenAny(download, Task.Delay(cancelGrace ?? CancelGrace, clock)).ConfigureAwait(false);
         if (download.IsCompleted)
         {
             _ = download.Exception;
+        }
+        else
+        {
+            // The callee ignored the cancellation and may still hold (or recreate) the temp file, so the caller's delete can fail. Once it does let go, observe its
+            // exception and delete the file ourselves, instead of leaving it until the next day's sweep.
+            _ = download.ContinueWith(
+                finished =>
+                {
+                    _ = finished.Exception;
+                    try
+                    {
+                        File.Delete(tempPath);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // The next sweep takes it.
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         if (cancellationToken.IsCancellationRequested)
