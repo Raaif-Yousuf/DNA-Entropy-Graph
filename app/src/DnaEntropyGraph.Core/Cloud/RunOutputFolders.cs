@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Contract;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -34,6 +36,22 @@ public static class RunOutputFolders
         return string.IsNullOrWhiteSpace(found)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")
             : found;
+    }
+
+    /// <summary>
+    /// The folder name a run gets (issue #514): <see cref="RunOptions.NameTemplate"/> expanded by <see cref="RunNamer"/> for this input, model and
+    /// time. The cloud runner, the This PC runner and the New run page's preview all call this one function, so what the page shows is what
+    /// the runner creates. A name already taken is not handled here: <see cref="CreateUnique"/> adds <c>_2</c> against the real disk.
+    /// </summary>
+    public static string RunFolderName(RunOptions options, StagedInput input, DateTime now)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(input);
+
+        // An accession has no file name, and its output stem holds no dot, so the stem is what {file} must see; a file goes in by its
+        // name so RunNamer drops the extension exactly as StagedInput.OutputStem does.
+        var file = input.IsAccession ? input.OutputStem : input.FileName;
+        return RunNamer.Resolve(options.NameTemplate, file, options.ModelId, now, 1, []);
     }
 
     /// <summary>

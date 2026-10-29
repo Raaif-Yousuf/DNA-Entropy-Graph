@@ -1,0 +1,1 @@
+- The Run name box is back on the New run page and now works: the results folder is named from the template (`{file}`, `{date}`, `{time}`, `{model}`, `{n}`) by the cloud and This PC runners alike, the page previews the exact name, and a taken name gets `_2`; the default `{file}` names the folder as before (#514).

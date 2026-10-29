@@ -172,6 +172,19 @@ public sealed class LocalJobRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task The_run_name_template_names_the_folder_the_same_way_a_cloud_run_does()
+    {
+        // Issue #514: both runners name the folder through RunOutputFolders.RunFolderName, so they cannot drift.
+        var request = Request() with { Options = Request().Options with { NameTemplate = "{file}_{model}" } };
+
+        await Runner(HappyWorker()).RunAsync(request, CancellationToken.None);
+
+        var folder = Path.GetFileName(_runs.Latest(JobId).OutputDir!);
+        folder.ShouldBe("locus_mock");
+        folder.ShouldBe(RunOutputFolders.RunFolderName(request.Options, request.Input, DateTime.Now));
+    }
+
+    [Fact]
     public async Task A_worker_that_exits_with_no_result_is_a_local_worker_crash_and_leaves_no_empty_output_folder()
     {
         var launcher = new FakeProcessLauncher(_ =>
