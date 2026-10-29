@@ -15,6 +15,7 @@ public sealed class ShellStartupOrderTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "deg-startorder-" + Guid.NewGuid().ToString("N"));
     private readonly TaskCompletionSource<bool> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _dialogShown = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public ShellStartupOrderTests() => Directory.CreateDirectory(Path.Combine(_root, "Downloads"));
 
@@ -48,7 +49,11 @@ public sealed class ShellStartupOrderTests : IDisposable
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         var dialogs = Substitute.For<IDialogService>();
-        dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => _answer.Task);
+        dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            _dialogShown.TrySetResult();
+            return _answer.Task;
+        });
         var proto = new PrototypeImportViewModel(
             new MemorySettings(),
             new PrototypeSearchPaths(Path.Combine(_root, "AppData", "dna-entropy", "config.json"), Path.Combine(_root, "Downloads")),
@@ -68,11 +73,30 @@ public sealed class ShellStartupOrderTests : IDisposable
 
         var offers = shell.RunStartupOffersAsync(CancellationToken.None);
         var loaded = shell.OnWindowLoadedAsync();
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await _dialogShown.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        offers.IsCompleted.ShouldBeFalse("the dialog is still open");
+        // The dialog is open and the question is unanswered: asserted before the gate is released, no timing involved.
+        offers.IsCompleted.ShouldBeFalse();
         loaded.IsCompleted.ShouldBeFalse();
         tour.IsNewRunStepOpen.ShouldBeFalse("the tour must not open over the dialog");
+
+        _answer.SetResult(true);
+        await offers;
+        await loaded;
+        tour.IsNewRunStepOpen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_order_of_the_two_calls_does_not_matter_the_tour_still_waits()
+    {
+        var (shell, tour) = Make(withPrototypeRuns: true);
+
+        var loaded = shell.OnWindowLoadedAsync();
+        await _dialogShown.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var offers = shell.RunStartupOffersAsync(CancellationToken.None);
+
+        loaded.IsCompleted.ShouldBeFalse();
+        tour.IsNewRunStepOpen.ShouldBeFalse("window-loaded ran first and still must not open the tour over the dialog");
 
         _answer.SetResult(true);
         await offers;
@@ -92,10 +116,25 @@ public sealed class ShellStartupOrderTests : IDisposable
     }
 
     [Fact]
-    public async Task The_tour_starts_even_when_offers_were_never_run()
+    public async Task A_cancelled_offer_still_lets_the_tour_start_and_never_throws_out_of_a_fire_and_forget_call()
     {
         var (shell, tour) = Make(withPrototypeRuns: true);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
 
+        _ = shell.RunStartupOffersAsync(cancelled.Token).ContinueWith(static _ => { }, TestContext.Current.CancellationToken, TaskContinuationOptions.None, TaskScheduler.Default);
+        await shell.OnWindowLoadedAsync();
+
+        tour.IsNewRunStepOpen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_faulted_offer_still_lets_the_tour_start()
+    {
+        var (shell, tour) = Make(withPrototypeRuns: true);
+        _answer.SetException(new InvalidOperationException("boom"));
+
+        _ = shell.RunStartupOffersAsync(CancellationToken.None).ContinueWith(static _ => { }, TestContext.Current.CancellationToken, TaskContinuationOptions.None, TaskScheduler.Default);
         await shell.OnWindowLoadedAsync();
 
         tour.IsNewRunStepOpen.ShouldBeTrue();

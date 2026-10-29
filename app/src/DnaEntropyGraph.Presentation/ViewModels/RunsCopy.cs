@@ -41,6 +41,7 @@ public static class RunsCopy
     public const string OwnerRequestGrantee = "Runs_OwnerRequest_Grantee";
     public const string PresetLine = "Runs_PresetLine";
     public const string DeleteCloudHintImported = "Runs_DeleteCloud_Hint_Imported";
+    public const string DeleteCloudHintPrototype = "Runs_DeleteCloud_Hint_Prototype";
     public const string ImportedBadge = "Runs_Imported_Badge";
     public const string ImportRunning = "Runs_Import_Running";
     public const string ImportNone = "Runs_Import_None";
@@ -110,7 +111,7 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
-        DeleteCloudHintImported, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
+        DeleteCloudHintImported, DeleteCloudHintPrototype, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),

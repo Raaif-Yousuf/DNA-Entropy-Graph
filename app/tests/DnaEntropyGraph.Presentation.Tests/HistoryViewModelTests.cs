@@ -258,6 +258,7 @@ public sealed class HistoryViewModelTests
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
         _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false); // as the real RunCloudResults answers for any Imported row
         var vm = await Loaded(proto);
 
         Item(vm, "legacy-p").IsImported.ShouldBeFalse();
@@ -265,6 +266,8 @@ public sealed class HistoryViewModelTests
         Item(vm, "legacy-p").HasImportedText.ShouldBeFalse();
         Item(vm, "legacy-p").DeleteLocalHint.ShouldBe("imported-hint");
         Item(vm, "legacy-p").CanDeleteLocal.ShouldBeFalse();
+        Item(vm, "legacy-p").DeleteCloudHint.ShouldBe(RunsCopy.DeleteCloudHintPrototype, "no cloud copy, and the named action (Open) exists; Run again is off for it");
+        Item(vm, "legacy-p").CanDeleteCloud.ShouldBeFalse();
     }
 
     [Fact]
@@ -274,11 +277,13 @@ public sealed class HistoryViewModelTests
         var found = new RunRecord("20261014-aaaa", JobPhase.Completed, Now, "f", Bucket: "b", JobPrefix: "jobs/20261014-aaaa/", InstallationId: "inst-pc-a-long", Imported: true);
         _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
         _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false); // as the real RunCloudResults answers for any Imported row
         var vm = await Loaded(found);
 
         Item(vm, "20261014-aaaa").IsImported.ShouldBeTrue();
         Item(vm, "20261014-aaaa").ImportedText.ShouldBe("badge inst-pc-");
         Item(vm, "20261014-aaaa").DeleteLocalHint.ShouldBeNull();
+        Item(vm, "20261014-aaaa").DeleteCloudHint.ShouldBe(RunsCopy.DeleteCloudHintImported);
     }
 
     [Fact]
