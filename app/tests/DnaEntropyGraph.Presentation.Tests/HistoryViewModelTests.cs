@@ -103,19 +103,61 @@ public sealed class HistoryViewModelTests
         Item(vm, "live").CostText.ShouldBe("about $0.50");
     }
 
-    [Fact]
-    public async Task A_phase_change_that_is_not_an_end_does_not_reload_the_list()
+    private sealed class CountingDispatcher : IDispatcher
     {
+        public int Enqueued { get; private set; }
+
+        public void Enqueue(Action action)
+        {
+            Enqueued++;
+            action();
+        }
+    }
+
+    private HistoryViewModel MakeListening(CommunityToolkit.Mvvm.Messaging.IMessenger messenger, IDispatcher dispatcher)
+        => new(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: dispatcher);
+
+    [Fact]
+    public async Task A_phase_change_that_is_not_an_end_does_not_reload_the_list_but_an_end_does()
+    {
+        // Deterministic, no clock: the dispatcher counts what the handler asks of the UI thread, and the repository substitute answers synchronously.
         CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
         _rows = [Row("live", JobPhase.Running)];
-        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: new InlineDispatcher());
+        var dispatcher = new CountingDispatcher();
+        var vm = MakeListening(messenger, dispatcher);
         await vm.RefreshCommand.ExecuteAsync(null);
         var loads = _repository.ReceivedCalls().Count();
 
         messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Running));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        _repository.ReceivedCalls().Count().ShouldBe(loads, "only an ended run changes what a row shows");
+        dispatcher.Enqueued.ShouldBe(0, "only an ended run changes what a row shows");
+        _repository.ReceivedCalls().Count().ShouldBe(loads);
+
+        messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Completed));
+
+        dispatcher.Enqueued.ShouldBe(1, "an end asks the UI thread for one reload");
+        _repository.ReceivedCalls().Count().ShouldBeGreaterThan(loads, "and the reload read the table");
+    }
+
+    [Fact]
+    public async Task A_page_that_was_left_stops_reloading_on_a_run_end_while_a_page_still_open_does()
+    {
+        CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
+        _rows = [Row("live", JobPhase.Running)];
+        var leftDispatcher = new CountingDispatcher();
+        var openDispatcher = new CountingDispatcher();
+        var left = MakeListening(messenger, leftDispatcher);
+        var open = MakeListening(messenger, openDispatcher);
+        await left.RefreshCommand.ExecuteAsync(null);
+        await open.RefreshCommand.ExecuteAsync(null);
+        left.Deactivate();
+
+        messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Completed));
+
+        leftDispatcher.Enqueued.ShouldBe(0, "a page the user left must not reload the whole table on every run end");
+        openDispatcher.Enqueued.ShouldBe(1);
+        GC.KeepAlive(left);
+        GC.KeepAlive(open);
     }
 
     [Fact]

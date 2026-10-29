@@ -91,6 +91,9 @@ public sealed class SpendLedger : ISpendCapGate
         return usd;
     }
 
+    /// <summary>Appends an already-quoted entry once (the decorator's kept-figure path: the quote is the one the stored row carries, never repriced here).</summary>
+    public Task<CostLedgerEntry?> RecordEntryAsync(CostLedgerEntry entry, CancellationToken cancellationToken) => _ledger.TryAppendAsync(entry, cancellationToken);
+
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
         => Quote(run) is { } entry ? await _ledger.TryAppendAsync(entry, cancellationToken).ConfigureAwait(false) : null;
@@ -268,16 +271,26 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
     private async Task<(RunRecord Run, CostLedgerEntry? Quote)> PrepareAsync(RunRecord run, CancellationToken cancellationToken)
     {
         if (JobStateMachine.IsTerminal(run.Phase)
-            && await inner.GetByJobIdAsync(run.JobId, cancellationToken).ConfigureAwait(false) is { EstimatedCostUsd: { } kept } stored)
+            && await inner.GetByJobIdAsync(run.JobId, cancellationToken).ConfigureAwait(false) is { EstimatedCostUsd: { } kept } stored
+            && double.IsFinite(kept) && kept >= 0)
         {
+            // First terminal figure wins for the row AND the ledger: the ledger entry is built from the incoming row (its span may differ from the stored one) but carries
+            // the kept figure, never a repriced one, so the run pages and the month total cannot disagree.
             run = run with { EstimatedCostUsd = kept, VmSeconds = stored.VmSeconds };
-            return (run, ledger.Quote(run));
+            return (run, ledger.Quote(run) is { } keptQuote ? keptQuote with { UsdEst = kept } : null);
         }
 
+        // No usable kept figure (none yet, or a stored one that is NaN, infinite or negative: priced again, which repairs the row). A figure that cannot be priced
+        // is cleared rather than carried as junk.
         var quote = ledger.Quote(run);
-        return quote is null
-            ? (run, null)
-            : (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
+        if (quote is not null)
+        {
+            return (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
+        }
+
+        return run.EstimatedCostUsd is { } carried && (!double.IsFinite(carried) || carried < 0)
+            ? (run with { EstimatedCostUsd = null, VmSeconds = null }, null)
+            : (run, null);
     }
 
     private async Task BookAsync(RunRecord stored, CostLedgerEntry? quote)
@@ -289,7 +302,7 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
         try
         {
-            await ledger.RecordRunAsync(stored, CancellationToken.None).ConfigureAwait(false);
+            await ledger.RecordEntryAsync(quote, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

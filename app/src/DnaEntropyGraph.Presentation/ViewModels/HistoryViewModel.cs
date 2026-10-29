@@ -55,6 +55,8 @@ public sealed partial class HistoryViewModel : ObservableObject
 
     private readonly Func<string?, bool>? _hasSpotPrice;
 
+    private readonly IMessenger? _messenger;
+
     public HistoryViewModel(
         IRunRepository runRepository,
         IRunHistoryRemover remover,
@@ -76,6 +78,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         IDispatcher? dispatcher = null)
     {
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
+        _messenger = messenger;
         if (messenger is not null && dispatcher is not null)
         {
             // A run that ends while this page is open gets its booked cost (and final phase) on its row: the row is built once per load, so the load is
@@ -114,6 +117,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         ];
         _selectedStatusFilter = StatusFilters[0];
     }
+
+    /// <summary>
+    /// Issue #100 round 3: the page was left. This ViewModel is transient and the messenger holds it weakly, so without this every instance that has not been collected yet
+    /// would go on reloading the whole table on each run end. The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
+    /// </summary>
+    public void Deactivate() => _messenger?.UnregisterAll(this);
 
     [ObservableProperty]
     private bool _isImporting;
