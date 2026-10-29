@@ -1252,8 +1252,7 @@ def test_a_planted_unbound_member_and_orphan_resource_are_still_reported_after_i
         root,
         {
             "src/Demo.Presentation/ViewModels/OtherViewModel.cs": (
-                "public sealed partial class OtherViewModel : ObservableObject\n{\n"
-                "    [ObservableProperty]\n    private string? _lonely;\n}\n"
+                "public sealed partial class OtherViewModel : ObservableObject\n{\n    [ObservableProperty]\n    private string? _lonely;\n}\n"
             ),
             "src/Demo.App/Strings/en-US/Resources.resw": RESW.replace(
                 "</root>", '  <data name="Nobody.Reads.This" xml:space="preserve"><value>x</value></data>\n</root>'
