@@ -269,21 +269,21 @@ public class SpendLedgerTests
     }
 
     [Fact]
-    public async Task A_flex_run_still_waiting_for_its_graphics_card_is_not_counted_toward_the_hard_stop_but_a_granted_one_is()
+    public async Task A_run_with_no_VM_start_yet_adds_nothing_to_the_hard_stop_whatever_its_options_say()
     {
+        // A queued flex request has no VmReadyAt (stamped only when the create is answered), so it is skipped on that alone. The granted-and-still-Provisioning
+        // case is covered through the real runner in Cloud.Tests (SpendLedgerRunnerTests), not with a hand-built row.
         var runs = new MemoryRuns();
         var (ledger, _, _, paths) = Make(runs);
         using (paths)
         {
             var flex = RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true });
-            var plain = RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" });
-            runs.Rows.Add(new RunRecord("queued", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-2), OptionsJson: flex));
-            runs.Rows.Add(new RunRecord("granted", JobPhase.Running, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-1), OptionsJson: flex));
-            runs.Rows.Add(new RunRecord("booting", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-1), OptionsJson: plain));
+            runs.Rows.Add(new RunRecord("queued", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", OptionsJson: flex));
+            runs.Rows.Add(new RunRecord("granted", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-1), OptionsJson: flex));
 
             var summary = await ledger.MonthToDateAsync(CancellationToken.None);
 
-            summary.InProgressUsd.ShouldBe(2 * 1.015, 1e-9, "granted flex (1 h) plus the ordinary run still provisioning (1 h); the queued flex request adds nothing");
+            summary.InProgressUsd.ShouldBe(1.015, 1e-9, "the granted flex VM (1 h) bills although its phase is still Provisioning; the queued request adds nothing");
         }
     }
 
