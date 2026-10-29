@@ -30,7 +30,8 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
             cancellationToken.ThrowIfCancellationRequested();
             var history = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
             var booked = await ReadBookedAsync(cancellationToken).ConfigureAwait(false);
-            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), booked);
+            var bookedSeconds = await ReadBookedSecondsAsync(cancellationToken).ConfigureAwait(false);
+            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), booked, bookedSeconds);
             await File.WriteAllBytesAsync(temp, zip, cancellationToken).ConfigureAwait(false);
             File.Move(temp, destinationPath, overwrite: true);
         }
@@ -59,6 +60,23 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
         try
         {
             return await costs.GetBookedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<string, long>?> ReadBookedSecondsAsync(CancellationToken cancellationToken)
+    {
+        if (costs is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await costs.GetBookedSecondsAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

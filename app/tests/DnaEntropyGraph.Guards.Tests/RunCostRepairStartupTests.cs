@@ -76,11 +76,32 @@ public class RunCostRepairStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(WatchedLedger[] ledger, IDiagnosticsLog? log = null)
+    /// <summary>
+    /// A counting seam on the repair the launch calls: how many times it was called, and the ledger's row count the instant before each call started (so a booking made
+    /// by any OTHER startup path shows up as a row that was already there) and the instant after it ended.
+    /// </summary>
+    private sealed class CountingRepair(IRunCostRepair inner, WatchedLedger ledger) : IRunCostRepair
+    {
+        public List<(int Before, int After)> Calls { get; } = [];
+
+        public async Task BookUnbookedRunsAsync(CancellationToken cancellationToken)
+        {
+            var before = (await ledger.GetAllAsync(cancellationToken).ConfigureAwait(false)).Count;
+            await inner.BookUnbookedRunsAsync(cancellationToken).ConfigureAwait(false);
+            Calls.Add((before, (await ledger.GetAllAsync(cancellationToken).ConfigureAwait(false)).Count));
+        }
+    }
+
+    private ServiceProvider Build(WatchedLedger[] ledger, IDiagnosticsLog? log = null, CountingRepair[]? repair = null)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
         services.AddSingleton<ICostLedgerRepository>(sp => ledger[0] = new WatchedLedger(new CostLedgerRepository(sp.GetRequiredService<SqliteDatabase>())));
+        if (repair is not null)
+        {
+            services.AddSingleton<IRunCostRepair>(sp => repair[0] = new CountingRepair(sp.GetRequiredService<SpendLedger>(), (WatchedLedger)sp.GetRequiredService<ICostLedgerRepository>()));
+        }
+
         if (log is not null)
         {
             services.AddSingleton<IDiagnosticsLog>(log);
@@ -131,6 +152,56 @@ public class RunCostRepairStartupTests : IDisposable
         await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
         (await provider.GetRequiredService<SpendLedger>().MonthToDateAsync(TestContext.Current.CancellationToken)).RecordedUsd.ShouldBeGreaterThan(0);
         (await ledger[0].GetAllAsync(TestContext.Current.CancellationToken)).Count(e => e.RunId == "unbooked-2").ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Each_launch_runs_the_repair_exactly_once_and_the_booking_comes_from_it()
+    {
+        var ledger = new WatchedLedger[1];
+        var repair = new CountingRepair[1];
+        using var provider = Build(ledger, repair: repair);
+        _ = provider.GetRequiredService<IRunCostRepair>(); // materialise the seam
+        await SeedUnbookedRunAsync(provider, "unbooked-4");
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken); // ends only after the background repair has
+
+        repair[0].Calls.Count.ShouldBe(1, "one repair per launch: none means it is wired to nothing, two means it is duplicated");
+        repair[0].Calls[0].Before.ShouldBe(0, "no other startup path booked the run before the repair looked");
+        repair[0].Calls[0].After.ShouldBe(1, "the repair is what booked it");
+
+        await AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken);
+
+        repair[0].Calls.Count.ShouldBe(2, "the second launch ran it once more");
+        repair[0].Calls[1].ShouldBe((1, 1), "and found nothing left to book");
+    }
+
+    [Fact]
+    public async Task A_launch_cancelled_before_the_repair_ends_leaves_no_unobserved_fault()
+    {
+        var ledger = new WatchedLedger[1];
+        using var provider = Build(ledger);
+        await SeedUnbookedRunAsync(provider, "unbooked-5");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var faulted = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e) => Interlocked.Increment(ref faulted);
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await Record.ExceptionAsync(() => AppStartup.BeginAsync(provider, cts.Token)); // a cancelled launch may itself end cancelled; only the repair's fault matters here
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        faulted.ShouldBe(0, "a cancelled repair is a requested stop, not a fault nobody observes");
     }
 
     [Fact]

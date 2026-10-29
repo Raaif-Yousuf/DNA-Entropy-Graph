@@ -585,7 +585,7 @@ public class DiagnosticsBundleBuilderTests
         var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
         var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 1.25 }));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 1.25 }, new Dictionary<string, long> { [run.JobId] = 1800 }));
 
         var row = JsonDocument.Parse(entries["run-history.json"]).RootElement[0];
         row.GetProperty("estimatedCostUsd").GetDouble().ShouldBe(1.25);
@@ -605,15 +605,27 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
-    public void A_runs_VM_seconds_are_the_span_the_ledger_booked_clamped_to_its_run_limit_not_the_raw_row_span()
+    public void A_runs_VM_seconds_are_the_span_the_ledger_entry_froze_not_one_derived_from_the_row()
     {
-        // Default options: a 4 h run limit plus the 15 minute grace the VM is created with. The row's raw span (10 h) is what the ledger clamps.
+        // The row says 10 h; the entry (clamped to the 4 h run limit plus the 15 minute grace when it was booked) says 255 minutes. The zip shows the entry's.
         var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
         var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddHours(10) };
+        var booked = (long)TimeSpan.FromMinutes(240 + 15).TotalSeconds;
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 4.3 }));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 4.3 }, new Dictionary<string, long> { [run.JobId] = booked }));
 
-        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe((long)TimeSpan.FromMinutes(240 + 15).TotalSeconds, "the figure beside the cost is the span the cost was booked for");
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe(booked, "the figure beside the cost is the span the cost was booked for");
+    }
+
+    [Fact]
+    public void A_run_with_a_ledger_cost_but_no_booked_seconds_shows_null_VM_seconds_never_a_row_derived_figure()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 1.0 }));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
     [Fact]

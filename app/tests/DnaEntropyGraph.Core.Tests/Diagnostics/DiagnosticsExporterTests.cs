@@ -61,6 +61,24 @@ public class DiagnosticsExporterTests : IDisposable
     }
 
     [Fact]
+    public async Task The_exported_VM_seconds_are_the_span_the_ledger_booked_not_the_rows_later_span()
+    {
+        var path = Path.Combine(_folder, "span.zip");
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        // The row's FinishedAt moved after the booking (3 h); the ledger entry froze 30 minutes.
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud", VmReadyAt: start, FinishedAt: start.AddHours(3));
+        var costs = Substitute.For<IRunCostSource>();
+        costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, double> { [run.JobId] = 0.5 });
+        costs.GetBookedSecondsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, long> { [run.JobId] = 1800 });
+
+        await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(path);
+        using var reader = new StreamReader(archive.GetEntry("run-history.json")!.Open());
+        System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe(1800);
+    }
+
+    [Fact]
     public async Task A_cost_source_that_fails_never_fails_the_export()
     {
         var path = Path.Combine(_folder, "nocost.zip");

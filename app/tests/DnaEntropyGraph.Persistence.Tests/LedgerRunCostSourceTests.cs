@@ -86,6 +86,60 @@ public class LedgerRunCostSourceTests
     }
 
     [Fact]
+    public async Task The_booked_seconds_are_the_ledger_entrys_own_span_and_a_later_row_finish_does_not_move_them()
+    {
+        var (runs, ledger, source, paths) = Make();
+        using (paths)
+        {
+            await runs.UpsertAsync(Ended("r1", 2), CancellationToken.None);
+            await runs.UpsertAsync(Ended("r1", 2, end: Now.AddHours(1)), CancellationToken.None);
+
+            var entry = (await ledger.GetAllAsync(CancellationToken.None)).Single();
+            var seconds = await source.GetBookedSecondsAsync(CancellationToken.None);
+            seconds["r1"].ShouldBe(7200L, "the span the entry froze, not the row's later one");
+            seconds["r1"].ShouldBe((long)(entry.EndedUtc!.Value - entry.StartedUtc).TotalSeconds);
+        }
+    }
+
+    [Fact]
+    public async Task A_row_that_finished_before_its_VM_was_ready_books_a_zero_second_entry_and_both_figures_agree()
+    {
+        var (runs, _, source, paths) = Make();
+        using (paths)
+        {
+            await runs.UpsertAsync(Ended("r1", 1, end: Now.AddHours(-3)), CancellationToken.None);
+
+            (await source.GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(0.0);
+            (await source.GetBookedSecondsAsync(CancellationToken.None))["r1"].ShouldBe(0L);
+        }
+    }
+
+    [Fact]
+    public async Task A_span_longer_than_the_run_limit_books_its_seconds_and_its_cost_for_the_same_clamped_span()
+    {
+        var (runs, _, source, paths) = Make();
+        using (paths)
+        {
+            await runs.UpsertAsync(Ended("r1", 10), CancellationToken.None); // 10 h row; default limit 4 h plus 15 min grace
+
+            (await source.GetBookedSecondsAsync(CancellationToken.None))["r1"].ShouldBe(255L * 60);
+            (await source.GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(255d / 60 * 1.015, 1e-9);
+        }
+    }
+
+    [Fact]
+    public async Task A_run_with_no_ledger_entry_has_no_booked_seconds()
+    {
+        var (runs, _, source, paths) = Make();
+        using (paths)
+        {
+            await runs.UpsertAsync(Ended("r1", 1, machine: null), CancellationToken.None);
+
+            (await source.GetBookedSecondsAsync(CancellationToken.None)).ShouldNotContainKey("r1");
+        }
+    }
+
+    [Fact]
     public async Task A_later_copy_of_the_row_that_cannot_be_priced_does_not_change_what_the_run_shows()
     {
         var (runs, ledger, source, paths) = Make();

@@ -21,9 +21,13 @@ public static class AppStartup
     {
         try
         {
-            await services.GetRequiredService<SpendLedger>().BookUnbookedRunsAsync(cancellationToken).ConfigureAwait(false);
+            await services.GetRequiredService<IRunCostRepair>().BookUnbookedRunsAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            // A requested stop, not a failure: nothing is logged, and the next launch repairs whatever is left.
+        }
+        catch (Exception ex)
         {
             try
             {
@@ -45,9 +49,21 @@ public static class AppStartup
     /// </summary>
     public static async Task BeginAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
-        // Issues #100 and #557: the one place a ledger append that failed after its run row was stored is booked again. Not awaited, so launch never waits for it.
-        _ = RepairRunCostsAsync(services, cancellationToken);
+        // Issues #100 and #557: the one place a ledger append that failed after its run row was stored is booked again. It runs in the background beside the rest of the launch
+        // (nothing waits for it), and this task, which the app does not await either, ends only after it has: so it is never left unobserved and a test can count it.
+        var repair = RepairRunCostsAsync(services, cancellationToken);
+        try
+        {
+            await ReconcileLaunchAsync(services, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await repair.ConfigureAwait(false);
+        }
+    }
 
+    private static async Task ReconcileLaunchAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
         // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
         _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
 

@@ -18,7 +18,7 @@ namespace DnaEntropyGraph.Persistence;
 /// midnight on the 1st counts toward the new month. MonthlySpend is not a stored table: the sum is read from the append-only ledger, so
 /// there is no second number to drift. Issue #557 will replace the estimate with the instance-timestamp figure.
 /// </summary>
-public sealed class SpendLedger : ISpendCapGate
+public sealed class SpendLedger : ISpendCapGate, IRunCostRepair
 {
     public const string VmRuntimeKind = "vm_runtime";
 
@@ -67,7 +67,7 @@ public sealed class SpendLedger : ISpendCapGate
         }
 
         // A span is never negative: a row whose end is before its start (a clock step, a bad stamp) books a zero span with its $0, so every reader of the entry agrees.
-        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : finished, UsdEst: usd);
+        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : BookedVmSpan.ClampEnd(run, vmStart, finished), UsdEst: usd);
     }
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>

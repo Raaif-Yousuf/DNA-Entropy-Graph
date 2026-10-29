@@ -22,4 +22,19 @@ public sealed class LedgerRunCostSource(ICostLedgerRepository ledger) : IRunCost
 
         return booked;
     }
+
+    public async Task<IReadOnlyDictionary<string, long>> GetBookedSecondsAsync(CancellationToken cancellationToken)
+    {
+        var seconds = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var entry in await ledger.GetByKindAsync(SpendLedger.VmRuntimeKind, cancellationToken).ConfigureAwait(false))
+        {
+            // The same entry GetBookedAsync reads (the first of a run stands), so the cost and the seconds are one booking.
+            if (entry.Kind == SpendLedger.VmRuntimeKind && entry.RunId is { } run && entry.UsdEst is { } usd && double.IsFinite(usd) && usd >= 0)
+            {
+                seconds.TryAdd(run, Math.Max(0L, (long)Math.Round(((entry.EndedUtc ?? entry.StartedUtc) - entry.StartedUtc).TotalSeconds)));
+            }
+        }
+
+        return seconds;
+    }
 }
