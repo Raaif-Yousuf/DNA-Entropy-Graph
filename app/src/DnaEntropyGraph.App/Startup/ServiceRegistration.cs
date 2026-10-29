@@ -65,7 +65,10 @@ public static class ServiceRegistration
         // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
         services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
-        services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
+        // Issue #244: every navigation also records the page (and run) for session restore; the shell reads it back at startup.
+        services.AddSingleton<SessionStore>();
+        services.AddSingleton<SessionRestorer>();
+        services.AddSingleton<INavigator>(sp => new RecordingNavigator(sp.GetRequiredService<NavigationService>(), sp.GetRequiredService<SessionStore>()));
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
         services.AddSingleton<InAppMessageCenter>();
         services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
