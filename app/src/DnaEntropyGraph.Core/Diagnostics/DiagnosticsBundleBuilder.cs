@@ -314,8 +314,9 @@ public static partial class DiagnosticsBundleBuilder
         gpuType = run.GpuType,
         isSpot = run.IsSpot,
         vmReused = run.VmReused,
-        // Issue #100: nothing writes the run row's cost columns any more. The cost is the spend-ledger figure the caller read; the VM seconds are the booked span itself.
-        vmSeconds = run.VmSeconds ?? (run.VmReadyAt is { } ready && run.FinishedAt is { } done && done >= ready ? (long)(done - ready).TotalSeconds : (long?)null),
+        // Issue #100: nothing writes the run row's cost columns any more. The cost is the spend-ledger figure the caller read; the VM seconds are the span the ledger booked for it
+        // (BookedVmSpan: clamped to the run's limit, exactly as the ledger prices it), and null when the ledger booked nothing (a This PC run, an unpriced one, no VM ever seen).
+        vmSeconds = bookedUsd is not null ? BookedVmSpan.Seconds(run) : (long?)null,
         estimatedCostUsd = bookedUsd ?? run.EstimatedCostUsd,
         actualCostUsd = run.ActualCostUsd,
         cloudResultsDeleted = run.CloudResultsDeleted,

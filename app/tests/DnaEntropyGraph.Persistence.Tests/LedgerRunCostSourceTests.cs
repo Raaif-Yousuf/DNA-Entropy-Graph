@@ -154,15 +154,25 @@ public class LedgerRunCostSourceTests
 
         public bool ForbidGetAll { get; set; }
 
+        /// <summary>Called on every append attempt, so a test can prove a read made none.</summary>
+        public Action? OnAppend { get; set; }
+
         public Task<IReadOnlyList<CostLedgerEntry>> GetAllAsync(CancellationToken cancellationToken)
             => ForbidGetAll ? throw new InvalidOperationException("the unfiltered read was used") : inner.GetAllAsync(cancellationToken);
 
         public Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken) => inner.GetByKindAsync(kind, cancellationToken);
 
-        public Task<CostLedgerEntry> AppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken) => inner.AppendAsync(entry, cancellationToken);
+        public Task<CostLedgerEntry> AppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
+        {
+            OnAppend?.Invoke();
+            return inner.AppendAsync(entry, cancellationToken);
+        }
 
         public Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
-            => FailAppends ? throw new IOException("database is locked") : inner.TryAppendAsync(entry, cancellationToken);
+        {
+            OnAppend?.Invoke();
+            return FailAppends ? throw new IOException("database is locked") : inner.TryAppendAsync(entry, cancellationToken);
+        }
     }
 
     [Fact]
@@ -177,41 +187,28 @@ public class LedgerRunCostSourceTests
     }
 
     [Fact]
-    public async Task A_ledger_write_that_failed_is_booked_by_the_next_read_of_the_run_cost_so_the_Runs_row_gets_its_figure()
+    public async Task Reading_the_run_cost_never_writes_to_the_ledger_a_failed_append_stays_unbooked_until_the_startup_repair()
     {
-        // SpendLedger's own reconcile repairs a failed append, but only on a month-to-date read; the Runs and Results pages never make one. They read through this source.
+        // Reads never write: the Runs and Results pages and the support zip read through this source, and a read that books is a page that mutates money records.
         using var paths = new TempPaths();
         var flaky = new FlakyLedger(new CostLedgerRepository(new SqliteDatabase(paths.DatabasePath))) { FailAppends = true };
         var rows = new Rows();
         var spend = new SpendLedger(flaky, new Pricing(), new Settings(), new FixedTime(Now), TimeZoneInfo.Utc, rows);
         var runs = new LedgerRecordingRunRepository(rows, spend);
         await runs.UpsertAsync(Ended("r1", 2), CancellationToken.None);
-        (await new LedgerRunCostSource(flaky).GetBookedAsync(CancellationToken.None)).ShouldBeEmpty("the append failed: nothing is booked yet, and a source with no repair cannot know");
-
         flaky.FailAppends = false;
-        var repaired = await new LedgerRunCostSource(flaky, spend).GetBookedAsync(CancellationToken.None);
+        var appends = 0;
+        flaky.OnAppend = () => Interlocked.Increment(ref appends);
 
-        repaired["r1"].ShouldBe(2 * 1.015, 1e-9);
-        (await flaky.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1);
-        await new LedgerRunCostSource(flaky, spend).GetBookedAsync(CancellationToken.None);
-        (await flaky.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1, "booked once; a second read adds nothing");
-    }
+        (await new LedgerRunCostSource(flaky).GetBookedAsync(CancellationToken.None)).ShouldBeEmpty("nothing was booked, and a read does not book it");
+        (await new LedgerRunCostSource(flaky).GetBookedAsync(CancellationToken.None)).ShouldBeEmpty();
+        appends.ShouldBe(0, "a read made no ledger write");
+        (await flaky.GetAllAsync(CancellationToken.None)).ShouldBeEmpty();
 
-    [Fact]
-    public async Task A_repair_that_throws_still_returns_what_the_ledger_holds()
-    {
-        using var paths = new TempPaths();
-        var real = new CostLedgerRepository(new SqliteDatabase(paths.DatabasePath));
-        await real.AppendAsync(new CostLedgerEntry(SpendLedger.VmRuntimeKind, Now, "r1", UsdEst: 3), CancellationToken.None);
-        var spend = new SpendLedger(real, new Pricing(), new Settings(), new FixedTime(Now), TimeZoneInfo.Utc, new UnreadableRows());
-
-        (await new LedgerRunCostSource(real, spend).GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(3, "the repair reads the run history, which throws; the figure the ledger holds still shows");
-    }
-
-    private sealed class UnreadableRows : IRunRepository
-    {
-        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => throw new IOException("database is locked");
-
-        public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
+        // The one place that books it: the startup repair, idempotent.
+        await spend.BookUnbookedRunsAsync(CancellationToken.None);
+        await spend.BookUnbookedRunsAsync(CancellationToken.None);
+        (await flaky.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1, "booked once; a second repair adds nothing");
+        (await new LedgerRunCostSource(flaky).GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(2 * 1.015, 1e-9);
     }
 }

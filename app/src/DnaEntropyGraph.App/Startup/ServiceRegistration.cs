@@ -189,8 +189,8 @@ public static class ServiceRegistration
             TimeProvider.System,
             runs: sp.GetRequiredService<RunRepository>()));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ISpendCapGate>(sp => sp.GetRequiredService<SpendLedger>());
-        // Issues #100 and #557: the Results header and the Runs rows read a run's cost from its ledger entry, the only record of it.
-        services.AddSingleton<IRunCostSource>(sp => new LedgerRunCostSource(sp.GetRequiredService<ICostLedgerRepository>(), sp.GetRequiredService<SpendLedger>()));
+        // Issues #100 and #557: the Results header and the Runs rows read a run's cost from its ledger entry, the only record of it. A read never writes: AppStartup books a missed entry once at launch.
+        services.AddSingleton<IRunCostSource>(sp => new LedgerRunCostSource(sp.GetRequiredService<ICostLedgerRepository>()));
         services.AddSingleton<IRunRepository>(sp => new LedgerRecordingRunRepository(sp.GetRequiredService<RunRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));

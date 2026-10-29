@@ -604,6 +604,40 @@ public class DiagnosticsBundleBuilderTests
         row.GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    [Fact]
+    public void A_runs_VM_seconds_are_the_span_the_ledger_booked_clamped_to_its_run_limit_not_the_raw_row_span()
+    {
+        // Default options: a 4 h run limit plus the 15 minute grace the VM is created with. The row's raw span (10 h) is what the ledger clamps.
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddHours(10) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 4.3 }));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe((long)TimeSpan.FromMinutes(240 + 15).TotalSeconds, "the figure beside the cost is the span the cost was booked for");
+    }
+
+    [Fact]
+    public void A_run_with_a_span_but_no_ledger_entry_an_unpriced_run_shows_null_VM_seconds()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", MachineType = null, EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double>()));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null, "nothing was booked, so no span is claimed");
+    }
+
+    [Fact]
+    public void A_This_PC_run_shows_null_VM_seconds()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "local", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double>()));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
     [Theory]
     [InlineData("Patient 42")]
     [InlineData("demo-run")]

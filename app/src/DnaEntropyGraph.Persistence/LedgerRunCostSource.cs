@@ -4,24 +4,13 @@ namespace DnaEntropyGraph.Persistence;
 
 /// <summary>
 /// Reads each run's booked cost from the cost ledger (see <see cref="IRunCostSource"/>): one read of the ledger's <c>vm_runtime</c> entries (filtered in the query), the first entry
-/// of a run standing. With a <paramref name="repair"/> it first books any ended run whose ledger append failed (the same idempotent reconcile a month-to-date read makes).
+/// of a run standing. A read never writes: a ledger append that failed after its run row was stored is booked by the repair the app runs once at startup
+/// (<see cref="SpendLedger.BookUnbookedRunsAsync"/>) and by a month-to-date read, never by a page, the Results header or the support zip reading a cost.
 /// </summary>
-public sealed class LedgerRunCostSource(ICostLedgerRepository ledger, SpendLedger? repair = null) : IRunCostSource
+public sealed class LedgerRunCostSource(ICostLedgerRepository ledger) : IRunCostSource
 {
     public async Task<IReadOnlyDictionary<string, double>> GetBookedAsync(CancellationToken cancellationToken)
     {
-        if (repair is not null)
-        {
-            try
-            {
-                await repair.BookUnbookedRunsAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // A repair that cannot run leaves the figures the ledger already holds; the page is never failed for it.
-            }
-        }
-
         var booked = new Dictionary<string, double>(StringComparer.Ordinal);
         foreach (var entry in await ledger.GetByKindAsync(SpendLedger.VmRuntimeKind, cancellationToken).ConfigureAwait(false))
         {

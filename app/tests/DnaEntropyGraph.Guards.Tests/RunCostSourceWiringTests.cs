@@ -36,11 +36,6 @@ public class RunCostSourceWiringTests
 
         var source = provider.GetRequiredService<IRunCostSource>();
         source.ShouldBeOfType<LedgerRunCostSource>();
-        // Built without the repair a failed ledger write would show no figure on the Runs row until some other page happened to read the month.
-        source.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
-            .Where(f => f.FieldType == typeof(SpendLedger))
-            .Select(f => f.GetValue(source))
-            .ShouldContain(v => v != null, "the run cost source was built without the ledger repair");
         await provider.GetRequiredService<ICostLedgerRepository>().AppendAsync(new CostLedgerEntry(SpendLedger.VmRuntimeKind, DateTimeOffset.UtcNow, "wired-run", EndedUtc: DateTimeOffset.UtcNow, UsdEst: 1.25), TestContext.Current.CancellationToken);
         (await source.GetBookedAsync(TestContext.Current.CancellationToken))["wired-run"].ShouldBe(1.25, 1e-12);
 
