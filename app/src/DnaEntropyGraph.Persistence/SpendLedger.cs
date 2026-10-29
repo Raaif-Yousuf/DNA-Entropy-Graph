@@ -69,6 +69,12 @@ public sealed class SpendLedger : ISpendCapGate
         }
 
         // A span is never negative: a row whose end is before its start (a clock step, a bad stamp) books a zero span with its $0, so every reader of the entry agrees.
+        // Traced by job id only (never a message), so a clock step shows up in the diagnostics zip.
+        if (finished < vmStart)
+        {
+            System.Diagnostics.Trace.TraceWarning($"vm-span-inverted job={run.JobId}");
+        }
+
         return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : finished, UsdEst: usd);
     }
 

@@ -220,7 +220,7 @@ public class SpendLedgerRound8Tests
     [Fact]
     public async Task A_run_records_the_workers_heartbeat_time_through_the_runs_own_token_and_one_row_read()
     {
-        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone).WithWorkerClock(new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var repo = new InMemoryRunRepository();
         var clocks = new RunnerClocks();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
@@ -240,7 +240,7 @@ public class SpendLedgerRound8Tests
 
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
         repo.GetTokens.ShouldContain(cts.Token, "the heartbeat write was handed the run's own cancellation token");
-        // The fake worker writes updatedAt from the real clock, weeks ahead of the runner's (test) clock: the row holds the earlier, the app's own now.
+        // The fake worker's updatedAt is pinned to 2099, far ahead of the runner's (test) clock: the row holds the earlier, the app's own now.
         LastRow(repo, "job-m6").LastHeartbeatAt!.Value.ShouldBeLessThanOrEqualTo(clocks.Run.GetUtcNow());
     }
     // ---- L: VmEndedAt is first-wins for the run ----
@@ -296,7 +296,7 @@ public class SpendLedgerRound8Tests
     public async Task A_heartbeat_from_a_VM_clock_ahead_of_the_app_is_recorded_as_the_apps_now()
     {
         var clocks = new RunnerClocks();
-        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone).WithWorkerClock(new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var repo = new InMemoryRunRepository();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
         {
@@ -313,7 +313,7 @@ public class SpendLedgerRound8Tests
         var result = await runner.RunAsync(TestInputs.Request("job-r10a", Spec("job-r10a")), CancellationToken.None);
 
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
-        // The fake worker writes the real clock, weeks ahead of the run's test clock: the row must never hold a time later than the app's own now.
+        // The fake worker's clock is pinned to 2099, far ahead of the run's test clock: the row must never hold a time later than the app's own now.
         var recorded = repo.AllRecordedInOrder.Where(r => r.JobId == "job-r10a" && r.LastHeartbeatAt is not null).Select(r => r.LastHeartbeatAt!.Value).ToList();
         recorded.ShouldNotBeEmpty();
         recorded.ShouldAllBe(at => at <= clocks.Run.GetUtcNow(), "a future heartbeat rejects every later real one and is booked as the end");
@@ -375,7 +375,7 @@ public class SpendLedgerRound8Tests
     {
         var start = AppNow.AddMinutes(5);
 
-        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null).ShouldBe(start);
-        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null, AppNow.AddMinutes(1)).ShouldBe(start);
+        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null).ShouldBe(AppNow);
+        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null, AppNow.AddMinutes(1)).ShouldBe(AppNow);
     }
 }

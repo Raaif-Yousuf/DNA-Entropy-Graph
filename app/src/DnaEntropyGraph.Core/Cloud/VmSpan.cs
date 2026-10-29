@@ -61,9 +61,9 @@ internal static class VmSpan
             return null;
         }
 
-        // Never later than now (a VM clock ahead of the app's would book the future), and never before the start (a start after now is a zero span, not a negative one).
-        var clamped = Min(known, now);
-        return start is { } from && clamped < from ? from : clamped;
+        // Never later than now (a VM clock ahead of the app's would book the future). A start after now (the app clock is behind the platform's) leaves the end BEFORE the start:
+        // the ledger books max(0, end - start) = zero for that and traces "vm-span-inverted"; the end is never invented in the future.
+        return Min(known, now);
     }
 
     private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a <= b ? a : b;
