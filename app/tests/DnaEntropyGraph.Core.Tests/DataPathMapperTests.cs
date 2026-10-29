@@ -47,4 +47,16 @@ public sealed class DataPathMapperTests
         mapper.ToStored(@"d:\STICK\outputs").ShouldBe(@"portable:outputs");
         mapper.FromStored("portable:").ShouldBe(@"D:\stick");
     }
+
+    [Theory]
+    [InlineData(@"portable:..\..\x")]
+    [InlineData(@"portable:outputs\..\..\x")]
+    [InlineData(@"portable:C:\Windows\x")]
+    [InlineData(@"portable:\\server\share\x")]
+    [InlineData(@"portable:\x")]
+    public void A_stored_path_that_would_expand_outside_the_portable_folder_is_left_unexpanded(string stored)
+    {
+        // A corrupt or hand-edited history row must not make the app read or write outside the stick (Hard Rule 14).
+        new DataPathMapper(@"D:\stick").FromStored(stored).ShouldBe(stored);
+    }
 }

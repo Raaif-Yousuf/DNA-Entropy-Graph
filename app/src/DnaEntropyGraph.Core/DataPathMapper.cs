@@ -46,6 +46,14 @@ public sealed class DataPathMapper(string? portableBase)
 
         var relative = stored[Prefix.Length..];
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(portableBase));
-        return relative.Length == 0 ? root : Path.Combine(root, relative);
+        if (relative.Length == 0)
+        {
+            return root;
+        }
+
+        // The stored text comes from the history database. A rooted or climbing remainder ("portable:..\..\x", "portable:C:\x")
+        // must not expand to a place outside the portable folder (Hard Rule 14), so it is left as stored: not a path that exists.
+        var expanded = Path.Combine(root, relative);
+        return Runs.RunOutputRoot.IsStrictlyInside(expanded, root) ? expanded : stored;
     }
 }

@@ -41,4 +41,30 @@ public class FileLogTailReaderTests
             Directory.Delete(root, recursive: true);
         }
     }
-}
+
+    [Theory]
+    [InlineData(@"..\outside")]
+    [InlineData(@"C:\outside")]
+    [InlineData(@"\\server\share")]
+    [InlineData("a:stream")]
+    public void A_job_id_that_leaves_the_runs_folder_reads_nothing(string jobId)
+    {
+        var parent = Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}");
+        var root = Path.Combine(parent, "runs");
+        Directory.CreateDirectory(root);
+        var outside = Path.Combine(parent, "outside", "logs");
+        Directory.CreateDirectory(outside);
+        File.WriteAllLines(Path.Combine(outside, "worker.log"), ["SECRET"]);
+        var reader = new FileLogTailReader(root);
+
+        try
+        {
+            reader.ReadLines(jobId).ShouldBeEmpty();
+            reader.ReadLines(Path.Combine("..", "outside")).ShouldBeEmpty();
+            reader.ReadLines(Path.Combine(parent, "outside")).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }}
