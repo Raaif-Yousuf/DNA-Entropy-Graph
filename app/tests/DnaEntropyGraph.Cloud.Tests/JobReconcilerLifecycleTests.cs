@@ -53,7 +53,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, compute: compute);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -238,6 +238,38 @@ public class JobReconcilerLifecycleTests
         outcomes.Count(o => o.Action == LifecycleAction.VmDeleted).ShouldBe(1);
         var left = (await rig.VmsAsync("job-hang-a")).Count + (await rig.VmsAsync("job-hang-b")).Count;
         left.ShouldBe(1, "one delete was deferred; the other VM was not skipped because of it");
+    }
+
+    [Fact]
+    public async Task A_reconciler_mutation_that_hits_the_apps_own_deadline_is_audited_as_timeout_not_cancelled()
+    {
+        // Issue #245 review round 4 (M): the reconciler's own deadline token reached the audited gateway without the caller scope, so the app's timeout read "cancelled".
+        var rig = new Rig(g => g.WithFirstDeleteDelay(TimeSpan.FromSeconds(30)));
+        await rig.SeedFinishedAsync("job-audit-timeout", AfterTaskAction.Delete);
+        var entries = new List<DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry>();
+        var auditor = new DnaEntropyGraph.Core.Cloud.Audit.CloudAuditor(new ListLog(entries), () => "install-1", TimeProvider.System);
+        var audited = new AuditedComputeGateway(rig.Gcp, auditor);
+
+        var outcomes = await rig.Reconciler(lookupTimeout: TimeSpan.FromMilliseconds(100), mutationTimeout: TimeSpan.FromMilliseconds(200), compute: audited).EnforceLifecycleAsync(CancellationToken.None);
+
+        outcomes.ShouldContain(o => o.JobId == "job-audit-timeout" && o.Action == LifecycleAction.Deferred);
+        for (var i = 0; i < 500 && !entries.Any(e => e.Operation == "Compute.DeleteVm" && e.Phase == "finished"); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        entries.Single(e => e.Operation == "Compute.DeleteVm" && e.Phase == "finished").Outcome.ShouldBe("timeout");
+    }
+
+    private sealed class ListLog(List<DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry> entries) : DnaEntropyGraph.Core.Cloud.Audit.ICloudAuditLog
+    {
+        public void Record(DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry entry)
+        {
+            lock (entries)
+            {
+                entries.Add(entry);
+            }
+        }
     }
 
     [Fact]

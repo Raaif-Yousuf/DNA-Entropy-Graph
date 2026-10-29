@@ -1537,6 +1537,8 @@ Every call that changes something in the user's Google Cloud project leaves one 
   line (`mintRequestId`), the gateway sends that same id (`CloudAuditContext.RequestIdForCall`), so the started line and a finished line
   for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`; `cancelled` only when the caller's own token was cancelled; `timeout` for any other cancellation, such as an HttpClient timeout; or the `CloudErrorClassifier` bucket), `errorCode`
   (Google's structured code, never the message) and `durationMs`.
+- **One way to start a call under the app's deadline.** Any code that hands an audited gateway call a token linked to an app-made deadline (`GatewayCalls`, the reconciler's `WithDeadline`) starts it through `CloudAuditContext.StartUnderDeadline(callerToken, deadlineToken, call)`, which names the caller's own token to the auditor; a new site that links a deadline and calls a gateway uses the same helper. Both sites also cancel the abandoned call's token when the wait ends (timeout or user cancel), so it ends and is audited at once.
+- **Known race (accepted).** A user cancel that lands after the app's deadline already fired, but before the abandoned inner call ends, is recorded as `cancelled`, because the auditor reads the caller's token when the call ends. The entry is then wrong about the first cause only; the call did not succeed either way.
 - **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
   email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
   `Object_prefix_stops_at_the_job...` guard it.

@@ -20,6 +20,19 @@ public static class CloudAuditContext
         return new CallerRestore(previous);
     }
 
+    /// <summary>
+    /// THE way to start an audited gateway call under an app-made deadline: hands <paramref name="call"/> the <paramref name="deadlineToken"/> (a token linked to the caller's)
+    /// while naming <paramref name="callerToken"/> as the caller's own, so the audit records a deadline as "timeout" and a user cancel as "cancelled". Every place in
+    /// Core that links a deadline token to a call into a gateway uses this (GatewayCalls, the reconciler), so the classification cannot be forgotten at a new site.
+    /// </summary>
+    public static Task<T> StartUnderDeadline<T>(CancellationToken callerToken, CancellationToken deadlineToken, Func<CancellationToken, Task<T>> call)
+    {
+        using (CallerScope(callerToken))
+        {
+            return call(deadlineToken);
+        }
+    }
+
     internal static CancellationToken? CurrentCaller => Caller.Value;
 
     private sealed class CallerRestore(CancellationToken? previous) : IDisposable

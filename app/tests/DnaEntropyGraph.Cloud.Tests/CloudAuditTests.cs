@@ -183,8 +183,13 @@ public class CloudAuditTests
         using var cts = new CancellationTokenSource();
         var inner = Substitute.For<IComputeGateway>();
 
-        // Ends on the USER's token: whether GatewayCalls also cancels its linked deadline before the caller's wait unwinds is a race this test does not depend on.
-        inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(_ => Task.Delay(Timeout.Infinite, cts.Token));
+        // Ends on the token the gateway was HANDED (GatewayCalls' linked token), and keeps it so the test can show the inner call received the user's cancel.
+        CancellationToken handed = default;
+        inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            handed = ci.Arg<CancellationToken>();
+            return Task.Delay(Timeout.Infinite, handed);
+        });
         var gateway = new AuditedComputeGateway(inner, new CloudAuditor(log, () => null, TimeProvider.System));
         var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromSeconds(30) }, new FakeGcp());
 
@@ -196,8 +201,10 @@ public class CloudAuditTests
         await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => pending);
+        handed.IsCancellationRequested.ShouldBeTrue("the inner call must have received the cancel through the token it was handed");
         (await SingleEntryAsync(log)).Outcome.ShouldBe("cancelled");
     }
+
     [Fact]
     public async Task The_installation_id_is_read_once_and_a_null_is_retried_not_cached()
     {
