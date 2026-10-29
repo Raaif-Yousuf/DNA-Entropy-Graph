@@ -64,7 +64,27 @@ public class FakeGcpTests
             return (-1, -1);
         }
 
-        var open = code.IndexOf('{', start);
+        // Past the parameter list: an expression body (`=>`) ends at its `;`, a block body at its closing brace. Brace counting alone would run an expression-bodied member into the next one.
+        var paren = code.IndexOf('(', start);
+        var parenDepth = 0;
+        var afterParams = paren;
+        for (var i = paren; i < code.Length; i++)
+        {
+            parenDepth += code[i] == '(' ? 1 : code[i] == ')' ? -1 : 0;
+            if (parenDepth == 0)
+            {
+                afterParams = i + 1;
+                break;
+            }
+        }
+
+        if (code[afterParams..].TrimStart().StartsWith("=>", StringComparison.Ordinal))
+        {
+            var semicolon = code.IndexOf(';', afterParams);
+            return semicolon < 0 ? (-1, -1) : (start, semicolon);
+        }
+
+        var open = code.IndexOf('{', afterParams);
         var depth = 0;
         for (var i = open; i < code.Length; i++)
         {
@@ -80,7 +100,7 @@ public class FakeGcpTests
 
     private static VmScan ScanVmRowWrites(string text, string label)
     {
-        var assignment = new System.Text.RegularExpressions.Regex(@"_vms\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*=(?<rhs>[^=][^;]*)");
+        var assignment = new System.Text.RegularExpressions.Regex(@"_vms\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*(?:\?\?|[-+*/%&|^]|<<|>>)?=(?<rhs>[^=][^;]*)");
         var violations = new List<string>();
         var helperWrites = 0;
         var marked = 0;
@@ -95,14 +115,14 @@ public class FakeGcpTests
         // or the one compare-and-swap (TryUpdate) / one insert (TryAdd) inside their own helper. An alias (`var d = _vms;`), a cast, a ref, `.Clear()`, `.AddOrUpdate(...)` are none of these.
         var allowedMember = new System.Text.RegularExpressions.Regex(@"^\s*\.\s*(?<member>\w+)");
         var readMembers = new HashSet<string> { "TryGetValue", "TryRemove", "Values", "Keys", "ContainsKey", "Count", "IsEmpty" };
-        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(code, @"(?<![\w.])_vms\b"))
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(code, @"(?<!\w)_vms\b"))
         {
             var before = code[..m.Index].TrimEnd();
             var rest = code[(m.Index + m.Length)..];
             var member = allowedMember.Match(rest);
             var name = member.Success ? member.Groups["member"].Value : null;
             var ok = (System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*=\s*new\b") && before.EndsWith('>'))
-                || (System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*\)") && System.Text.RegularExpressions.Regex.IsMatch(before, @"\bin$"))
+                || (System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*\)") && System.Text.RegularExpressions.Regex.IsMatch(before, @"\bforeach\s*\((?:[^()]|\([^()]*\))*\bin$"))
                 || System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*\[")
                 || (name is not null && readMembers.Contains(name));
             if (!ok && name == "TryUpdate" && updateBody.Start >= 0 && m.Index > updateBody.Start && m.Index < updateBody.End)
@@ -165,6 +185,12 @@ public class FakeGcpTests
     [InlineData("a bare indexer assignment", "void M() { _vms[key] = row; }")]
     [InlineData("a TryUpdate outside the helper", "void M() { _vms.TryUpdate(key, a, b); }")]
     [InlineData("passing it by reference", "void M() { Interlocked.Exchange(ref _vms, other); }")]
+    [InlineData("a this-qualified clear", "void M() { this._vms.Clear(); }")]
+    [InlineData("a this-qualified alias", "void M() { var d = this._vms; }")]
+    [InlineData("a null-coalescing indexer assignment", "void M() { _vms[key] ??= row; }")]
+    [InlineData("passing it as an in argument", "void M() { Take(in _vms); }")]
+    [InlineData("a TryAdd outside the helper", "bool TryInsertVm(k, r) => _vms.TryAdd(k, r); void Other() { _vms.TryAdd(k, r); }")]
+    [InlineData("a TryAdd in the member after a block-bodied helper", "bool TryInsertVm(k, r) { return true; } void Other() { _vms.TryAdd(k, r); }")]
     public void The_vm_row_guard_catches_every_bypass_shape(string shape, string code)
     {
         var scan = ScanVmRowWrites("class C { private readonly ConcurrentDictionary<(string, string), VmDescriptor> _vms = new(); " + code + " }", "planted.cs");
@@ -176,6 +202,8 @@ public class FakeGcpTests
     [InlineData("a read", "void M() { _vms.TryGetValue(key, out var v); var x = _vms.Values; foreach (var (k, vm) in _vms) { } }")]
     [InlineData("a removal", "void M() { _vms.TryRemove(key, out _); _vms.TryRemove(new KeyValuePair<int, int>(key, row)); }")]
     [InlineData("a marked create", "void M() { // vm-row-create: a new row\n _vms[key] = new VmDescriptor(a); }")]
+    [InlineData("the TryAdd inside an expression-bodied helper", "bool TryInsertVm(k, r) => _vms.TryAdd(k, r);")]
+    [InlineData("the TryAdd inside a block-bodied helper", "bool TryInsertVm(k, r) { return _vms.TryAdd(k, r); }")]
     public void The_vm_row_guard_lets_reads_removals_and_a_marked_create_through(string shape, string code)
     {
         var scan = ScanVmRowWrites("class C { private readonly ConcurrentDictionary<(string, string), VmDescriptor> _vms = new(); " + code + " }", "planted.cs");

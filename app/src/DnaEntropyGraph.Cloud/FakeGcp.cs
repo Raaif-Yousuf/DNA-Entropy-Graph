@@ -66,7 +66,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Per-attempt scripted failures (worth continuing past) ---
     private readonly Dictionary<string, int> _stockoutRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _quotaExceededRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _alreadyExistingVmKeys = new();
+    // name -> the incarnation WithAlreadyExists put there: the create is refused only while that VM is the one under the name (#918)
+    private readonly ConcurrentDictionary<(string Name, string Zone), ulong> _alreadyExistingVmKeys = new();
     private int _networkFailuresRemaining;
 
     // --- Transient / auth failures (issue #258): consumed by the next calls to ANY gateway method ---
@@ -332,10 +333,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public FakeGcp WithAlreadyExists(string vmName, string zone, string status = "RUNNING")
     {
         var key = (vmName, zone);
+        var id = (ulong)Interlocked.Increment(ref _nextInstanceId);
+        var displaced = _vms.TryGetValue(key, out var live) ? live : null;
         // vm-row-create: inserts a NEW row (the #875 guard allows a bare assignment only here)
-        _vms[key] = new VmDescriptor(vmName, zone, status, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        _vms[key] = new VmDescriptor(vmName, zone, status, InstanceId: id);
+        if (displaced is not null)
+        {
+            ForgetIncarnation(displaced); // the row it replaces is gone, and so is what belonged to it (#918)
+        }
+
         ResetVmDeleted(vmName);
-        _alreadyExistingVmKeys[key] = 0;
+        _alreadyExistingVmKeys[key] = id;
         return this;
     }
 
@@ -1051,13 +1059,21 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         var key = (spec.VmName, zone);
 
-        if (_alreadyExistingVmKeys.ContainsKey(key))
+        if (_alreadyExistingVmKeys.TryGetValue(key, out var markedIncarnation))
         {
-            throw Build(
-                CloudErrorKind.AlreadyExists,
-                "ALREADY_EXISTS",
-                409,
-                $"The resource 'projects/{spec.ProjectId}/zones/{zone}/instances/{spec.VmName}' already exists");
+            if (!_vms.TryGetValue(key, out var marked) || IncarnationOf(marked) != markedIncarnation)
+            {
+                // The VM the mark was made for is gone: the name is free, as on Compute.
+                _alreadyExistingVmKeys.TryRemove(new KeyValuePair<(string Name, string Zone), ulong>(key, markedIncarnation));
+            }
+            else
+            {
+                throw Build(
+                    CloudErrorKind.AlreadyExists,
+                    "ALREADY_EXISTS",
+                    409,
+                    $"The resource 'projects/{spec.ProjectId}/zones/{zone}/instances/{spec.VmName}' already exists");
+            }
         }
 
         if (_vms.TryGetValue(key, out var alreadyCreatedByUs))
@@ -1143,7 +1159,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private TaskCompletionSource<bool>? _flexHold;
     private bool _queuedHidden;
-    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _queuedKeys = new();
+    private readonly ConcurrentDictionary<ulong, byte> _queuedKeys = new(); // by the queued request's incarnation (#918)
 
     /// <summary>Issue #92: a flex-start create is queued until <see cref="GrantFlexStart"/> (the test decides when Google finds a card). The request lives on the "server": a caller that gives up does not remove it.</summary>
     public FakeGcp WithFlexStartHeld()
@@ -1167,19 +1183,20 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
         var now = _timeProvider.GetUtcNow();
         // Check and insert are ONE step (#918): a request of the same VM that landed since the exists check wins, and this one is its replay.
-        if (!TryInsertVm(key, new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId))))
+        var request = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        if (!TryInsertVm(key, request))
         {
             return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
         }
 
-        _queuedKeys[key] = 0;
-        var server = QueuedOnServerAsync(spec, zone, key);
+        _queuedKeys[IncarnationOf(request)] = 0;
+        var server = QueuedOnServerAsync(spec, zone, key, request);
         _ = server.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         _flexQueued.TrySetResult();
         return await server.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<VmDescriptor> QueuedOnServerAsync(VmSpec spec, string zone, (string, string) key)
+    private async Task<VmDescriptor> QueuedOnServerAsync(VmSpec spec, string zone, (string, string) key, VmDescriptor request)
     {
         if (_flexHold is { } hold)
         {
@@ -1190,8 +1207,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             await Task.Delay(_flexGrantAfter ?? _flexExpireAfter!.Value).ConfigureAwait(false);
         }
 
-        _queuedKeys.TryRemove(key, out _);
-        if (!_vms.TryGetValue(key, out var queued))
+        _queuedKeys.TryRemove(IncarnationOf(request), out _);
+        // Only THIS request's row: a request made again under the name after this one was deleted is another incarnation and is not this task's to grant or expire (#918).
+        if (!_vms.TryGetValue(key, out var queued) || queued.InstanceId != request.InstanceId)
         {
             // Deleted while queued: the request is gone.
             throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
@@ -1220,6 +1238,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             undoWorker = RunWorkerUndoably(spec, zone, vm.InstanceId);
         }
 
+        // The VM's own state is written BEFORE its row lands (#918): keyed by a fresh incarnation nobody else holds, it cannot be seen by another VM, and a delete or poll that
+        // meets the row finds it complete (a delete in the window forgets it, instead of it being written for a VM that is gone).
+        var incarnation = IncarnationOf(vm);
+        _labelFingerprints[incarnation] = NextFingerprint();
+        _maxRunByVm[incarnation] = spec.MaxRunDuration;
+        if (_bootPolls > 0)
+        {
+            _bootPollsLeft[incarnation] = _bootPolls;
+        }
+
         try
         {
             BeforeGrantWrite?.Invoke();
@@ -1228,6 +1256,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 // Check and insert are ONE step (#918): another create of the same VM that landed since the exists check wins, and this one is its replay.
                 if (!TryInsertVm(key, vm))
                 {
+                    ForgetIncarnation(vm);
                     undoWorker?.Invoke();
                     return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
                 }
@@ -1235,6 +1264,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             else if (!ReferenceEquals(UpdateVm(key, v => v.InstanceId == queued.InstanceId ? vm : v), vm))
             {
                 // Deleted (or made again by someone else) while the grant was being made: the request is gone, and so is the worker that was to serve it.
+                ForgetIncarnation(vm);
                 undoWorker?.Invoke();
                 throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
             }
@@ -1242,17 +1272,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         catch (Exception ex) when (ex is not CloudOperationException)
         {
             // A hook or a swap that threw between the worker's return and the row landing (#918): the worker never served a VM, so its files and deferred end go back.
+            ForgetIncarnation(vm);
             undoWorker?.Invoke();
             throw;
         }
 
+        AfterGrantInsert?.Invoke();
         ResetVmDeleted(spec.VmName);
-        _labelFingerprints[IncarnationOf(vm)] = NextFingerprint();
-        _maxRunByVm[IncarnationOf(vm)] = spec.MaxRunDuration;
-        if (_bootPolls > 0)
-        {
-            _bootPollsLeft[IncarnationOf(vm)] = _bootPolls;
-        }
 
         // Scheduled before this VM existed, or on the queued row it replaces: it is for this VM. A compare-and-swap, so a plan another actor re-scheduled meanwhile is kept.
         if (_preemptPlans.TryGetValue(key, out var scheduledBefore) && (scheduledBefore.InstanceId is null || (queued is not null && scheduledBefore.InstanceId == queued.InstanceId)))
@@ -1340,6 +1366,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     /// <summary>Test seam (#918): the labelFingerprint of the VM now under this name (0 when there is none, or it has none).</summary>
     internal long LabelFingerprintOf(string vmName, string zone) => _vms.TryGetValue((vmName, zone), out var vm) ? _labelFingerprints.GetValueOrDefault(IncarnationOf(vm)) : 0;
+
+    /// <summary>Test seam (#918): runs right after a create's row landed, before anything else about that create is written, so a test can poll or delete the VM in that window.</summary>
+    internal Action? AfterGrantInsert { get; set; }
+
+    /// <summary>Test seam (#918): how many per-incarnation state entries (fingerprint, max run, boot and stopping countdowns) this fake holds; zero once every VM is gone.</summary>
+    internal int IncarnationStateCount => _labelFingerprints.Count + _maxRunByVm.Count + _bootPollsLeft.Count + _stoppingPollsLeft.Count;
 
     /// <summary>The key of a VM's per-incarnation state (#918). Every row this fake makes carries an InstanceId; 0 is only a fallback for a hand-built row.</summary>
     private static ulong IncarnationOf(VmDescriptor vm) => vm.InstanceId ?? 0;
@@ -1728,10 +1760,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var existed = _vms.TryRemove((vmName, zone), out var removed);
         if (existed)
         {
-            // A preemption scheduled for the deleted VM dies with it; a VM made again under the name must not inherit it, nor lose its own (#875 review).
-            ClearPlan((vmName, zone), removed!.InstanceId);
+            // What belongs to the VM that was just removed (its disks, the signal that it is gone) is settled BEFORE the plan cleanup, whose gap a VM made again under the name can land in (#918):
+            // that VM's disks stay attached and its own "deleted" signal is not completed by this delete (making it again resets a signal the old one already completed).
             DetachDisksOf(vmName);
             SignalVmDeleted(vmName);
+            // A preemption scheduled for the deleted VM dies with it; a VM made again under the name must not inherit it, nor lose its own (#875 review).
+            ClearPlan((vmName, zone), removed!.InstanceId);
         }
 
         if (existed)
@@ -1787,7 +1821,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         var name = $"deg-{jobId}";
         // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
         IReadOnlyList<VmDescriptor> matches = _vms.Values
-            .Where(v => !(_queuedHidden && _queuedKeys.ContainsKey((v.Name, v.Zone))))
+            .Where(v => !(_queuedHidden && _queuedKeys.ContainsKey(IncarnationOf(v))))
             .Where(v => v.Labels is null ? v.Name == name : v.Labels.TryGetValue("job-id", out var owner) && owner == jobId)
             .ToList();
         return Task.FromResult(matches);
@@ -2034,18 +2068,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             if (wedged)
             {
                 // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
-                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3));
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3, Id: NextLiveWorkerId()));
             }
 
             if (stuck)
             {
-                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: WorkerStages.ModelLoading));
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: WorkerStages.ModelLoading, Id: NextLiveWorkerId()));
             }
 
             Put(_objects, (bucket, prefix + "progress.jsonl"), Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine)));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
-                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done, runsOn)));
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done, runsOn), Id: NextLiveWorkerId()));
             }
 
             return;
@@ -2188,6 +2222,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         _maxRunByVm.TryRemove(id, out _);
         _bootPollsLeft.TryRemove(id, out _);
         _stoppingPollsLeft.TryRemove(id, out _);
+        _alreadyExistingVmKeys.TryRemove(new KeyValuePair<(string Name, string Zone), ulong>((gone.Name, gone.Zone), id));
     }
 
     /// <summary>A worker deletes its own VM: only the incarnation it ran on (when known), so a later VM made under the same name survives.</summary>
@@ -2212,7 +2247,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = WorkerStages.Running, bool CancelSeen = false, int? WindowsDone = null);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = WorkerStages.Running, bool CancelSeen = false, int? WindowsDone = null, long Id = 0);
+
+    private long _liveWorkerIds;
+
+    // Each worker is its own value (#918): two simulated workers of one job that differ in nothing but their delegates are otherwise EQUAL records, and an undo that compares by value
+    // takes the other worker with it.
+    private long NextLiveWorkerId() => Interlocked.Increment(ref _liveWorkerIds);
 
     private static string WorkerStatusJson(string jobId, long seq, string stage = WorkerStages.Running, bool cancelSeen = false, int? windowsDone = null)
     {

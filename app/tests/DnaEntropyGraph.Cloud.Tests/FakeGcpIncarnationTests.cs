@@ -218,4 +218,153 @@ public class FakeGcpIncarnationTests
         gcp.ObjectKeys(bucket).Where(k => k.StartsWith("jobs/job-1/", StringComparison.Ordinal)).ShouldBe(["jobs/job-1/manifest.json"]);
         gcp.PendingWorkerEndCount.ShouldBe(0);
     }
+
+    private static VmSpec FlexSpec(string jobId) => Spec(jobId) with { FlexStart = true, FlexStartWait = TimeSpan.FromHours(2) };
+
+    [Fact]
+    public async Task A_delete_does_not_detach_the_disks_or_signal_the_deletion_of_a_vm_made_again_in_the_gap()
+    {
+        var gcp = new FakeGcp();
+        var first = await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+        VmDescriptor? second = null;
+        gcp.BeforePlanCleanup = () =>
+        {
+            gcp.BeforePlanCleanup = null;
+            second = gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+            gcp.WithDisk(new DiskDescriptor("disk-1", Zone, 10, "READY", new Dictionary<string, string>(), AttachedTo: [second.Name]));
+        };
+
+        await gcp.DeleteVmAsync(first.Name, Zone, CancellationToken.None);
+
+        second.ShouldNotBeNull("vacuity: the VM was made again inside the delete's gap");
+        gcp.Disks.Single().Users.ShouldBe([second.Name]);
+        gcp.WhenVmDeletedAsync(second.Name).IsCompleted.ShouldBeFalse("the new VM has not been deleted");
+    }
+
+    [Fact]
+    public async Task A_queued_request_that_was_deleted_never_grants_or_expires_a_request_made_again_under_the_name()
+    {
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var name = FlexSpec("job-1").VmName;
+        var a = gcp.CreateVmAsync(FlexSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        await gcp.DeleteVmAsync(name, Zone, CancellationToken.None);
+        var b = gcp.CreateVmAsync(FlexSpec("job-1"), Zone, CancellationToken.None);
+        var queuedB = await gcp.GetVmAsync(name, Zone, CancellationToken.None);
+        queuedB.ShouldNotBeNull("vacuity: the request was made again under the name");
+
+        gcp.GrantFlexStart();
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => a.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+        ex.Error.Code.ShouldBe("FLEX_START_REQUEST_CANCELLED");
+        var granted = await b.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        granted.InstanceId.ShouldNotBe(queuedB.InstanceId); // the grant replaced B's own queued row, once
+        (await gcp.GetVmAsync(name, Zone, CancellationToken.None))!.InstanceId.ShouldBe(granted.InstanceId);
+    }
+
+    [Fact]
+    public async Task The_already_exists_mark_goes_with_the_vm_it_marked_so_the_name_can_be_created_after_a_delete()
+    {
+        var gcp = new FakeGcp();
+        var name = Spec("job-1").VmName;
+        gcp.WithAlreadyExists(name, Zone);
+        await Should.ThrowAsync<CloudOperationException>(() => gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None)); // vacuity: while the VM exists the create is refused
+
+        await gcp.DeleteVmAsync(name, Zone, CancellationToken.None);
+
+        var created = await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+        created.Name.ShouldBe(name);
+    }
+
+    [Fact]
+    public async Task A_loser_of_two_overlapping_stuck_creates_does_not_take_the_winners_live_worker_with_it()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInRunning);
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-1/manifest.json", Manifest);
+        gcp.BeforeGrantWrite = () =>
+        {
+            gcp.BeforeGrantWrite = null;
+            gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult(); // the winner
+        };
+
+        await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None); // the loser: its worker is undone
+
+        long Seq()
+        {
+            using var s = gcp.TryDownloadAsync(bucket, "jobs/job-1/status.json", CancellationToken.None).GetAwaiter().GetResult()!;
+            return System.Text.Json.JsonDocument.Parse(new StreamReader(s).ReadToEnd()).RootElement.GetProperty("heartbeatSeq").GetInt64();
+        }
+
+        var first = Seq();
+        Seq().ShouldBeGreaterThan(first, "the winner's worker still heartbeats on every look");
+    }
+
+    [Fact]
+    public async Task A_create_has_its_per_incarnation_state_by_the_time_its_row_is_visible_and_a_delete_in_that_window_leaves_none()
+    {
+        var gcp = new FakeGcp().WithBootStatusPolls(2);
+        long seenFingerprint = -1;
+        gcp.AfterGrantInsert = () =>
+        {
+            gcp.AfterGrantInsert = null;
+            seenFingerprint = gcp.LabelFingerprintOf(Spec("job-1").VmName, Zone);
+            gcp.DeleteVmAsync(Spec("job-1").VmName, Zone, CancellationToken.None).GetAwaiter().GetResult();
+        };
+
+        await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+
+        seenFingerprint.ShouldBeGreaterThan(0L);
+        gcp.IncarnationStateCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_loser_create_leaves_no_per_incarnation_state_behind()
+    {
+        var gcp = new FakeGcp().WithBootStatusPolls(2);
+        gcp.BeforeGrantWrite = () =>
+        {
+            gcp.BeforeGrantWrite = null;
+            gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+        };
+
+        await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+
+        gcp.IncarnationStateCount.ShouldBe(3); // the winner's fingerprint, max run and boot countdown, and nothing of the loser's
+    }
+
+    [Fact]
+    public async Task A_vm_displaced_by_an_already_exists_setup_takes_its_per_incarnation_state_with_it()
+    {
+        var gcp = new FakeGcp();
+        var first = await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+        gcp.IncarnationStateCount.ShouldBeGreaterThan(0); // vacuity
+
+        gcp.WithAlreadyExists(first.Name, Zone);
+
+        gcp.IncarnationStateCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Two_overlapping_creates_with_a_worker_keep_the_winners_files_and_pending_end_and_drop_the_losers()
+    {
+        var gcp = new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete);
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-1/manifest.json", Manifest);
+        VmDescriptor? winner = null;
+        gcp.BeforeGrantWrite = () =>
+        {
+            gcp.BeforeGrantWrite = null;
+            winner = gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+        };
+
+        var loser = await gcp.CreateVmAsync(Spec("job-1"), Zone, CancellationToken.None);
+
+        winner.ShouldNotBeNull();
+        loser.InstanceId.ShouldBe(winner.InstanceId);
+        gcp.ObjectKeys(bucket).ShouldContain("jobs/job-1/result.json"); // the winner's file survives the loser's undo
+        gcp.PendingWorkerEndCount.ShouldBe(1); // exactly the winner's end, not two and not none
+        await gcp.TryDownloadAsync(bucket, "jobs/job-1/result.json", CancellationToken.None); // the winner's worker deletes ITS VM
+        (await gcp.GetVmAsync(winner.Name, Zone, CancellationToken.None)).ShouldBeNull();
+    }
 }
