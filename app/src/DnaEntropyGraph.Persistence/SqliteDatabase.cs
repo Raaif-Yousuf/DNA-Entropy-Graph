@@ -176,7 +176,7 @@ public sealed class SqliteDatabase : IDisposable
 
     private void QuarantineCorruptFile(string reason)
     {
-        SqliteConnection.ClearAllPools();
+        ClearOwnPool();
         var quarantinePath = $"{_databasePath}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}";
         try
         {
@@ -201,7 +201,18 @@ public sealed class SqliteDatabase : IDisposable
         _ = reason; // surfaced via RecoveredFromCorruptFileAt + logs, not thrown
     }
 
-    public void Dispose() => SqliteConnection.ClearAllPools();
+    /// <summary>
+    /// Releases only THIS database's pooled handles. <c>SqliteConnection.ClearAllPools()</c> is process-wide: it closed the
+    /// pooled handles of every other database while another thread was renting them, which surfaced as
+    /// ObjectDisposedException from SafeHandle.DangerousAddRef inside <see cref="ConfigurePragmas"/> (#741).
+    /// </summary>
+    private void ClearOwnPool()
+    {
+        using var probe = new SqliteConnection(BuildConnectionString());
+        SqliteConnection.ClearPool(probe);
+    }
+
+    public void Dispose() => ClearOwnPool();
 }
 
 /// <summary>

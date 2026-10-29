@@ -24,6 +24,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     private readonly InstallationCleanup _cleanup;
     private readonly ISettingsStore _settings;
     private readonly IPricingSource? _pricing;
+    private readonly IDispatcher? _dispatcher;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasError))]
@@ -47,7 +48,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     [ObservableProperty]
     private bool _isEmpty;
 
-    public CloudResourcesViewModel(IGcpAccount account, IDialogService dialogs, IStringResourceProvider strings, IComputeGateway compute, InstallationCleanup cleanup, ISettingsStore settings, IPricingSource? pricing = null)
+    public CloudResourcesViewModel(IGcpAccount account, IDialogService dialogs, IStringResourceProvider strings, IComputeGateway compute, InstallationCleanup cleanup, ISettingsStore settings, IPricingSource? pricing = null, IDispatcher? dispatcher = null)
     {
         _account = account;
         _dialogs = dialogs;
@@ -56,6 +57,113 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         _cleanup = cleanup;
         _settings = settings;
         _pricing = pricing;
+        _dispatcher = dispatcher;
+        // Issue #828: a project switch while this page is open must not leave the old project's rows on screen with live buttons.
+        _lastRaisedProject = account.SelectedProjectId;
+        _account.AccountChanged += OnAccountChangedEvent;
+    }
+
+    /// <summary>
+    /// Ends the subscription to the account's AccountChanged event. The account is a singleton and this view model is transient, so without it every visit to the Cloud page
+    /// would leave one more view model reachable and reacting (#828). The page calls it when it is navigated away from.
+    /// </summary>
+    public void Detach() => _account.AccountChanged -= OnAccountChangedEvent;
+
+    /// <summary>
+    /// Runs on the thread that raised the event, NOT the UI queue: the project is read and the generation counted here, because the queued handler may run long after
+    /// (A to B to A before either runs would otherwise count nothing), and a listing started after the switch must not see the queued handler as a change during it.
+    /// </summary>
+    private void OnAccountChangedEvent(object? sender, EventArgs e)
+    {
+        var project = _account.SelectedProjectId;
+        lock (_generationGate)
+        {
+            if (!string.Equals(project, _lastRaisedProject, StringComparison.Ordinal))
+            {
+                _lastRaisedProject = project;
+                Interlocked.Increment(ref _projectGeneration);
+            }
+        }
+
+        OnUiThread(() => OnAccountChanged(project));
+    }
+
+    /// <summary>The project the rows on screen were listed for; null while nothing is listed (first load in flight, last listing discarded). Every action compares it with the project chosen NOW (#828).</summary>
+    private string? _listedProject;
+
+    /// <summary>A listing in flight: the project it was started for and the token its gateway calls observe, so a switch can cancel it (and only it) when it goes stale.</summary>
+    private sealed record InFlightListing(string Project, CancellationTokenSource Cts);
+
+    private readonly List<InFlightListing> _inFlight = [];
+
+    /// <summary>Counts every real change of the chosen project (A to B, and B back to A, are two). A listing compares it with the value it started at, because the gateway reads the project at call time and "same id at the end" does not mean "same project all along".</summary>
+    private int _projectGeneration;
+
+    private readonly object _generationGate = new();
+
+    private string? _lastRaisedProject;
+
+    /// <summary>The queued half of an account change; <paramref name="project"/> is the project chosen when the event was raised.</summary>
+    private void OnAccountChanged(string? project)
+    {
+        // Every in-flight listing for another project is stale: cancel it so Refresh is available again. The same project (token refresh, sign-in) leaves it alone.
+        foreach (var listing in _inFlight.ToArray())
+        {
+            if (!string.Equals(project, listing.Project, StringComparison.Ordinal))
+            {
+                try
+                {
+                    listing.Cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The listing finished in the meantime: nothing to cancel.
+                }
+            }
+        }
+
+        // Nothing was listed, so there is nothing stale to clear and nothing to announce.
+        if (_listedProject is null || string.Equals(project, _listedProject, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ForgetListing();
+        // No network from here: this view model is transient and the event is the account's, so a call per abandoned page would be waste. Refresh lists the new project.
+        ErrorText = Format("CloudPage_ProjectChanged");
+    }
+
+    /// <summary>Everything on screen that belongs to the listing of one project, forgotten together: rows, summary, running banner, empty state.</summary>
+    private void ForgetListing()
+    {
+        Vms.Clear();
+        Disks.Clear();
+        _listedProject = null;
+        IsEmpty = false;
+        SummaryText = string.Empty;
+        BannerText = string.Empty;
+    }
+    private void OnUiThread(Action action)
+    {
+        if (_dispatcher is null)
+        {
+            action();
+            return;
+        }
+
+        _dispatcher.Enqueue(action);
+    }
+
+    /// <summary>The gateway has no project parameter (it reads the chosen project per call), so an action is only safe while the project it was listed for is still the chosen one.</summary>
+    private bool StillListedProject(string listedProject)
+    {
+        if (string.Equals(_account.SelectedProjectId, listedProject, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        ErrorText = Format("CloudPage_ProjectChanged");
+        return false;
     }
 
     public ObservableCollection<CloudVmRow> Vms { get; } = [];
@@ -85,17 +193,32 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
 
         IsBusy = true;
+        var generation = Volatile.Read(ref _projectGeneration);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var listing = new InFlightListing(project, cts);
+        _inFlight.Add(listing);
         try
         {
             var installation = InstallationId.GetOrCreate(_settings);
-            var inventory = await _cleanup.InventoryAsync(project, installation, cancellationToken);
-            var everyone = await _compute.ListAppVmsAsync(cancellationToken);
+            var inventory = await _cleanup.InventoryAsync(project, installation, cts.Token);
+            var everyone = await _compute.ListAppVmsAsync(cts.Token);
             var pricing = LoadPricing();
 
+            // The project changed while Google was answering: these lists belong to the old one. Show nothing of them and say why here (the account-changed
+            // handler stays quiet when no listing was on screen); Refresh lists the new project.
+            // Also when it changed and changed back (the generation moved): the gateway reads the chosen project per call, so the answer may be for the other one.
+            if (generation != Volatile.Read(ref _projectGeneration) || !string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
+            {
+                ForgetListing();
+                ErrorText = Format("CloudPage_ProjectChanged");
+                return;
+            }
+
+            _listedProject = project;
             Vms.Clear();
             foreach (var vm in inventory.Vms)
             {
-                Vms.Add(OwnRow(vm, inventory.Disks, pricing));
+                Vms.Add(OwnRow(vm, inventory.Disks, pricing, project));
             }
 
             var ownNames = inventory.Vms.Select(v => (v.Name, v.Zone)).ToHashSet();
@@ -130,6 +253,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
         finally
         {
+            _inFlight.Remove(listing);
             IsBusy = false;
         }
     }
@@ -169,6 +293,11 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             var size = Size(inventory.Bucket?.TotalBytes ?? 0);
             var confirmed = await _dialogs.ConfirmAsync(Format("CloudDeleteAll_Title"), Format("CloudDeleteAll_Body", inventory.Vms.Count, inventory.Disks.Count, jobs, size), cancellationToken);
             if (!confirmed)
+            {
+                return;
+            }
+
+            if (!StillListedProject(project))
             {
                 return;
             }
@@ -236,7 +365,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         };
     }
 
-    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing)
+    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing, string listedProject)
     {
         var running = IsRunning(vm);
         var stopped = !running && IsStopped(vm);
@@ -257,25 +386,36 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
 
         return new CloudVmRow(vm.Name, vm.Zone, StatusOf(vm), cost, string.Empty, isAnotherComputer: false)
         {
-            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, () => _compute.StopVmAsync(vm.Name, vm.Zone, ct), ct), () => running),
-            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, () => _compute.StartVmAsync(vm.Name, vm.Zone, ct), ct), () => stopped),
-            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, ct)),
+            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StopVmAsync(vm.Name, vm.Zone, ct), ct), () => running),
+            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StartVmAsync(vm.Name, vm.Zone, ct), ct), () => stopped),
+            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, listedProject, ct)),
         };
     }
 
-    private async Task DeleteOneAsync(VmDescriptor vm, CancellationToken cancellationToken)
+    private async Task DeleteOneAsync(VmDescriptor vm, string listedProject, CancellationToken cancellationToken)
     {
+        if (!StillListedProject(listedProject))
+        {
+            return;
+        }
+
         if (!await _dialogs.ConfirmAsync(Format("CloudDeleteVm_Title"), Format("CloudDeleteVm_Body", vm.Name), cancellationToken))
         {
             return;
         }
 
-        await ActAsync(vm, () => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), cancellationToken);
+        await ActAsync(vm, listedProject, () => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), cancellationToken);
     }
 
     /// <summary>One button's call, then a fresh listing so the row shows what Google says now. A refusal names the computer and the action.</summary>
-    private async Task ActAsync(VmDescriptor vm, Func<Task> call, CancellationToken cancellationToken)
+    private async Task ActAsync(VmDescriptor vm, string listedProject, Func<Task> call, CancellationToken cancellationToken)
     {
+        // Checked again here as well as before the confirm: the project can change while the confirm is open.
+        if (!StillListedProject(listedProject))
+        {
+            return;
+        }
+
         try
         {
             await call();

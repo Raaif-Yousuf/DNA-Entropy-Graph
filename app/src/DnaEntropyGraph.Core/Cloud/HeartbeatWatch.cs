@@ -32,11 +32,11 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
     /// </summary>
     public static IReadOnlyDictionary<string, TimeSpan> DefaultStageDeadlines { get; } = new Dictionary<string, TimeSpan>(StringComparer.Ordinal)
     {
-        ["booting"] = TimeSpan.FromMinutes(8),
-        ["installing"] = TimeSpan.FromMinutes(15),
-        ["restoring-cache"] = TimeSpan.FromMinutes(15),
-        ["model-loading"] = TimeSpan.FromMinutes(15),
-        ["uploading"] = TimeSpan.FromMinutes(10),
+        [WorkerStages.Booting] = TimeSpan.FromMinutes(8),
+        [WorkerStages.Installing] = TimeSpan.FromMinutes(15),
+        [WorkerStages.RestoringCache] = TimeSpan.FromMinutes(15),
+        [WorkerStages.ModelLoading] = TimeSpan.FromMinutes(15),
+        [WorkerStages.Uploading] = TimeSpan.FromMinutes(10),
     };
 
     /// <summary>The fraction of a stage's deadline after which the soft "taking longer than usual" notice is given (issue #675).</summary>
@@ -133,7 +133,7 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
         // A heartbeat that ticks while the compute thread is wedged inside the running stage (a hung CUDA call, a deadlock; #522): the stage deadlines do not
         // cover running (its length depends on the input), so its progress fields do.
         var progressBound = progressStallTimeout ?? DefaultProgressStallTimeout;
-        if (_workerSeen && _progressSeen && string.Equals(_stage, "running", StringComparison.Ordinal) && elapsed - _progressChange >= progressBound)
+        if (_workerSeen && _progressSeen && string.Equals(_stage, WorkerStages.Running, StringComparison.Ordinal) && elapsed - _progressChange >= progressBound)
         {
             return new HeartbeatVerdict(
                 RunErrorCodes.WorkerProgressStalled,
