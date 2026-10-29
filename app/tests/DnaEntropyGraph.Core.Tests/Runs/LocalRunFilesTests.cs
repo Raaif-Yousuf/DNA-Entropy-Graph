@@ -67,6 +67,19 @@ public sealed class LocalRunFilesTests : IDisposable
     }
 
     [Fact]
+    public void An_imported_prototype_run_is_never_deleted_because_its_folder_is_the_users_own()
+    {
+        // MEASURED 2026-10-16 by reading the code: an imported row has no options, so RunOutputRoot falls back to the Downloads folder and
+        // the lexical "strictly inside" test passes. Hard Rule 14: the user's own prototype folder must survive anyway.
+        var folder = MakeRunFolder("proto-run");
+        var imported = new RunRecord("legacy-abc", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: folder, Imported: true);
+
+        Make().DeleteOutputFolder(imported).Status.ShouldBe(LocalDeleteStatus.Refused);
+
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Deleting_the_runs_own_folder_removes_it_and_reports_deleted()
     {
         var folder = MakeRunFolder();

@@ -1,0 +1,2 @@
+- Shell: the header and the selected nav item now follow the page the frame really shows, so "Open viewer", Back (Alt+Left) and a deep link no longer leave the old title and selection (#499, #701, #807). Pages with no nav item (run progress, results, viewer) show their own title and select nothing.
+- Windows: turning high contrast on or off while the app runs now re-applies the window theme, so the title bar buttons follow it without a restart (#701).

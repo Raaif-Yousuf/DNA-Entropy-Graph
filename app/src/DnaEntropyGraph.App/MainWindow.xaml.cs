@@ -29,7 +29,7 @@ public sealed partial class MainWindow : Window
 
     private readonly ShellReadiness _readiness;
 
-    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier, ShellReadiness readiness)
+    public MainWindow(ShellViewModel shellViewModel, ISettingsStore settingsStore, WindowPlacementService windowPlacementService, WindowThemeApplier windowThemeApplier, ShellReadiness readiness, HighContrastThemeReapplier highContrastReapplier)
     {
         _readiness = readiness;
         ViewModel = shellViewModel;
@@ -38,9 +38,11 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SystemBackdrop = new MicaBackdrop();
         SetTitleBar(AppTitleBar);
+        NavSelectionBinder.Attach(RootNavigationView, ViewModel);
         // The window's content root, not the NavigationView: the title bar and the Mica backdrop sit outside the NavigationView (#639).
         windowThemeApplier.Attach(RootGrid, AppWindow);
         windowThemeApplier.Apply(ThemeApplier.ReadTheme(settingsStore) ?? "System");
+        highContrastReapplier.Start();
         WindowPlacementApplier.Apply(this, windowPlacementService);
         // Ctrl+, (issue #110): the comma has no VirtualKey name, so XAML cannot spell it; 188 is VK_OEM_COMMA.
         SettingsNavItem.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = (Windows.System.VirtualKey)188, Modifiers = Windows.System.VirtualKeyModifiers.Control });
@@ -65,6 +67,7 @@ public sealed partial class MainWindow : Window
         // Issue #143: the first-launch tour opens once layout has run, so the nav items it points at have a size; the pane layout is told first.
         ViewModel.OnNavigationDisplayModeChanged((int)RootNavigationView.DisplayMode);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => _ = ViewModel.OnWindowLoadedAsync());
+        await ViewModel.RunStartupOffersAsync(CancellationToken.None);
     }
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

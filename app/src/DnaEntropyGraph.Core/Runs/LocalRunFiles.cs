@@ -61,6 +61,13 @@ public sealed class LocalRunFiles : ILocalRunFiles
 
     public LocalDeleteResult DeleteOutputFolder(RunRecord run)
     {
+        // Hard Rule 14: an imported prototype run's folder is the user's own (the app never wrote it). It has no options, so the output
+        // root falls back to Downloads and the folder would pass the "strictly inside" test below: refuse by origin, not by path.
+        if (run.Imported)
+        {
+            return new(LocalDeleteStatus.Refused);
+        }
+
         if (string.IsNullOrWhiteSpace(run.OutputDir))
         {
             return new(LocalDeleteStatus.NothingToDelete);

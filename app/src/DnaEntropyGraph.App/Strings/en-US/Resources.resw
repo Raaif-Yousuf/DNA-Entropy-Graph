@@ -2195,6 +2195,51 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
     <value>IGV connection number</value>
   </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
   <data name="RunError_worker_progress_stalled" xml:space="preserve">
     <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
   </data>
@@ -2739,23 +2784,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
-  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
-    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
-  </data>
-  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
-    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
-    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
-    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
-    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
-    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
-  </data>
   <data name="RunsImportButton.Content" xml:space="preserve">
     <value>Find runs from other computers</value>
   </data>
@@ -2806,6 +2834,26 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
+    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
+    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
+    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
+  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
+    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
+    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
   </data>
   <data name="RunError_stockout_waited" xml:space="preserve">
     <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
