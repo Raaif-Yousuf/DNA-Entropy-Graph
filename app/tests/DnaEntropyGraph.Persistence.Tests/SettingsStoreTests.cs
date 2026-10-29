@@ -321,18 +321,12 @@ public class SettingsStoreTests
     {
         using var paths = new TempPaths();
         File.WriteAllText(paths.SettingsPath, """{"Theme":"Dark"}""");
-        var store = new SettingsStore(paths.SettingsPath);
-
         var holder = new FileStream(paths.SettingsPath, FileMode.Open, FileAccess.Read, FileShare.None);
-        var release = new Thread(() =>
-        {
-            Thread.Sleep(80);
-            holder.Dispose();
-        });
-        release.Start();
+        // No wall clock (#841): the lock clears at the store's first retry pause, so the second read is the one that succeeds.
+        var time = new ManualTimeProvider();
+        var store = new SettingsStore(paths.SettingsPath) { Clock = time, Pause = by => { time.Advance(by); holder.Dispose(); } };
 
         store.GetString("Theme").ShouldBe("Dark");
-        release.Join();
         store.LastReadAttempts.ShouldBeGreaterThan(1);
         store.RecoveredFromUnreadableFile.ShouldBeFalse();
     }

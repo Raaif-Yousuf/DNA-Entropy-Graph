@@ -42,17 +42,17 @@ public sealed class AccountRegistry
     private readonly string _path;
     private readonly Func<string, Mutex> _openMutex;
     private readonly TimeSpan _saveLockWait;
-    private readonly int _readBackoffMs;
+    private readonly Action<TimeSpan> _pause;
 
     public AccountRegistry(string directory)
         : this(directory, name => new Mutex(false, name))
     {
     }
 
-    /// <summary>Tests only: how the named mutex is opened (so a refusal by the system can be played) and how long a save waits for it, and the read-retry backoff (a test that holds the file for a while needs margins a loaded CI runner cannot eat, issue #664).</summary>
-    internal AccountRegistry(string directory, Func<string, Mutex> openMutex, TimeSpan? saveLockWait = null, int readBackoffMs = ReadBackoffMs)
+    /// <summary>Tests only: how the named mutex is opened (so a refusal by the system can be played) and how long a save waits for it, and the sleep between read retries (a test that holds the file until the first retry pauses passes a pause that releases it, so no wall-clock margin is involved, issues #664 and #841).</summary>
+    internal AccountRegistry(string directory, Func<string, Mutex> openMutex, TimeSpan? saveLockWait = null, Action<TimeSpan>? pause = null)
     {
-        _readBackoffMs = readBackoffMs;
+        _pause = pause ?? Thread.Sleep;
         _path = Path.Combine(directory, "accounts.json");
         _openMutex = openMutex;
         _saveLockWait = saveLockWait ?? DefaultSaveLockWait;
@@ -141,7 +141,7 @@ public sealed class AccountRegistry
                     return new LoadOutcome(AccountsFile.Empty, true, false, null);
                 }
 
-                Thread.Sleep(_readBackoffMs * attempt);
+                _pause(TimeSpan.FromMilliseconds(ReadBackoffMs * attempt));
             }
         }
 

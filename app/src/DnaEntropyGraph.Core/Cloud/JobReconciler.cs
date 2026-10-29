@@ -773,6 +773,22 @@ public sealed class JobReconciler
                 : await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the input remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
         }
 
+        // Issue #720: a run paired with a GFF3 (#686) keeps the pairing. The same two sources as the FASTA, the app's copy then the original, and the same
+        // answer when neither is there and no VM could hold the input already: failing says what is missing, dropping it would run with the worker's own genes.
+        var annotation = staged is { IsAccession: false } ? await FindAnnotationAsync(row, options, cancellationToken).ConfigureAwait(false) : null;
+        if (annotation is null && staged is { IsAccession: false } && !vmMayExist && !string.IsNullOrWhiteSpace(options.AnnotationPath))
+        {
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the paired GFF3 remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
+        }
+
+        // Hard Rule 2, as JobEngine does for a new run: the pair is checked before anything is created. The original GFF3 may have been edited since the run started
+        // (the app's copy is gone), so nobody pays for a VM to learn it no longer fits the FASTA. Once a VM may exist it already holds the uploaded pair.
+        if (annotation is not null && !vmMayExist && AnnotationPairValidator.Check(staged!.LocalPath, annotation.LocalPath, options.Topology).Problem is { } pairProblem)
+        {
+            // The code only: the problem's own text can hold a sequence name from the user's file.
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputInvalid, "Annotation " + pairProblem.Code, cancellationToken).ConfigureAwait(false);
+        }
+
         var appVersion = row.AppVersion ?? "0.0.0";
         var image = _images.Resolve(appVersion, VmProvisioner.ExpectsGpu(CloudJobRequestFactory.MachineTypeFor(options.GpuTier)));
         if (imageRequired && (image.Status != WorkerImageStatus.Available || image.Reference is null))
@@ -788,7 +804,9 @@ public sealed class JobReconciler
             row.InstallationId,
             appVersion,
             image.Status == WorkerImageStatus.Available ? image.Reference : null,
-            [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")],
+            annotation is null
+                ? [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")]
+                : [staged!, annotation],
             OutputParent(row, options));
 
         // Issue #91: a run that was already preempted once is on its on-demand retry; a resume must not ask for Spot again.
@@ -1033,6 +1051,25 @@ public sealed class JobReconciler
 
             // Hard Rule 14 keeps a copy of every input; a missing one falls back to the original, if it is still where it was.
             return string.IsNullOrWhiteSpace(options.InputPath) ? null : await _inputs.StageAsync(row.JobId, options.InputPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The run's paired GFF3 (issue #720): the app's copy, else the original it was paired from, else null (an unpaired run, or both gone).</summary>
+    private async Task<StagedInput?> FindAnnotationAsync(RunRecord row, RunOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var copy = await _inputs.FindAnnotationAsync(row.JobId, cancellationToken).ConfigureAwait(false);
+            if (copy is not null)
+            {
+                return copy;
+            }
+
+            return string.IsNullOrWhiteSpace(options.AnnotationPath) ? null : await _inputs.StageAnnotationAsync(row.JobId, options.AnnotationPath, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
