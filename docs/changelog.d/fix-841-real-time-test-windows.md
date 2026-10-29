@@ -1,0 +1,1 @@
+- Test reliability: real-time windows in the IGV client, account registry, settings store, New Run and local runner tests moved to injected time or signals, or justified as negative-evidence waits (#841).

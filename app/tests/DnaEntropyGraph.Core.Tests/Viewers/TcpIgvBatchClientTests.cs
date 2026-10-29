@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using DnaEntropyGraph.Cloud.Tests;
 using DnaEntropyGraph.Core.Viewers;
 using Shouldly;
 using Xunit;
@@ -16,6 +17,11 @@ public sealed class TcpIgvBatchClientTests
         listener.Start();
         return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
     }
+
+    // The client's connect and reply waits run on a clock that stands still (#841): a wait ends only when a test moves it, so a loaded machine
+    // can never cut a reply that was on its way, and a test never sleeps to let a wait elapse.
+    private static TcpIgvBatchClient Client(VirtualTimeProvider clock, TimeSpan reply, TimeSpan? load = null)
+        => new(TimeSpan.FromSeconds(5), reply, load ?? reply, clock);
 
     private static async Task<List<string>> Serve(TcpListener listener, Func<string, string?> reply, CancellationToken ct)
     {
@@ -43,7 +49,7 @@ public sealed class TcpIgvBatchClientTests
         try
         {
             var server = Serve(listener, _ => "OK", ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            var client = Client(new VirtualTimeProvider(), TimeSpan.FromSeconds(5));
 
             var result = await client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct);
 
@@ -61,8 +67,8 @@ public sealed class TcpIgvBatchClientTests
     {
         var (listener, port) = Listen();
         listener.Stop();
-        // MEASURED 2026-10-03: Windows reports a refused loopback connect after about 2.07 s, so the timeout must be longer than that.
-        var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(2));
+        // MEASURED 2026-10-03: Windows reports a refused loopback connect after about 2.07 s. The connect timeout runs on a clock nobody moves, so it can never beat the refusal.
+        var client = Client(new VirtualTimeProvider(), TimeSpan.FromSeconds(2));
 
         (await client.SendAsync(port, ["new"], TestContext.Current.CancellationToken)).ShouldBe(IgvBatchOutcome.NotListening);
     }
@@ -75,7 +81,7 @@ public sealed class TcpIgvBatchClientTests
         try
         {
             var server = Serve(listener, line => line.StartsWith("genome", StringComparison.Ordinal) ? "ERROR: bad genome" : "OK", ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            var client = Client(new VirtualTimeProvider(), TimeSpan.FromSeconds(5));
 
             var result = await client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct);
 
@@ -96,9 +102,15 @@ public sealed class TcpIgvBatchClientTests
         try
         {
             _ = Serve(listener, _ => null, ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(300));
+            var clock = new VirtualTimeProvider();
+            var client = Client(clock, TimeSpan.FromMilliseconds(300));
+            var send = client.SendAsync(port, ["new"], ct);
 
-            (await client.SendAsync(port, ["new"], ct)).ShouldBe(IgvBatchOutcome.NoReply);
+            // The 300 ms reply wait is armed after the command is written; time passes only once it is.
+            await clock.WhenTimerCreatedAsync(1, TimeSpan.FromMilliseconds(300)).WaitAsync(TimeSpan.FromSeconds(20), ct);
+            clock.Advance(TimeSpan.FromMilliseconds(300));
+
+            (await send).ShouldBe(IgvBatchOutcome.NoReply);
         }
         finally
         {
@@ -123,11 +135,30 @@ public sealed class TcpIgvBatchClientTests
         var (listener, port) = Listen();
         try
         {
-            // genome and load answer after 700 ms: longer than the 250 ms wait for new, shorter than the long wait.
-            var server = Serve(listener, line => line.StartsWith("new", StringComparison.Ordinal) ? "OK" : SlowOk(700), ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+            // genome and load answer only once the test lets them, after the clock has moved past the 250 ms wait for new and short of the long wait.
+            using var release = new SemaphoreSlim(0);
+            var server = Serve(listener, line =>
+            {
+                if (!line.StartsWith("new", StringComparison.Ordinal))
+                {
+                    release.Wait(TimeSpan.FromSeconds(20));
+                }
 
-            (await client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct)).ShouldBe(IgvBatchOutcome.Done);
+                return "OK";
+            }, ct);
+            var clock = new VirtualTimeProvider();
+            var client = Client(clock, TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+            var send = client.SendAsync(port, ["new", "genome \"a\"", "load \"b\""], ct);
+
+            // Timers so far: connect (1), new's reply wait (2), genome's long wait (3).
+            await clock.WhenTimerCreatedAsync(2, TimeSpan.FromSeconds(5)).WaitAsync(TimeSpan.FromSeconds(20), ct);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            release.Release();
+            await clock.WhenTimerCreatedAsync(3, TimeSpan.FromSeconds(5)).WaitAsync(TimeSpan.FromSeconds(20), ct);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            release.Release();
+
+            (await send).ShouldBe(IgvBatchOutcome.Done);
             _ = server;
         }
         finally
@@ -143,10 +174,15 @@ public sealed class TcpIgvBatchClientTests
         var (listener, port) = Listen();
         try
         {
-            _ = Serve(listener, _ => SlowOk(700), ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+            _ = Serve(listener, _ => null, ct);
+            var clock = new VirtualTimeProvider();
+            var client = Client(clock, TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
+            var send = client.SendAsync(port, ["new"], ct);
 
-            (await client.SendAsync(port, ["new"], ct)).ShouldBe(IgvBatchOutcome.NoReply);
+            await clock.WhenTimerCreatedAsync(1, TimeSpan.FromMilliseconds(250)).WaitAsync(TimeSpan.FromSeconds(20), ct);
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+
+            (await send).ShouldBe(IgvBatchOutcome.NoReply);
         }
         finally
         {
@@ -162,9 +198,10 @@ public sealed class TcpIgvBatchClientTests
         {
             _ = Serve(listener, _ => null, ct);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var client = new TcpIgvBatchClient(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
+            var clock = new VirtualTimeProvider();
+            var client = Client(clock, TimeSpan.FromSeconds(30));
             var send = client.SendAsync(port, ["new"], cts.Token);
-            await Task.Delay(200, ct);
+            await clock.WhenTimerCreatedAsync(1, TimeSpan.FromSeconds(30)).WaitAsync(TimeSpan.FromSeconds(20), ct); // the client is now waiting for a reply
             await cts.CancelAsync();
 
             await Should.ThrowAsync<OperationCanceledException>(send);
@@ -174,13 +211,4 @@ public sealed class TcpIgvBatchClientTests
             listener.Stop();
         }
     }
-
-    // Serve's callback is synchronous; blocking a thread-pool thread for the delay is enough to model a slow IGV.
-    private static string SlowOk(int milliseconds)
-    {
-        Thread.Sleep(milliseconds);
-        return "OK";
-    }
 }
-
-
