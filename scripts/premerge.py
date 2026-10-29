@@ -67,9 +67,11 @@ Console output is ASCII-only.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -115,8 +117,14 @@ EXEMPT_TEST_PROJECTS: dict[str, str] = {
 }
 
 # Gates that need more than the default timeout.
+# MEASURED 2026-10-29 (#925): `scripts/tests` under ~3-lane load ran `1843 passed, 15 skipped in 1086.03s`,
+# which the old 900s default turned into ERROR "timed out" on a green suite. 1800s is 1.66x that run, so
+# a load-slowed suite still finishes and a genuinely hung one is still caught inside half an hour.
 LONG_TIMEOUT = 1800.0
 DEFAULT_TIMEOUT = 900.0
+# #959: scripts/tests runs under pytest-xdist. MEASURED 2026-10-29: serial it took 1600s under agent load (1874 passed, 19 skipped),
+# a long tail of ~0.8s subprocess/git tests, so workers (not a few slow tests) are the lever. Capped so it plays fair with heavy.py slots.
+SCRIPTS_TESTS_MAX_WORKERS = 8
 DEFAULT_BASE = "origin/main"
 
 SCRIPT_REF = re.compile(r"scripts/[A-Za-z0-9_./-]+\.(?:py|ps1)")
@@ -172,6 +180,13 @@ def discover_check_scripts(root: Path) -> list[Path]:
 
 def discover_test_projects(root: Path) -> list[Path]:
     return sorted((root / "app" / "tests").glob("*/*.csproj"))
+
+
+def scripts_test_workers(cpus: int | None = -1) -> int:
+    """xdist worker count for the scripts-tests gate: half the CPUs, at least 2, at most SCRIPTS_TESTS_MAX_WORKERS."""
+    if cpus == -1:
+        cpus = os.cpu_count()
+    return max(2, min(SCRIPTS_TESTS_MAX_WORKERS, (cpus or 0) // 2))
 
 
 def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE) -> list[Gate]:
@@ -245,9 +260,26 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
     gates += [
         Gate(
             "scripts-tests",
-            ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "--with",
+                "pytest-xdist",
+                "--with",
+                "pyyaml",
+                "python",
+                "-m",
+                "pytest",
+                "scripts/tests",
+                "-q",
+                "-n",
+                str(scripts_test_workers()),
+            ],
             root,
             tier="full",
+            timeout=LONG_TIMEOUT,  # MEASURED 2026-10-29 (#925): see LONG_TIMEOUT; the 900s default killed a green 1086s run
             pytest=True,
             why="the guards' own tests; pyyaml is not in the worker venv",
         ),
@@ -427,6 +459,135 @@ def _dotnet_format_forgive(output: str, returncode: int, cwd: Path) -> str | Non
     return forgive_endofline(output, returncode, _autocrlf_is_true(cwd), _tree_has_stale_crlf(cwd))
 
 
+def _pid_alive(pid: int) -> bool:
+    """True while a process with this pid exists (used to prove a timeout left no orphan).
+    Raises rather than answering "dead" when the probe itself fails."""
+    if os.name == "nt":
+        proc = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, check=False, timeout=30)
+        if proc.returncode != 0:
+            raise RuntimeError(f"tasklist failed (exit {proc.returncode}); cannot tell whether pid {pid} is alive")
+        return re.search(rf"\b{pid}\b", proc.stdout.decode("utf-8", errors="replace")) is not None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A killed process nobody reaps (a container without an init) stays a zombie and still answers kill(0).
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            state = handle.read().rpartition(")")[2].split()[0]
+        return state != "Z"
+    except (OSError, IndexError):
+        return True
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
+    """Kill the gate's whole process tree. `uv run ... pytest` is uv -> python -> workers; killing
+    only the direct child leaves a grandchild holding the output pipe, so the gate would block.
+    Never raises; returns False when the tree kill itself did not work."""
+    ok = True
+    try:
+        if os.name == "nt":
+            done = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
+            ok = done.returncode == 0
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # the group was already gone: nothing survived
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    finally:
+        with contextlib.suppress(OSError):
+            proc.kill()
+    return ok
+
+
+KILL_GRACE = 30.0  # seconds to wait for the output pipe to close after the tree kill
+
+
+@dataclass
+class Captured:
+    returncode: int | None  # None when the timeout hit
+    output: bytes
+    child_exit: int | None = None  # the direct child's exit code when it had already exited at the timeout
+    tree_may_survive: bool = False  # the kill failed or the pipe stayed open after it
+    output_lost: bool = False  # the post-kill read timed out, so only the pre-kill partial output is here
+
+
+def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]) -> Captured:
+    """Run argv, capture stdout+stderr. On timeout the whole tree is killed and the output the tree
+    wrote before then is returned. Any other exception (KeyboardInterrupt) also kills the tree."""
+    proc = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+            return Captured(proc.returncode, (out or b"") + (err or b""))
+        except subprocess.TimeoutExpired as exc:
+            partial = (exc.output if isinstance(exc.output, bytes) else b"") + (exc.stderr if isinstance(exc.stderr, bytes) else b"")
+            child_exit = proc.poll()
+            killed = _kill_tree(proc)
+            try:
+                # communicate() keeps its buffer across calls, so this result is the whole output:
+                # never concatenate it with the partial.
+                full, full_err = proc.communicate(timeout=KILL_GRACE)
+                full = (full or b"") + (full_err or b"")
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5.0)  # reap the direct child so it is not left a zombie
+                return Captured(None, partial, child_exit, tree_may_survive=True, output_lost=True)
+            return Captured(None, full, child_exit, tree_may_survive=not killed)
+    except BaseException:
+        _kill_tree(proc)
+        raise
+
+
+_PYTEST_PROGRESS_LINE = re.compile(r"^([.FEsxX]+)(?:\s+\[\s*\d+%\])?\s*$", re.MULTILINE)
+
+
+def classify_pytest_timeout(timeout: float, output: str) -> str:
+    """Detail for a pytest gate killed by its timeout, from the `-q` progress characters seen so far."""
+    chars = "".join(m.group(1) for m in _PYTEST_PROGRESS_LINE.finditer(output))
+    passed = chars.count(".")
+    failed = chars.count("F") + chars.count("E")
+    note = "the suite did not finish" if failed == 0 else "the suite did not finish AND tests had already failed"
+    return f"timed out after {timeout:.0f}s with {passed} passed and {failed} failed so far (NOT a pass; {note})"
+
+
+def _raise_keyboard_interrupt(_signum: int, _frame: object) -> None:
+    """SIGTERM/SIGHUP handler: become the KeyboardInterrupt path, which kills every running gate's tree
+    (a gate runs in its own session on POSIX, so the signal would otherwise orphan it)."""
+    raise KeyboardInterrupt
+
+
+def install_termination_handlers() -> None:
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is not None:
+            signal.signal(number, _raise_keyboard_interrupt)
+
+
+def _timeout_detail(gate: Gate, text: str, captured: Captured) -> str:
+    if captured.output_lost:
+        detail = f"timed out after {gate.timeout:.0f}s; output after the kill was lost, so pass/fail counts are unknown"
+    elif gate.pytest:
+        detail = classify_pytest_timeout(gate.timeout, text)
+    else:
+        detail = f"timed out after {gate.timeout:.0f}s"
+    if captured.child_exit is not None:
+        detail += f"; child exited {captured.child_exit} but its pipe stayed open"
+    if captured.tree_may_survive:
+        detail += "; the process tree may have survived the kill, look for orphan processes"
+    return detail
+
+
 def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path | None = None) -> Result:
     started = time.monotonic()
     resolved = _resolve_exe(gate.argv[0])
@@ -439,37 +600,30 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
         return Result(gate, ERROR, 0.0, detail=f"cannot run: {gate.argv[0]} not found{hint}")
     child_env = dict(os.environ if env is None else env)
     child_env.setdefault("PYTHONUTF8", "1")
+    child_env.setdefault("PYTHONUNBUFFERED", "1")  # partial pytest progress must survive a kill
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     argv = [resolved, *gate.argv[1:]]
     if gate.pytest and basetemp_root is not None:
         argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:
-        proc = subprocess.run(
-            argv,
-            cwd=gate.cwd,
-            capture_output=True,
-            timeout=gate.timeout,
-            env=child_env,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or b"") + (exc.stderr or b"")
-        text = partial.decode("utf-8", errors="replace") if isinstance(partial, bytes) else str(partial)
-        return Result(gate, ERROR, time.monotonic() - started, text, f"timed out after {gate.timeout:.0f}s")
+        captured = _run_capture(argv, gate.cwd, gate.timeout, child_env)
     except OSError as exc:
         return Result(gate, ERROR, time.monotonic() - started, detail=f"could not start: {exc}")
-    text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+    returncode = captured.returncode
+    text = captured.output.decode("utf-8", errors="replace")
     seconds = time.monotonic() - started
+    if returncode is None:
+        return Result(gate, ERROR, seconds, text, _timeout_detail(gate, text, captured))
     if gate.pytest:
-        status, detail = classify_pytest(proc.returncode, text)
+        status, detail = classify_pytest(returncode, text)
         return Result(gate, status, seconds, text, detail)
-    if proc.returncode == 0:
+    if returncode == 0:
         return Result(gate, PASS, seconds, text)
     if gate.forgive is not None:
-        note = gate.forgive(text, proc.returncode, gate.cwd)
+        note = gate.forgive(text, returncode, gate.cwd)
         if note:
             return Result(gate, KNOWN, seconds, text, note)
-    return Result(gate, FAIL, seconds, text, f"exit code {proc.returncode}")
+    return Result(gate, FAIL, seconds, text, f"exit code {returncode}")
 
 
 def _ascii(text: str) -> str:
@@ -763,6 +917,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--log-dir", type=Path, default=None, help="also write each gate's full output and summary.txt here")
     ap.add_argument("--self-test", action="store_true", help="prove the runner reports PASS/FAIL/ERROR correctly")
     args = ap.parse_args(argv)
+    install_termination_handlers()
 
     if args.self_test:
         return 0 if self_test() else 1

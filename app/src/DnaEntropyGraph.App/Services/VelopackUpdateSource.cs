@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Net;
 using DnaEntropyGraph.Presentation.Services;
 using Velopack;
 using Velopack.Sources;
@@ -9,7 +10,7 @@ namespace DnaEntropyGraph.App.Services;
 /// draft release, and <c>prerelease</c> decides whether a pre-release is offered, which is how the Stable and Beta channels differ (#145).
 /// A copy that the installer did not put there (a dev build, a CI artifact) has no feed, and says so instead of throwing.
 /// </summary>
-public sealed class VelopackUpdateSource : IAppUpdateSource
+public sealed class VelopackUpdateSource(IProxyPolicy proxy) : IAppUpdateSource
 {
     /// <summary>The releases feed. A constant: the app only ever updates from its own repository.</summary>
     public const string RepoUrl = "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph";
@@ -20,11 +21,11 @@ public sealed class VelopackUpdateSource : IAppUpdateSource
     public string CurrentVersion => InstalledVersion() ?? System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
     // A copy the installer did not put there has no installed version; any failure to ask falls back to the assembly's own.
-    private static string? InstalledVersion()
+    private string? InstalledVersion()
     {
         try
         {
-            return new UpdateManager(new GithubSource(RepoUrl, null, false)).CurrentVersion?.ToString();
+            return new UpdateManager(new GithubSource(RepoUrl, null, false, new ProxiedFileDownloader(proxy))).CurrentVersion?.ToString();
         }
         catch (Exception ex)
         {
@@ -35,7 +36,7 @@ public sealed class VelopackUpdateSource : IAppUpdateSource
 
     public async Task<UpdateCheckResult> CheckAsync(UpdateChannel channel, CancellationToken cancellationToken)
     {
-        var manager = new UpdateManager(new GithubSource(RepoUrl, null, channel == UpdateChannel.Beta));
+        var manager = new UpdateManager(new GithubSource(RepoUrl, null, channel == UpdateChannel.Beta, new ProxiedFileDownloader(proxy)));
         if (!manager.IsInstalled)
         {
             return new UpdateCheckResult(UpdateCheckOutcome.NotInstalled);

@@ -51,7 +51,6 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerImageUnavailable] = RunErrorAction.UpdateApp,
         [RunErrorCodes.WorkerImageRefused] = RunErrorAction.UpdateApp,
         [RunErrorCodes.ResultTimeout] = RunErrorAction.StartAgain,
-        [RunErrorCodes.RunTimeLimit] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerNoHeartbeat] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerHeartbeatStale] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerFailed] = RunErrorAction.SaveDiagnostics,
@@ -84,9 +83,6 @@ public static class RunErrorActions
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
-        [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
-        [RunErrorCodes.DeletedByCleanup] = RunErrorAction.StartAgain,
-        [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LocalEngineNotReady] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalGpuNotUsable] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.LocalWorkerCrashed] = RunErrorAction.OpenSettings,
@@ -104,6 +100,8 @@ public static class RunErrorActions
         ["org_policy"] = RunErrorAction.AskAdministrator,
         ["network"] = RunErrorAction.CheckInternet,
         [RunErrorCodes.Other] = RunErrorAction.SaveDiagnostics,
+        [RunErrorCodes.ProxyBlocked] = RunErrorAction.OpenSettings,
+        [RunErrorCodes.NetworkCertificate] = RunErrorAction.AskAdministrator,
     };
 
     /// <summary>Every code with a declared action.</summary>

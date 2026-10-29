@@ -94,6 +94,30 @@ public sealed record RunRecord(
     string? TagsJson = null,
     int PreemptionCount = 0)
 {
+    // Issue #141: a whole record can reach a log line or a failure message ($"{run}"), and the compiler's ToString prints every member.
+    // The user's own free text prints as a fixed marker instead; every other member prints as before (a null as "null").
+    private static readonly System.Reflection.PropertyInfo[] PrintedMembers =
+        [.. typeof(RunRecord).GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)];
+
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        var first = true;
+        foreach (var member in PrintedMembers)
+        {
+            var value = member.GetValue(this);
+            var text = member.Name switch
+            {
+                nameof(Notes) when value is not null => "<notes withheld>",
+                nameof(TagsJson) when value is not null => "<tags withheld>",
+                _ => value is null ? "null" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
+            };
+            builder.Append(first ? string.Empty : ", ").Append(member.Name).Append(" = ").Append(text);
+            first = false;
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// <see cref="Imported"/> means two things; this is the earlier command-line version's run (issue #243): a local record
     /// (<see cref="Target"/> is <c>local</c>) whose folder the user already owned. No installation id, bucket or cloud copy.

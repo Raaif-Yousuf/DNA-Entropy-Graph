@@ -55,14 +55,59 @@ public static class RunOutputFolders
     }
 
     /// <summary>
-    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName_2.ext</c>, <c>_3</c> and so on when that exists: a file the
-    /// user may care about is never silently overwritten (Hard Rule 14).
+    /// The one folder for the exports (pictures) of a run whose own folder belongs to the user: <c>parent\name exports</c>, the same path every time
+    /// for the same run. Only names it; the caller creates it when it has something to write.
+    /// </summary>
+    public static string ExportsFolder(string parent, string name, string jobId)
+    {
+        // A short code from the job id keeps two runs of the same name apart, and keeps the app out of a plain "<name> exports" folder the
+        // user may have made themselves.
+        var code = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(jobId)))[..6].ToLowerInvariant();
+        return Path.Combine(parent, Sanitize($"{name} exports {code}"));
+    }
+
+    /// <summary>
+    /// Creates <paramref name="folder"/> and any missing parents and returns exactly the folders it made, outermost first (empty when it was
+    /// already there), so a caller that then has nothing to write can <see cref="RemoveCreated"/> them and leave no trace.
+    /// </summary>
+    public static IReadOnlyList<string> CreateFolderChain(string folder)
+    {
+        var missing = new List<string>();
+        for (var dir = Path.GetFullPath(folder); !string.IsNullOrEmpty(dir) && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir) ?? string.Empty)
+        {
+            missing.Add(dir);
+        }
+
+        missing.Reverse();
+        Directory.CreateDirectory(folder);
+        return missing;
+    }
+
+    /// <summary>Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive.</summary>
+    public static void RemoveCreated(IReadOnlyList<string> created)
+    {
+        for (var i = created.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                Directory.Delete(created[i]);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName (2).ext</c>, <c>(3)</c> and so on when anything (a file or a
+    /// folder) already has that name: a file the user may care about is never silently overwritten (Hard Rule 14).
     /// </summary>
     public static string UniqueFilePath(string folder, string baseName, string extension)
     {
         for (var n = 1; ; n++)
         {
-            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName}_{n}{extension}");
+            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName} ({n}){extension}");
             if (!Path.Exists(candidate))
             {
                 return candidate;

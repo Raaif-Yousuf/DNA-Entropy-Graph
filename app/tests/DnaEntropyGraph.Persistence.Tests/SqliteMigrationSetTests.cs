@@ -77,7 +77,7 @@ public class SqliteMigrationSetTests
     public void A_newer_database_file_is_not_quarantined_or_deleted_when_opened()
     {
         using var paths = new TempPaths();
-        using (var seed = new SqliteConnection($"Data Source={paths.DatabasePath}"))
+        using (var seed = new SqliteConnection($"Data Source={paths.DatabasePath};Pooling=False"))
         {
             seed.Open();
             using var set = seed.CreateCommand();
@@ -85,7 +85,6 @@ public class SqliteMigrationSetTests
             set.ExecuteNonQuery();
         }
 
-        SqliteConnection.ClearAllPools();
         var database = new SqliteDatabase(paths.DatabasePath);
 
         Should.Throw<DatabaseNewerThanAppException>(() => database.OpenConnection());
@@ -93,7 +92,7 @@ public class SqliteMigrationSetTests
         database.RecoveredFromCorruptFileAt.ShouldBeNull();
         File.Exists(paths.DatabasePath).ShouldBeTrue();
         Directory.GetFiles(paths.Directory, "*.corrupt-*").ShouldBeEmpty();
-        SqliteConnection.ClearAllPools();
+        database.Dispose(); // releases this database's own pool only; ClearAllPools would break parallel tests (#741)
         using var check = new SqliteConnection($"Data Source={paths.DatabasePath};Mode=ReadOnly");
         check.Open();
         using var read = check.CreateCommand();

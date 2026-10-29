@@ -1,0 +1,1 @@
+- land_wt.py --merge-when-green now prints a read-only per-rule and per-directory summary of the PR's open code-scanning alerts when a CodeQL check fails (exit code unchanged) (#920).

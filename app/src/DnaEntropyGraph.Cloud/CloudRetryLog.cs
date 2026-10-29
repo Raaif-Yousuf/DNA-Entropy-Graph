@@ -28,6 +28,7 @@ public sealed class CloudRetryLog : ICloudCallObserver
         _retries.Enqueue(retry);
         while (_retries.Count > Capacity && _retries.TryDequeue(out _))
         {
+            // Intentionally empty: TryDequeue in the condition drops the oldest entries until the log is back within Capacity.
         }
     }
 

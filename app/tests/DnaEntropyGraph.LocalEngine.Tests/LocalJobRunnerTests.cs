@@ -47,6 +47,9 @@ public sealed class LocalJobRunnerTests : IDisposable
 
     private static readonly LocalEngineLayout Layout = new(@"C:\data\engine");
 
+    // Real-time runner (#841), kept where the real clock cannot fail correct code: a short CancelGrace (50 to 300 ms) is used only by tests that let it run OUT and assert the
+    // kill that follows (a loaded machine only makes the kill later, never absent), and the one test that asserts "not killed during the grace" gives it 30 s. Every
+    // test that needs a deadline to pass or NOT pass at an exact moment uses TimedRunner and the virtual clock.
     private LocalJobRunner Runner(FakeProcessLauncher launcher, TimeSpan? grace = null, LocalEngineLayout? layout = null)
         => new(launcher, _runs, layout ?? Layout, RunsDirectory, (_, phase) => _phases.Add(phase))
         {
@@ -364,7 +367,11 @@ public sealed class LocalJobRunnerTests : IDisposable
     private static void WriteHeartbeat(string root, int seq)
         => File.WriteAllText(Path.Combine(root, "status.json"), "{\"stage\":\"running\",\"heartbeatSeq\":" + seq + ",\"updatedAt\":\"2026-10-15T12:00:00Z\",\"worker\":{\"version\":\"0.0.1\"}}");
 
-    /// <summary>Moves the virtual clock one poll at a time (letting the runner's loop run between steps) until the condition holds.</summary>
+    /// <summary>
+    /// Moves the virtual clock one poll at a time (letting the runner's loop run between steps) until the condition holds.
+    /// Real time here (#841) is only a yield between steps and a 30 s safety net: the outcome follows from how far the virtual clock moved, so a starved
+    /// thread makes the loop take more steps and never changes which state the run ends in.
+    /// </summary>
     private static async Task AdvanceUntilAsync(VirtualTimeProvider clock, Func<bool> condition, Action? eachStep = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -391,6 +398,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         await WaitUntilAsync(() => _runs.Latest(JobId).Phase == JobPhase.Running);
 
         clock.Advance(TimeSpan.FromSeconds(55));
+        // Negative evidence, real time (#841): the runner must NOT kill the worker, so a window too short to let it react can only hide a regression, never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
         worker.Killed.ShouldBeFalse("55 s is inside the 60 s first-heartbeat deadline");
         await AdvanceUntilAsync(clock, () => run.IsCompleted);
@@ -446,6 +454,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         {
             WriteHeartbeat(root!, ++seq);
             clock.Advance(TimeSpan.FromSeconds(1));
+            // A yield, not a wait for anything (#841): every clock move is preceded by a new heartbeat, so a runner that polls late still sees a changed one.
             await Task.Delay(2, TestContext.Current.CancellationToken);
         }
 
@@ -665,6 +674,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         _runs.Latest("cloud-1").Phase.ShouldBe(JobPhase.Running);
         _runs.Latest("done-1").Phase.ShouldBe(JobPhase.Completed);
     }
+    // Waits for a state, not for a duration (#841): the 10 s deadline is only a safety net that turns a lost transition into a failure.
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
