@@ -2751,36 +2751,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="ResultsGenesHeading.Text" xml:space="preserve">
     <value>Genes</value>
   </data>
-  <data name="ResultsGeneHeadContig.Content" xml:space="preserve">
-    <value>Record</value>
-  </data>
-  <data name="ResultsGeneHeadGene.Content" xml:space="preserve">
-    <value>Gene</value>
-  </data>
-  <data name="ResultsGeneHeadBegin.Content" xml:space="preserve">
-    <value>Start</value>
-  </data>
-  <data name="ResultsGeneHeadEnd.Content" xml:space="preserve">
-    <value>End</value>
-  </data>
-  <data name="ResultsGeneHeadStrand.Content" xml:space="preserve">
-    <value>Strand</value>
-  </data>
-  <data name="ResultsGeneHeadLength.Content" xml:space="preserve">
-    <value>Length</value>
-  </data>
-  <data name="ResultsGeneHeadMean.Content" xml:space="preserve">
-    <value>Mean entropy</value>
-  </data>
-  <data name="ResultsGeneHeadMin.Content" xml:space="preserve">
-    <value>Lowest entropy</value>
-  </data>
-  <data name="ResultsGeneHeadMax.Content" xml:space="preserve">
-    <value>Highest entropy</value>
-  </data>
-  <data name="ResultsGeneHeadLow.Content" xml:space="preserve">
-    <value>Low-entropy share</value>
-  </data>
   <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
     <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
   </data>

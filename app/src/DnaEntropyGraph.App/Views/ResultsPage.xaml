@@ -136,16 +136,16 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <Button x:Uid="ResultsGeneHeadContig" Grid.Column="0" Command="{x:Bind SortByCommand}" CommandParameter="contig" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadGene" Grid.Column="1" Command="{x:Bind SortByCommand}" CommandParameter="gene" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadBegin" Grid.Column="2" Command="{x:Bind SortByCommand}" CommandParameter="begin" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadEnd" Grid.Column="3" Command="{x:Bind SortByCommand}" CommandParameter="end" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadStrand" Grid.Column="4" Command="{x:Bind SortByCommand}" CommandParameter="strand" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadLength" Grid.Column="5" Command="{x:Bind SortByCommand}" CommandParameter="length" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadMean" Grid.Column="6" Command="{x:Bind SortByCommand}" CommandParameter="mean" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadMin" Grid.Column="7" Command="{x:Bind SortByCommand}" CommandParameter="min" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadMax" Grid.Column="8" Command="{x:Bind SortByCommand}" CommandParameter="max" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
-                                <Button x:Uid="ResultsGeneHeadLow" Grid.Column="9" Command="{x:Bind SortByCommand}" CommandParameter="low" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind ContigHeader}" Grid.Column="0" Command="{x:Bind SortByCommand}" CommandParameter="contig" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind GeneHeader}" Grid.Column="1" Command="{x:Bind SortByCommand}" CommandParameter="gene" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind BeginHeader}" Grid.Column="2" Command="{x:Bind SortByCommand}" CommandParameter="begin" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind EndHeader}" Grid.Column="3" Command="{x:Bind SortByCommand}" CommandParameter="end" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind StrandHeader}" Grid.Column="4" Command="{x:Bind SortByCommand}" CommandParameter="strand" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind LengthHeader}" Grid.Column="5" Command="{x:Bind SortByCommand}" CommandParameter="length" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MeanHeader}" Grid.Column="6" Command="{x:Bind SortByCommand}" CommandParameter="mean" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MinHeader}" Grid.Column="7" Command="{x:Bind SortByCommand}" CommandParameter="min" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MaxHeader}" Grid.Column="8" Command="{x:Bind SortByCommand}" CommandParameter="max" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind LowHeader}" Grid.Column="9" Command="{x:Bind SortByCommand}" CommandParameter="low" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
                             </Grid>
                             <ItemsControl ItemsSource="{x:Bind Rows}">
                                 <ItemsControl.ItemTemplate>
