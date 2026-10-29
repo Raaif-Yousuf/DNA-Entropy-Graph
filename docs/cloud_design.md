@@ -577,6 +577,20 @@ exercise.
  any bucket object or VM, and refuses with `spend_cap` (action: Open Settings). The card re-asks
  whenever the page is shown and with no file chosen. The
  stopped-VM idle sweep (the third checkbox of the issue) is the reconciler's (#530).
+ Round 5 review fixes: `LedgerRecordingRunRepository` declares `TryUpsertIfPhaseAsync` itself (the
+ interface default is a plain upsert, so a decorator that left it out silently dropped the #113
+ phase guard; a reflection test and a test through the real container pin it), booking only when
+ the inner repository accepted the write. The cap card and the Run button ignore the cap for a
+ This PC run (the engine never applies it to one; Auto is left as asked). A cancel while the create
+ is in flight stamps `VmReadyAt` from the moment the create landed (`VmProvisioner.TakeVmStartForCancel`),
+ or from the cancel time when the create is still unsettled, so the VM that billed until the delete
+ is booked. An adopted VM books from its own platform start (`RunClockStart`), not from the moment
+ the run found it. A flex-start ("wait for a graphics card") run still in Provisioning is a queued
+ request: it is left out of the in-progress figure that the hard stop reads. THEORY (unverified, no
+ live project; ToTest #92): the flex create operation completes at the grant, not at queueing; if it
+ completes at queueing, queued time would be booked from `VmReadyAt` at the run's end (the estimate
+ display stays conservative). The Settings cap box commits on LostFocus (stated in the XAML), so
+ typing 1 on the way to 10 never saves cap 1.
 
 ## 11. The job runner and operation polling (issues #58, #256)
 

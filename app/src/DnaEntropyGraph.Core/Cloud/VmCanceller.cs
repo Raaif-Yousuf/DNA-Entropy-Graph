@@ -96,6 +96,20 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             }
         }
 
+        // Issue #109 (M2): a run abandoned mid-create never stamped when its VM started (the stamp lives on the runner's own path), so the cancel does, or the
+        // ledger books nothing for a VM that billed until this delete. Kept if the row already has one.
+        if (provisioner.TakeVmStartForCancel(jobId, settled) is { } vmStart)
+        {
+            try
+            {
+                await rows.UpdateRowAsync(jobId, row => row.VmReadyAt is null ? row with { VmReadyAt = vmStart } : row, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // A record, not a step: the terminal state below still lands.
+            }
+        }
+
         // Hard Rule 11: a cancel ends in exactly one recorded terminal state. Failed names the VM to delete by hand.
         await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
     }

@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -117,6 +118,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
         RunTarget = runTarget;
+        if (runTarget is not null)
+        {
+            runTarget.PropertyChanged += OnRunTargetPropertyChanged;
+        }
+
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -1242,8 +1248,28 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
+    /// <summary>The last cap answer, kept so a change of target can show or hide the card without asking the ledger again.</summary>
+    private SpendCapStatus? _lastSpendCap;
+
+    private void OnRunTargetPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RunTargetPickerViewModel.SelectedTarget))
+        {
+            SetSpendCap(_lastSpendCap);
+        }
+    }
+
     private void SetSpendCap(SpendCapStatus? status)
     {
+        _lastSpendCap = status;
+
+        // The cap is a cloud spending cap: the engine routes a This PC run before it ever asks (JobEngine.StartRunAsync), so the card must neither
+        // block nor warn for one. Auto stays as asked (it may resolve to the cloud).
+        if (RunTargets.IsThisPc(RunTarget?.SelectedTarget))
+        {
+            status = null;
+        }
+
         if (status is not { Level: not SpendCapLevel.None, CapUsd: { } cap })
         {
             SpendCapText = string.Empty;

@@ -152,6 +152,15 @@ public sealed class SpendLedger : ISpendCapGate
                 continue;
             }
 
+            // A flex-start (wait for a card) run still in Provisioning is a request in Google's queue, not a VM that bills: the run only leaves
+            // Provisioning once its create has been answered with a granted VM. THEORY (unverified, no live project; ToTest #92): the create
+            // operation completes at the grant, not at queueing. Until that is measured the queued time is kept out of the HARD STOP figure (it can
+            // only under-count a VM that was in fact already billing; the run's own row, booked at its end, still carries the whole span).
+            if (run.Phase == JobPhase.Provisioning && RunOptionsJson.TryDeserialize(run.OptionsJson)?.WaitForGpu == true)
+            {
+                continue;
+            }
+
             var from = vmStart > monthStart ? vmStart : monthStart;
             if (now > from && UsdFor(run, from, now) is { } usd)
             {
@@ -212,13 +221,38 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
-        var quote = ledger.Quote(run);
-        if (quote is not null)
+        var (stamped, quote) = Quote(run);
+        await inner.UpsertAsync(stamped, cancellationToken).ConfigureAwait(false);
+        await BookAsync(stamped, quote).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Declared here on purpose: <see cref="IRunRepository.TryUpsertIfPhaseAsync"/> has a NON-conditional default body, so a decorator that left it out would
+    /// inherit a plain upsert and silently drop the #113 phase guard (a Cancelled row overwritten with Completed). The inner repository decides; a ledger row is
+    /// booked only when the write was accepted.
+    /// </summary>
+    public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
+    {
+        var (stamped, quote) = Quote(run);
+        if (!await inner.TryUpsertIfPhaseAsync(stamped, expectedPhase, cancellationToken).ConfigureAwait(false))
         {
-            run = run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) };
+            return false;
         }
 
-        await inner.UpsertAsync(run, cancellationToken).ConfigureAwait(false);
+        await BookAsync(stamped, quote).ConfigureAwait(false);
+        return true;
+    }
+
+    private (RunRecord Run, CostLedgerEntry? Quote) Quote(RunRecord run)
+    {
+        var quote = ledger.Quote(run);
+        return quote is null
+            ? (run, null)
+            : (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
+    }
+
+    private async Task BookAsync(RunRecord stored, CostLedgerEntry? quote)
+    {
         if (quote is null)
         {
             return;
@@ -226,7 +260,7 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
         try
         {
-            await ledger.RecordRunAsync(run, CancellationToken.None).ConfigureAwait(false);
+            await ledger.RecordRunAsync(stored, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
