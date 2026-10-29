@@ -796,7 +796,7 @@ def test_a_heartbeat_retries_a_transient_failure(env: lq.Env, monkeypatch: pytes
     assert json.loads((env.state / "runner.json").read_text(encoding="utf-8"))["pid"] == env.pid
 
 
-def _prs(*rows: dict[str, str]) -> tuple[int, str]:
+def _prs(*rows: dict[str, int | str]) -> tuple[int, str]:
     return 0, json.dumps(list(rows))
 
 

@@ -198,7 +198,9 @@ def test_green_landing_records_the_pr_for_the_merge_hook(world):
 
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
-    landed = json.loads(premerge_stamp.landed_path(world.clone).read_text(encoding="utf-8"))
+    landed_file = premerge_stamp.landed_path(world.clone)
+    assert landed_file is not None
+    landed = json.loads(landed_file.read_text(encoding="utf-8"))
     assert list(landed.values())[0]["head"] == sha
 
 
@@ -1200,7 +1202,9 @@ def test_a_posix_kill_still_reaches_a_victim_whose_parent_died_after_the_scan(tm
         assert start is not None
         gofile.write_text("x")
         parent.wait(timeout=10)  # the parent dies after the scan: gc is reparented to init
-        assert lw._proc_fields(gc)[1] != parent.pid
+        fields = lw._proc_fields(gc)
+        assert fields is not None
+        assert fields[1] != parent.pid
         assert lw._kill_if_same(gc, start) is True  # identity is pid + start time only, never the ppid
         assert _pid_gone(gc)
     finally:
