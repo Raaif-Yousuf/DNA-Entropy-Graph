@@ -33,7 +33,6 @@ public sealed class SpendLedger : ISpendCapGate
     private readonly TimeProvider _time;
     private readonly TimeZoneInfo _zone;
     private readonly IRunRepository? _runs;
-    private readonly Lazy<PricingLoadResult> _table;
 
     /// <param name="runs">
     /// The UNDECORATED run repository (reading in-progress runs). Null means in-progress runs are not counted. It must not be the
@@ -47,7 +46,6 @@ public sealed class SpendLedger : ISpendCapGate
         _time = time;
         _zone = zone ?? TimeZoneInfo.Local;
         _runs = runs;
-        _table = new Lazy<PricingLoadResult>(() => _pricing.Load());
     }
 
     /// <summary>
@@ -179,10 +177,12 @@ public sealed class SpendLedger : ISpendCapGate
         return total;
     }
 
+    // The table is read at each pricing use, never cached: the registered source serves the latest table, which changes after a catalog refresh (a cheap locked read there).
+    // First-write-wins still holds: a booked run's row is never re-priced.
     /// <summary>VM time from <paramref name="from"/> to <paramref name="to"/> at the run's machine rate plus its disk share; null when there is no price.</summary>
     private double? UsdFor(RunRecord run, DateTimeOffset from, DateTimeOffset to)
     {
-        if (run.MachineType is null || _table.Value.Table is not { } table || table.Find(run.MachineType) is not { } machine)
+        if (run.MachineType is null || _pricing.Load().Table is not { } table || table.Find(run.MachineType) is not { } machine)
         {
             return null;
         }
