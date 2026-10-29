@@ -114,7 +114,9 @@ public sealed class LocalJobRunner
         string runFolder;
         try
         {
-            runFolder = RunOutputFolders.CreateUnique(request.OutputFolder, Path.GetFileNameWithoutExtension(request.Input.FileName));
+            runFolder = RunOutputFolders.CreateUnique(
+                request.OutputFolder,
+                RunOutputFolders.RunFolderName(request.Options, request.Input, Clock.GetLocalNow().DateTime));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

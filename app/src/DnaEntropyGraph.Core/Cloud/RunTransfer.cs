@@ -223,7 +223,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         string folder;
         try
         {
-            folder = RunOutputFolders.CreateUnique(request.OutputFolder, request.Inputs[0].OutputStem);
+            folder = RunOutputFolders.CreateUnique(
+                request.OutputFolder,
+                RunOutputFolders.RunFolderName(request.Options, request.Inputs[0], settings.TimeProvider.GetLocalNow().DateTime));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
