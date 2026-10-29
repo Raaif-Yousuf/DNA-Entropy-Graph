@@ -27,7 +27,7 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
                 Directory.Delete(_root, recursive: true);
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
     }
@@ -35,8 +35,26 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
     private string Log => Path.Combine(_root, "logs", "app.log");
 
     /// <summary>The lines of the log that carry this test's marker.</summary>
-    private List<string> Mine() => (File.Exists(Log) ? File.ReadAllLines(Log) : [])
-        .Where(l => l.Contains(_marker, StringComparison.Ordinal)).ToList();
+    private List<string> Mine() => ReadLines().Where(l => l.Contains(_marker, StringComparison.Ordinal)).ToList();
+
+    /// <summary>Reads the log while a parallel writer may hold it open: a plain ReadAllLines would throw an IOException on a sharing violation.</summary>
+    private List<string> ReadLines()
+    {
+        if (!File.Exists(Log))
+        {
+            return [];
+        }
+
+        using var stream = new FileStream(Log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
+        return lines;
+    }
 
     [Fact]
     public void A_TraceWarning_after_the_startup_registration_lands_as_one_line_in_logs_app_log_and_in_the_diagnostics_zip_listing()
@@ -100,7 +118,7 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
         t.Join();
         Trace.WriteLine("done");
 
-        var lines = File.ReadAllLines(Log);
+        var lines = ReadLines();
         lines.ShouldContain(l => l.EndsWith($" INFO trace {other} whole", StringComparison.Ordinal));
         lines.ShouldContain(l => l.EndsWith($" INFO trace {_marker} unfinished done", StringComparison.Ordinal));
         lines.Where(l => l.Contains(other, StringComparison.Ordinal)).ShouldAllBe(l => !l.Contains("unfinished", StringComparison.Ordinal));
@@ -116,6 +134,38 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
         Mine().ShouldHaveSingleItem().Length.ShouldBeGreaterThan(DiagnosticsTraceListener.MaxPendingChars);
         Trace.WriteLine(_marker + " after");
         Mine().Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_nucleotide_run_that_spans_the_cap_is_never_written_as_two_raw_halves()
+    {
+        DiagnosticsTraceListener.Install(_root);
+
+        // Exactly the cap in the first fragment, so the second one is a 10-base tail: flushed on its own it would be a raw run too short to redact.
+        var head = _marker + " ";
+        Trace.Write(head + new string('A', DiagnosticsTraceListener.MaxPendingChars - head.Length));
+        Trace.Write("ACGTACGTAC");
+        Trace.WriteLine(string.Empty);
+        var text = string.Join("\n", ReadLines());
+        text.ShouldNotContain("AAAAAAAAAAAAAAAAAAAA");
+        text.ShouldNotContain("ACGTACGTAC");
+        text.ShouldContain("<sequence>");
+    }
+
+    [Fact]
+    public void An_empty_or_blank_message_writes_no_line_and_a_pending_fragment_does_not_survive_a_reinstall()
+    {
+        DiagnosticsTraceListener.Install(_root);
+        var before = ReadLines().Count;
+
+        Trace.TraceWarning("   ");
+        Trace.WriteLine(string.Empty);
+        Trace.Write(_marker + "stale fragment");
+        DiagnosticsTraceListener.Install(_root);
+        Trace.WriteLine(_marker + "fresh");
+
+        ReadLines().Count(l => !l.Contains(_marker, StringComparison.Ordinal)).ShouldBe(before, "blank messages add no line (other lines are not mine)");
+        Mine().ShouldHaveSingleItem().ShouldEndWith($" INFO trace {_marker}fresh");
     }
 
     [Fact]

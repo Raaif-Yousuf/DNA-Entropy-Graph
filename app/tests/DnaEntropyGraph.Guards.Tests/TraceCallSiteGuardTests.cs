@@ -12,7 +12,10 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public class TraceCallSiteGuardTests
 {
-    private static readonly Regex Call = new(@"(?:Trace\.Trace(?:Warning|Error|Information)|Trace\.(?:Write|WriteLine|Fail)|Debug\.(?:Write|WriteLine|Fail))\(", RegexOptions.Compiled);
+    // The leading boundary keeps FooTrace.Write and My.Trace.Write out; an optional System.Diagnostics. prefix is still a match.
+    private static readonly Regex Call = new(
+        @"(?<![\w.])(?:(?:global::)?System\.)?(?:Diagnostics\.)?(?:Trace\.(?<m>TraceWarning|TraceError|TraceInformation)|(?:Trace|Debug)\.(?<m>WriteLineIf|WriteIf|WriteLine|Write|Fail|Assert))\(",
+        RegexOptions.Compiled);
 
     private static readonly Regex TypeNameHole = new(
         @"^\w+(?:\.GetBaseException\(\))?\.GetType\(\)\.Name$", RegexOptions.Compiled);
@@ -69,7 +72,57 @@ public class TraceCallSiteGuardTests
 
         return bad;
     }
-    /// <summary>Every call's argument text (up to the matching close parenthesis, string literals skipped over).</summary>
+
+    /// <summary>The top-level arguments of one call's argument text (commas inside parentheses, brackets, braces and string literals do not split).</summary>
+    private static List<string> SplitArguments(string text)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var inString = false;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (inString)
+            {
+                if (c == '\\')
+                {
+                    i++;
+                }
+                else if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '(' or '[' or '{':
+                    depth++;
+                    break;
+                case ')' or ']' or '}':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    parts.Add(text[start..i]);
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        parts.Add(text[start..]);
+        return parts;
+    }
+
+    /// <summary>
+    /// Every message argument that reaches the log. A plain call is checked as a whole (so a trailing category or format argument is a violation);
+    /// for WriteIf, WriteLineIf and Assert the first argument is a condition and is not checked, the message (and an Assert's detail message) are.
+    /// </summary>
     internal static IEnumerable<string> Arguments(string source)
     {
         foreach (Match m in Call.Matches(source))
@@ -109,10 +162,23 @@ public class TraceCallSiteGuardTests
                 }
             }
 
-            yield return source[start..(i - 1)];
+            var argument = source[start..(i - 1)];
+            if (m.Groups["m"].Value is "WriteIf" or "WriteLineIf" or "Assert")
+            {
+                // Condition first; everything after it is message text.
+                var parts = SplitArguments(argument);
+                yield return parts.Count > 1 ? parts[1] : string.Empty;
+                if (parts.Count > 2 && m.Groups["m"].Value == "Assert")
+                {
+                    yield return parts[2];
+                }
+            }
+            else
+            {
+                yield return argument;
+            }
         }
     }
-
     [Fact]
     public void Every_Trace_call_in_app_src_interpolates_only_type_names_or_whitelisted_members()
     {
@@ -174,6 +240,9 @@ public class TraceCallSiteGuardTests
     [InlineData("DEBUG_WRITE")]
     [InlineData("DEBUG_WRITELINE")]
     [InlineData("DEBUG_FAIL")]
+    [InlineData("WRITELINEIF")]
+    [InlineData("ASSERT")]
+    [InlineData("DEBUG_WRITEIF")]
     public void The_scanner_catches_a_planted_unsafe_call(string kind)
     {
         // Built at run time so this file never contains a bad call itself.
@@ -185,6 +254,9 @@ public class TraceCallSiteGuardTests
             "DEBUG_WRITE" => "Debug." + "Write(",
             "DEBUG_WRITELINE" => "Debug." + "WriteLine(",
             "DEBUG_FAIL" => "Debug." + "Fail(",
+            "WRITELINEIF" => "Trace." + "WriteLineIf(",
+            "ASSERT" => "Debug." + "Assert(",
+            "DEBUG_WRITEIF" => "System.Diagnostics.Debug." + "WriteIf(",
             _ => "System.Diagnostics.Trace." + "TraceWarning(",
         };
         var planted = kind switch
@@ -193,6 +265,8 @@ public class TraceCallSiteGuardTests
             "INTERP_ARGS" => "$\"x {ex.GetType().Name}\", " + "path",
             "PLAIN_ARGS" => "\"x {0}\", " + "path",
             "VERBATIM" => "@\"C:\\" + "x\"",
+            "WRITELINEIF" or "DEBUG_WRITEIF" => "enabled, " + "fileName",
+            "ASSERT" => "ok, " + "path",
             "WRITE" or "WRITELINE" or "FAIL" or "DEBUG_WRITE" or "DEBUG_WRITELINE" or "DEBUG_FAIL" => "fileName",
             "MESSAGE" => "$\"failed: {" + "ex.Message}\"",
             "PATH" => "$\"could not open {" + "inputPath}\"",
@@ -202,6 +276,18 @@ public class TraceCallSiteGuardTests
         var source = call + planted + ");";
 
         Arguments(source).SelectMany(Violations).ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public void The_scanner_ignores_a_longer_name_and_checks_the_message_not_the_condition()
+    {
+        Arguments("FooTrace." + "Write(fileName);").ShouldBeEmpty();
+        Arguments("My.Trace." + "WriteLine(fileName);").ShouldBeEmpty();
+
+        var clean = Arguments("Trace." + "WriteLineIf(someFlag && other, \"constant\");" + "Debug." + "Assert(items.Count > 0, \"constant\", \"detail\");").ToList();
+
+        clean.Count.ShouldBe(3, "one message per call, plus the Assert detail");
+        clean.SelectMany(Violations).ShouldBeEmpty();
     }
 
     [Fact]

@@ -41,6 +41,7 @@ public sealed class DiagnosticsTraceListener : TraceListener
     public static void Install(string root, TimeProvider? time = null)
     {
         Uninstall();
+        _pending?.Clear();
         Trace.Listeners.Add(new DiagnosticsTraceListener(root, time));
         Trace.AutoFlush = true;
     }
@@ -48,6 +49,7 @@ public sealed class DiagnosticsTraceListener : TraceListener
     /// <summary>Removes every instance from the shared listener collection (tests; the app never calls this).</summary>
     public static void Uninstall()
     {
+        _pending?.Clear();
         foreach (var existing in Trace.Listeners.OfType<DiagnosticsTraceListener>().ToList())
         {
             Trace.Listeners.Remove(existing);
@@ -70,13 +72,23 @@ public sealed class DiagnosticsTraceListener : TraceListener
 
         var pending = _pending ??= new StringBuilder();
         pending.Append(message);
-        if (pending.Length >= MaxPendingChars)
+        while (pending.Length >= MaxPendingChars)
         {
-            // A Write that never meets its WriteLine must not grow without bound: emit what is there as a line.
-            Flush("INFO");
+            // A Write that never meets its WriteLine must not grow without bound. Cut at the last whitespace so a nucleotide run is not split
+            // into a redactable half and a short raw tail; with no whitespace the whole fragment goes out as one line.
+            var text = pending.ToString();
+            var cut = text.LastIndexOfAny([' ', '\t']);
+            if (cut <= 0)
+            {
+                pending.Clear();
+                Emit("INFO", text);
+                break;
+            }
+
+            pending.Remove(0, cut + 1);
+            Emit("INFO", text[..cut]);
         }
     }
-
     public override void WriteLine(string? message)
     {
         _pending ??= new StringBuilder();
@@ -135,6 +147,11 @@ public sealed class DiagnosticsTraceListener : TraceListener
 
     private void Emit(string level, string text)
     {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
         try
         {
             var line = string.Create(
