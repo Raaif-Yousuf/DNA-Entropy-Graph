@@ -17,6 +17,9 @@ public sealed class GoogleAccountOptions
     /// <summary>Null in production (Google's own HTTP stack, real Google URLs). A test passes a fake that answers those same URLs.</summary>
     public HttpMessageHandler? HttpHandler { get; init; }
 
+    /// <summary>The proxy choice the token exchange follows (issue #239). Null is the system default. Ignored when <see cref="HttpHandler"/> is set.</summary>
+    public DnaEntropyGraph.Core.Net.IProxyPolicy? Proxy { get; init; }
+
     /// <summary>
     /// What <see cref="GoogleAccountService.SelectedProjectId"/> answers while signed in with no project chosen. A chosen
     /// project (issue #520) always wins. Production still sets it to the id the fake used, so a run on an account that
