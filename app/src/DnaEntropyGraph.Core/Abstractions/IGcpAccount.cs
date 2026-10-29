@@ -23,6 +23,16 @@ public interface IGcpAccount
     /// <summary>Every account signed in on this PC, the current one included.</summary>
     IReadOnlyList<AccountInfo> Accounts { get; }
 
+    /// <summary>
+    /// True when the saved account list exists but could not be read (another program or copy of the app holds it, issue #624), so
+    /// <see cref="IsSignedIn"/> and <see cref="Accounts"/> are empty only because they are unread. The sign-in screen then says so and offers
+    /// Try again (<see cref="RecheckAccountsFile"/>) instead of looking signed out.
+    /// </summary>
+    bool IsAccountsFileLocked { get; }
+
+    /// <summary>Reads the saved account list again now (Try again), without waiting out the short window between automatic reads. Raises <see cref="AccountChanged"/> if it was locked and can now be read.</summary>
+    void RecheckAccountsFile();
+
     /// <summary>Raised after the current account, the account list or the sign-in state changed. Not guaranteed to be on the UI thread.</summary>
     event EventHandler? AccountChanged;
 
