@@ -119,3 +119,84 @@ def test_check_reports_an_appended_duplicate_row(tmp_path):
     (tmp_path / ctf.TOTEST_RELATIVE).write_text(table + last + "\n", encoding="utf-8", newline="\n")
     problems = ctf.check(tmp_path, 45)
     assert any("duplicate" in p.lower() for p in problems), problems
+
+
+# --- #652: a row split across two lines must fail, naming the line ---------------------------------------------
+
+_ROW = "| #12 | {sha} | installer | Install and run once | The tray icon appears | Process runs, no tray icon |"
+
+
+def _queue(*lines):
+    head = (
+        "## Queue\n\nProse before the table is fine.\n\n"
+        "| # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+    )
+    return head + "\n".join(lines) + "\n"
+
+
+def test_a_well_formed_table_has_no_stray_lines():
+    assert ctf.find_stray_lines(_queue(_ROW.format(sha="abc1234"))) == []
+
+
+def test_prose_before_the_table_and_blank_lines_in_it_are_allowed():
+    text = _queue(_ROW.format(sha="abc1234"), "", _ROW.format(sha="abc1235"))
+    assert ctf.find_stray_lines(text) == []
+
+
+def test_a_continuation_line_after_a_split_row_is_reported_with_its_line_number():
+    row = _ROW.format(sha="abc1234")
+    first, second = row[:60], row[60:]
+    text = _queue(first, second)
+    problems = ctf.find_stray_lines(text)
+    line_of_second = text.splitlines().index(second) + 1
+    assert any(p.startswith(f"L{line_of_second}:") for p in problems), problems
+
+
+def test_a_row_with_no_closing_pipe_is_reported():
+    # The first half of a split row still has six cells by a count of '|', so only the missing closing pipe shows it.
+    row = "| #12 | abc1234 | installer | Install | Passing | False pass"
+    problems = ctf.find_stray_lines(_queue(row))
+    assert any("closing" in p for p in problems), problems
+
+
+def test_a_heading_after_the_table_ends_the_scan():
+    text = _queue(_ROW.format(sha="abc1234")) + "\n## Later\n\nFree prose here.\n"
+    assert ctf.find_stray_lines(text) == []
+
+
+def test_a_non_row_line_directly_under_the_table_is_reported():
+    text = _queue(_ROW.format(sha="abc1234"), "stray words")
+    assert len(ctf.find_stray_lines(text)) == 1
+
+
+def test_check_fails_on_a_split_row_in_a_real_file(tmp_path):
+    sha = _init_repo(tmp_path)
+    row = _ROW.format(sha=sha)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ctf.TOTEST_RELATIVE).write_text(_queue(row[:70], row[70:]), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 36500)
+    assert any("not a table row" in p or "closing" in p for p in problems), problems
+
+
+def test_check_is_clean_for_the_same_row_unsplit(tmp_path):
+    sha = _init_repo(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ctf.TOTEST_RELATIVE).write_text(_queue(_ROW.format(sha=sha)), encoding="utf-8", newline="\n")
+    assert ctf.check(tmp_path, 36500) == []
+
+
+def _init_repo(root):
+    return ctf._init_throwaway_repo(root)
+
+
+def test_the_stray_line_scanner_sees_rows_in_the_real_queue():
+    # Vacuity: the scanner must have walked at least one real table row, not returned [] for lack of a table.
+    text = (SCRIPTS_DIR.parent / ctf.TOTEST_RELATIVE).read_text(encoding="utf-8")
+    assert ctf.count_table_lines(text) >= 3
+
+
+def test_a_lone_carriage_return_inside_a_cell_is_reported():
+    # MEASURED 2026-10-03 (#106): the split was a bare CR (a PowerShell backtick-r), not an LF.
+    row = _ROW.format(sha="abc1234").replace("Install and", "Install\rand")
+    assert len(ctf.find_stray_lines(_queue(row))) == 2

@@ -8,6 +8,7 @@ the real venv are never touched.
 from __future__ import annotations
 
 import contextlib
+import importlib
 import json
 import os
 import subprocess
@@ -77,6 +78,12 @@ def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
     return proc.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _git_bytes(cwd: Path, *args: str) -> bytes:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    return proc.stdout
 
 
 @dataclass
@@ -280,6 +287,132 @@ def test_a_totest_only_conflict_is_union_resolved_and_both_rows_survive(world):
     assert "| lane row |" in merged and "| main row |" in merged and "<<<<" not in merged
     assert _git(world.origin, "rev-list", "--parents", "-n", "1", "feat/1-x").count(" ") == 2  # a merge commit
     assert world.venv_intact() and world.leftover_worktrees() == []
+
+
+# --- ToTest.md normalisation after the union (#892) ------------------------------------------------------
+
+TT_HEAD = (
+    "## Queue\n\n| # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |\n"
+    "| --- | --- | --- | --- | --- | --- |\n"
+)
+
+
+def _tt(issue: int, do: str = "do a", sha: str = "abc1234", needs: str = "gpu-vm", close: bool = True) -> str:
+    return f"| #{issue} | {sha} | {needs} | {do} | p | f |" + ("\n" if close else "")
+
+
+def _land_totest(world, lane: str, main: str) -> list[str]:
+    """Land a lane and main that both append to the Queue table; return the landed ToTest.md lines."""
+    world.advance_main({"docs/ToTest.md": TT_HEAD.encode()})
+    sha = world.commit_on_branch("feat/1-x", {"docs/ToTest.md": (TT_HEAD + lane).encode()})
+    world.advance_main({"docs/ToTest.md": (TT_HEAD + main).encode()})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    return _git(world.origin, "show", "feat/1-x:docs/ToTest.md").splitlines()
+
+
+def test_a_row_both_sides_carry_is_kept_once_and_mains_copy_wins(world):
+    # a stacked chain whose bottom just landed: the lane has #91 and #92, main has #5 and the same #91
+    lines = _land_totest(world, _tt(91) + _tt(92, "do b"), _tt(5, "do x") + _tt(91))
+    rows = [ln for ln in lines if ln.startswith("| #") and ln[3].isdigit()]
+    assert rows == [_tt(92, "do b").strip(), _tt(5, "do x").strip(), _tt(91).strip()], rows
+
+
+def test_a_row_with_the_same_key_but_a_different_cell_is_kept_and_named_for_the_lane_to_reconcile(world, capsys):
+    import check_totest_format as ctf
+
+    lane = _tt(91, "do a", sha="def5678") + _tt(92, "do b")
+    lines = _land_totest(world, lane, _tt(5, "do x") + _tt(91, "do a"))
+    out = capsys.readouterr().out
+    assert _tt(91, "do a", sha="def5678").strip() in lines and _tt(91, "do a").strip() in lines  # the lane's edit survives
+    assert "#91" in out and "do a" in out and "Closed by (commit sha)" in out and "reconcile" in out
+    assert "line " not in out.split("reconcile")[0].split("WARNING")[-1]  # no worktree line numbers: the file is deleted after the land
+    assert len(ctf.find_duplicate_rows(ctf.parse_rows("\n".join(lines) + "\n"))) == 1  # premerge will refuse it
+
+
+def test_a_lane_only_duplicate_is_left_and_named_not_collapsed(world, capsys):
+    lines = _land_totest(world, _tt(93, "do c") + _tt(93, "do c"), _tt(5, "do x"))
+    out = capsys.readouterr().out
+    assert [ln for ln in lines if ln.startswith("| #93")] == [_tt(93, "do c").strip()] * 2
+    assert "#93" in out and "do c" in out and "reconcile" in out
+
+
+def test_identical_copies_of_a_row_main_carries_collapse_to_mains_copy(world):
+    lines = _land_totest(world, _tt(91) + _tt(91) + _tt(92, "do b"), _tt(5, "do x") + _tt(91))
+    assert [ln for ln in lines if ln.startswith("| #91")] == [_tt(91).strip()]
+
+
+def test_a_copy_that_differs_from_mains_in_the_sha_cell_is_not_dropped():
+    text = TT_HEAD + _tt(91, sha="def5678") + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91))
+    assert dropped == 0 and out == text
+    assert len(conflicts) == 1 and "#91" in conflicts[0] and "Closed by (commit sha)" in conflicts[0]
+
+
+def test_a_main_copy_lacking_the_closing_pipe_still_wins_over_the_lane_copy():
+    text = TT_HEAD + _tt(91) + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
+    assert dropped == 1 and not conflicts
+    assert out == TT_HEAD + _tt(5, "do x") + _tt(91)
+
+
+def test_a_totest_that_is_not_utf8_is_left_as_the_union_made_it_and_says_so(world, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"docs/ToTest.md": b"| header |\n| row0 |\n| lane \xff |\n"})
+    world.advance_main({"docs/ToTest.md": b"| header |\n| row0 |\n| main |\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    out = capsys.readouterr().out
+    assert "not UTF-8" in out and "skipped" in out
+    assert b"| lane \xff |" in _git_bytes(world.origin, "show", "feat/1-x:docs/ToTest.md")
+
+
+def test_a_row_missing_its_closing_pipe_is_closed(world):
+    lines = _land_totest(world, _tt(93, "do c").rstrip("\n |") + "\n" + _tt(94, "do d"), _tt(5, "do x"))
+    assert _tt(93, "do c").strip() in lines
+    assert all(ln.rstrip().endswith("|") for ln in lines if ln.startswith("|"))
+
+
+def test_a_genuinely_distinct_row_is_kept(world):
+    # same issue, different "Do this"; and another issue with the same "Do this": neither is a duplicate
+    lines = _land_totest(world, _tt(91, "do b") + _tt(7, "do a"), _tt(91, "do a"))
+    rows = [ln for ln in lines if ln.startswith("| #") and ln[3].isdigit()]
+    assert sorted(rows) == sorted([_tt(91, "do b").strip(), _tt(7, "do a").strip(), _tt(91, "do a").strip()])
+
+
+def test_normalize_totest_touches_only_queue_table_rows():
+    tail = "prose | with a pipe\n## Other\n| #1 | x | y\n"
+    text = "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(1) + _tt(2).rstrip(" |\n") + "\n" + tail
+    out, dropped, closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(1))
+    assert (dropped, closed, conflicts) == (1, 1, [])
+    assert out == "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(2) + tail  # lines outside the table are byte-identical
+    out, dropped, closed, _ = lw.normalize_totest(TT_HEAD + _tt(2).rstrip(" |\n") + "\r\n", "")
+    assert (dropped, closed) == (0, 1) and out.endswith(" |\r\n")
+
+
+def test_a_row_ending_in_a_unicode_line_break_does_not_glue_the_next_line():
+    row = _tt(2).rstrip(" |\n")
+    text = TT_HEAD + row + "\x0c" + _tt(3)
+    out, _dropped, closed, _ = lw.normalize_totest(text, "")
+    assert closed == 1 and out == TT_HEAD + row + " |\x0c" + _tt(3)
+
+
+# --- the sha recorded for the merge hook is the one pushed (#904) ----------------------------------------
+
+
+def test_a_lane_behind_main_records_the_pushed_merge_commit_not_the_lane_tip(world):
+    import premerge_stamp
+
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    world.advance_main({"a.txt": b"two\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    pushed = _git(world.origin, "rev-parse", "refs/heads/feat/1-x")
+    assert pushed != sha
+    landed_file = premerge_stamp.landed_path(world.clone)
+    assert landed_file is not None
+    assert list(json.loads(landed_file.read_text(encoding="utf-8")).values())[0]["head"] == pushed
+    sys.path.insert(0, str(SCRIPTS_DIR / "hooks"))
+    hook = importlib.import_module("require_premerge_before_pr")
+
+    assert hook.verdict(f"gh pr merge 7 --merge --match-head-commit {pushed}", world.clone) is None
+    assert hook.verdict(f"gh pr merge 7 --merge --match-head-commit {sha}", world.clone) is not None
 
 
 def test_any_other_conflict_refuses_names_the_files_and_pushes_nothing(world, capsys):
