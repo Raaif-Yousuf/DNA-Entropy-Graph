@@ -65,7 +65,43 @@ def test_cpu_image_installs_from_a_locked_lockfile() -> None:
     text = DOCKERFILE_CPU.read_text(encoding="utf-8")
     assert "uv.lock" in text
     assert "uv export --locked" in text
-    assert "pip install --no-deps -r requirements.lock.txt" in text
+    assert "pip install --require-hashes --no-deps -r requirements.lock.txt" in text
+
+
+def test_cpu_lockfile_install_is_hash_verified() -> None:
+    """#255: a version pin alone trusts whatever PyPI serves under that version; the export must
+    keep the hashes (no --no-hashes) and pip must refuse anything unhashed."""
+    code = _code_only(DOCKERFILE_CPU)
+    assert "--no-hashes" not in code
+    assert "--require-hashes" in code
+
+
+def test_cuda_base_is_pinned_by_digest() -> None:
+    """#255: the release pin gate refuses an unpinned FROM, so cuda must carry a literal digest."""
+    import re
+
+    code = _code_only(DOCKERFILE_CUDA)
+    froms = [ln for ln in code.splitlines() if ln.strip().startswith("FROM ")]
+    assert len(froms) == 1
+    assert re.search(r"^FROM nvcr\.io/nvidia/pytorch:\S+@sha256:[0-9a-f]{64}$", froms[0])
+
+
+def test_every_from_has_its_human_readable_tag_in_a_comment() -> None:
+    """A bare digest is unreadable: the tag it was resolved from stays in a comment above the FROM."""
+    for path, tag in (
+        (DOCKERFILE_CPU, "python:3.12-slim"),
+        (DOCKERFILE_CUDA, "nvcr.io/nvidia/pytorch:25.06-py3"),
+    ):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        idx = next(i for i, ln in enumerate(lines) if ln.startswith("FROM "))
+        block: list[str] = []
+        for ln in reversed(lines[:idx]):
+            if not ln.startswith("#"):
+                break
+            block.append(ln)
+        above = "\n".join(reversed(block))
+        assert tag in above, f"{path.name}: name {tag} in a comment above FROM"
+        assert "resolved" in above.lower()
 
 
 def test_uv_lock_file_exists() -> None:
@@ -151,3 +187,111 @@ def test_neither_image_installs_gcloud_or_ssh() -> None:
         code = _code_only(path)
         assert "gcloud" not in code
         assert "openssh" not in code.lower()
+
+
+def test_every_registry_package_in_uv_lock_has_a_hash_on_every_artifact() -> None:
+    import tomllib
+
+    data = tomllib.loads((WORKER_DIR / "uv.lock").read_text(encoding="utf-8"))
+    bad: list[str] = []
+    seen = 0
+    for pkg in data["package"]:
+        if "registry" not in pkg.get("source", {}):
+            continue
+        seen += 1
+        artifacts = list(pkg.get("wheels", []))
+        if "sdist" in pkg:
+            artifacts.append(pkg["sdist"])
+        if not artifacts or any(not str(a.get("hash", "")).startswith("sha256:") for a in artifacts):
+            bad.append(pkg["name"])
+    assert seen > 0, "no registry package found: the check would be vacuous"
+    assert bad == []
+
+
+def test_every_package_in_the_cpu_export_is_hash_pinned() -> None:
+    """Runs the exact export the Dockerfile runs; skipped without uv, like the staleness check."""
+    import re
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv not on PATH in this environment")
+    out = subprocess.run(
+        ["uv", "export", "--locked", "--no-emit-project", "--extra", "genes"],
+        cwd=WORKER_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    blocks = re.split(r"(?m)^(?=[A-Za-z0-9_.-]+(?:\[[^\]]*\])?==)", out.stdout)[1:]
+    assert blocks, "the export listed no package: the check would be vacuous"
+    for block in blocks:
+        name = block.split("==", 1)[0]
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", block), f"{name} has no hash in the export"
+
+
+BUILD_REQUIREMENTS = WORKER_DIR / "build-requirements.txt"
+
+
+def test_build_requirements_pin_uv_and_the_build_backend_with_hashes() -> None:
+    import re
+
+    text = re.sub(r"(?m)^#.*$", "", BUILD_REQUIREMENTS.read_text(encoding="utf-8"))
+    entries = [e for e in re.split(r"(?m)^(?=[A-Za-z])", text) if e.strip()]
+    names = {e.split("==", 1)[0] for e in entries}
+    assert {"uv", "setuptools", "wheel"} <= names
+    for e in entries:
+        assert "==" in e.split("\\", 1)[0], f"{e.split()[0]} must be pinned with =="
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}", e), f"{e.split()[0]} has no hash"
+
+
+def test_build_requirements_pin_every_transitive_build_dependency() -> None:
+    """MEASURED 2026-10-28 (PR #900 CI, "CPU container smoke"): `pip install --require-hashes`
+    failed with "packaging>=24.0 from wheel==0.48.0" because the transitive dependency was not
+    pinned. In --require-hashes mode pip refuses any unpinned requirement, so every transitive
+    dependency of uv, setuptools and wheel must be listed with == and a sha256."""
+    import re
+
+    text = re.sub(r"(?m)^#.*$", "", BUILD_REQUIREMENTS.read_text(encoding="utf-8"))
+    entries = [e for e in re.split(r"(?m)^(?=[A-Za-z])", text) if e.strip()]
+    by_name = {e.split("==", 1)[0]: e for e in entries}
+    assert "packaging" in by_name, "wheel requires packaging>=24.0 and --require-hashes needs it pinned"
+    assert re.match(r"packaging==\d", by_name["packaging"])
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}", by_name["packaging"])
+
+
+def test_cpu_bootstrap_and_project_install_are_hash_verified() -> None:
+    code = _code_only(DOCKERFILE_CPU)
+    assert "pip install --require-hashes -r build-requirements.txt" in code
+    assert 'pip install "uv==' not in code, "an unhashed uv bootstrap is the hole #255 closes"
+    assert "pip install --no-deps --no-build-isolation ." in code
+    assert "pip install --no-deps ." not in code
+
+
+def test_cuda_comments_do_not_claim_the_base_is_unpinned() -> None:
+    """Rule-shaped: while every FROM is pinned by @sha256, no comment may say the base is unpinned."""
+    import re
+
+    text = DOCKERFILE_CUDA.read_text(encoding="utf-8")
+    froms = [ln for ln in _code_only(DOCKERFILE_CUDA).splitlines() if ln.startswith("FROM ")]
+    assert froms and all(re.search(r"@sha256:[0-9a-f]{64}", ln) for ln in froms)
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("#"):
+            assert not re.search(r"(?i)(isn't|is not|not|never)\s+pinned|pinned by digest yet", ln), (
+                f"stale claim that the base is unpinned: {ln!r}"
+            )
+
+
+def test_cuda_lock_follow_up_is_named_by_issue_number() -> None:
+    assert "#921" in DOCKERFILE_CUDA.read_text(encoding="utf-8")
+
+
+def test_build_requirements_ends_with_a_newline() -> None:
+    assert BUILD_REQUIREMENTS.read_bytes().endswith(b"\n")
+
+
+def test_trivyignore_ends_with_a_newline() -> None:
+    assert (WORKER_DIR.parent / ".trivyignore.yaml").read_bytes().endswith(b"\n")

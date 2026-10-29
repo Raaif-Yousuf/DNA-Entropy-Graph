@@ -226,6 +226,25 @@
                         </StackPanel>
                     </StackPanel>
                 </Expander>
+                <!-- Issue #239: the one proxy policy every network client follows. Collapsed by default; Windows' own settings are the right answer for most labs. -->
+                <Expander x:Uid="SettingsProxyExpander" IsExpanded="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="ProxyExplainer" TextWrapping="Wrap" />
+                        <ComboBox x:Uid="ProxyModeBox" SelectedIndex="{x:Bind Proxy.SelectedModeIndex, Mode=TwoWay}" HorizontalAlignment="Stretch">
+                            <ComboBoxItem x:Uid="ProxyModeSystemItem" />
+                            <ComboBoxItem x:Uid="ProxyModeManualItem" />
+                            <ComboBoxItem x:Uid="ProxyModeNoneItem" />
+                        </ComboBox>
+                        <StackPanel Spacing="8">
+                            <TextBox x:Uid="ProxyAddressBox" Text="{x:Bind Proxy.ManualAddress, Mode=TwoWay}" IsEnabled="{x:Bind Proxy.IsManual, Mode=OneWay}" />
+                            <TextBox x:Uid="ProxyUserNameBox" Text="{x:Bind Proxy.ProxyUserName, Mode=TwoWay}" IsEnabled="{x:Bind Proxy.IsManual, Mode=OneWay}" />
+                            <PasswordBox x:Uid="ProxyPasswordBox" Password="{x:Bind Proxy.ProxyPassword, Mode=TwoWay}" IsEnabled="{x:Bind Proxy.IsManual, Mode=OneWay}" />
+                            <TextBlock x:Uid="ProxySignInSaved" Visibility="{x:Bind Proxy.HasSavedSignIn, Mode=OneWay}" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button x:Uid="ProxyApplyButton" Command="{x:Bind Proxy.ApplyCommand}" />
+                        <TextBlock Text="{x:Bind Proxy.Status, Mode=OneWay}" Visibility="{x:Bind Proxy.HasStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Expander>
             </StackPanel>
 
             <StackPanel Spacing="8">

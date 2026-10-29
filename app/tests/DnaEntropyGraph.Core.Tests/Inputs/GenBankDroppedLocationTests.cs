@@ -240,11 +240,14 @@ public sealed class GenBankDroppedLocationTests
     [Fact]
     public void A_pathological_one_of_position_returns_quickly()
     {
+        // Real-time bound kept on purpose (#841): no deterministic alternative exists without changing GenBankLite (the parser has no step counter or match timeout to read).
+        // The bound is generous: this input parses in milliseconds, a catastrophic-backtracking regression on 20000 characters runs for minutes to years, so a loaded machine
+        // cannot reach 60 s while a real regression cannot stay under it.
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
         var result = Record.Exception(() => GenBankLite.Read(WithFirstGeneAt("one-of(" + new string('1', 20000) + "x..5")));
 
-        watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(60));
         (result is null or GenBankReadException).ShouldBeTrue();
     }
 

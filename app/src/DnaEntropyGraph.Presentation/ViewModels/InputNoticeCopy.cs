@@ -20,6 +20,8 @@ public static class InputNoticeCopy
             InputNoticeCode.AnnotationUnmatchedNames => "NewRunNotice_AnnotationUnmatchedNames_One",
             InputNoticeCode.AnnotationFeaturesPastEnd => "NewRunNotice_AnnotationFeaturesPastEnd_One",
             InputNoticeCode.GenBankFeaturesDropped => "NewRunNotice_GenBankFeaturesDropped_One",
+            InputNoticeCode.GenBankFeaturesOutOfRange => "NewRunNotice_GenBankFeaturesOutOfRange_One",
+            InputNoticeCode.GenBankGeneStoodInByCds => "NewRunNotice_GenBankGeneStoodInByCds_One",
             _ => KeyFor(code),
         }
         : KeyFor(code);
@@ -33,6 +35,8 @@ public static class InputNoticeCopy
         InputNoticeCode.RepeatedIds => "NewRunNotice_RepeatedIds",
         InputNoticeCode.GenBankRecordSkippedNoSequence => "NewRunNotice_GenBankRecordSkippedNoSequence",
         InputNoticeCode.GenBankFeaturesDropped => "NewRunNotice_GenBankFeaturesDropped",
+        InputNoticeCode.GenBankFeaturesOutOfRange => "NewRunNotice_GenBankFeaturesOutOfRange",
+        InputNoticeCode.GenBankGeneStoodInByCds => "NewRunNotice_GenBankGeneStoodInByCds",
         InputNoticeCode.RnaConverted => "NewRunNotice_RnaConverted",
         InputNoticeCode.AmbiguityMasked => "NewRunNotice_AmbiguityMasked",
         InputNoticeCode.AmbiguityKept => "NewRunNotice_AmbiguityKept",

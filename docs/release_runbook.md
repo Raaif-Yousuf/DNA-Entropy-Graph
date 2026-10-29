@@ -19,7 +19,8 @@ moving on; do not skip a step because a later one "would probably catch it anywa
 | `pytest -m "not gpu"` is green | `worker\.venv\Scripts\python.exe -m pytest worker/tests -m "not gpu" -q` |
 | The app tests are green | From `app/`, each test project (`dotnet test <project>`); the solution-wide command hangs on CI (see `ci-app.yml`'s header) |
 | `ci-app` and `ci-worker` were green on the commit you will tag | `gh run list --commit <sha> --limit 10`; the release workflow does not run the test suites, it only builds |
-| Both worker Dockerfiles pin their base by `@sha256` digest | `Select-String '^FROM' worker/Dockerfile.*`; the `images` job refuses a release otherwise (`Dockerfile.cuda` is unpinned until #37) |
+| Both worker Dockerfiles pin their base by `@sha256` digest | `Select-String '^FROM' worker/Dockerfile.*`; the `images` job refuses a release otherwise (#255 pinned both) |
+| `.trivyignore.yaml` has no expired accepted CVE | `worker\.venv\Scripts\python.exe scripts\check_trivy_allowlist.py` prints `OK:`; an entry past its `expired_at` fails this check, and the image scan when the CVE is fixable (#255); allowlist only a fixable finding |
 | `app/Directory.Build.props` and `worker/pyproject.toml` already say the new version | `python scripts\check_version_lockstep.py --tag vX.Y.Z` |
 | No open `P0` issues remain | `gh issue list --label P0 --state open` (empty) |
 | The `release` GitHub environment exists with a tag rule `v*`, required reviewers, and the signing secrets as ENVIRONMENT secrets (not repository secrets), plus the environment variable `RELEASE_SIGNER_SUBJECT` (owner steps: #703, `OWNER_TODO.md` item 5c) | `gh api repos/Raaif-Yousuf/DNA-Entropy-Graph/environments/release --jq ".protection_rules"` lists a reviewer; `gh secret list` (repository level) shows NONE of the names below; `gh secret list --env release` shows them |
@@ -96,7 +97,7 @@ Pushing the tag triggers `release.yml` (`on: push: tags: v*`). Its jobs, in orde
 1. `verify` (needs your approval once, the `release` environment): asserts every secret in section 0 exists (names only, never values) and fails the run before anything is built
    if one is missing; runs `check_version_lockstep.py --tag`; checks the tagged commit is on `main`.
 2. `images` (cuda and cpu in parallel): checks the base is pinned by digest, builds and pushes
-   `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, runs the Trivy gate, writes SBOMs and attestations.
+   `ghcr.io/raaif-yousuf/dna-entropy-worker:vX.Y.Z-cuda` and `-cpu`, uploads a Trivy SARIF report (HIGH and CRITICAL) to the Security tab, runs the Trivy gate (a fixable HIGH or CRITICAL fails the release; an unfixed one is only reported; the first release may go red on a fixable finding in a pinned base: bump the base digest, preferred, or add an expiring `.trivyignore.yaml` entry for a fixable CVE only; after the first release check `gh api 'repos/Raaif-Yousuf/DNA-Entropy-Graph/code-scanning/analyses?tool_name=Trivy'` lists `trivy-cuda` and `trivy-cpu`, THEORY (unverified) that tag-ref SARIF is accepted), writes SBOMs and attestations. If the gate fails, read the Security tab category `trivy-cuda` or `trivy-cpu`, bump the base digest or the locked dependency, or add a dated entry to `.trivyignore.yaml` (at most 90 days out, with the issue that removes it).
 3. `wheel`: builds the worker wheel.
 4. `app` (approval again; read token only): writes the image digests into `worker-images.json`, publishes, writes `oauth_client.local.json` from `OAUTH_CLIENT_JSON`,
    signs the app binaries, `vpk pack`, signs `Setup.exe`, verifies EVERY signed file (chain and signer subject), stages exactly this

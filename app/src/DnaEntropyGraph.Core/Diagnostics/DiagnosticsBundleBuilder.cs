@@ -106,6 +106,7 @@ public static partial class DiagnosticsBundleBuilder
                 os = info.OsDescription,
                 dotNet = info.DotNetVersion,
                 webView2 = info.WebView2Version ?? "not found",
+                proxyMode = info.ProxyMode ?? "unknown",
                 installationId = settings.InstallationId,
                 createdUtc = info.CreatedUtc,
             },

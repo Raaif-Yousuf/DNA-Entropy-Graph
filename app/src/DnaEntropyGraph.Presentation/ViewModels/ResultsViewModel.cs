@@ -436,8 +436,9 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     /// <summary>
     /// Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer. A run imported
-    /// from the earlier version has a folder that is the user's own: its PNG goes to a new folder under the default output folder instead.
-    /// A file that already exists is never overwritten; the new one gets a number.
+    /// from the earlier version has a folder that is the user's own: its pictures go to one exports folder per run under the default output
+    /// folder instead (made only when a picture is written). A downloaded cloud run's folder is the app's own and is used as it is.
+    /// A name that is already taken is never overwritten; the new one gets a number.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
     private async Task ExportOverviewPngAsync()
@@ -447,13 +448,17 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
+        var labels = new OverviewImageLabels(Format(ResultsCopy.ExportPngTitle, Title, contig.Name), _strings.GetString(ResultsCopy.ExportPngXAxis), _strings.GetString(ResultsCopy.ExportPngYAxis));
         var run = _run;
         string? path = null;
         var written = false;
-        if (run is { Imported: true } && _exportRoot is null)
+
+        // Only an earlier-version import has a folder that is the user's own (Hard Rule 14); a cloud download's folder is the app's.
+        var ownFolder = run is { IsPrototypeImport: true };
+        if (ownFolder && _exportRoot is null)
         {
-            // No safe place to write: say so rather than fall back to the user's own folder.
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // No safe place to write, and the results folder is not the problem: say so rather than fall back to the user's own folder.
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngNoFolder);
             return;
         }
 
@@ -462,16 +467,46 @@ public sealed partial class ResultsViewModel : ObservableObject
             (path, written) = await Task.Run(
                 () =>
                 {
-                    var target = run is { Imported: true } && _exportRoot is not null
-                        ? RunOutputFolders.CreateUnique(_exportRoot.Parent(), (string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name) + " exports")
+                    var target = ownFolder && _exportRoot is not null && run is not null
+                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
                         : folder;
-                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy.overview", ".png");
-                    return (file, exporter.Export(contig, file));
+                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
+
+                    // A run's own folder must still be there (one the user deleted or moved is not brought back with a lone picture in it);
+                    // only the exports folder of an earlier-version run is made here, with whatever parents it lacks, and all of it is
+                    // taken away again if nothing was written.
+                    IReadOnlyList<string> made = [];
+                    if (ownFolder)
+                    {
+                        made = RunOutputFolders.CreateFolderChain(target);
+                    }
+                    else if (!Directory.Exists(target))
+                    {
+                        return (file, false);
+                    }
+
+                    var ok = false;
+                    try
+                    {
+                        ok = exporter.Export(contig, labels, file);
+                    }
+                    finally
+                    {
+                        if (!ok)
+                        {
+                            RunOutputFolders.RemoveCreated(made);
+                        }
+                    }
+
+                    return (file, ok);
                 },
                 CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
+            // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
+            // Only the class name is traced: a message can carry a path or a file name (Hard Rule 14, no names in logs).
+            System.Diagnostics.Trace.TraceWarning("Save picture failed: " + ex.GetType().Name);
             written = false;
         }
 
@@ -481,7 +516,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
         else
         {
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // Name the place that matters: the exports folder for an earlier-version run, the run's own results folder otherwise.
+            ActionNoticeText = _strings.GetString(ownFolder ? ResultsCopy.ExportPngFailedInExports : ResultsCopy.ExportPngFailed);
         }
     }
 

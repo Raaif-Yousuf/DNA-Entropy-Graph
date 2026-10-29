@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -52,8 +53,10 @@ def test_guard_scans_its_own_repo_from_a_foreign_cwd(script: str, tmp_path: Path
     foreign = tmp_path / "unrelated"
     foreign.mkdir()
 
-    home = _run(script, REPO_ROOT)
-    away = _run(script, foreign)
+    # #959: the two runs are independent, so run them side by side (this test was the slowest in scripts/tests).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        home_run, away_run = pool.submit(_run, script, REPO_ROOT), pool.submit(_run, script, foreign)
+        home, away = home_run.result(), away_run.result()
 
     out_away = away.stdout + away.stderr
     out_home = home.stdout + home.stderr
