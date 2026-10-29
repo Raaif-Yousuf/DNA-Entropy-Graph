@@ -597,7 +597,7 @@ public class GoogleComputeGatewayTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.FindByJobIdAsync("job1", CancellationToken.None));
 
         ex.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
-        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        ex.Kind.ShouldBe(CloudErrorKind.Other, "a repeated page token is not a connection problem");
     }
 
     [Fact]

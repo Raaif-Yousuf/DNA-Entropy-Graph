@@ -110,6 +110,23 @@ public static class RunsCopy
         _ => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Other", ToastSeverity.Warning),
     };
 
+    /// <summary>
+    /// A cloud delete that stopped with files known to remain (the body takes the count as {0}) for a cause that pressing the button again cannot fix by itself:
+    /// the count and that cause's one action. Null for a cause whose action is just "choose it again" (the general count copy already says so).
+    /// </summary>
+    public static RunsMessage? DeleteCloudPartialKnown(CloudErrorKind kind) => kind switch
+    {
+        CloudErrorKind.Permission => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialKnown_Body_Permission", ToastSeverity.Warning),
+        CloudErrorKind.OrgPolicy => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialKnown_Body_OrgPolicy", ToastSeverity.Warning),
+        CloudErrorKind.Billing => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialKnown_Body_Billing", ToastSeverity.Warning),
+        CloudErrorKind.ApiDisabled => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialKnown_Body_Api", ToastSeverity.Warning),
+        CloudErrorKind.Quota => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialKnown_Body_Quota", ToastSeverity.Warning),
+        _ => null,
+    };
+
+    /// <summary>A cloud delete whose sweep finished without error but whose read-back could not be done: the app does not know the folder is empty, and does not claim the delete stopped.</summary>
+    public static readonly RunsMessage DeleteCloudPartialUnconfirmed = Pair("Runs_DeleteCloud_PartialUnconfirmed_Title", "Runs_DeleteCloud_PartialUnconfirmed_Body", ToastSeverity.Warning);
+
     /// <summary>One file left in storage after a partial cloud delete (singular body).</summary>
     public static readonly RunsMessage DeleteCloudPartialOne = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
 
@@ -152,7 +169,8 @@ public static class RunsCopy
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
-        .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne),
+        .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne), .. Flatten(DeleteCloudPartialUnconfirmed),
+        .. Enum.GetValues<CloudErrorKind>().Select(DeleteCloudPartialKnown).Where(m => m is not null).SelectMany(m => Flatten(m!.Value)).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),

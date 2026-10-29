@@ -119,7 +119,7 @@ public class GoogleQuotaGatewayTests
         var failure = result.Failures.ShouldHaveSingleItem();
         failure.Call.ShouldBe("regions.list");
         failure.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
-        failure.Kind.ShouldBe(CloudErrorKind.Network);
+        failure.Kind.ShouldBe(CloudErrorKind.Other, "a repeated page token is not a connection problem");
     }
 
     [Fact]

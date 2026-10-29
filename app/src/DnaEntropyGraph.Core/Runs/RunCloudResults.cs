@@ -46,9 +46,10 @@ public enum CloudResultsStatus
 /// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
 /// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one, or of a
 /// <see cref="CloudResultsStatus.PartiallyDeleted"/> whatever its count (a known count with a refused permission needs that cause's action; an unknown one may have lost some files too).
+/// <see cref="SweepCompleted"/> is true when the sweep itself finished without error and only the count read back afterwards failed or disagreed.
 /// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
 /// </summary>
-public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null)
+public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null, bool SweepCompleted = false)
 {
     public static implicit operator CloudDeleteResult(CloudResultsStatus status) => new(status);
 }
@@ -227,10 +228,12 @@ public sealed class RunCloudResults : IRunCloudResults
             CloudErrorKind? cause = partial.InnerException switch
             {
                 CloudOperationException cloud => cloud.Kind,
-                IOException or HttpRequestException => CloudErrorKind.Network,
+                IOException or HttpRequestException or System.Net.Sockets.SocketException => CloudErrorKind.Network,
                 _ => null,
             };
-            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause);
+
+            // No inner exception means the sweep itself finished without error (the count after it is what failed or disagrees): the page must not say it stopped.
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.InnerException is null);
         }
         catch (CloudDeleteRefusedException refused)
         {

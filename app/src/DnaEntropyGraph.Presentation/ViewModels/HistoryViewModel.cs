@@ -528,27 +528,30 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.DeleteCloud(result.Status);
             }
 
-            // The count could not be read but the sweep stopped on a known cause: some files may be gone, and that cause picks the one action to take.
-            if (result.ObjectsLeft is null && result.ErrorKind is { } cause)
+            // Every copy below says only what the app knows: was the sweep completed, is the count known, what was the cause.
+            if (result.ObjectsLeft is not { } left)
             {
-                return RunsCopy.DeleteCloudPartialMaybe(cause);
+                // The sweep finished without error and only the read-back failed: say so, not that the delete stopped.
+                if (result.SweepCompleted)
+                {
+                    return RunsCopy.DeleteCloudPartialUnconfirmed;
+                }
+
+                // The sweep stopped and the count could not be read: some files may be gone, and a known cause picks the one action to take.
+                return result.ErrorKind is { } cause ? RunsCopy.DeleteCloudPartialMaybe(cause) : RunsCopy.DeleteCloudPartialUnknown;
             }
 
-            // A known count, but a cause that pressing the button again cannot fix (a refused permission, a blocking organization rule, billing off, a service off):
-            // that cause's own action comes first, or the user is told to repeat what will fail the same way.
-            if (result.ErrorKind is CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.Billing or CloudErrorKind.ApiDisabled)
+            // A known count with a cause that pressing the button again cannot fix (a refused permission, a blocking organization rule, billing off, a service off, a request limit):
+            // the count AND that cause's own action, or the user is told to repeat what will fail the same way.
+            if (result.ErrorKind is { } known && RunsCopy.DeleteCloudPartialKnown(known) is { } withAction)
             {
-                return RunsCopy.DeleteCloudPartialMaybe(result.ErrorKind.Value);
-            }
-
-            // Partway through: say how many are left (or that it could not be counted) and that the same button finishes it.
-            if (result.ObjectsLeft is { } left)
-            {
-                Toast(left == 1 ? RunsCopy.DeleteCloudPartialOne : RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
+                Toast(withAction, left);
                 return null;
             }
 
-            return RunsCopy.DeleteCloudPartialUnknown;
+            // Partway through: say how many are left and that the same button finishes it.
+            Toast(left == 1 ? RunsCopy.DeleteCloudPartialOne : RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
+            return null;
         },
         RunsCopy.DeleteCloudFailed(null));
 

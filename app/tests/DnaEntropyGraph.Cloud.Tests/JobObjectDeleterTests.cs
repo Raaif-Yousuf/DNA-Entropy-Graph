@@ -101,10 +101,13 @@ public sealed class JobObjectDeleterTests
         outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 4, kind));
     }
 
-    [Fact]
-    public async Task A_sweep_cut_by_an_IOException_after_real_deletions_with_an_unreadable_read_back_is_a_network_cause_not_an_unknown_one()
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(System.Net.Http.HttpRequestException))]
+    [InlineData(typeof(System.Net.Sockets.SocketException))]
+    public async Task A_sweep_cut_by_a_raw_transport_exception_after_real_deletions_with_an_unreadable_read_back_is_a_network_cause_not_an_unknown_one(Type transport)
     {
-        // Issue #262 review round 4 (M): a raw transport exception is no CloudOperationException, so the page had no cause and said files remain although the count is unknown.
+        // A raw transport exception is no CloudOperationException, so the page had no cause and said files remain although the count is unknown.
         Seed(JobId, 4);
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
         var counts = 0;
@@ -116,7 +119,7 @@ public sealed class JobObjectDeleterTests
         {
             await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file0.bin", CancellationToken.None);
             await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file1.bin", CancellationToken.None);
-            throw new IOException("connection reset");
+            throw (Exception)Activator.CreateInstance(transport)!;
         });
         var runs = new InMemoryRunRepository();
         var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), runs, () => Path.GetTempPath(), TimeProvider.System);
@@ -125,6 +128,37 @@ public sealed class JobObjectDeleterTests
 
         _gcp.ObjectKeys(Bucket).Count.ShouldBe(3, "two objects really were deleted before the cut");
         outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, CloudErrorKind.Network));
+    }
+
+    [Fact]
+    public async Task Run_cloud_results_tells_a_completed_sweep_with_an_unreadable_read_back_from_a_stopped_one()
+    {
+        // The sweep did not fail; only the count after it did. The page must not claim the delete stopped.
+        var storage = NSubstitute.Substitute.For<IStorageGateway>();
+        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult(new PrefixUsage(3, 30)),
+            Task.FromException<PrefixUsage>(new IOException("read-back failed")));
+        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
+        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
+        var runs = new InMemoryRunRepository();
+        var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), runs, () => Path.GetTempPath(), TimeProvider.System);
+
+        var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, null, SweepCompleted: true));
+        runs.AllRecordedInOrder.ShouldBeEmpty("the row stays unmarked: the folder is not proven empty");
+    }
+
+    [Fact]
+    public async Task A_stopped_sweep_with_an_unreadable_read_back_is_not_reported_as_a_completed_one()
+    {
+        var storage = SweepThat403sAfterTwoWithUnreadableReadBack();
+        var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), new InMemoryRunRepository(), () => Path.GetTempPath(), TimeProvider.System);
+
+        var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
+
+        outcome.SweepCompleted.ShouldBeFalse();
     }
 
     [Fact]

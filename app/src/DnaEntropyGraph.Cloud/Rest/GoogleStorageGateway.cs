@@ -192,10 +192,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 deleted++;
             }
         }
-        catch (Exception ex) when (ex is IOException or HttpRequestException or System.Net.Sockets.SocketException)
+        catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
         {
-            // A raw transport failure (a connection reset mid-sweep) is a dropped connection, classified like every other call's (CloudCallPipeline does the same for an
-            // HttpRequestException), so the delete page can name an action for it. Only the sweep's own requests run in here, so an IOException is never a local file.
+            // A raw transport failure (a connection reset mid-sweep) is a dropped connection, classified like every other call's, so the delete page can name an action for it.
+            // An HttpRequestException is not caught here: CloudCallPipeline already maps it to Network. Only the sweep's own requests run in here, so an IOException is never a local file.
             throw new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "The connection dropped during the delete (" + ex.GetType().Name + ")."), CloudErrorKind.Network);
         }
 
