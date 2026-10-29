@@ -162,12 +162,15 @@ public class ProjectSelectionTests
         using var harness = new AuthHarness();
         var service = await harness.SignedInAsync("1001", "first@example.test");
         var accounts = Path.Combine(harness.AuthDirectory, "accounts.json");
-        File.Delete(accounts);
-        Directory.CreateDirectory(accounts);
 
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SelectProjectAsync(Project, CancellationToken.None));
+        // Readable but not replaceable: a reader that allows reading and denies the delete or rename a save ends with.
+        using (new FileStream(accounts, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SelectProjectAsync(Project, CancellationToken.None));
 
-        failure.Code.ShouldBe(AuthErrorCodes.ProjectSaveFailed);
+            failure.Code.ShouldBe(AuthErrorCodes.ProjectSaveFailed);
+        }
+
         service.SelectedProjectId.ShouldBeNull();
     }
 }

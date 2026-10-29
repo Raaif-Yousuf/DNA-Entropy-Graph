@@ -281,6 +281,34 @@ the user-facing cards) on purpose: a classifier bucket is a stable, small enum a
 assert against; a user-facing message is copy that can be rewritten without touching the
 classifier at all.
 
+### Paging (issue #933)
+
+Every Google list loop in `DnaEntropyGraph.Cloud/Rest` (billing accounts, projects, price catalog, buckets, objects, region quotas, quota preferences,
+VMs, disks, accelerator zones, zone operations: 11 loops) reads the next page token through one helper, `PageTokenGuard.Advance`
+(`app/src/DnaEntropyGraph.Cloud/Rest/PageTokenGuard.cs`), one guard per walk. It remembers every token it was given, not only the last, so the same
+token for ever and a cycle (A, B, A) both fail on the first repeat, with `LIST_PAGINATION_STUCK`, one extra request after the first page (A, B, A: the third).
+A short list must never read as a complete one: an empty VM list reads as "no VM" (a duplicate or a leak), an empty quota table as "no quota".
+`Guards.Tests/PageTokenGuardWiringTests` scans every `Rest/*.cs` (comments removed, strings blanked) and fails on a next page token read outside `.Advance(`, a string that names the JSON member, a hand comparison of a token, or a `PageTokenGuard` built inside a loop.
+Before this, `GoogleStorageGateway.ListOursAsync` looped for ever on a repeated token, the billing and project listings had no guard, and the accelerator
+zone list returned a partial answer silently (MEASURED 2026-10-29, read in code; the new tests prove each now fails).
+
+DECISION (agent-made, reversible): the kind of `LIST_PAGINATION_STUCK` is `Network`, everywhere (what compute, quota and storage already used; the price
+catalog's `Other` is changed to match). A first draft of this decision chose `Other`; a cold review disproved it (MEASURED 2026-10-29, code read of
+`JobReconciler`). `IsNoAnswer` is `Kind == Network`: with `Other` the look for a Running row's VM returns Unknown instead of Deferred, the run is handed to
+`CloudJobRunner`, whose own `FindByJobIdAsync` fails the same way, the runner records the row terminal Failed, and `EndVmAfterFailureAsync` cannot list the
+VM to end it: a live, billing VM orphaned and its result never downloaded. A repeated token is not definitive like billing or permission, so the reconciler
+must defer. Locked by `JobReconcilerTests.A_stuck_listing_looking_for_a_live_VM_defers_the_run_and_leaves_the_row_and_the_VM_alone` (outcome Deferred, row
+still Running, nothing written, VM still there; the exception it throws is the real `PageTokenGuard`'s). Consumers of the kind, all read: the reconciler
+defers (wanted); `VmProvisioner` treats a Network failure of a create as "adopt by label", not applicable to a listing; `CatalogPricingSource` maps Network to
+fallback reason `Network` instead of `Other` (the same one-hour back-off and the same shipped-prices fallback; only the reason label differs, which is not harmful).
+Retry (a side effect, kept): `CloudCallPipeline.IsTransient` retries a status-less Network error, but only a gateway wrapped whole in the pipeline is replayed:
+in `GoogleCloudGateways.Create` that is the billing gateway alone (compute, storage, quota, projects and pricing route each HTTP request through the pipeline instead,
+so a stuck token, which is found after a page's request has completed, is never replayed there; MEASURED 2026-10-29, scripted handler: the compute listing makes 2
+requests whatever the retry setting). For billing, a token repeated once that then recovers succeeds on the replayed walk (a fresh walk, a fresh guard: 3 requests), and a
+token repeated for ever fails after 8 requests (1 attempt + 3 replays, 2 requests each) with `LIST_PAGINATION_STUCK`, kind Network. THEORY (unverified, no live project):
+that a real server's repeated token is ever transient, i.e. that a replay is useful; the bound is what makes it harmless. The guard's message names no list on purpose:
+`IsTransient` also reads `CloudErrorClassifier.Classify` over the text, and "the billing account list" classified as Billing and "the quota list" as Quota (permanent: the
+replay was silently switched off; MEASURED 2026-10-29, the billing replay test was red with a list-naming message), so a test pins the message to `Other`.To reverse: change the kind in `PageTokenGuard` and the expectations in `ListPagingGuardTests`, `JobReconcilerTests` and the compute and quota gateway tests.
 ## 6. Quota reading
 
 Two distinct quota reads matter, and conflating them is a real bug shape:
@@ -1072,10 +1100,32 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `.bad.2`, never over an earlier one) before anything can overwrite it, and the first sign-in, project choice or switch afterwards fails
   once with `ACCOUNTS_FILE_UNREADABLE` (action Sign in again) before a browser opens. `Load` reads under the same mutex and retries a failed read
   (3 tries, 40 ms steps; a load blocks at most `AccountRegistry.WorstCaseLoadBudget`, about 270 ms). A file that still cannot be read (held open by another program or copy) is not empty and not set aside: the registry
-  is `Unreadable`, `Save` refuses to replace it, the service does not cache the empty list, and the sign-in, project choice or switch fails with
-  `ACCOUNTS_FILE_LOCKED` (action Try again); a read is not retried more often than every 2 s while it is locked (the result is remembered, so a UI read never waits on the file each time), and a token request or sign-out in that state fails with the same code instead of reading as signed out; the next call after the window reads the file again and succeeds once the hold is gone. A save that cannot take the lock in time, or whose mutex the system refuses to open, is `AccountsFileLockedException` (not a disk failure) and reaches the user as `ACCOUNTS_FILE_LOCKED` from sign-in, switch and project choice; a disk failure keeps `SIGNIN_STORAGE` or `PROJECT_SAVE_FAILED`. The save runs on a pool thread (`CommitAsync`) so a 10 s lock wait never blocks a dispatcher, and a load's worst case is about 270 ms (150 ms lock wait plus two read-retry sleeps), because the state getter can run on the UI thread. A damaged file the folder will not let the app move aside reports `SIGNIN_STORAGE` (the folder is the problem, Try again would never help). A save also deletes leftover `accounts.json.<guid>.tmp` files older than 5 minutes (including the old fixed `accounts.json.tmp`), best effort.
-  THEORY (unverified): a virus scanner or a second app instance is what damaged the file in the field. Not covered: two processes doing
-  load-modify-save can still lose one update (last writer wins); only corruption is prevented.
+  is `Unreadable`, an `Update` refuses to replace it, the service does not cache the empty list, and the sign-in, project choice or switch fails with
+  `ACCOUNTS_FILE_LOCKED` (action Try again); a read is not retried more often than every 2 s while it is locked (the result is remembered, so a UI read never waits on the file each time), and a token request or sign-out in that state fails with the same code instead of reading as signed out; the next call after the window reads the file again and succeeds once the hold is gone. A save that cannot take the lock in time, or whose mutex the system refuses to open, is `AccountsFileLockedException` (not a disk failure) and reaches the user as `ACCOUNTS_FILE_LOCKED` from sign-in, switch and project choice; a disk failure keeps `SIGNIN_STORAGE` or `PROJECT_SAVE_FAILED`. The save runs on a pool thread (`UpdateAsync`) so a 10 s lock wait never blocks a dispatcher, and a load's worst case is about 270 ms (150 ms lock wait plus two read-retry sleeps), because the state getter can run on the UI thread. A damaged file the folder will not let the app move aside reports `SIGNIN_STORAGE` (the folder is the problem, Try again would never help). That holds when a running copy finds the damage in a change too (`AccountsFileFolderException` from `Update`, mapped to `SIGNIN_STORAGE` for sign-in, switch and project choice, and the cached list is dropped). A set-aside notice not yet reported (the write after it failed) survives the next load, and a successful sign-in clears a pending notice, because the user has just signed in against the list as it is. A sign-in stores its token inside the same registry lock as its list change, not before it, so a sign-out's check-and-delete cannot remove a token stored between its check and its delete. The token file and the list change together, under the registry lock: an expiry mark or a sign-out first takes a stamp (a SHA-256 of the token file's bytes, so equal write times cannot hide a new token) and, for a sign-out, reads the token; inside the `Update` lambda it compares the stamp with the file as it is then, and if another copy signed the account in meanwhile it leaves the list unchanged and deletes and revokes nothing. The token file is deleted by `Update`'s `afterWrite`, still under the lock and only after the list was written (a failed list save leaves the token), and a failed delete is reported as `SIGNIN_STORAGE` after the revoke ran. The revoke is of the token read with the stamp, through a flow with no token store, so it can never be the fresh token of a sign-in that landed later. Known limits (not changed): a sign-out that loses the race to a fresh sign-in answers `true` with no message and leaves the account signed in; a token refresh by another copy between the stamp and the lock makes the sign-out a no-op for the same reason; a refresh token the Google flow's own refresh superseded in that window is neither revoked nor kept; and the flow's own refresh writes (`_store` handed to the Google flow) stay outside the registry lock. A save also deletes leftover `accounts.json.<guid>.tmp` files older than 5 minutes (including the old fixed `accounts.json.tmp`), best effort.
+  THEORY (unverified): a virus scanner or a second app instance is what damaged the file in the field. Two processes changing the list at once
+  no longer lose an update (next paragraph, issue #620).
+  **Concurrent changes (issue #620).** Every change to the list goes through `AccountRegistry.Update(change)`, which, under the same mutex, reads the
+  file again, applies `change` to what it finds and writes the result; `GoogleAccountService` never saves its cached list. So two copies of the app
+  changing different things (a sign-in in one, a project choice in the other) both persist. Each change touches only its own fields of its own
+  account: a project choice sets `projectId` on the account that was current when it started and leaves `activeSub` alone; a switch sets only
+  `activeSub`; expiry sets only `needsSignIn`; a sign-in replaces its own record (keeping the `projectId` the file has now) and makes it current;
+  a sign-out removes its own record and keeps another copy's current account. **Same account, same field: the later writer wins** (the later one
+  to take the lock; two project choices end with the second). A project choice for an account another copy signed out fails with `SIGNIN_EXPIRED`
+  and writes nothing. The account is never put back when the file does not list it, because that can be one another copy is signing out right now
+  (entry removed, revoke pending, token file not yet deleted); a list that lost the account by hand therefore also reads "sign in again". A copy's
+  cached list is refreshed from what it wrote, not from other copies' later changes: another copy's change shows here after a restart or the next
+  change made here. `Save` no longer exists: `Update` is the only writer, and the registry's `Unreadable`, `QuarantineFailed` and `QuarantinedTo`
+  properties are set by `Load` alone (a test reads them); the service acts on the outcome `LoadWithOutcome` and `Update` hand back, never on shared
+  flags. An update that is the first to find the file damaged sets it aside (`.bad`) and, if its change then gives up, fails with
+  `ACCOUNTS_FILE_UNREADABLE` itself; if the change went through, the next change says it once. Marking an account expired takes a stamp (a SHA-256 of the token file's bytes) first; under the registry lock it
+  compares the stamp with the file as it is then and, only if equal, marks the account and deletes the token file under that same lock, so a fresh sign-in of the same account in another copy keeps
+  its new token and its listing. A token file that cannot be deleted does not change the answer: the user still gets `SIGNIN_EXPIRED` and the UI is told.
+  **Locked at launch (issue #624).** A list that cannot be read is not shown as signed out: `IGcpAccount.IsAccountsFileLocked` is true, the setup
+  page's sign-in card shows `ACCOUNTS_FILE_LOCKED` with a Try again button (it calls `RecheckAccountsFile()`, which re-reads the file at once and does not
+  open the browser, so a user who is already signed in is never sent to Google), and the service raises `AccountChanged` when the file turns readable, whether
+  from Try again or from an ordinary read after the 2 s window. Chosen: Try again only, no timer (a timer would read the file on a pool thread behind the UI's
+  back and needs a clock seam every test would drive; the message says what to do and the button is one click). No new strings: the message and the button
+  label are the existing `AuthError_ACCOUNTS_FILE_LOCKED` and `AuthAction_TryAgain`.
 - **Errors** are `AccountAuthException` with a code from `AuthErrorCodes`; the English is `AuthError_<code>` in
   `Resources.resw`. `SIGNIN_EXPIRED` (Google answered `invalid_grant`) deletes the dead token file, sets `needsSignIn`
   on the account and offers **Sign in again**. `SIGNIN_NETWORK` does not expire anything. `OAUTH_CLIENT_MISSING` and
@@ -1087,8 +1137,9 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `cloud-platform` (or none) fails `CONSENT_INCOMPLETE` before anything is stored; on a refresh a `scope` that names scopes without it
   deletes the token file, sets `needsSignIn` and fails the same way (a refresh answer with no `scope` keeps the stored grant). The action
   is **Sign in again and allow access**, which is the ordinary sign-in command. Decision #18 (single `cloud-platform` scope) is what makes this one check enough.
-- **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, deletes the token file
-  and the account entry whatever Google said, and makes the next remaining account current.
+- **Switching** only changes `activeSub`. **Sign out** revokes the refresh token at Google, removes the account entry and deletes the token file under the registry lock (the same stamp guard: a
+  sign-in of the same account by another copy since the sign-out read the token makes it a no-op), then revokes the token it read, whatever Google said, and makes the next remaining account current.
+  `AccountChanged` is raised whenever the list changed, also when the token file then could not be deleted (that failure is `SIGNIN_STORAGE`).
 - **Not here yet:** the selected project (a placeholder until #520), and any UI that starts a sign-in, lists
   accounts, switches or signs out: no page binds `WizardViewModel.SignInCommand` yet (#99, #519), so today nothing
   in the shipped UI can start a sign-in. What is wired in the UI is the shell status pill, which follows
@@ -1340,7 +1391,7 @@ the running app calls this class yet.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
   (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
-  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation; see Paging in section 5); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;

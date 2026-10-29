@@ -190,6 +190,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public event EventHandler? AccountChanged;
 
+    /// <summary>The fake keeps no file, so its account list is never locked.</summary>
+    public bool IsAccountsFileLocked => false;
+
+    public void RecheckAccountsFile()
+    {
+    }
+
     /// <summary>Every <see cref="SignInAsync"/> fails with this <see cref="AuthErrorCodes"/> code, as the real account service does for a missing client file or a declined consent page.</summary>
     public FakeGcp WithSignInError(string code)
     {
