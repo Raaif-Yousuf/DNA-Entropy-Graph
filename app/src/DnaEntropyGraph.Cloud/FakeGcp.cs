@@ -1234,9 +1234,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _bootPollsLeft[key] = _bootPolls;
         }
 
-        if (_preemptPlans.TryGetValue(key, out var scheduledBefore) && scheduledBefore.InstanceId is null)
+        // Scheduled before this VM existed, or on the queued row it replaces: it is for this VM. A compare-and-swap, so a plan another actor re-scheduled meanwhile is kept.
+        if (_preemptPlans.TryGetValue(key, out var scheduledBefore) && (scheduledBefore.InstanceId is null || (queued is not null && scheduledBefore.InstanceId == queued.InstanceId)))
         {
-            _preemptPlans[key] = scheduledBefore with { InstanceId = vm.InstanceId }; // scheduled before this VM existed: it is for this VM
+            _preemptPlans.TryUpdate(key, scheduledBefore with { InstanceId = vm.InstanceId }, scheduledBefore);
         }
 
         if (spec.Spot && _spotPreemptionsLeft > 0)
@@ -1622,6 +1623,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>How many deferred worker ends (a worker stopping or deleting its own VM when its result is read) are still pending.</summary>
     internal int PendingWorkerEndCount => _pendingWorkerEnds.Count;
 
+    /// <summary>Test seam (#875): runs at the end of a worker's run (its files and deferred end are written), so a test can make the worker fail AFTER writing.</summary>
+    internal Action? AfterWorkerWrite { get; set; }
+
     /// <summary>Test seam (#875): runs between a stop's read of the VM and its write, so a test can interleave a delete there deterministically.</summary>
     internal Action? BeforeStopWrite { get; set; }
 
@@ -1650,7 +1654,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // A concurrent change of state does not cancel the stop (real Compute accepts a stop of a booting VM), except a preempt that Compute took back first, which is kept.
         if (_stoppingPolls > 0)
         {
-            if (UpdateVm(key, v => StopLeavesAlone(v, vm, preemptedAtRead, onlyIncarnation) ? v : v with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() }) is { Status: "STOPPING" })
+            VmDescriptor? written = null;
+            var stopping = UpdateVm(key, v => StopLeavesAlone(v, vm, preemptedAtRead, onlyIncarnation) ? v : written = v with { Status = "STOPPING", StatusReason = null, StoppedAt = _timeProvider.GetUtcNow() });
+            // Only a row THIS stop moved to STOPPING starts a countdown; a STOPPING row the stop left alone (another incarnation's) keeps its own.
+            if (stopping is { Status: "STOPPING" } && ReferenceEquals(stopping, written))
             {
                 _stoppingPollsLeft[key] = _stoppingPolls;
             }
@@ -1923,8 +1930,30 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// LAST (docs/job_contract.md section 7). Does nothing when no manifest is in the bucket, since a
     /// worker with no manifest has nothing to run.
     /// </summary>
-    private void RunSimulatedWorker(VmSpec spec, string zone, FakeWorkerMode? modeOverride = null, ulong? instanceId = null)
+    private void RunSimulatedWorker(VmSpec spec, string zone, FakeWorkerMode? modeOverride = null, ulong? instanceId = null, List<Action>? journal = null)
     {
+        // Every write the worker makes goes through here, so a caller that must take the worker back undoes exactly these entries (their prior values) and nothing another actor wrote.
+        void Put<T>(ConcurrentDictionary<(string Bucket, string Key), T> map, (string Bucket, string Key) k, T value)
+        {
+            if (journal is not null)
+            {
+                var had = map.TryGetValue(k, out var prior);
+                journal.Add(() =>
+                {
+                    if (had)
+                    {
+                        map[k] = prior!;
+                    }
+                    else
+                    {
+                        map.TryRemove(k, out _);
+                    }
+                });
+            }
+
+            map[k] = value;
+        }
+
         var workerMode = modeOverride ?? _workerMode;
         if (workerMode is FakeWorkerMode.Never or FakeWorkerMode.NoHeartbeat)
         {
@@ -1948,22 +1977,22 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
             var wedged = workerMode == FakeWorkerMode.StuckInRunning;
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null));
+            Put(_objects, (bucket, prefix + "status.json"), Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null)));
             if (wedged)
             {
                 // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
-                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3);
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, WindowsDone: 3));
             }
 
             if (stuck)
             {
-                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading");
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading"));
             }
 
-            _objects[(bucket, prefix + "progress.jsonl")] = Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine));
+            Put(_objects, (bucket, prefix + "progress.jsonl"), Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine)));
             if (workerMode == FakeWorkerMode.HeartbeatingThenDone)
             {
-                _liveWorkers[(bucket, prefix + "status.json")] = new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done, runsOn));
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: 100, Finish: () => RunSimulatedWorker(spec, zone, FakeWorkerMode.Done, runsOn)));
             }
 
             return;
@@ -1980,16 +2009,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 ["stage"] = "failed",
                 ["error"] = new JsonObject { ["code"] = bootCode, ["retriable"] = false },
             };
-            _objects[(bucket, prefix + "status.json")] = Encoding.UTF8.GetBytes(status.ToJsonString());
-            _pendingWorkerEnds[resultKey] = bootCode == "GPU_NOT_VISIBLE"
+            Put(_objects, (bucket, prefix + "status.json"), Encoding.UTF8.GetBytes(status.ToJsonString()));
+            Put(_pendingWorkerEnds, resultKey, bootCode == "GPU_NOT_VISIBLE"
                 ? () => RemoveIncarnation(vmKey, runsOn)
-                : () => StopIncarnation(vmKey, runsOn);
+                : () => StopIncarnation(vmKey, runsOn));
             return;
         }
 
         if (workerMode == FakeWorkerMode.GarbageResult)
         {
-            _objects[resultKey] = Encoding.UTF8.GetBytes("this is not json");
+            Put(_objects, resultKey, Encoding.UTF8.GetBytes("this is not json"));
             return;
         }
 
@@ -2022,7 +2051,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 {
                     var partialPath = $"output/{name}/{name}.partial.bedgraph";
                     var partialBytes = TrackBytes(name + "-partial");
-                    _objects[(bucket, prefix + partialPath)] = partialBytes;
+                    Put(_objects, (bucket, prefix + partialPath), partialBytes);
                     entry["outputs"] = new JsonArray(partialPath);
                     entry["files"] = new JsonArray(new JsonObject { ["path"] = partialPath, ["sha256"] = Convert.ToHexString(SHA256.HashData(partialBytes)).ToLowerInvariant(), ["bytes"] = partialBytes.Length });
                 }
@@ -2033,7 +2062,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             {
                 var path = workerMode == FakeWorkerMode.UnsafePath ? "output/../evil.txt" : $"output/{name}/{name}.bedgraph";
                 var bytes = TrackBytes(name);
-                _objects[(bucket, prefix + path)] = bytes;
+                Put(_objects, (bucket, prefix + path), bytes);
                 var sha = workerMode == FakeWorkerMode.ChecksumMismatch
                     ? new string('0', 64)
                     : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
@@ -2054,15 +2083,17 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["inputs"] = wholeFailure ? new JsonArray() : results,
             ["error"] = wholeFailure ? new JsonObject { ["code"] = _workerFailureCode, ["message"] = "out of memory", ["retriable"] = true } : null,
         };
-        _objects[resultKey] = Encoding.UTF8.GetBytes(result.ToJsonString());
+        Put(_objects, resultKey, Encoding.UTF8.GetBytes(result.ToJsonString()));
         if (_workerSelfEnd == WorkerSelfEnd.Stop)
         {
-            _pendingWorkerEnds[resultKey] = () => StopIncarnation(vmKey, runsOn);
+            Put(_pendingWorkerEnds, resultKey, () => StopIncarnation(vmKey, runsOn));
         }
         else if (_workerSelfEnd == WorkerSelfEnd.Delete)
         {
-            _pendingWorkerEnds[resultKey] = () => RemoveIncarnation(vmKey, runsOn);
+            Put(_pendingWorkerEnds, resultKey, () => RemoveIncarnation(vmKey, runsOn));
         }
+
+        AfterWorkerWrite?.Invoke();
     }
 
     /// <summary>
@@ -2071,36 +2102,22 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// </summary>
     private Action RunWorkerUndoably(VmSpec spec, string zone, ulong? instanceId)
     {
-        var bucket = BucketName(spec.ProjectId);
-        var prefix = $"jobs/{spec.JobId}/";
-        bool Mine((string Bucket, string Key) k) => k.Bucket == bucket && k.Key.StartsWith(prefix, StringComparison.Ordinal);
-        var objects = _objects.Where(kv => Mine(kv.Key)).ToArray();
-        var live = _liveWorkers.Where(kv => Mine(kv.Key)).ToArray();
-        var ends = _pendingWorkerEnds.Where(kv => Mine(kv.Key)).ToArray();
-
-        void Restore<T>(ConcurrentDictionary<(string Bucket, string Key), T> map, KeyValuePair<(string Bucket, string Key), T>[] before)
-        {
-            foreach (var k in map.Keys.Where(Mine).ToArray())
-            {
-                map.TryRemove(k, out _);
-            }
-
-            foreach (var (k, v) in before)
-            {
-                map[k] = v;
-            }
-        }
+        // The worker records each key it writes with the value it replaced; undoing restores those keys one by one, newest first, and never touches anything else under the job prefix.
+        var journal = new List<Action>();
 
         void Undo()
         {
-            Restore(_objects, objects);
-            Restore(_liveWorkers, live);
-            Restore(_pendingWorkerEnds, ends);
+            for (var i = journal.Count - 1; i >= 0; i--)
+            {
+                journal[i]();
+            }
+
+            journal.Clear();
         }
 
         try
         {
-            RunSimulatedWorker(spec, zone, instanceId: instanceId);
+            RunSimulatedWorker(spec, zone, instanceId: instanceId, journal: journal);
         }
         catch
         {
@@ -2110,7 +2127,6 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         return Undo;
     }
-
     /// <summary>A worker deletes its own VM: only the incarnation it ran on (when known), so a later VM made under the same name survives.</summary>
     private void RemoveIncarnation((string Name, string Zone) key, ulong? instanceId)
     {
