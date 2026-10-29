@@ -33,6 +33,10 @@ hang = Path(str(log) + ".hang")
 if hang.exists() and " ".join(sys.argv[2:4]) in hang.read_text(encoding="utf-8").split(","):
     import time
     time.sleep(60)
+if sys.argv[2:4] == ["pr", "list"]:
+    listed = Path(str(log) + ".prlist")  # the scripted JSON array of open PRs for a head branch ([] when unset)
+    print(listed.read_text(encoding="utf-8") if listed.exists() else "[]")
+    sys.exit(0)
 if sys.argv[2:4] == ["pr", "view"]:
     import subprocess
     failing = Path(str(log) + ".viewfail")  # the first N `pr view` calls exit 1 with no output
@@ -1765,3 +1769,148 @@ def test_a_red_codeql_with_another_check_pending_prints_the_triage_at_the_pendin
     assert "still pending: scripts tests" in out
     assert out.count("CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)") == 1
     assert len(_api_calls(world)) == 1
+
+
+# --- #927: a refusal names EVERY red check and says whether only CodeQL is red ------------------------------
+
+
+def _refusal(out: str) -> str:
+    return next(ln for ln in out.splitlines() if ln.startswith("ERROR: not merging"))
+
+
+def test_after_a_rerun_a_second_still_red_check_is_named_not_just_codeql(world, capsys):
+    # MEASURED 2026-10-29 (PR #924): the refusal named CodeQL while `build and test` was red as well.
+    both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
+    settling = [_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]
+    rc, _ = _land_green(world, [both, settling, both], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    line = _refusal(out)
+    assert "CodeQL" in line and "build and test" in line and "still red after one re-run" in line
+    assert "CODEQL-AND-OTHERS" in out and "ONLY-CODEQL" not in out
+    assert _calls(world, "merge") == []
+
+
+def test_after_a_rerun_the_refusal_waits_for_the_other_checks_to_settle(world):
+    settling = [_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]
+    both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
+    rc, clock = _land_green(world, [both, settling, settling, both], rerun=True, poll=10.0)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert len(_calls(world, "checks")) == 4  # it kept polling while build and test was pending
+    assert len(clock.sleeps) == 3
+
+
+def test_only_codeql_red_is_said_in_one_literal_line(world, capsys):
+    red = [_check("CodeQL", "fail", 5), _check("build and test", "pass", 6)]
+    rc, _ = _land_green(world, [red, red], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "ONLY-CODEQL" in out and "CODEQL-AND-OTHERS" not in out
+    assert "build and test" not in _refusal(out)
+
+
+def test_codeql_red_with_a_pending_check_is_not_only_codeql(world, capsys):
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]], rerun=False)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CODEQL-AND-OTHERS" in out and "build and test" in out and "ONLY-CODEQL" not in out
+
+
+def test_a_red_non_codeql_check_prints_neither_verdict_line(world, capsys):
+    rc, _ = _land_green(world, [[_check("build and test", "fail", 6), _check("CodeQL", "pass", 5)]], rerun=False)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "ONLY-CODEQL" not in out and "CODEQL-AND-OTHERS" not in out
+
+
+def test_the_could_not_be_rerun_refusal_also_says_codeql_and_others(world, capsys):
+    both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
+    rc, _ = _land_green(world, [both], rerun=True, rerun_rc=1)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CODEQL-AND-OTHERS" in out and out.isascii()
+
+
+def test_a_pending_timeout_after_a_rerun_still_names_the_red_check(world, capsys):
+    settling = [_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]
+    both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
+    rc, _ = _land_green(world, [both, settling], rerun=True, timeout=30.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert "still pending: build and test" in out and "red: CodeQL" in out
+
+
+# --- #945: re-landing a branch whose earlier landing push is still on origin -----------------------------
+
+
+def _reland_setup(world: World, branch: str) -> tuple[str, str]:
+    """Land `branch` once with main already ahead (so the push is a MERGE commit, recorded as PR 7), then move main again so
+    the next landing builds a different merge commit that does not descend from the first. Returns (lane sha, pushed tip).
+    MEASURED 2026-10-29: when the first push was the bare lane sha the second one fast-forwards, so only this shape fails."""
+    sha = world.commit_on_branch(branch, {"b.txt": b"new\n"})
+    world.advance_main({"a.txt": b"two\n"})
+    assert _land(world, branch, sha) == lw.EXIT_OK
+    tip = _origin_sha(world, branch)
+    assert tip != sha
+    world.advance_main({"a.txt": b"three\n"})
+    return sha, tip
+
+
+def test_a_reland_over_our_own_earlier_push_uses_a_lease_and_reuses_the_open_pr(world, capsys, monkeypatch):
+    lane, old = _reland_setup(world, "feat/945-x")
+    (world.root / "gh.log.prlist").write_text(json.dumps([{"url": "https://github.com/o/r/pull/7"}]), encoding="utf-8")
+    pushes: list[tuple[str, ...]] = []
+    real = lw.git
+
+    def spy(cwd, *args, **kw):
+        if args[:1] == ("push",):
+            pushes.append(args)
+        return real(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    creates_before = len(_calls(world, "create"))
+    rc = _land(world, "feat/945-x", lane)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_OK, out
+    new = _origin_sha(world, "feat/945-x")
+    assert new != old
+    assert any(f"--force-with-lease=refs/heads/feat/945-x:{old}" in a for a in pushes), pushes
+    assert len(_calls(world, "create")) == creates_before  # the existing PR is reused, not duplicated
+    assert "reusing" in out and out.isascii()
+
+
+def test_a_reland_opens_a_new_pr_when_the_old_one_is_no_longer_open(world, capsys):
+    lane, old = _reland_setup(world, "feat/945-y")
+    creates_before = len(_calls(world, "create"))
+    assert _land(world, "feat/945-y", lane) == lw.EXIT_OK  # no .prlist file: gh lists no open PR
+    assert len(_calls(world, "create")) == creates_before + 1
+    assert _origin_sha(world, "feat/945-y") != old
+
+
+def test_a_remote_tip_we_never_recorded_is_never_overwritten(world, capsys):
+    foreign = world.commit_on_branch("feat/945-other", {"c.txt": b"someone else\n"})
+    _git(world.clone, "push", "-q", "origin", f"{foreign}:refs/heads/feat/945-z")
+    mine = world.commit_on_branch("feat/945-z", {"b.txt": b"new\n"})
+    creates_before = len(_calls(world, "create"))
+    rc = _land(world, "feat/945-z", mine)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_FAILED
+    assert _origin_sha(world, "feat/945-z") == foreign  # untouched
+    assert len(_calls(world, "create")) == creates_before
+    assert foreign[:12] in out and "--land-branch" in out and out.isascii()
+
+
+def test_a_remote_tip_moved_after_our_push_is_not_ours_and_is_never_overwritten(world, capsys):
+    lane, old = _reland_setup(world, "feat/945-w")
+    _git(world.clone, "fetch", "-q", "origin")
+    _git(world.clone, "switch", "-q", "--detach", "origin/feat/945-w")
+    (world.clone / "d.txt").write_bytes(b"a human pushed this\n")
+    _git(world.clone, "add", "--", "d.txt")
+    _git(world.clone, "commit", "-q", "-m", "human")
+    human = _git(world.clone, "rev-parse", "HEAD")
+    _git(world.clone, "push", "-q", "origin", f"{human}:refs/heads/feat/945-w")
+    _git(world.clone, "switch", "-q", "--detach", "origin/main")
+    rc = _land(world, "feat/945-w", lane)
+    assert rc == lw.EXIT_FAILED
+    assert _origin_sha(world, "feat/945-w") == human
+    assert "--land-branch" in capsys.readouterr().out

@@ -28,7 +28,10 @@ WHAT IT DOES, IN ORDER (a refusal before step 4 changes nothing; no step ever fo
    pass/skipping runs `gh pr merge <pr> --merge` (a merge commit). Either refusal leaves the PR open.
    `--rerun-failed-once` (default on, `--no-rerun-failed-once` to disable): the first red result re-runs each failed
    run once (`gh run rerun <run> --failed`, after the other checks settle), appends a line to
-   `<git-dir>/flaky-checks.log` and waits again; a second red refuses.
+   `<git-dir>/flaky-checks.log` and waits again; a second red refuses (#927: after the re-run it waits until nothing is pending, so the
+   refusal names every red check, then prints `ONLY-CODEQL` or `CODEQL-AND-OTHERS`; exit codes unchanged).
+   A rejected push (#945) whose remote tip is a head recorded in landed-prs.json is replaced with
+   `--force-with-lease=<ref>:<that sha>` and its open PR reused; any other tip is never overwritten.
 8. ALWAYS, success or not: unlink the junction with `os.rmdir`, check it is gone, and only then
    `git worktree remove --force`. MEASURED: an earlier tool deleted the real venv through a junction.
    If the junction cannot be removed the worktree is LEFT IN PLACE (and named) rather than removed.
@@ -741,13 +744,58 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     git(wt, *ident, "commit", "--no-edit", "-q")
 
 
-def _push(ctx: Ctx, wt: Path, land_branch: str, sha: str) -> None:
-    """Push HEAD. A timed-out push is not a verdict: ask origin whether the branch arrived (a killed git can have finished remotely)."""
+def _recorded_pr(ctx: Ctx, tip: str) -> str | None:
+    """The PR number whose landed head (`<common-git-dir>/landed-prs.json`, written by `_record_landed`) is exactly `tip`, else None.
+    That file is the only record of what this tool pushed; a sha not in it is not ours. Age does not matter: a push is ours forever."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import premerge_stamp
+
+        path = premerge_stamp.landed_path(ctx.repo)
+        data = json.loads(path.read_text(encoding="utf-8")) if path is not None else {}
+    except Exception:  # noqa: BLE001  (an unreadable record means "not recorded", which refuses: the safe side)
+        return None
+    if not isinstance(data, dict):
+        return None
+    for pr, record in data.items():
+        if isinstance(record, dict) and record.get("head") == tip:
+            return str(pr)
+    return None
+
+
+def _push_over_own_tip(ctx: Ctx, wt: Path, land_branch: str, sha: str, rejected: LandError) -> bool:
+    """A plain push failed (#945: the earlier attempt pushed merge commit M1, this one built M2 against a newer main, and M2 does not
+    descend from M1). When origin holds exactly a head this tool recorded, replace it under a lease bounded to that sha and return True;
+    otherwise raise, naming the action. Never a force over a tip this tool did not record."""
+    try:
+        listing = _text(git(wt, "ls-remote", "--heads", REMOTE, f"refs/heads/{land_branch}", timeout=60.0).stdout).split()
+    except LandError:
+        raise rejected from None
+    tip = listing[0] if listing else ""
+    if not tip:
+        raise rejected  # the branch is not on origin: the push failed for another reason
+    pr = _recorded_pr(ctx, tip)
+    if pr is None:
+        raise LandError(
+            f"{rejected} -- {land_branch} on origin is at {tip[:12]}, which this tool did not record as its own push, so it was left "
+            f"untouched. Check who pushed it, then land again with --land-branch {land_branch}-{sha[:7]}",
+            rejected.code,
+        ) from None
+    ctx.say(f"- {land_branch} on origin is this tool's own earlier push (PR {pr}, {tip[:12]}); replacing it under a lease")
+    git(wt, "push", REMOTE, f"--force-with-lease=refs/heads/{land_branch}:{tip}", f"HEAD:refs/heads/{land_branch}", timeout=ctx.git_timeout)
+    return True
+
+
+def _push(ctx: Ctx, wt: Path, land_branch: str, sha: str) -> bool:
+    """Push HEAD; True when it replaced this tool's own earlier landing push (the open PR is then reused). A timed-out push is not a
+    verdict: ask origin whether the branch arrived (a killed git can have finished remotely)."""
     try:
         git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}", timeout=ctx.git_timeout)
-        return
+        return False
     except LandTimeout as err:
         pushed_err = err
+    except LandError as err:
+        return _push_over_own_tip(ctx, wt, land_branch, sha, err)
     try:
         listing = _text(git(wt, "ls-remote", "--heads", REMOTE, f"refs/heads/{land_branch}", timeout=60.0).stdout)
     except LandError:
@@ -757,7 +805,7 @@ def _push(ctx: Ctx, wt: Path, land_branch: str, sha: str) -> None:
         ) from None
     if listing.split()[:1] == [sha]:
         ctx.say(f"- push timed out but origin already has {land_branch} at {sha[:12]}; continuing")
-        return
+        return False
     if listing:
         raise LandError(
             f"push timed out and {land_branch} on origin is at {listing.split()[0][:12]}, not {sha[:12]}. "
@@ -779,6 +827,18 @@ def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path
     if proc.returncode != 0:
         raise LandError(f"{land_branch} was pushed but gh pr create failed: {_text(proc.stderr or proc.stdout)}. Open the PR by hand")
     return _text(proc.stdout).splitlines()[-1] if proc.stdout.strip() else "(no url printed)"
+
+
+def _open_pr_url(ctx: Ctx, wt: Path, land_branch: str) -> str | None:
+    """The URL of the open PR whose head is `land_branch`, or None (none open, or gh could not say). Never raises."""
+    argv = [*ctx.gh, "pr", "list", "--head", land_branch, "--base", BASE, "--state", "open", "--json", "url"]
+    try:
+        proc = run_bounded(argv, cwd=wt, timeout=ctx.gh_timeout)
+        rows = json.loads(_text(proc.stdout)) if proc.returncode == 0 else []
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    urls = [str(r["url"]) for r in rows if isinstance(r, dict) and r.get("url")] if isinstance(rows, list) else []
+    return urls[0] if urls else None
 
 
 def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
@@ -960,6 +1020,18 @@ def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
         ctx.say(line)
 
 
+def _say_codeql_verdict(ctx: Ctx, checks: Sequence[dict[str, str]]) -> None:
+    """#927: one literal line that says whether a hand merge after dismissing CodeQL alerts is even on the table. Printed only when a
+    CodeQL check is red. `ONLY-CODEQL` means every other check is green at this moment; `CODEQL-AND-OTHERS` names what is not."""
+    if not any(c.get("bucket") in RED_BUCKETS and _is_codeql(c) for c in checks):
+        return
+    others = [c for c in checks if not _is_codeql(c) and c.get("bucket") not in GREEN_BUCKETS]
+    if others:
+        ctx.say(f"CODEQL-AND-OTHERS: CodeQL is red and these are not green: {_names(others)}. Do not merge by hand; fix them and push")
+    else:
+        ctx.say("ONLY-CODEQL: every other check is green and only CodeQL is red. Judge the alerts before any hand merge")
+
+
 def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
     """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
 
@@ -979,8 +1051,10 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
         if checks:
             red = [c for c in checks if c.get("bucket") in RED_BUCKETS]
             waiting = [c for c in checks if c.get("bucket") not in GREEN_BUCKETS and c not in red]
-            if red and rerun_failed_once and not rerun_spent and waiting:
-                pass  # a rerun needs the run finished: keep polling until the rest settle (still bounded by the deadline)
+            if red and rerun_failed_once and waiting:
+                # Before the re-run: it needs the run finished. After it (#927): the re-run checks are still going, so a refusal now
+                # would name only the stale red ones. Keep polling until the rest settle (still bounded by the deadline).
+                pass
             elif red and rerun_failed_once and not rerun_spent:
                 rerun_spent = True
                 if _rerun_failed(ctx, pr, red):
@@ -988,6 +1062,7 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
                     ctx.sleep(poll)  # let the rerun replace the stale red before it is read again
                     continue
                 ctx.say(f"ERROR: not merging {pr}: failed check(s) {_names(red)} could not be re-run. Re-run them by hand; the PR stays open")
+                _say_codeql_verdict(ctx, checks)
                 if any(_is_codeql(c) for c in red) and not triaged:
                     triaged = True
                     _report_codeql_alerts(ctx, pr)
@@ -995,6 +1070,7 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             elif red:
                 again = " (still red after one re-run)" if rerun_spent else ""
                 ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
+                _say_codeql_verdict(ctx, checks)
                 if any(_is_codeql(c) for c in red) and not triaged:
                     triaged = True
                     _report_codeql_alerts(ctx, pr)
@@ -1006,7 +1082,7 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
                 triaged = True
                 _report_codeql_alerts(ctx, pr)
             if waiting:
-                what = f"still pending: {_names(waiting)}"
+                what = f"still pending: {_names(waiting)}" + (f"; red: {_names(red)}" if red else "")
             elif ctx.checks_error:
                 what = f"gh could not read the checks ({ctx.checks_error})"
             else:
@@ -1014,6 +1090,8 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             ctx.say(
                 f"ERROR: not merging {pr}: {what} after {int(timeout)} s. Run `gh pr checks {pr} --watch`, then merge by hand; the PR stays open"
             )
+            if checks:
+                _say_codeql_verdict(ctx, checks)
             if any(_is_codeql(c) for c in red) and not triaged:
                 triaged = True
                 _report_codeql_alerts(ctx, pr)
@@ -1091,9 +1169,13 @@ def land(
             fails = [ln for ln in output.splitlines() if re.search(r"\b(FAIL|ERROR)\b", ln)][:30]
             raise LandError("premerge is red; nothing was pushed. " + "; ".join(s.strip() for s in fails) + f" (full log: {log})", EXIT_RED)
         pushed_head = _text(git(wt, "rev-parse", "HEAD").stdout)
-        _push(ctx, wt, land_branch, pushed_head)
+        replaced_own = _push(ctx, wt, land_branch, pushed_head)
         pushed = True
-        url = _create_pr(ctx, wt, land_branch, title, body_file)
+        url = _open_pr_url(ctx, wt, land_branch) if replaced_own else None
+        if url:
+            ctx.say(f"- reusing the open PR {url} for the re-landed {land_branch}")
+        else:
+            url = _create_pr(ctx, wt, land_branch, title, body_file)
         _record_landed(ctx, url, pushed_head)  # the PR head the hook must allow, not the pre-merge lane tip (#904)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
