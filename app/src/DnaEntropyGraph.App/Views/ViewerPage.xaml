@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:DnaEntropyGraph.App.Controls"
     xmlns:converters="using:DnaEntropyGraph.App.Converters"
+    xmlns:vmv="using:DnaEntropyGraph.Presentation.Viewer"
     xmlns:wv2="using:Microsoft.UI.Xaml.Controls">
 
     <!--
@@ -47,6 +48,7 @@
             Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.IsViewerVisible), Mode=OneWay}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <StackPanel
@@ -65,9 +67,37 @@
                     VerticalAlignment="Bottom"
                     Command="{x:Bind ViewModel.GoToContigCommand}" />
             </StackPanel>
+            <!-- Issue #552: the smoothed entropy tracks are views of the raw track, off until switched on. -->
+            <StackPanel
+                Grid.Row="1"
+                Spacing="4"
+                Visibility="{x:Bind converters:VisibilityHelper.FromBool(ViewModel.HasSmoothedTracks), Mode=OneWay}">
+                <InfoBar
+                    IsOpen="{x:Bind ViewModel.IsTrackNoticeVisible, Mode=OneWay}"
+                    Severity="Warning"
+                    IsClosable="False"
+                    Message="{x:Bind ViewModel.TrackNoticeText, Mode=OneWay}" />
+                <TextBlock x:Uid="ViewerSmoothedHeading" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" TextWrapping="Wrap" />
+                <ItemsControl
+                    ItemsSource="{x:Bind ViewModel.SmoothedTracks}"
+                    IsEnabled="{x:Bind ViewModel.AreSmoothedTracksEnabled, Mode=OneWay}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="16" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vmv:ViewerOptionalTrack">
+                            <CheckBox
+                                Content="{x:Bind Label}"
+                                IsChecked="{x:Bind IsOn, Mode=TwoWay}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
             <wv2:WebView2
                 x:Name="Viewer"
-                Grid.Row="1" />
+                Grid.Row="2" />
         </Grid>
 
         <StackPanel
