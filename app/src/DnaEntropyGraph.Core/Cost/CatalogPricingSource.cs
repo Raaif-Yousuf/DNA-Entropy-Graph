@@ -103,8 +103,9 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     public static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// The budget for the WHOLE paged read (several requests, each of which the pipeline may take up to its 30 second attempt cap over), so a slow link
-    /// still gets a multi-page catalog. Nothing waits on it that long: <see cref="CostEstimateService"/> answers from what is known and lets the read finish.
+    /// The budget for the WHOLE paged read, not a guarantee that a multi-page catalog fits: each page may take the pipeline up to 30 seconds per attempt and
+    /// up to 5 attempts, so a very slow link can still run out of it and fall back (reason Network). Nothing waits on it that long:
+    /// <see cref="CostEstimateService"/> answers from what is known and lets the read finish.
     /// </summary>
     public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(90);
 
@@ -278,7 +279,8 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     {
         lock (_state)
         {
-            if (_snapshot!.Origin is PricingOrigin.Catalog or PricingOrigin.Cache && _snapshot.AsOf >= Today())
+            // Fresh is today up to one day ahead (the same slack EnsureLoaded gives a cache); a date further ahead means the clock went back and is not trusted.
+            if (_snapshot!.Origin is PricingOrigin.Catalog or PricingOrigin.Cache && _snapshot.AsOf >= Today() && _snapshot.AsOf <= Today().AddDays(1))
             {
                 return false;
             }
