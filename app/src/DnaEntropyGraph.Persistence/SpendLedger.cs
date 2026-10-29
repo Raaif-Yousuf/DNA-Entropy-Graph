@@ -152,14 +152,9 @@ public sealed class SpendLedger : ISpendCapGate
                 continue;
             }
 
-            // A flex-start (wait for a card) run still in Provisioning is a request in Google's queue, not a VM that bills: the run only leaves
-            // Provisioning once its create has been answered with a granted VM. THEORY (unverified, no live project; ToTest #92): the create
-            // operation completes at the grant, not at queueing. Until that is measured the queued time is kept out of the HARD STOP figure (it can
-            // only under-count a VM that was in fact already billing; the run's own row, booked at its end, still carries the whole span).
-            if (run.Phase == JobPhase.Provisioning && RunOptionsJson.TryDeserialize(run.OptionsJson)?.WaitForGpu == true)
-            {
-                continue;
-            }
+            // A flex-start (wait for a card) run that is still queued is not counted, and needs no test here: VmReadyAt is stamped only when the create is answered with a
+            // granted VM, so a queued request has none and is skipped above. THEORY (unverified, no live project; ToTest #92): the create operation completes at the grant, not at
+            // queueing. A granted flex VM that is still booting IS counted: it bills, and the phase alone (Provisioning through the boot) says nothing about that.
 
             var from = vmStart > monthStart ? vmStart : monthStart;
             if (now > from && UsdFor(run, from, now) is { } usd)

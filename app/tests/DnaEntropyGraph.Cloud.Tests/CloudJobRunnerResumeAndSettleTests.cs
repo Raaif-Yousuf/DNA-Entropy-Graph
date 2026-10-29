@@ -411,4 +411,57 @@ public class CloudJobRunnerResumeAndSettleTests
         LastRow(repo, "job-w").ErrorDetail.ShouldNotBeNull().ToLowerInvariant().ShouldContain("no result files");
         Directory.GetFileSystemEntries(request.OutputFolder).ShouldBeEmpty();
     }
-}
+
+    // ---- #109 round 3: the span booked is what the VM ran, not how long the app was closed ----
+
+    private static async Task SeedFinishedAndStoppedAsync(FakeGcp gcp, InMemoryRunRepository repo, ManualTimeProvider time, string jobId, TimeSpan ranFor, bool stop = true)
+    {
+        var request = TestInputs.Request(jobId, Spec(jobId));
+        await gcp.CreateVmAsync(request.Spec, Zone, CancellationToken.None);
+        time.Advance(ranFor);
+        if (stop)
+        {
+            await gcp.StopVmAsync($"deg-{jobId}", Zone, CancellationToken.None);
+        }
+
+        var bucket = FakeGcp.BucketName(Project);
+        var track = FakeGcp.TrackBytes("seq");
+        gcp.PutObject(bucket, $"jobs/{jobId}/output/seq/seq.bedgraph", track);
+        gcp.PutObject(bucket, $"jobs/{jobId}/result.json", System.Text.Encoding.UTF8.GetBytes(
+            $$"""{"schema":1,"jobId":"{{jobId}}","status":"done","inputs":[{"id":"in1","status":"done","outputs":["output/seq/seq.bedgraph"],"files":[{"path":"output/seq/seq.bedgraph","sha256":"{{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(track))}}","bytes":{{track.Length}}}],"notices":[],"stats":null,"error":null}],"error":null}"""));
+        await repo.UpsertAsync(new RunRecord(jobId, JobPhase.Running, DateTimeOffset.UtcNow.AddHours(-10)), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_run_resumed_hours_after_its_VM_stopped_itself_books_the_span_the_VM_ran_not_the_time_the_app_was_closed()
+    {
+        var t0 = DateTimeOffset.UtcNow.AddHours(-10);
+        var time = new ManualTimeProvider(t0);
+        var gcp = new FakeGcp(time);
+        var repo = new InMemoryRunRepository();
+        await SeedFinishedAndStoppedAsync(gcp, repo, time, "job-s7", TimeSpan.FromMinutes(20));
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-s7", Spec("job-s7")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-s7");
+        row.VmReadyAt.ShouldBe(t0, "the VM's own platform start");
+        (row.FinishedAt!.Value - row.VmReadyAt!.Value).TotalMinutes.ShouldBe(20, 0.01, "the VM stopped at +20 min; resuming 10 h later must not book 10 h");
+    }
+
+    [Fact]
+    public async Task A_resumed_finished_run_whose_VM_is_still_running_ends_now()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        await SeedFinishedAndStoppedAsync(gcp, repo, time, "job-s8", TimeSpan.Zero, stop: false);
+        var request = TestInputs.Request("job-s8", Spec("job-s8"));
+        (await gcp.FindByJobIdAsync("job-s8", CancellationToken.None)).ShouldNotBeEmpty();
+
+        var result = await Runner(gcp, repo).RunAsync(request, CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-s8");
+        (DateTimeOffset.UtcNow - row.FinishedAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(1), "a running VM bills until the run ends: the end is the finish");
+    }}

@@ -19,18 +19,27 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _landedAt = new();
 
     /// <summary>
-    /// Issue #109 (M2): the start of the VM billing for a run that is being cancelled, taken once. The moment a create or reuse landed when one did; when a create is
-    /// still in flight and unsettled (<paramref name="settled"/> false) the VM may yet land and bill, so the cancel request time is the conservative start; null when
-    /// no create was ever tracked for the job.
+    /// Issue #109 (round 3): bumped when a job's run ends terminal (<see cref="ForgetPendingRequests"/>). A create captures the value when it starts and records its landing only
+    /// if the value is unchanged, so a create that lands AFTER the run it belonged to ended leaves no entry for anything to adopt.
     /// </summary>
-    public DateTimeOffset? TakeVmStartForCancel(string jobId, bool settled)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _runEpoch = new();
+
+    /// <summary>Tests: how many landed-create entries are still held (none may outlive a run that ended terminal).</summary>
+    internal int LandedCount => _landedAt.Count;
+
+    /// <summary>
+    /// Issue #109 (M2): the start of the VM billing for a run that is being cancelled, taken once. The moment a create or reuse landed when one did; when a create is
+    /// still in flight and unsettled (<paramref name="settled"/> false) the cancel time is the start only when the cancel's own delete found a VM
+    /// (<paramref name="vmFoundByCancel"/>), because an unsettled create may yet FAIL and book a span for a VM that never existed; null otherwise.
+    /// </summary>
+    public DateTimeOffset? TakeVmStartForCancel(string jobId, bool settled, bool vmFoundByCancel)
     {
         if (_landedAt.TryRemove(jobId, out var landed))
         {
             return landed;
         }
 
-        return settled ? null : settings.TimeProvider.GetUtcNow();
+        return !settled && vmFoundByCancel ? settings.TimeProvider.GetUtcNow() : null;
     }
 
     /// <summary>The GPU machine families (G2 = L4, A2 = A100, A3 = H100); anything else is a CPU smoke VM.</summary>
@@ -105,6 +114,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // Issue #109 (L1): an adopted VM has been billing since the platform started it, not since this run found it; a run whose first stamp failed
             // before the app closed has no other record. (A platform clock a little ahead of ours only makes a span of zero: the ledger floors it.)
             progress.VmCreatedAt ??= kept.RunClockStart;
+            progress.VmEndedAt ??= VmFacts.StoppedSpanEnd(kept);
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -354,6 +364,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public void ForgetPendingRequests(string jobId)
     {
         TakePendingRequests(jobId);
+        _runEpoch.AddOrUpdate(jobId, 1, (_, epoch) => epoch + 1);
         _landedAt.TryRemove(jobId, out _);
     }
 
@@ -842,6 +853,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private Task<T> TrackInflightCreate<T>(string jobId, Func<Task<T>> start)
     {
         var placeholder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var epoch = _runEpoch.GetValueOrDefault(jobId);
         _inflightCreates[placeholder.Task] = jobId;
         Task<T> task;
         try
@@ -858,9 +870,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             t =>
             {
                 _ = t.Exception;
-                if (t.IsCompletedSuccessfully)
+                if (t.IsCompletedSuccessfully && _runEpoch.GetValueOrDefault(jobId) == epoch)
                 {
                     _landedAt.TryAdd(jobId, settings.TimeProvider.GetUtcNow());
+                    if (_runEpoch.GetValueOrDefault(jobId) != epoch)
+                    {
+                        _landedAt.TryRemove(jobId, out _); // the run ended between the check and the add
+                    }
                 }
 
                 _inflightCreates.TryRemove(placeholder.Task, out _);

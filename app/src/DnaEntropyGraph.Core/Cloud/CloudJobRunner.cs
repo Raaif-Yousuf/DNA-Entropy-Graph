@@ -246,6 +246,9 @@ public sealed class CloudJobRunner
     /// <summary>Tests: how many queued flex requests the runner still remembers.</summary>
     internal int PendingQueuedRequestCount => _provisioner.PendingFlexCount;
 
+    /// <summary>Tests: how many landed-create start times the runner still holds.</summary>
+    internal int LandedCreateCount => _provisioner.LandedCount;
+
     /// <summary>Tests: how many per-job waiting-notice chains the runner still holds.</summary>
     internal int NoticeChainCount => _provisioner.NoticeChainCount;
 
@@ -444,6 +447,7 @@ public sealed class CloudJobRunner
                 {
                     // Issue #109 (L1): the VM's own start, so a first stamp that failed does not become "now".
                     progress.VmCreatedAt ??= platformStart;
+                    progress.VmEndedAt ??= VmFacts.StoppedSpanEnd(owned[0]);
                     await StampVmCreatedAsync(request.JobId, progress).ConfigureAwait(false);
                 }
 
@@ -496,6 +500,7 @@ public sealed class CloudJobRunner
                 progress.VmName = null;
                 progress.Zone = null;
                 progress.VmStartMark = null;
+                progress.VmEndedAt = null;
             }
         }
     }
@@ -519,7 +524,16 @@ public sealed class CloudJobRunner
 
         try
         {
-            await _rows.UpdateRowAsync(jobId, row => row.VmReadyAt is null ? row with { VmReadyAt = createdAt } : row, CancellationToken.None).ConfigureAwait(false);
+            var endedAt = progress.VmEndedAt;
+            await _rows.UpdateRowAsync(
+                jobId,
+                row => row with
+                {
+                    VmReadyAt = row.VmReadyAt ?? createdAt,
+                    // Issue #109 (round 3): a VM that had already stopped billed only until it stopped. The terminal write keeps a FinishedAt that is already set.
+                    FinishedAt = row.FinishedAt ?? (JobStateMachine.IsTerminal(row.Phase) ? null : endedAt),
+                },
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

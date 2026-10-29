@@ -583,14 +583,22 @@ exercise.
  the inner repository accepted the write. The cap card and the Run button ignore the cap for a
  This PC run (the engine never applies it to one; Auto is left as asked). A cancel while the create
  is in flight stamps `VmReadyAt` from the moment the create landed (`VmProvisioner.TakeVmStartForCancel`),
- or from the cancel time when the create is still unsettled, so the VM that billed until the delete
- is booked. An adopted VM books from its own platform start (`RunClockStart`), not from the moment
- the run found it. A flex-start ("wait for a graphics card") run still in Provisioning is a queued
- request: it is left out of the in-progress figure that the hard stop reads. THEORY (unverified, no
+ or, when the create is still unsettled, from the cancel time only if the cancel's own delete-by-label found a VM (an unsettled create may yet fail, and a span is never booked for a VM nobody saw). An adopted VM books from its own platform start (`RunClockStart`), not from the moment
+ the run found it. A flex-start ("wait for a graphics card") request that is still queued has no `VmReadyAt` (stamped only when
+ the create is answered), so it adds nothing to the in-progress figure; a granted flex VM that is still booting
+ does count (round 3: the earlier phase test dropped it). THEORY (unverified, no
  live project; ToTest #92): the flex create operation completes at the grant, not at queueing; if it
  completes at queueing, queued time would be booked from `VmReadyAt` at the run's end (the estimate
  display stays conservative). The Settings cap box commits on LostFocus (stated in the XAML), so
  typing 1 on the way to 10 never saves cap 1.
+ Round 3 review fixes: a resume that finds the worker already finished, or a run that adopts a VM that is no longer
+ running, books the span the VM RAN. The runner pre-stamps the row's `FinishedAt` with the VM's own stop time
+ (`lastStopTimestamp`; a stopped VM that reports none ends at its own start, so nothing is booked past what is known)
+ and the terminal write keeps a `FinishedAt` already set, so a VM that stopped itself at +20 min and is resumed 10 h
+ later books 20 min, not 10 h. A VM still running bills until the run ends, as before. `VmProvisioner` drops a landed-create
+ start when the job's run ends terminal (an epoch per job), so a create that lands after the run ended leaves nothing for a
+ later cancel to adopt. Limit: a run that failed after the VM stopped but before its stop time was read is booked to the
+ failure time. No log line records the unknown-stop-time fallback (the Core cloud collaborators have no logger).
 
 ## 11. The job runner and operation polling (issues #58, #256)
 
