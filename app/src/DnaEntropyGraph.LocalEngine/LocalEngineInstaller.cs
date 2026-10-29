@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.LocalEngine;
 
@@ -66,7 +67,7 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
         cancellationToken.ThrowIfCancellationRequested();
         var folder = Path.GetFullPath(_layout.EngineFolder);
         var allowed = Path.GetFullPath(_appDataFolder);
-        if (!IsStrictlyInside(folder, allowed))
+        if (!RunOutputRoot.IsSafelyInside(folder, allowed))
         {
             return Task.FromResult(new LocalInstallResult(false, LocalEngineErrorCodes.RemoveRefused, "The engine folder is not inside the app data folder."));
         }
@@ -84,13 +85,6 @@ public sealed class LocalEngineInstaller : ILocalEngineInstaller
         {
             return Task.FromResult(new LocalInstallResult(false, LocalEngineErrorCodes.InstallFailed, "The engine folder could not be deleted: " + ex.GetType().Name + "."));
         }
-    }
-
-    private static bool IsStrictlyInside(string path, string root)
-    {
-        var p = Path.TrimEndingDirectorySeparator(path);
-        var r = Path.TrimEndingDirectorySeparator(root);
-        return p.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<LocalInstallResult> RunAsync(bool createVenv, IProgress<LocalInstallProgress>? progress, CancellationToken cancellationToken)
