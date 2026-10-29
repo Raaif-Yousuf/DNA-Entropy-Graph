@@ -576,27 +576,73 @@ def test_a_timeout_keeps_partial_output_from_both_streams(tmp_path):
     assert "FROMOUT" in result.output and "FROMERR" in result.output
 
 
-@pytest.fixture(autouse=True)
-def _restore_termination_handlers():
-    """pm.main() installs SIGTERM/SIGHUP handlers; never let them leak into the rest of the pytest session."""
+def _snapshot_termination_handlers():
+    """Return a callable that puts SIGTERM/SIGHUP back as they are now."""
     import signal
 
     names = [n for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
     saved = {n: signal.getsignal(getattr(signal, n)) for n in names}
+
+    def restore() -> None:
+        for n, handler in saved.items():
+            signal.signal(getattr(signal, n), handler)
+
+    return restore
+
+
+@pytest.fixture(autouse=True)
+def _restore_termination_handlers():
+    """pm.main() installs SIGTERM/SIGHUP handlers; never let them leak into the rest of the pytest session."""
+    restore = _snapshot_termination_handlers()
     yield
-    for n, handler in saved.items():
-        signal.signal(getattr(signal, n), handler)
+    restore()
 
 
-def test_zz_a_main_call_installs_the_handlers_for_this_test_only_part_one():
+def test_a_main_call_installs_the_handlers_and_the_restore_puts_them_back():
+    """One test, not an order-dependent pair: under xdist the second half could land on another worker and pass vacuously (#959)."""
     import signal
 
+    restore = _snapshot_termination_handlers()
     pm.main(["--root", str(REPO_ROOT), "--list"])
     assert signal.getsignal(signal.SIGTERM) is pm._raise_keyboard_interrupt
-
-
-def test_zz_the_handlers_were_restored_after_the_previous_test_part_two():
-    import signal
-
-    # Order-dependent on purpose: runs right after part one, so a missing restore shows here.
+    restore()
     assert signal.getsignal(signal.SIGTERM) is not pm._raise_keyboard_interrupt
+
+
+# --- #959: the scripts-tests gate runs in parallel (pytest-xdist) --------------------------------------------
+
+
+def test_scripts_test_workers_scale_with_cpus_and_stay_capped():
+    assert pm.scripts_test_workers(cpus=16) == pm.SCRIPTS_TESTS_MAX_WORKERS
+    assert pm.scripts_test_workers(cpus=4) == 2
+    assert pm.scripts_test_workers(cpus=1) == 2  # never fewer than two, or xdist is only overhead
+    assert pm.scripts_test_workers(cpus=None) == 2
+
+
+def test_the_real_scripts_tests_gate_is_parallel_and_installs_xdist():
+    gate = {g.name: g for g in pm.build_gates(REPO_ROOT)}["scripts-tests"]
+    cmd = gate.argv
+    assert "pytest-xdist" in cmd and cmd[cmd.index("-n") + 1] == str(pm.scripts_test_workers())
+    assert cmd[cmd.index("--with") + 1] == "pytest"  # the non-xdist `--with`s are untouched
+
+
+def test_the_scripts_tests_ci_job_uses_the_same_parallel_command_as_premerge():
+    text = (REPO_ROOT / ".github" / "workflows" / "ci-docs.yml").read_text(encoding="utf-8")
+    assert "--with pytest-xdist" in text and "pytest scripts/tests -q -n " in text
+
+
+@pytest.mark.parametrize(
+    ("rc", "output", "status"),
+    [
+        (0, "created: 8/8 workers\n8 workers [1874 items]\n1874 passed, 19 skipped in 190.02s (0:03:10)", pm.PASS),
+        (1, "[gw3] FAILED scripts/tests/test_x.py::test_y\n1 failed, 1873 passed in 190.02s", pm.FAIL),
+        (1, "worker 'gw2' crashed while running 'scripts/tests/test_x.py::test_y'\n....  [ 40%]", pm.ERROR),
+    ],
+)
+def test_classify_pytest_reads_xdist_output(rc, output, status):
+    assert pm.classify_pytest(rc, output)[0] == status
+
+
+def test_a_timed_out_xdist_gate_still_counts_progress():
+    out = "......F...  [ 12%]\n..........  [ 24%]\n"
+    assert "timed out after 600s with 19 passed and 1 failed" in pm.classify_pytest_timeout(600, out)
