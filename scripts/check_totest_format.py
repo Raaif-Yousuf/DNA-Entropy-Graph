@@ -383,6 +383,21 @@ def self_test() -> bool:
     else:
         print(f"ok    validate_row_shape flags a malformed row ({len(shape_problems)} problem(s))")
 
+    # --- stray lines and unterminated rows (#652): pure, no git ---
+    good = _GOOD_TABLE.format(sha="abc1234")
+    split = good.replace("Install and run once | The tray", "Install and run once\n| The tray")  # a row split by a stray line break
+    unterminated = good.replace("no tray icon |", "no tray icon")
+    if find_stray_lines(good) or count_table_lines(good) < 3:
+        print("FAIL find_stray_lines: a well-formed table must be clean and the scan must see its lines")
+        ok = False
+    elif len(find_stray_lines(split)) < 1 or len(find_stray_lines(unterminated)) != 1:
+        print(f"FAIL find_stray_lines: split={find_stray_lines(split)} unterminated={find_stray_lines(unterminated)}")
+        ok = False
+    elif not find_stray_lines(good.replace("| #12", "stray text\n| #12")):
+        print("FAIL find_stray_lines: a line inside the table that is not a row must be flagged")
+        ok = False
+    else:
+        print("ok    find_stray_lines flags a split row, an unterminated row and a non-row line, and passes a clean table")
     # --- git-backed: a real throwaway repo, one real commit ---
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
