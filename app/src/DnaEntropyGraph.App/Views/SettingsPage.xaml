@@ -303,6 +303,16 @@
                     </StackPanel>
                 </Border>
             </StackPanel>
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsPrototypeHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="12">
+                        <TextBlock x:Uid="SettingsPrototypeExplainer" TextWrapping="Wrap" />
+                        <Button x:Uid="SettingsPrototypeFindButton" Command="{x:Bind PrototypeImport.FindCommand}" />
+                        <TextBlock Text="{x:Bind PrototypeImport.Status, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </Page>

@@ -232,7 +232,9 @@ removed), pushes and opens the PR; you merge it, or pass `--merge-when-green` an
 with a merge commit only if none failed (exit 5 a check failed, 6 still pending at `--checks-timeout`; the PR stays
 open). Prefer the flag to a hand-written `gh pr checks --watch; gh pr merge` chain: that chain exits 0 on a red check
 (MEASURED 2026-10-15, #666). A failed check is re-run once by default (`--no-rerun-failed-once` to disable) and logged to
-`<git-dir>/flaky-checks.log`; a second red refuses. See `docs/branching_and_prs.md`. The steps below apply to every landing.
+`<git-dir>/flaky-checks.log`; a second red refuses. For a batch, queue the lines with `scripts/land_queue.py add` and run
+`land_queue.py run` (items keyed `branch@sha`; merge when green with one rerun; a DIRTY PR is re-landed once; `status` shows
+the queue, the in-flight item and the last results; `stop` ends it). See `docs/branching_and_prs.md`. The steps below apply to every landing.
 
 Land one lane at a time, and run the guard set after **each**:
 

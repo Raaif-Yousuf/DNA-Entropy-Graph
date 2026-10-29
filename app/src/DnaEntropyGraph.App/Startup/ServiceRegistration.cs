@@ -66,10 +66,16 @@ public static class ServiceRegistration
         // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
         services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
-        services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
+        // Issue #244: every navigation also records the page (and run) for session restore; the shell reads it back at startup.
+        services.AddSingleton<SessionStore>();
+        services.AddSingleton<SessionRestorer>();
+        services.AddSingleton<INavigator>(sp => new RecordingNavigator(sp.GetRequiredService<NavigationService>(), sp.GetRequiredService<SessionStore>()));
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
         services.AddSingleton<InAppMessageCenter>();
         services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
+        // Issue #701: the high contrast state behind the window theme, and the listener that re-applies it when it changes at runtime.
+        services.AddSingleton<IHighContrastSource, AccessibilityHighContrastSource>();
+        services.AddSingleton<HighContrastThemeReapplier>();
         services.AddSingleton<WindowThemeApplier>();
         services.AddSingleton<IThemeApplier>(sp => sp.GetRequiredService<WindowThemeApplier>());
         services.AddSingleton<WindowHandleProvider>();
@@ -218,7 +224,9 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
+        services.AddSingleton<DnaEntropyGraph.Core.Tracks.IGeneTableSource, DnaEntropyGraph.Core.Tracks.GeneTableSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
+        services.AddSingleton(new DnaEntropyGraph.Presentation.Services.ResultsExportRoot(() => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory)));
         // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).
         services.AddSingleton<ImportedRunDismissals>(sp => new ImportedRunDismissals(sp.GetRequiredService<ISettingsStore>()));
         services.AddSingleton<IRunImporter>(sp => new RunImporter(sp.GetRequiredService<IStorageGateway>(), sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<ImportedRunDismissals>()));
@@ -242,8 +250,17 @@ public static class ServiceRegistration
         services.AddSingleton<IWorkerImageProvider, PinnedWorkerImageProvider>();
         // Issue #98: the price list ships beside the app (Assets\pricing.json in the output folder) and the New run page's
         // estimate reads it through this one service. A missing file is a named message on the page, not a crash.
-        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
+        // Issue #214: the price catalog (read at most once a day, cached under the app data folder) sits in front of that file, which stays the
+        // fallback when the catalog cannot be read; IPricingStatus says which one the numbers came from and as of when.
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.FilePricingSource>(_ => new DnaEntropyGraph.Core.Cost.FilePricingSource(
             Path.Combine(AppContext.BaseDirectory, "Assets", "pricing.json")));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.CatalogPricingSource>(sp => new DnaEntropyGraph.Core.Cost.CatalogPricingSource(
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.FilePricingSource>(),
+            sp.GetRequiredService<IPricingCatalogGateway>(),
+            new DnaEntropyGraph.Core.Cost.FilePricingCacheStore(Path.Combine(root.Path, "pricing-cache.json")),
+            TimeProvider.System));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingSource>(sp => sp.GetRequiredService<DnaEntropyGraph.Core.Cost.CatalogPricingSource>());
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.IPricingStatus>(sp => sp.GetRequiredService<DnaEntropyGraph.Core.Cost.CatalogPricingSource>());
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ICostEstimateService, DnaEntropyGraph.Core.Cost.CostEstimateService>();
 
         // LocalEngine (issues #120, #172, #173, #174): the This PC path. Everything that starts a program goes through the one
@@ -428,6 +445,12 @@ public static class ServiceRegistration
         // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
         services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
         services.AddTransient<SettingsTransferViewModel>();
+        // Issue #243: one look for the earlier command-line version's runs, shared by the first-launch offer and the Settings button.
+        services.AddSingleton(new DnaEntropyGraph.Core.PrototypeImport.PrototypeSearchPaths(
+            DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.ConfigPath(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+            DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.Downloads(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))));
+        services.AddSingleton<DnaEntropyGraph.Core.PrototypeImport.PrototypeImporter>();
+        services.AddSingleton<PrototypeImportViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {
@@ -482,6 +505,7 @@ public static class ServiceRegistration
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Billing);
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
         services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
+        services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().PricingCatalog);
 
     }
 
@@ -504,6 +528,7 @@ public static class ServiceRegistration
         services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
     }
 }
 
