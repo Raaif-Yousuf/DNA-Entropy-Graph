@@ -193,6 +193,9 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   Serilog file log yet (issue #164). Today `logs/app.log` (written by `FileDiagnosticsLog` and by `DiagnosticsTraceListener`, which routes every
   `Trace.Trace*` line through a redaction of paths, emails and long nucleotide runs, #923) is in the bundle, with the worker and run logs and per-run files.
 
+## 5c. The network proxy (issue #239, implemented)
+
+A proxy sees which Google hosts the app talks to (not the contents: the traffic is TLS, and the app does not trust a proxy to re-sign it silently, so a TLS-inspecting proxy whose root this PC lacks fails as `network_certificate` instead of being bypassed). The app never sets `ServerCertificateCustomValidationCallback`, so there is no setting that turns validation off. A manual proxy's password is DPAPI-encrypted for the Windows user in `auth\proxy.cred`, never in settings.json, SQLite, the logs or the diagnostics zip; the zip records only the mode. A password cannot be typed into the address box (the parser refuses an `@`).
 ## 6. Residual risk this document does not pretend to solve
 
 - A user's own Windows account being compromised compromises the DPAPI-protected token

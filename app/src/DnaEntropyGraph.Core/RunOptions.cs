@@ -167,7 +167,14 @@ public sealed record RunOptions
     public int RegionMergeGap { get; init; } = 5;
 
     /// <summary>Window sizes (odd numbers of bases) of the smoothed entropy tracks (analysis.smoothingWindows; issue #552). Sent only when the smoothed tracks are chosen.</summary>
-    public IReadOnlyList<int> SmoothingWindows { get; init; } = [51];
+    public IReadOnlyList<int> SmoothingWindows
+    {
+        get => _smoothingWindows;
+        init => _smoothingWindows = value as ValueEqualList<int> ?? new ValueEqualList<int>(value);
+    }
+
+    // The record's generated equality compares this field (by items), so the list member takes part in ==, Equals and GetHashCode.
+    private readonly ValueEqualList<int> _smoothingWindows = new([51]);
 
     /// <summary>Tokens: <c>{file} {date:yyyy-MM-dd} {time:HHmm} {model} {n}</c>. A name colliding with an existing local folder gets <c>_2</c> appended by <c>RunNamer</c>.</summary>
     public string NameTemplate { get; init; } = "{file}";
