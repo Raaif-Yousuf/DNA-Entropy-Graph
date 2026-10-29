@@ -9,7 +9,7 @@ public enum LateCreateState
     /// <summary>The create landed but its VM was already gone (the worker or the platform got there first), or is not this job's.</summary>
     NothingToDelete,
 
-    /// <summary>The create failed, so it made no VM.</summary>
+    /// <summary>The create was refused, or ended without a VM, and a look by name after it ended (and the grace for an accepted insert to show) found none.</summary>
     CreateFailed,
 
     /// <summary>The VM landed and could not be confirmed deleted within the lifecycle timeout; <see cref="LateCreateOutcome.ErrorClass"/> says what failed. The VM's own maxRunDuration is the backstop.</summary>
@@ -17,6 +17,9 @@ public enum LateCreateState
 
     /// <summary>The create had not landed when the reap window ran out; the VM's own maxRunDuration is the backstop.</summary>
     GaveUp,
+
+    /// <summary>A newer attempt of the same job created, adopted or reused a VM under the same name in the same zone: it is that attempt's now, and this clean-up left it alone.</summary>
+    Superseded,
 }
 
 /// <summary>What happened to a create that was still in flight when a cancel stopped waiting. Ids and classes only: never a name, a zone or a message.</summary>

@@ -40,6 +40,7 @@ public class LateCreateAfterCancelTests
                 LifecycleTimeout = TimeSpan.FromSeconds(2),
                 LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
                 CancelAckTimeout = TimeSpan.Zero,
+                LateCreateGrace = TimeSpan.FromMilliseconds(200),
                 OnLateCreate = outcome => Outcomes.Writer.TryWrite(outcome),
             };
             var calls = new GatewayCalls(Settings, gcp);
@@ -206,7 +207,7 @@ public class LateCreateAfterCancelTests
         var second = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-l7", spec, zones: [ZoneB]), spec, new RunProgress(), CancellationToken.None);
 
         second.Success.ShouldBeTrue();
-        await Task.Delay(200, TestContext.Current.CancellationToken); // negative evidence: a wrongly kept per-job mark would delete on arrival
+        await rig.Canceller.WhenReapsEndedAsync(); // the earlier cancel's clean-up has ended: nothing is left that could delete the new attempt's VM
         (await gcp.GetVmAsync("deg-job-l7", ZoneB, CancellationToken.None)).ShouldNotBeNull("the second attempt's VM was deleted by the first cancel's clean-up");
         gcp.DeleteAttempts.Count(d => d.Zone == ZoneB).ShouldBe(0);
     }
@@ -223,8 +224,7 @@ public class LateCreateAfterCancelTests
         // The first create is still held. A new attempt for the same job id (another zone) creates its own VM once the gate opens.
         var spec = Spec("job-l8");
         var attempt = rig.Provisioner.ProvisionAsync(TestInputs.Request("job-l8", spec, zones: [ZoneB]), spec, new RunProgress(), CancellationToken.None);
-        // Real time on purpose: a window for the new attempt to reach its (held) create before the gate opens. Too short only weakens the check (the attempt adopts instead); it cannot fail correct code.
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await gcp.WhenCreatesEnteredAsync(2); // the new attempt has reached its own (held) create
         gcp.ReleaseCreate();
         (await attempt.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Success.ShouldBeTrue();
         await rig.NextOutcomeAsync();
@@ -255,10 +255,225 @@ public class LateCreateAfterCancelTests
         await Should.ThrowAsync<OperationCanceledException>(() => ladder);
         await rig.Canceller.CancelAsync("job-l9", CancellationToken.None);
         gate.SetResult();
-        await Task.Delay(300, TestContext.Current.CancellationToken); // negative evidence: a reap of the reuse would have deleted it by now
+        (await rig.Provisioner.SettleInflightCreatesAsync("job-l9").WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldBeTrue("the reuse has landed"); // a signal, not a sleep
+        await rig.Canceller.WhenReapsEndedAsync(); // no clean-up is running that could still delete it
 
+        rig.LastRow("job-l9").ErrorDetail.ShouldNotBeNull().ShouldNotContain("The app deletes it", Case.Sensitive, "the app never deletes a reuse (#970 tracks stopping it): the row must not promise it");
         gcp.DeleteAttempts.ShouldBeEmpty("the late clean-up deleted a VM this run did not create");
         rig.Outcomes.Reader.TryRead(out _).ShouldBeFalse("no late create was ever reported: the reuse is not a create");
+    }
+
+    // ---- round 2: the gateway production has (a create that honours its token, but Compute had accepted the insert) ----
+
+    /// <summary>Starts a create that honours its token, gives up on it, and returns once the run's ladder has ended Canceled.</summary>
+    private static async Task CancelAnAcceptedCreateAsync(Rig rig, string jobId, string zone = ZoneA)
+    {
+        var spec = Spec(jobId);
+        using var cts = new CancellationTokenSource();
+        var ladder = rig.Provisioner.ProvisionAsync(TestInputs.Request(jobId, spec, zones: [zone]), spec, new RunProgress(), cts.Token);
+        await rig.Gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => ladder);
+    }
+
+    [Fact]
+    public async Task H1_an_accepted_insert_that_lands_after_the_cancel_looked_is_deleted_by_name_while_the_label_listing_lags()
+    {
+        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false);
+        gcp.LabelListingBlind = true;
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-h1");
+        await CancelAnAcceptedCreateAsync(rig, "job-h1");
+
+        await rig.Canceller.CancelAsync("job-h1", CancellationToken.None);
+        (await gcp.GetVmAsync("deg-job-h1", ZoneA, CancellationToken.None)).ShouldBeNull("nothing had landed when the cancel looked");
+        await gcp.LandAcceptedCreatesAsync();
+
+        var outcome = await rig.NextOutcomeAsync();
+        outcome.State.ToString().ShouldBe("Deleted", "the create task ended Canceled, yet Compute made the VM: it must still be found by its name and deleted");
+        (await gcp.GetVmAsync("deg-job-h1", ZoneA, CancellationToken.None)).ShouldBeNull("the VM billed until maxRunDuration");
+        await WaitForAsync(() => rig.LastRow("job-h1").ErrorDetail?.Contains("deleted", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task H1_an_accepted_insert_that_exists_when_the_cancel_looks_is_deleted_by_the_cancel_itself_even_with_a_blind_listing()
+    {
+        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: true);
+        gcp.LabelListingBlind = true;
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-h1b");
+        await CancelAnAcceptedCreateAsync(rig, "job-h1b");
+
+        await rig.Canceller.CancelAsync("job-h1b", CancellationToken.None);
+
+        (await gcp.GetVmAsync("deg-job-h1b", ZoneA, CancellationToken.None)).ShouldBeNull("the create was cancelled on the client side yet the VM exists: the cancel must find it by name");
+        rig.LastRow("job-h1b").Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task H1_a_create_that_ended_Canceled_and_never_made_a_VM_is_said_to_have_made_none_only_after_a_by_name_look_finds_nothing()
+    {
+        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false);
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(300);
+        await rig.SeedRowAsync("job-h1c");
+        await CancelAnAcceptedCreateAsync(rig, "job-h1c");
+        await rig.Canceller.CancelAsync("job-h1c", CancellationToken.None);
+
+        var outcome = await rig.NextOutcomeAsync();
+
+        outcome.State.ToString().ShouldBe("CreateFailed");
+        gcp.DeleteAttempts.ShouldBeEmpty("nothing existed to delete");
+    }
+
+    [Fact]
+    public async Task M1_a_later_attempt_of_the_same_job_in_the_SAME_zone_keeps_the_VM_the_earlier_cancelled_create_made()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-m1");
+        await GiveUpOnABlockedCreateAsync(rig, "job-m1", ZoneA);
+        await rig.Canceller.CancelAsync("job-m1", CancellationToken.None);
+
+        var spec = Spec("job-m1");
+        var attempt = rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m1", spec, zones: [ZoneA]), spec, new RunProgress(), CancellationToken.None);
+        await gcp.WhenCreatesEnteredAsync(2); // the new attempt has asked Compute for the same name in the same zone
+        gcp.ReleaseCreate();
+        (await attempt.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Success.ShouldBeTrue();
+        var outcome = await rig.NextOutcomeAsync();
+
+        outcome.State.ToString().ShouldBe("Superseded", "the VM now belongs to the newer attempt");
+        (await gcp.GetVmAsync("deg-job-m1", ZoneA, CancellationToken.None)).ShouldNotBeNull("the new attempt's VM was deleted by the earlier cancel's clean-up");
+        gcp.DeleteAttempts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task M2_a_failing_by_name_look_never_skips_the_delete_of_a_VM_the_label_listing_found_and_does_not_fail_the_cancel()
+    {
+        var gcp = new FakeGcp().WithDeleteOfMissingVmNotFound();
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-m2");
+        var spec = Spec("job-m2");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 1000);
+
+        await rig.Canceller.CancelAsync("job-m2", CancellationToken.None);
+
+        gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
+        (await gcp.GetVmAsync("deg-job-m2", ZoneA, CancellationToken.None)).ShouldBeNull("the VM the label listing found was left because a by-name look failed");
+        rig.LastRow("job-m2").Phase.ShouldBe(JobPhase.Cancelled, "the VM is gone: an unreadable look is not a failed cancel");
+    }
+
+    [Fact]
+    public async Task M2_with_the_label_listing_blind_and_every_by_name_look_failing_the_VM_is_still_deleted_by_name()
+    {
+        var gcp = new FakeGcp().WithDeleteOfMissingVmNotFound();
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-m2b");
+        var spec = Spec("job-m2b");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2b", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+        gcp.LabelListingBlind = true;
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 1000);
+
+        await rig.Canceller.CancelAsync("job-m2b", CancellationToken.None);
+
+        gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
+        (await gcp.GetVmAsync("deg-job-m2b", ZoneA, CancellationToken.None)).ShouldBeNull("an unreadable VM is treated as present: it is deleted by name");
+        rig.LastRow("job-m2b").Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task M2_the_late_watch_deletes_by_name_even_when_every_look_fails()
+    {
+        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false).WithDeleteOfMissingVmNotFound();
+        gcp.LabelListingBlind = true;
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromSeconds(30);
+        await rig.SeedRowAsync("job-m2d");
+        await CancelAnAcceptedCreateAsync(rig, "job-m2d");
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 100000);
+        await rig.Canceller.CancelAsync("job-m2d", CancellationToken.None);
+
+        await gcp.LandAcceptedCreatesAsync();
+        var outcome = await rig.NextOutcomeAsync();
+
+        gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
+        outcome.State.ShouldBe(LateCreateState.Deleted);
+        (await gcp.GetVmAsync("deg-job-m2d", ZoneA, CancellationToken.None)).ShouldBeNull("an unreadable VM is treated as maybe present and deleted by name");
+    }
+
+    [Fact]
+    public async Task M2_an_unreadable_VM_whose_delete_does_nothing_is_never_reported_as_gone()
+    {
+        var gcp = new FakeGcp().WithSilentNoOpDeletes();
+        var rig = new Rig(gcp);
+        rig.Settings.LifecycleTimeout = TimeSpan.FromMilliseconds(50);
+        await rig.SeedRowAsync("job-m2c");
+        var spec = Spec("job-m2c");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2c", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+        gcp.LabelListingBlind = true;
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 1000);
+
+        await rig.Canceller.CancelAsync("job-m2c", CancellationToken.None);
+
+        rig.LastRow("job-m2c").Phase.ShouldBe(JobPhase.Failed, "nobody confirmed the VM gone: an unreadable look is not a gone VM");
+        rig.LastRow("job-m2c").ErrorCode.ShouldBe(RunErrorCodes.CancelFailed);
+    }
+
+    [Fact]
+    public async Task La_a_run_that_ends_terminal_forgets_its_unclaimed_creates_but_never_the_ones_a_cancel_has_claimed()
+    {
+        var rig = new Rig(new FakeGcp());
+        var spec = Spec("job-la");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-la", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+        rig.Provisioner.SentCount.ShouldBe(1, "the create was recorded when it was sent");
+
+        var claimed = rig.Provisioner.ClaimSentCreates("job-la");
+        rig.Provisioner.ForgetPendingRequests("job-la"); // the run's own terminal end, racing the cancel that holds the claim
+
+        claimed.Count.ShouldBe(1);
+        rig.Provisioner.SentCount.ShouldBe(1, "the forget took the snapshot a concurrent cancel was working from");
+        rig.Provisioner.ClaimSentCreates("job-la").ShouldBeEmpty("an entry is handed to exactly one caller");
+        rig.Provisioner.ReleaseSent(claimed[0]);
+        var other = Spec("job-la2");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-la2", other), other, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+        rig.Provisioner.ForgetPendingRequests("job-la2");
+        rig.Provisioner.SentCount.ShouldBe(0, "a run that ended on its own leaks nothing");
+    }
+
+    [Fact]
+    public async Task Lc_the_late_outcome_never_reaches_a_newer_attempts_row()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-lc");
+        await GiveUpOnABlockedCreateAsync(rig, "job-lc");
+        await rig.Canceller.CancelAsync("job-lc", CancellationToken.None);
+        var spec = Spec("job-lc");
+        var attempt = rig.Provisioner.ProvisionAsync(TestInputs.Request("job-lc", spec, zones: [ZoneB]), spec, new RunProgress(), CancellationToken.None);
+        await gcp.WhenCreatesEnteredAsync(2);
+        gcp.ReleaseCreate();
+        (await attempt.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).Success.ShouldBeTrue();
+
+        (await rig.NextOutcomeAsync()).State.ShouldBe(LateCreateState.Deleted);
+
+        (rig.LastRow("job-lc").ErrorDetail ?? string.Empty).ShouldNotContain("was deleted", Case.Sensitive, "the first attempt's clean-up wrote into a row that now belongs to a newer attempt");
+    }
+
+    [Fact]
+    public async Task Lg_a_VM_the_listing_and_the_name_both_show_is_counted_once()
+    {
+        var gcp = new FakeGcp().WithSilentNoOpDeletes();
+        var rig = new Rig(gcp);
+        rig.Settings.LifecycleTimeout = TimeSpan.FromMilliseconds(50);
+        await rig.SeedRowAsync("job-lg");
+        var spec = Spec("job-lg");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-lg", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
+
+        await rig.Canceller.CancelAsync("job-lg", CancellationToken.None);
+
+        rig.LastRow("job-lg").Phase.ShouldBe(JobPhase.Failed);
+        rig.LastRow("job-lg").ErrorDetail.ShouldNotBeNull().ShouldStartWith("1 VM(s)", Case.Sensitive);
     }
 
     private static async Task WaitForAsync(Func<bool> condition)

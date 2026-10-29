@@ -780,6 +780,59 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>Every <see cref="DeleteVmAsync"/> request made so far, in order, whether or not the VM existed or the call was scripted to fail.</summary>
     public IReadOnlyList<(string Name, string Zone)> DeleteAttempts => _deleteAttempts.ToArray();
 
+    /// <summary>
+    /// Issue #938: the gateway shape production has. <see cref="CreateVmAsync"/> blocks until <see cref="ReleaseCreate"/> and HONOURS its token (the caller's cancel ends the task at once,
+    /// as the real gateway's insert POST does), but Compute had already accepted the insert: the VM comes to exist anyway, either at the moment of the cancel
+    /// (<paramref name="landAtCancel"/>) or when a test calls <see cref="LandAcceptedCreatesAsync"/>. <see cref="GetVmAsync"/> sees it; set <see cref="LabelListingBlind"/> for a listing that does not.
+    /// </summary>
+    public FakeGcp WithServerAcceptedCreateThatTheClientCancels(bool landAtCancel)
+    {
+        _createGate = new CreateGate(false) { AcceptOnCancel = true, LandAtCancel = landAtCancel };
+        return this;
+    }
+
+    /// <summary>Makes every create the client cancelled after the server accepted it (<see cref="WithServerAcceptedCreateThatTheClientCancels"/>) come to exist now.</summary>
+    public async Task LandAcceptedCreatesAsync()
+    {
+        while (_createGate is { } gate && gate.Accepted.TryDequeue(out var accepted))
+        {
+            await CreateVmCore(accepted.Spec, accepted.Zone, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private readonly object _gateEntryLock = new();
+    private int _gateEntries;
+    private readonly List<(int Count, TaskCompletionSource Signal)> _gateEntryWaiters = [];
+
+    /// <summary>Completes once <paramref name="count"/> creates have entered the blocked gate (a signal that a later attempt reached its create, so a test needs no sleep).</summary>
+    public Task WhenCreatesEnteredAsync(int count)
+    {
+        lock (_gateEntryLock)
+        {
+            if (_gateEntries >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _gateEntryWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
+    private void NoteGateEntry()
+    {
+        lock (_gateEntryLock)
+        {
+            _gateEntries++;
+            foreach (var waiter in _gateEntryWaiters.Where(w => w.Count <= _gateEntries).ToList())
+            {
+                waiter.Signal.TrySetResult();
+                _gateEntryWaiters.Remove(waiter);
+            }
+        }
+    }
+
     /// <summary>Completes when a blocked <see cref="CreateVmAsync"/> has started waiting.</summary>
     public Task CreateVmEntered => _createGate?.Entered.Task ?? Task.CompletedTask;
 
@@ -790,6 +843,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         public CreateGate(bool ignoreCancellation) => IgnoreCancellation = ignoreCancellation;
 
         public bool IgnoreCancellation { get; }
+
+        public bool AcceptOnCancel { get; init; }
+
+        public bool LandAtCancel { get; init; }
+
+        public System.Collections.Concurrent.ConcurrentQueue<(VmSpec Spec, string Zone)> Accepted { get; } = new();
 
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1029,10 +1088,29 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         gate.Entered.TrySetResult();
+        NoteGateEntry();
         OnCallParked?.Invoke(gate.IgnoreCancellation ? ParkedCall.CreateThatNeverLands : ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         if (gate.IgnoreCancellation)
         {
             await gate.Release.Task.ConfigureAwait(false);
+        }
+        else if (gate.AcceptOnCancel)
+        {
+            try
+            {
+                await gate.Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The client gave up; the server had accepted the insert, so the VM comes to exist regardless.
+                gate.Accepted.Enqueue((spec, zone));
+                if (gate.LandAtCancel)
+                {
+                    await LandAcceptedCreatesAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
         else
         {

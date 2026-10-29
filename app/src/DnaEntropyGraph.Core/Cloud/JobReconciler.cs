@@ -431,6 +431,13 @@ public sealed class JobReconciler
             return VmWant.Leave;
         }
 
+        if (CancelOwnsTheVm(row))
+        {
+            // Issue #938: a cancel deletes the run's VM. One found under a cancelled run's job id (a create Compute accepted after the app stopped looking, or after the app was closed
+            // mid-cancel) is that cancel's to delete, whatever its lifecycle label says: nothing is left worth stopping or keeping.
+            return VmWant.Delete;
+        }
+
         var lifecycle = vm.Labels is not null && vm.Labels.TryGetValue("lifecycle", out var label)
             ? label
             : options is null ? null : CloudJobRequestFactory.LifecycleLabel(options.AfterTask);
@@ -455,6 +462,13 @@ public sealed class JobReconciler
                 return VmWant.Leave;
         }
     }
+
+    /// <summary>
+    /// A run the user cancelled (Cancelled with no code of its own: a cleanup's Stop or Delete is Cancelled under <see cref="RunErrorCodes.StoppedByCleanup"/> / <see cref="RunErrorCodes.DeletedByCleanup"/>, which the user chose),
+    /// or one whose cancel could not confirm its VM gone (<see cref="RunErrorCodes.CancelFailed"/>).
+    /// </summary>
+    private static bool CancelOwnsTheVm(RunRecord row)
+        => (row.Phase == JobPhase.Cancelled && string.IsNullOrEmpty(row.ErrorCode)) || (row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed);
 
     /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read say nothing against it (its job id already matched a row of this installation).</summary>
     private static bool IsOurs(VmDescriptor vm, string installation)

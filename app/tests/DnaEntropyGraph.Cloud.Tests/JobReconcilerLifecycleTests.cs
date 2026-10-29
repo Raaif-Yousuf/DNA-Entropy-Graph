@@ -211,6 +211,38 @@ public class JobReconcilerLifecycleTests
         KeepAliveRows.Select(c => c.Survives).Distinct().Count().ShouldBe(2);
     }
 
+    // Issue #938 (the durable backstop): a create Compute accepted after the app stopped looking, or after the app was closed mid-cancel, leaves a VM under a cancelled run's job id.
+    // The in-process watch dies with the app; the next launch deletes it here, whatever lifecycle label the VM carries.
+    [Theory]
+    [InlineData(AfterTaskAction.Stop, JobPhase.Cancelled, null)]
+    [InlineData(AfterTaskAction.Delete, JobPhase.Cancelled, null)]
+    [InlineData(AfterTaskAction.KeepAlive, JobPhase.Cancelled, null)]
+    [InlineData(AfterTaskAction.Stop, JobPhase.Failed, RunErrorCodes.CancelFailed)]
+    public async Task A_VM_that_appears_under_a_cancelled_runs_job_id_is_deleted_on_the_next_launch(AfterTaskAction after, JobPhase phase, string? code)
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-late", after, phase: phase, tweak: row => row with { ErrorCode = code });
+
+        var outcomes = await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-late")).ShouldBeEmpty("a VM labelled with a cancelled run's job id bills until maxRunDuration unless the launch deletes it");
+        outcomes.ShouldContain(o => o.JobId == "job-late" && o.Action == LifecycleAction.VmDeleted);
+    }
+
+    [Theory]
+    [InlineData(RunErrorCodes.StoppedByCleanup)]
+    [InlineData(RunErrorCodes.DeletedByCleanup)]
+    public async Task A_run_the_user_ended_with_Stop_or_Delete_from_the_exit_window_keeps_its_stopped_VM_as_the_user_chose(string code)
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-cleanup", AfterTaskAction.Stop, phase: JobPhase.Cancelled, tweak: row => row with { ErrorCode = code });
+        await rig.StopAsync("job-cleanup");
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-cleanup")).Single().Status.ShouldBe("STOPPED", "a Cancelled row the user made by choosing Stop is not a cancel's leftover");
+    }
+
     [Fact]
     public async Task A_slow_delete_does_not_expire_under_the_lookup_deadline_and_the_next_VM_is_still_deleted()
     {

@@ -10,29 +10,64 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, Task<bool>>? jobIsFinished = null, IQuotaGateway? quotaGateway = null, Func<RunProgress, CancellationToken, Task<string?>>? bucketLocation = null, Func<RunProgress, string, CancellationToken, Task>? claimZone = null)
 {
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, (string JobId, bool Reuse)> _inflightCreates = new();
 
     /// <summary>
-    /// The creates THIS instance made (never a reuse, which names another run's VM) in the job's current attempt, answered or not. Issue #938: a cancel takes them
-    /// (<see cref="TakeOwnedCreates"/>) to delete what they made by name, and the next attempt of the job starts from an empty list, so nothing here outlives the
-    /// attempt it belongs to. The entries are the real tasks, so a create's answer is read when it is needed and the VM it names is looked at again then, never remembered.
+    /// Issue #938: the creates this instance ASKED Compute to make, recorded at send time, by VM name and zone (never a reuse, which names another run's VM). A cancel claims them
+    /// (<see cref="ClaimSentCreates"/>) and looks each up BY NAME whatever became of the create task, and the late clean-up keeps looking for the ones whose outcome is unknown.
+    /// A run that ends terminal on its own drops the ones nobody claimed (<see cref="ForgetPendingRequests"/>).
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task<VmDescriptor>, string> _ownedCreates = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<SentCreate, byte> _sent = new();
 
-    /// <summary>The creates of the job's current attempt, removed from the list: the caller (a cancel) now owns clearing up after them. Empty when there are none.</summary>
-    public IReadOnlyList<Task<VmDescriptor>> TakeOwnedCreates(string jobId)
+    /// <summary>The job's current attempt number: one per <see cref="ProvisionAsync"/> (a Spot attempt 2, a resume, a run again after a cancel).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _generations = new(StringComparer.Ordinal);
+
+    /// <summary>The newest attempt that created, adopted or reused a VM under a name in a zone. A create's clean-up leaves a VM a NEWER attempt owns.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), long> _nameOwner = new();
+
+    /// <summary>The job's current attempt number (0 before the first); a late clean-up writes to the run's row only while it is still the attempt it belongs to.</summary>
+    public long CurrentGeneration(string jobId) => _generations.TryGetValue(jobId, out var generation) ? generation : 0;
+
+    private long BeginAttempt(string jobId)
     {
-        var taken = new List<Task<VmDescriptor>>();
-        foreach (var (task, owner) in _ownedCreates)
+        var generation = _generations.AddOrUpdate(jobId, 1, (_, old) => old + 1);
+        // The earlier attempts' creates nobody claimed are not this attempt's to clean up; a cancel that did claim them owns them.
+        foreach (var earlier in _sent.Keys.Where(e => e.JobId == jobId && !e.Claimed))
         {
-            if (owner == jobId && _ownedCreates.TryRemove(task, out _))
-            {
-                taken.Add(task);
-            }
+            _sent.TryRemove(earlier, out _);
         }
 
-        return taken;
+        return generation;
     }
+
+    private void NoteOwned(string name, string zone, long generation)
+        => _nameOwner.AddOrUpdate((name, zone), generation, (_, old) => Math.Max(old, generation));
+
+    /// <summary>Records, BEFORE the gateway is called, that this attempt is about to ask Compute for <paramref name="name"/> in <paramref name="zone"/>.</summary>
+    private SentCreate NoteSent(string jobId, string name, string zone)
+    {
+        var generation = CurrentGeneration(jobId);
+        NoteOwned(name, zone, generation);
+        var sent = new SentCreate(jobId, name, zone, generation, () => _nameOwner.TryGetValue((name, zone), out var owner) && owner > generation);
+        _sent[sent] = 0;
+        return sent;
+    }
+
+    /// <summary>
+    /// Takes over the clean-up of the creates the job has sent: the caller (a cancel) looks each up by name and keeps the ones whose outcome is unknown under watch. Claimed ones are
+    /// not dropped by <see cref="ForgetPendingRequests"/>; the caller releases each with <see cref="ReleaseSent"/> when done with it. An entry is handed to exactly one caller.
+    /// </summary>
+    public IReadOnlyList<SentCreate> ClaimSentCreates(string jobId)
+        => _sent.Keys.Where(e => e.JobId == jobId && e.TryClaim()).ToList();
+
+    /// <summary>Forgets a create the clean-up is finished with.</summary>
+    public void ReleaseSent(SentCreate sent) => _sent.TryRemove(sent, out _);
+
+    /// <summary>Tests: how many sent creates are still remembered (none may outlive the run that ended terminal, and a cancel's claimed ones are not dropped by it).</summary>
+    internal int SentCount => _sent.Count;
+
+    /// <summary>True when a create (not a reuse) of the job is still in flight.</summary>
+    public bool HasInflightCreate(string jobId) => _inflightCreates.Any(kv => kv.Value.JobId == jobId && !kv.Value.Reuse);
 
     /// <summary>The GPU machine families (G2 = L4, A2 = A100, A3 = H100); anything else is a CPU smoke VM.</summary>
     public static bool ExpectsGpu(string machineType)
@@ -88,7 +123,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
         // A new attempt of the job (Spot attempt 2, a resume) starts with no creates of an earlier one: those are cleared up by their own cancel or settle (#938).
-        _ = TakeOwnedCreates(request.JobId);
+        var generation = BeginAttempt(request.JobId);
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
         progress.VmAdopted = false;
         if (existing.Count > 0)
@@ -105,6 +140,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             progress.VmName = kept.Name;
             progress.VmAdopted = true;
+            NoteOwned(kept.Name, kept.Zone, generation);
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -168,8 +204,19 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                             // first and records createTimedOut, so it takes the caller's token, not the poller's deadline
                             // token (the same instant, so the poller's would win and hide the abandoned create).
                             progress.VmStartMark = settings.StartClock();
-                            createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
-                            _ownedCreates[createTask] = request.JobId;
+                            // Recorded BEFORE the gateway is called (#938): the cancel looks this name up whatever becomes of the task.
+                            var sent = NoteSent(request.JobId, spec.VmName, zone);
+                            try
+                            {
+                                createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
+                            }
+                            catch (Exception ex)
+                            {
+                                sent.Create = Task.FromException<VmDescriptor>(ex);
+                                throw;
+                            }
+
+                            sent.Create = createTask;
                             state.Create = createTask;
                             var vm = await createTask.WaitAsync(createTimeout, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
                             return new OperationPoll<VmDescriptor>(true, vm, null);
@@ -347,7 +394,12 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public void ForgetPendingRequests(string jobId)
     {
         _ = TakePendingRequests(jobId);
-        _ = TakeOwnedCreates(jobId);
+
+        // Only the creates nobody claimed: a cancel that is clearing up after this job's creates owns the claimed ones, and this must not take them from it.
+        foreach (var unclaimed in _sent.Keys.Where(e => e.JobId == jobId && !e.Claimed))
+        {
+            _sent.TryRemove(unclaimed, out _);
+        }
     }
 
     /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
@@ -756,11 +808,12 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 token =>
                 {
                     progress.VmStartMark = settings.StartClock();
-                    return TrackInflightCreate(request.JobId, () => compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token));
+                    return TrackInflightCreate(request.JobId, () => compute.ReuseVmAsync(spec, chosen.Name, chosen.Zone, token), reuse: true);
                 },
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
+            NoteOwned(started.Name, started.Zone, CurrentGeneration(request.JobId));
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
@@ -770,6 +823,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
             {
                 progress.VmName = adopted.Name;
+                NoteOwned(adopted.Name, adopted.Zone, CurrentGeneration(request.JobId));
                 return ProvisionResult.Ok(adopted.Zone, adopted.Name);
             }
 
@@ -800,26 +854,25 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// <summary>Waits, bounded by <see cref="CloudRunSettings.CreateSettleTimeout"/>, for every create this instance started for the job to land or fail. False when one is still in flight.</summary>
     public async Task<bool> SettleInflightCreatesAsync(string jobId)
     {
-        var pending = _inflightCreates.Where(kv => kv.Value == jobId).Select(kv => kv.Key).ToList();
+        var pending = _inflightCreates.Where(kv => kv.Value.JobId == jobId).Select(kv => kv.Key).ToList();
         if (pending.Count == 0)
         {
             return true;
         }
 
         var all = Task.WhenAll(pending);
-        var winner = await Task.WhenAny(all, Task.Delay(settings.CreateSettleTimeout, settings.TimeProvider)).ConfigureAwait(false);
-        if (winner != all)
+        try
+        {
+            // WaitAsync disposes its timer when the creates finish first (a bare Task.Delay would hold one for the whole settle window).
+            await all.WaitAsync(settings.CreateSettleTimeout, settings.TimeProvider).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
         {
             return false;
         }
-
-        try
-        {
-            await all.ConfigureAwait(false);
-        }
         catch (Exception)
         {
-            // A create that failed made no VM; nothing to wait for or to report.
+            // A create that failed: whether it still made a VM is for the by-name look to say, not this wait.
         }
 
         return true;
@@ -830,10 +883,10 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// completes when the real task does), because the gateway's synchronous part runs before it returns its task: a cancel that looked in
     /// that window found nothing in flight, deleted nothing, and the VM then landed under a Cancelled record (#784).
     /// </summary>
-    private Task<T> TrackInflightCreate<T>(string jobId, Func<Task<T>> start)
+    private Task<T> TrackInflightCreate<T>(string jobId, Func<Task<T>> start, bool reuse = false)
     {
         var placeholder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _inflightCreates[placeholder.Task] = jobId;
+        _inflightCreates[placeholder.Task] = (jobId, reuse);
         Task<T> task;
         try
         {

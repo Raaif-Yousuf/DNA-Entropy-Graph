@@ -17,6 +17,12 @@ internal sealed class CloudRunSettings
     /// </summary>
     public TimeSpan LateCreateReapWindow { get; set; } = TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// Issue #938: after a create ENDED without a VM being seen (it was cancelled, or failed in a way that does not prove Compute refused it), how long the watch keeps looking by name for a
+    /// VM an accepted insert may still make. THEORY (unverified, no live project): an accepted insert shows its instance within seconds, so two minutes is generous.
+    /// </summary>
+    public TimeSpan LateCreateGrace { get; set; } = TimeSpan.FromMinutes(2);
+
     /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Null means nobody is listening (it is still done).</summary>
     public Action<LateCreateOutcome>? OnLateCreate { get; set; }
 
