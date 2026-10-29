@@ -544,9 +544,10 @@ def test_cli_requires_the_core_arguments():
 
 
 def _dead_pid() -> int:
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
+    """A pid no process can have. MEASURED 2026-10-29: the old version (spawn a child, reap it, return its pid) failed in a
+    landing under load because Windows had already handed that pid to a new process, so the "dead" pid read as alive.
+    Windows pids are multiples of 4 well below this; Linux caps pid_max at 2**22."""
+    return 0x7FFFFFFC
 
 
 def _write_lock(world: World, name: str, pid: int) -> None:
