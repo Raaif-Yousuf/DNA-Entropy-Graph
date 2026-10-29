@@ -66,6 +66,7 @@ CULTURE = re.compile(r"^(?:System\.Globalization\.)?CultureInfo\.(?:CurrentCultu
 KEY_ARG = re.compile(
     r'^(?:(?:[A-Za-z_]\w*\.)*|\((?:[^()]|\([^()]*\))*\)\.)GetString\(\s*(?:"([^"\\]*)"|([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+))\s*\)$'
 )
+KEY_COND_ARG = re.compile(r"^(?:(?:[A-Za-z_]\w*\.)*|\((?:[^()]|\([^()]*\))*\)\.)GetString\((.+)\)$", re.DOTALL)
 KEY_VAR_ARG = re.compile(r"^(?:[A-Za-z_]\w*\.)*GetString\(\s*([A-Za-z_]\w*)\s*\)$")
 LITERAL_KEY = re.compile(r'^"([^"\\]*)"$')
 DOTTED_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
@@ -475,6 +476,37 @@ def _literal_keys(arg: str, consts: dict[str, set[str]]) -> list[str] | None:
     return left + right if left is not None and right is not None else None
 
 
+def _get_string_conditional_keys(arg: str, consts: dict[str, set[str]]) -> list[str] | None:
+    """Every key of `<recv>.GetString(c ? "A" : "B")` (nested ternaries too), else None.
+
+    None when the argument is not that shape, when the parenthesis closing GetString( is not the last
+    character (`GetString(c ? "A" : "B").Trim()`), or when any branch is not a literal/const key.
+    """
+    m = KEY_COND_ARG.match(arg)
+    if not m:
+        return None
+    inner = m.group(1)
+    depth = 0
+    i = 0
+    while i < len(inner):
+        c = inner[i]
+        if c == '"':
+            i = _skip_string(inner, i)
+            continue
+        if c == "'":
+            i = _skip_char(inner, i)
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                return None
+        i += 1
+    if depth != 0 or _ternary_split(inner.strip()) is None:
+        return None
+    return _literal_keys(inner.strip(), consts)
+
 def _literal_key(arg: str, consts: dict[str, set[str]]) -> str | None:
     """The resw key of a bare `"Key"` or `Ns.Class.Const` argument, else None (also None when ambiguous)."""
     lit = LITERAL_KEY.match(arg)
@@ -622,6 +654,10 @@ def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) 
                 check_template("literal " + literal[:30], literal, rest, f.rel, line)
                 continue
             key_match = KEY_ARG.match(args[0])
+            if not key_match and not spread and (cond_keys := _get_string_conditional_keys(args[0], consts)) is not None:
+                for key in cond_keys:
+                    check(key, rest, f.rel, line)
+                continue
             if not key_match or spread:
                 dynamic.setdefault(f.rel, []).append(line)
                 continue

@@ -307,7 +307,7 @@ product code only does not remove that flow source: MEASURED 2026-10-29: 5 open 
 rule, the 5 open ones all in product code. DECISION (agent-made, reversible): the rule is excluded in
 `codeql-config.yml` and `scripts/check_format_arity.py` replaces it.
 `scripts/check_format_arity.py` reads the real template and checks (scope: `app/src` and `app/tools`, never
-obj/bin): every `string.Format(..., GetString("Key" | Ns.Class.Const), args)`, every `string.Format` with a literal
+obj/bin): every `string.Format(..., GetString("Key" | Ns.Class.Const | cond ? K1 : K2), args)` (a conditional key is checked against every branch; a branch that is not a key stays dynamic), every `string.Format` with a literal
 template, every call of a detected wrapper helper `Name(string key, params object[] args)` (own file and `partial`
 siblings; conditional keys check each branch), that every placeholder template is referenced by a literal or a used
 const, and that no file ends inside a string or comment (LEX-DESYNC). Stays dynamic, with exact counts in

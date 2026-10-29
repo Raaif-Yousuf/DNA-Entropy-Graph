@@ -453,3 +453,48 @@ def test_same_class_and_const_name_in_two_namespaces_is_ambiguous_unless_qualifi
         extra_cs='namespace N2;\nstatic class Keys { public const string Gpu = "B"; }',
     )
     assert _codes(qualified) == [("TOO-MANY-ARGS", "A")]
+
+
+def _tern(tmp: Path, resw: str, cond_args: str = "a, b") -> Path:
+    cs = f'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(down ? "A" : "B"), {cond_args});'
+    return _tree(tmp, resw, cs)
+
+
+def _finding_codes(root: Path) -> list[str]:
+    return [f.code for f in cfa.scan_repo(root, known_dynamic={}).findings]
+
+
+def test_get_string_conditional_of_two_keys_with_matching_arity_is_clean_and_checks_both(tmp_path):
+    root = _tern(tmp_path, _resw(A="x {0} {1}", B="y {1} {0}"))
+    assert _codes(root) == []
+    res = cfa.scan_repo(root, known_dynamic={})
+    assert res.checked == 2
+    assert res.skipped == 0
+
+
+def test_get_string_conditional_reports_the_branch_whose_arity_differs(tmp_path):
+    assert _codes(_tern(tmp_path, _resw(A="x {0} {1}", B="y {0} {1} {2}"))) == [("TOO-FEW-ARGS", "B")]
+    assert _codes(_tern(tmp_path / "t2", _resw(A="x {0}", B="y {0} {1}"))) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_get_string_conditional_with_a_const_branch_and_a_missing_key(tmp_path):
+    copy = 'static class RCopy { public const string Up = "A"; }'
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(down ? RCopy.Up : "Nope"), a);'
+    assert _codes(_tree(tmp_path, _resw(A="x {0}"), cs, copy)) == [("MISSING-KEY", "Nope")]
+
+
+def test_get_string_conditional_with_a_non_key_branch_stays_dynamic(tmp_path):
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(down ? "A" : someVar), a);'
+    root = _tree(tmp_path, _resw(A="x {0}"), cs)
+    assert cfa.scan_repo(root, known_dynamic=None).skipped == 1
+    assert _finding_codes(root) == ["UNEXPECTED-DYNAMIC"]
+
+
+def test_get_string_conditional_nested_checks_every_branch(tmp_path):
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(p ? "A" : q ? "B" : "C"), a);'
+    assert _codes(_tree(tmp_path, _resw(A="{0}", B="{0}", C="{0} {1}"), cs)) == [("TOO-FEW-ARGS", "C")]
+
+
+def test_get_string_call_with_a_chained_member_after_a_conditional_is_not_a_key(tmp_path):
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString(p ? "A" : "B").Trim(), a);'
+    assert _finding_codes(_tree(tmp_path, _resw(A="{0}", B="{0}"), cs)) == ["UNEXPECTED-DYNAMIC"]
