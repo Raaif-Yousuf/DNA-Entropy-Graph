@@ -1,0 +1,154 @@
+using DnaEntropyGraph.Core.Tracks;
+using DnaEntropyGraph.Presentation.Services;
+using DnaEntropyGraph.Presentation.ViewModels;
+using NSubstitute;
+using Shouldly;
+using Xunit;
+
+namespace DnaEntropyGraph.Presentation.Tests;
+
+/// <summary>Issue #552: the sortable gene table on the Results page.</summary>
+public sealed class ResultsGeneTableTests
+{
+    private static GeneRecord Gene(string id, double mean, long begin = 1, long length = 30, string contig = "c1")
+        => new(contig, id, begin, begin + length - 1, "+", length, false, false, mean, mean - 0.1, mean + 0.1, null, 0.25);
+
+    private static IStringResourceProvider Strings()
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        return strings;
+    }
+
+    private static ResultsGeneTable Table(params GeneRecord[] rows) => new("t", rows, Strings());
+
+    private static string[] Ids(ResultsGeneTable t) => [.. t.Rows.Select(r => r.GeneId)];
+
+    [Fact]
+    public void Every_heading_text_comes_from_its_own_column_key_so_the_sort_line_and_the_heading_say_the_same_words()
+    {
+        var t = Table(Gene("a", 1));
+
+        string[] headings = [t.ContigHeader, t.GeneHeader, t.BeginHeader, t.EndHeader, t.StrandHeader, t.LengthHeader, t.MeanHeader, t.MinHeader, t.MaxHeader, t.LowHeader];
+
+        headings.ShouldBe([.. ResultsCopy.GeneColumnKeys.Select(ResultsCopy.GeneColumnKey)]);
+        ResultsCopy.GeneColumnKeys.Count.ShouldBe(10);
+        headings.Distinct().Count().ShouldBe(10);
+    }
+
+    [Fact]
+    public void Rows_start_in_the_files_own_order()
+        => Ids(Table(Gene("b", 1.5), Gene("a", 0.5), Gene("c", 1.0))).ShouldBe(["b", "a", "c"]);
+
+    [Fact]
+    public void Sorting_by_mean_entropy_is_numeric_ascending_first_then_descending()
+    {
+        // 10.0 would sort before 9.0 if the column were sorted as text.
+        var t = Table(Gene("big", 1.9), Gene("low", 0.25), Gene("mid", 1.25));
+
+        t.SortByCommand.Execute("mean");
+        Ids(t).ShouldBe(["low", "mid", "big"]);
+
+        t.SortByCommand.Execute("mean");
+        Ids(t).ShouldBe(["big", "mid", "low"]);
+    }
+
+    [Fact]
+    public void Sorting_by_length_compares_numbers_not_text()
+    {
+        var t = Table(Gene("nine", 1, length: 9), Gene("ten", 1, length: 10), Gene("hundred", 1, length: 100));
+
+        t.SortByCommand.Execute("length");
+
+        Ids(t).ShouldBe(["nine", "ten", "hundred"]);
+    }
+
+    [Fact]
+    public void Ties_keep_the_files_order_in_both_directions()
+    {
+        var t = Table(Gene("a", 1), Gene("b", 1), Gene("c", 0.5));
+
+        t.SortByCommand.Execute("mean");
+        Ids(t).ShouldBe(["c", "a", "b"]);
+        t.SortByCommand.Execute("mean");
+        Ids(t).ShouldBe(["a", "b", "c"]);
+    }
+
+    [Fact]
+    public void Choosing_another_column_starts_ascending_again()
+    {
+        var t = Table(Gene("b", 1, begin: 50), Gene("a", 2, begin: 10));
+        t.SortByCommand.Execute("mean");
+        t.SortByCommand.Execute("mean");
+
+        t.SortByCommand.Execute("begin");
+
+        Ids(t).ShouldBe(["a", "b"]);
+        t.SortSummary.ShouldBe(ResultsCopy.GenesSortedAscending, "another column starts lowest first");
+    }
+
+    [Fact]
+    public void An_unknown_column_changes_nothing()
+    {
+        var t = Table(Gene("b", 2), Gene("a", 1));
+
+        t.SortByCommand.Execute("nonsense");
+
+        Ids(t).ShouldBe(["b", "a"]);
+    }
+
+    [Fact]
+    public void Gene_names_sort_naturally_and_the_same_on_every_language_setting()
+    {
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+            var t = Table(Gene("g10", 1), Gene("g2", 1), Gene("G1", 1), Gene("g02", 1), Gene("g1", 1));
+
+            t.SortByCommand.Execute("gene");
+
+            Ids(t).ShouldBe(["G1", "g1", "g2", "g02", "g10"]);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void A_gene_row_shows_its_numbers_in_bits_to_two_decimals()
+    {
+        var row = Table(Gene("g", 1.256, begin: 10, length: 90)).Rows.Single();
+
+        row.MeanText.ShouldBe("1.26");
+        row.BeginText.ShouldBe("10");
+        row.EndText.ShouldBe("99");
+        row.LengthText.ShouldBe("90");
+    }
+
+    [Fact]
+    public void A_very_long_table_shows_the_first_rows_and_says_where_the_rest_is()
+    {
+        var t = Table([.. Enumerable.Range(0, ResultsGeneTable.MaxRowsShown + 5).Select(i => Gene("g" + i, i))]);
+
+        t.Rows.Count.ShouldBe(ResultsGeneTable.MaxRowsShown);
+        t.IsTruncated.ShouldBeTrue();
+        t.TruncatedNotice.ShouldBe(ResultsCopy.GenesTruncated);
+
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        strings.GetString(ResultsCopy.GenesTruncated).Returns("{0} of {1} genes shown, {2}");
+        strings.GetString(ResultsCopy.GenesOrderFile).Returns("file order");
+        strings.GetString(ResultsCopy.GenesOrderSorted).Returns("sorted by {0}");
+        strings.GetString(ResultsCopy.GeneColumnKey("mean")).Returns("Mean entropy");
+        var worded = new ResultsGeneTable("t", [.. Enumerable.Range(0, ResultsGeneTable.MaxRowsShown + 5).Select(i => Gene("g" + i, i))], strings);
+        worded.TruncatedNotice.ShouldBe("500 of 505 genes shown, file order");
+        worded.SortByCommand.Execute("mean");
+        worded.TruncatedNotice.ShouldBe("500 of 505 genes shown, sorted by Mean entropy");
+
+        t.SortByCommand.Execute("mean");
+        t.SortByCommand.Execute("mean");
+        t.Rows[0].GeneId.ShouldBe("g" + (ResultsGeneTable.MaxRowsShown + 4), "sorting applies to every gene, not only the ones shown");
+    }
+}

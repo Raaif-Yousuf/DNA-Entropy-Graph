@@ -221,6 +221,7 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IShellLauncher, Services.ShellLauncher>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
+        services.AddSingleton<DnaEntropyGraph.Core.Tracks.IGeneTableSource, DnaEntropyGraph.Core.Tracks.GeneTableSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
         services.AddSingleton(new DnaEntropyGraph.Presentation.Services.ResultsExportRoot(() => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory)));
         // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).

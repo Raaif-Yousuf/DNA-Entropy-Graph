@@ -95,7 +95,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         var repository = Substitute.For<IRunRepository>();
         repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { run });
         _source.Load(run.OutputDir!).Returns(Overview("chr1"));
-        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, new ResultsExportRoot(() => exportParent));
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent));
         await vm.LoadAsync(run.JobId, TestContext.Current.CancellationToken);
         return vm;
     }

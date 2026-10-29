@@ -15,7 +15,14 @@ public enum IgvPlanFailure
 }
 
 /// <summary>What to show for one run folder: the JSON <c>load</c> command for bridge.js, or why there is none.</summary>
-public sealed record IgvLoadPlan(IgvPlanFailure Failure, string? RunFolder, string? LoadMessageJson, string? FastaPath = null);
+public sealed record IgvLoadPlan(IgvPlanFailure Failure, string? RunFolder, string? LoadMessageJson, string? FastaPath = null)
+{
+    /// <summary>Smoothed entropy tracks the run has (issue #552), by window. Not in the load command: the viewer adds one when the user switches it on, so the raw track stays primary.</summary>
+    public IReadOnlyList<SmoothedTrackOption> SmoothedTracks { get; init; } = [];
+}
+
+/// <summary>One <c>&lt;name&gt;.entropy.smooth&lt;W&gt;.bedgraph</c> (or <c>.wig</c>) of the run: its window, igv.js format and URL on the run host.</summary>
+public sealed record SmoothedTrackOption(int Window, string Format, string Url);
 
 public static class ViewerLimits
 {
@@ -139,6 +146,8 @@ public static class IgvLoadPlanner
             });
         }
 
+        AddRegionsTrack(tracks, runFolder, stem);
+
         var reference = new Dictionary<string, object>
         {
             ["id"] = stem,
@@ -161,7 +170,48 @@ public static class IgvLoadPlanner
             },
         };
 
-        return new IgvLoadPlan(IgvPlanFailure.None, runFolder, JsonSerializer.Serialize(message));
+        return new IgvLoadPlan(IgvPlanFailure.None, runFolder, JsonSerializer.Serialize(message)) { SmoothedTracks = SmoothedTracksOf(runFolder, stem) };
+    }
+
+    // Issue #552: the region caller writes both; the BED is the plain one, so it wins and at most one track is drawn.
+    private static void AddRegionsTrack(List<object> tracks, string folder, string stem)
+    {
+        foreach (var ext in new[] { "bed", "gff3" })
+        {
+            var file = $"{stem}.regions.{ext}";
+            if (File.Exists(Path.Combine(folder, file)))
+            {
+                tracks.Add(new Dictionary<string, object>
+                {
+                    ["type"] = "annotation",
+                    ["format"] = ext,
+                    ["name"] = "Entropy regions",
+                    ["url"] = Url(file),
+                });
+                return;
+            }
+        }
+    }
+
+    // A window is the digits between "smooth" and the extension; anything else that merely starts alike is not the worker's file.
+    private static List<SmoothedTrackOption> SmoothedTracksOf(string folder, string stem)
+    {
+        var prefix = $"{stem}.entropy.smooth";
+        var byWindow = new SortedDictionary<int, SmoothedTrackOption>();
+        foreach (var ext in EntropyExtensions)
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, prefix + "*." + ext, SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(path);
+                var digits = name[prefix.Length..^(ext.Length + 1)];
+                if (digits.Length > 0 && digits.All(char.IsAsciiDigit) && int.TryParse(digits, out var window) && window > 0)
+                {
+                    byWindow.TryAdd(window, new SmoothedTrackOption(window, ext, Url(name)));
+                }
+            }
+        }
+
+        return [.. byWindow.Values];
     }
 
     private static IgvLoadPlan Fail(IgvPlanFailure failure, string folder) => new(failure, folder, null);
