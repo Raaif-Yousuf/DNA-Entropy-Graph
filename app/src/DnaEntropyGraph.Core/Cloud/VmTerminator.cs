@@ -225,15 +225,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return error;
     }
 
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken, Action<VmDescriptor>? foundVm = null, IReadOnlyList<VmDescriptor>? landed = null)
+    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken, Action<VmDescriptor>? foundVm = null)
     {
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
-        if (landed is { Count: > 0 })
-        {
-            // Issue #109 round 8: a VM a create ANSWERED is named by that answer; a label listing that lags must not hide it from the delete or from the booking.
-            owned = [.. owned, .. landed.Where(l => !owned.Any(o => string.Equals(o.Name, l.Name, StringComparison.Ordinal) && string.Equals(o.Zone, l.Zone, StringComparison.Ordinal)))];
-        }
-
         // Issue #109: each VM the delete finds is an observation of that VM (VmSpan), whether or not the create that made it was settled.
         foreach (var seen in owned)
         {

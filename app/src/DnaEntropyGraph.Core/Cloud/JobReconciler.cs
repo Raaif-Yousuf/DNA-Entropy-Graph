@@ -754,7 +754,7 @@ public sealed class JobReconciler
                 var code = RunErrorCodes.ForWorkerStatusCode(workerCode)
                     ?? (lived is { } age && age + LimitHeartbeatWindow >= limit ? RunErrorCodes.RunTimeLimit : RunErrorCodes.VmUnhealthy);
                 // Issue #109: the VM is gone, so it billed until the last time anything knew it was alive (VmSpan), not until the app came back.
-                await _rows.StampVmSpanAsync(row.JobId, null, VmSpan.EndOfGone(row.VmReadyAt, limit, row, lastAlive)).ConfigureAwait(false);
+                await _rows.StampVmSpanAsync(row.JobId, null, VmSpan.EndOfGone(row.VmReadyAt, limit, _time.GetUtcNow(), row, lastAlive)).ConfigureAwait(false);
                 return await FailAsync(row, underway, ReattachAction.FailedVmMissing, code, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
             // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new

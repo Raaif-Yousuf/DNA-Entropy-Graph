@@ -214,6 +214,8 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 {
     public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => inner.GetAllAsync(cancellationToken);
 
+    public Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken) => inner.GetAsync(jobId, cancellationToken);
+
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
         var (stamped, quote) = Quote(run);

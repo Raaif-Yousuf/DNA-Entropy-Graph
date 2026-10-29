@@ -34,8 +34,33 @@ internal sealed class InMemoryRunRepository : IRunRepository
     private Func<int, CancellationToken, Task>? _beforeGetAll;
     private int _getAllCalls;
 
+    /// <summary>How many times the whole table was read (every <see cref="GetAllAsync"/>), so a test can prove a write path reads one job's row instead.</summary>
+    public int GetAllCount => Volatile.Read(ref _getAllCount);
+
+    private int _getAllCount;
+
+    /// <summary>The tokens the per-job reads (<see cref="GetAsync"/>) were given, in order.</summary>
+    public ConcurrentQueue<CancellationToken> GetTokens { get; } = new();
+
+    public Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetTokens.Enqueue(cancellationToken);
+        RunRecord? latest = null;
+        foreach (var run in _runs)
+        {
+            if (run.JobId == jobId && (latest is null || run.CreatedUtc >= latest.CreatedUtc))
+            {
+                latest = run;
+            }
+        }
+
+        return Task.FromResult(latest);
+    }
+
     public async Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _getAllCount);
         var call = Interlocked.Increment(ref _getAllCalls);
         if (BeforeGetAll is { } hook)
         {

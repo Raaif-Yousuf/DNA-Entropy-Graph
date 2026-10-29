@@ -555,13 +555,15 @@ exercise.
  deleted itself after the worker finished) the last time the app knew it alive, the later of the row's `LastHeartbeatAt`,
  the result's `finishedAt` and the status file's `updatedAt` (worker clock; THEORY (unverified): within seconds of the
  platform's); a VM still running ends when the run does. A gone VM with no evidence at all books its start plus the run's own
- limit (its maxRunDuration; Compute cannot have run it longer), never "now". The cloud runner writes `LastHeartbeatAt` on the row when
- it sees a fresh worker heartbeat (at most once a minute), so a run killed with the app has a sign of life to book to. END is first-wins
+ limit (its maxRunDuration, the run limit plus the 15 minute grace: the one limit the ledger clamps to; Compute cannot have run it longer),
+ and never past now (a VM that died 5 min in and is found 10 min after it started books about 10 min). The cloud runner writes the worker's own
+ heartbeat time (`updatedAt`) to `LastHeartbeatAt` when it sees a new worker heartbeat (at most once a minute, from one row read, with the run's
+ cancellation token, and only when newer than the one recorded, so a stale status.json found on a resume does not move it), so a run killed with
+ the app has a sign of life to book to. END is first-wins
  for a run: a stopped VM the run adopted and restarted keeps the stop first observed; a cancel that finds several VMs books the earliest
  start to the latest end. A VM that self-deleted at +20 min and is resumed 10 h later books about 20 min, not 10 h.
- A create answered `AlreadyExists` adopts the VM and books its start. A cancel remembers what each create ANSWERED (the VM's name and
- start) and deletes and books it by that name, so a label listing that lags cannot hide it; a create that answers after the cancel stopped
- waiting is deleted by its own name the moment it answers (unbooked: the row is already terminal). A create that lands only after the run ended books nothing (the row never learned a start); the VM carries the
+ A create answered `AlreadyExists` adopts the VM and books its start. A cancel books the VMs its label lookup found.
+ A create that lands only after the run ended books nothing (the row never learned a start); the VM carries the
  standard labels, so the label-based left-running scan and the Cloud page surface it.
  Local-engine runs (`Target` is not `cloud`) rent no VM and book nothing. An in-progress row
  accrues at most to its `MaxRunDurationMinutes` plus the 15 minute grace (the VM cannot outlive
