@@ -194,7 +194,7 @@ public class CloudAuditTests
     [Fact]
     public async Task A_user_cancel_through_GatewayCalls_reaches_the_call_it_abandoned_and_is_recorded_as_cancelled()
     {
-        // The inner call ends ONLY when the token it was handed (GatewayCalls' linked token) is cancelled, so the audit entry exists only if the cancel reached it (by the link or by the abandon helper: both are tested below).
+        // The inner call ends ONLY when the token it was handed (GatewayCalls' linked token) is cancelled, so the audit entry exists only if the cancel reached it (by the link or by the abandon helper; this test passes through either one and does not tell which).
         var log = new SignallingLog();
         using var cts = new CancellationTokenSource();
         var inner = Substitute.For<IComputeGateway>();
@@ -236,7 +236,7 @@ public class CloudAuditTests
                 return 0;
             }, cts.Token);
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        // MEASURED 2026-10-29: 13 of 13 runs, the user's own CancelAsync returns normally. THEORY (unverified): the wait unwinds first, so the helper (not the link) runs the callee's throwing callback.
+        // MEASURED 2026-10-29: 0 of 200 runs (under a concurrent Presentation.Tests run) saw an AggregateException out of the user's own CancelAsync. THEORY (unverified): the wait unwinds first, so the helper (not the link) runs the callee's throwing callback.
         await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => pending);

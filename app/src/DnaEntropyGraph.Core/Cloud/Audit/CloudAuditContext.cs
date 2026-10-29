@@ -36,11 +36,11 @@ public static class CloudAuditContext
     /// <summary>
     /// The one way to give up on a call started by <see cref="StartUnderDeadline{T}"/> (a deadline passed, or the caller cancelled while the wait unwound before the link
     /// passed it on): tells the call to stop now, and observes a fault it may still raise later, since nobody is waiting to see it. Never throws: a callback the callee
-    /// registered on its token can throw, and <see cref="CancellationTokenSource.CancelAsync"/> would then raise an <see cref="AggregateException"/> (MEASURED 2026-10-29) that
+    /// registered on its token can throw, and <see cref="CancellationTokenSource.CancelAsync"/> would then raise an <see cref="AggregateException"/> (MEASURED 2026-10-29: CancelAsync on a source with a directly registered throwing callback, the shape of the helper's own swallow test) that
     /// REPLACES the cancellation or timeout the caller's filters look for. The scope is narrow: this protects the app's OWN abandon of a call. It does not make a throwing callee
     /// callback harmless in general: when the deadline fires, the callback also runs on the timer's thread through the linked source, where nothing here can catch it
-    /// (MEASURED 2026-10-29: a callback that throws on a timed-out call ended the test host with an unhandled AggregateException), and THEORY (unverified): it can surface out of the
-    /// user's own Cancel() if the link relays before the wait unwinds (not seen in 13 runs).
+    /// (MEASURED 2026-10-29: a test that gave GatewayCalls a 200 ms CallTimeout and a call that registered a throwing callback on its token and then awaited it: 3 of 3 runs ended the test host with an unhandled AggregateException; no committed test runs that shape, because it ends the host), and THEORY (unverified): it can surface out of the
+    /// user's own Cancel() if the link relays before the wait unwinds (MEASURED 2026-10-29: 0 of 200 runs of each user-cancel test, run under a concurrent Presentation.Tests run).
     /// </summary>
     public static async Task StopAbandonedAsync(CancellationTokenSource deadline, Task? abandoned)
     {
