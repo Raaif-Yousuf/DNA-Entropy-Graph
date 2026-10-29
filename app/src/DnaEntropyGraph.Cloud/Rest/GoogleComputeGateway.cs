@@ -91,7 +91,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 return insert.ExecuteAsync(token);
             },
             cancellationToken).ConfigureAwait(false);
-        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        // Issue #92: a queued (flex-start) insert stays pending until capacity is found, so its poll is bounded by the wait it asked for plus a margin.
+        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken, deadline: spec.FlexStart ? spec.FlexStartCreateBound : null).ConfigureAwait(false);
 
         // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
         // retryable, and a retry lands on 409 alreadyExists if the VM exists. The runner lists by label before trying another zone.
@@ -644,7 +645,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>Polls the zone operation until <c>DONE</c> and throws its error. <paramref name="goneIsDone"/>: a stop or delete whose operation says the VM is not found has nothing left to do.</summary>
-    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false)
+    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false, TimeSpan? deadline = null)
     {
         if (!IsDone(operation))
         {
@@ -658,7 +659,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                         : await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
                     return new OperationPoll<bool>(IsDone(latest), true, null);
                 },
-                _options.OperationDeadline,
+                deadline ?? _options.OperationDeadline,
                 cancellationToken,
                 _options.Delay,
                 _options.TimeProvider).ConfigureAwait(false);
@@ -744,6 +745,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 }
 
 /// <summary>
+/// Issue #92: the instance resource plus the <c>params</c> field. MEASURED 2026-10-16: <c>Google.Apis.Compute.v1</c> 1.77.0.4282 declares
+/// <c>InstanceParams</c> (with <c>RequestValidForDuration</c>, "relative deadline for waiting for capacity") but its <c>Instance</c> class has no <c>Params</c>
+/// property, so the field is added here and serialized by name. THEORY (unverified, no live project): the v1 insert accepts <c>params.requestValidForDuration</c>.
+/// </summary>
+internal sealed class ComputeInstanceBody : ComputeData.Instance
+{
+    [Newtonsoft.Json.JsonProperty("params", NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+    public ComputeData.InstanceParams? Params { get; set; }
+}
+
+/// <summary>
 /// The shape of the VM a <see cref="VmSpec"/> becomes: the parts <see cref="VmSpec"/> does not carry (boot image, disk, network)
 /// are fixed here, in one place. ONE image family for every machine type: <c>worker/vm/startup.sh</c> needs docker, python3,
 /// curl and a writable root, which the deep learning VM image ships and Container-Optimized OS does not (DECISION, agent-made,
@@ -785,18 +797,23 @@ internal static class ComputeVmShape
         AutomaticRestart = false,
         // Issue #91. Null for an on-demand VM (Compute's default, STANDARD). THEORY (unverified, no live project): SPOT is accepted together with
         // maxRunDuration and instanceTerminationAction=DELETE on a GPU VM with onHostMaintenance=TERMINATE; docs/ToTest.md carries the row.
-        ProvisioningModel = spec.Spot ? "SPOT" : null,
+        ProvisioningModel = spec.FlexStart ? "FLEX_START" : spec.Spot ? "SPOT" : null,
     };
 
-    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
+    public static ComputeInstanceBody Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
     {
-        return new ComputeData.Instance
+        return new ComputeInstanceBody
         {
             Name = spec.VmName,
             MachineType = $"zones/{zone}/machineTypes/{spec.MachineType}",
             Labels = labels.ToDictionary(p => p.Key, p => p.Value),
             Metadata = new ComputeData.Metadata { Items = MetadataItems(spec) },
             Scheduling = Scheduling(spec),
+            // Issue #92: the relative deadline for waiting for capacity (Compute's own doc for this field: "Relevant only for Instances.Insert API").
+            // THEORY (unverified, no live project): FLEX_START with this field, maxRunDuration, DELETE and onHostMaintenance=TERMINATE is accepted for a GPU VM; docs/ToTest.md carries the row.
+            Params = spec.FlexStart && spec.FlexStartWait is { } wait
+                ? new ComputeData.InstanceParams { RequestValidForDuration = new ComputeData.Duration { Seconds = (long)Math.Ceiling(wait.TotalSeconds) } }
+                : null,
             Disks =
             [
                 new ComputeData.AttachedDisk

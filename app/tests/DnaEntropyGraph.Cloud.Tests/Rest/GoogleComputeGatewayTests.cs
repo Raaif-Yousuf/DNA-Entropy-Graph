@@ -1132,4 +1132,42 @@ public class GoogleComputeGatewayTests
 
         rig.Handler.Requests.ShouldBeEmpty();
     }
+
+    // ---- Issue #92: the wire body and the shared bound, through the real gateway ----
+
+    private static VmSpec FlexSpec(TimeSpan wait, TimeSpan margin) => Spec() with { FlexStart = true, FlexStartWait = wait, FlexStartMargin = margin };
+
+    [Fact]
+    public async Task A_flex_start_create_sends_the_provisioning_model_and_the_wait_for_capacity_in_the_insert_body()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Post, Instances, 200, Op("PENDING"))
+            .Returns(Get, OperationPath, 200, Op("DONE"))
+            .Returns(Get, Instance, 200, Vm("deg-job1", Zone, "PROVISIONING"));
+
+        await rig.Gateways.Compute.CreateVmAsync(FlexSpec(TimeSpan.FromHours(2), TimeSpan.FromMinutes(5)), Zone, CancellationToken.None);
+
+        using var body = JsonDocument.Parse(rig.Handler.To(Post, Instances).Single().Body);
+        body.RootElement.GetProperty("scheduling").GetProperty("provisioningModel").GetString().ShouldBe("FLEX_START");
+        body.RootElement.GetProperty("scheduling").GetProperty("instanceTerminationAction").GetString().ShouldBe("DELETE");
+        body.RootElement.GetProperty("params").GetProperty("requestValidForDuration").GetProperty("seconds").GetInt64().ShouldBe(7200);
+    }
+
+    [Fact]
+    public async Task A_queued_create_is_polled_for_the_specs_own_bound_not_the_ordinary_operation_deadline()
+    {
+        // The ordinary deadline is two minutes (the harness default); the spec's bound is 4 s. Eight RUNNING answers are scripted: only the bound can end the poll before they run out.
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler.Returns(Post, Instances, 200, Op("PENDING"));
+        for (var i = 0; i < 8; i++)
+        {
+            rig.Handler.Returns(Get, OperationPath, 200, Op("RUNNING"));
+        }
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(FlexSpec(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(1)), Zone, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(OperationPoller.TimeoutCode);
+        rig.Delays.Count.ShouldBeLessThan(8, "the poll ended at the 4 s bound, before the scripted answers ran out");
+    }
 }
