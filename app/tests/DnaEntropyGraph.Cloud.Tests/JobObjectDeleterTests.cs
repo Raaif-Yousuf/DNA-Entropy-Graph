@@ -4,6 +4,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -41,6 +42,41 @@ public sealed class JobObjectDeleterTests
 
     [Fact]
     public void Is_available_because_a_real_gateway_is_behind_it() => Make().IsAvailable.ShouldBeTrue();
+
+    [Fact]
+    public async Task A_failed_sweep_whose_read_back_also_fails_surfaces_the_classified_sweep_failure_not_a_partial_delete_of_unknown_size()
+    {
+        // Issue #262 review M2: the read-back swallows its own failure as "unknown"; that must not hide the real, classified error.
+        var storage = NSubstitute.Substitute.For<IStorageGateway>();
+        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult(new PrefixUsage(3, 30)),
+            Task.FromException<PrefixUsage>(new IOException("read-back failed")));
+        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
+        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<int>(new CloudOperationException(new CloudError("FORBIDDEN", 403, "scripted"), CloudErrorKind.Permission)));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => new JobObjectDeleter(storage, () => Installation).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+    }
+
+    [Fact]
+    public async Task A_sweep_that_did_not_fail_but_whose_read_back_does_is_still_a_partial_delete_of_unknown_size()
+    {
+        // No failure to surface: the delete was accepted, the count after it is unknown, so it is not reported as done.
+        var storage = NSubstitute.Substitute.For<IStorageGateway>();
+        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult(new PrefixUsage(3, 30)),
+            Task.FromException<PrefixUsage>(new IOException("read-back failed")));
+        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
+        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
+
+        var ex = await Should.ThrowAsync<PartialCloudDeleteException>(() => new JobObjectDeleter(storage, () => Installation).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Remaining.ShouldBeNull();
+    }
 
     [Fact]
     public async Task Removes_every_object_under_this_jobs_prefix_and_keeps_siblings_cache_and_config()

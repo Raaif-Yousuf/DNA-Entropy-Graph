@@ -119,6 +119,13 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         }
 
         var left = await CountLeftAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
+        if (left is null && failure is not null)
+        {
+            // The count after the sweep could not be read, but the sweep itself failed with a real, classified error: that is what the person acts on.
+            // A partial delete of unknown size would lose it.
+            failure.Throw();
+        }
+
         if (left == 0)
         {
             // Gone, even if the call that did it threw afterwards (a dropped connection on the last reply).
