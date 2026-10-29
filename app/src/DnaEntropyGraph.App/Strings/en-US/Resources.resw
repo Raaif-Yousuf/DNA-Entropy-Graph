@@ -280,6 +280,9 @@
   <data name="RunError_worker_identity_not_applied" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
   </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
+  </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
   </data>
@@ -567,18 +570,6 @@
   </data>
   <data name="NewRunStatusPasteFailed" xml:space="preserve">
     <value>We could not save the pasted sequence. Check that your disk has free space, then choose Add sequence again.</value>
-  </data>
-  <data name="NewRunNameTemplate.Header" xml:space="preserve">
-    <value>Run name</value>
-  </data>
-  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
-    <value>{file}</value>
-  </data>
-  <data name="NewRunNameHelp.Text" xml:space="preserve">
-    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
-  </data>
-  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
-    <value>This run will be named</value>
   </data>
   <data name="NewRunRunsSelectedOnly.Text" xml:space="preserve">
     <value>Run starts only the file selected in the list. Running several files together is coming.</value>
@@ -2096,69 +2087,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
-  <data name="RunError_proxy_blocked" xml:space="preserve">
-    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
-  </data>
-  <data name="RunError_network_certificate" xml:space="preserve">
-    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
-  </data>
-  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
-    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
-  </data>
-  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
-    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
-  </data>
-  <data name="SettingsProxyExpander.Header" xml:space="preserve">
-    <value>Network proxy</value>
-  </data>
-  <data name="ProxyExplainer.Text" xml:space="preserve">
-    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
-  </data>
-  <data name="ProxyModeBox.Header" xml:space="preserve">
-    <value>How to reach the internet</value>
-  </data>
-  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
-    <value>Use the Windows settings (recommended)</value>
-  </data>
-  <data name="ProxyModeManualItem.Content" xml:space="preserve">
-    <value>Use a proxy I type</value>
-  </data>
-  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
-    <value>No proxy</value>
-  </data>
-  <data name="ProxyAddressBox.Header" xml:space="preserve">
-    <value>Proxy address (host:port)</value>
-  </data>
-  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
-    <value>proxy.example.edu:8080</value>
-  </data>
-  <data name="ProxyUserNameBox.Header" xml:space="preserve">
-    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
-  </data>
-  <data name="ProxyPasswordBox.Header" xml:space="preserve">
-    <value>Proxy password</value>
-  </data>
-  <data name="ProxySignInSaved.Text" xml:space="preserve">
-    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
-  </data>
-  <data name="ProxyApplyButton.Content" xml:space="preserve">
-    <value>Apply</value>
-  </data>
-  <data name="ProxySaved" xml:space="preserve">
-    <value>Saved. The next connection uses this setting.</value>
-  </data>
-  <data name="ProxyAddressInvalid" xml:space="preserve">
-    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
-  </data>
-  <data name="ProxyPasswordNeeded" xml:space="preserve">
-    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
-  </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
-  <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
-  </data>
   <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
     <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
   </data>
@@ -2167,6 +2095,132 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
+    <value>Cloud copy only partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body" xml:space="preserve">
+    <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
+    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Title" xml:space="preserve">
+    <value>Cloud copy delete not confirmed</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Body" xml:space="preserve">
+    <value>The delete finished, but the app could not confirm that this run's folder in your Google Cloud storage is empty. Choose Delete cloud copy again to check.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Files still in your Google Cloud storage: {0}. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Files still in your Google Cloud storage: {0}. Ask your organization's administrator to allow deleting files in Google Cloud Storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Files still in your Google Cloud storage: {0}. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Files still in your Google Cloud storage: {0}. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Files still in your Google Cloud storage: {0}. Wait a few minutes, then choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
+    <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
+    <value>Cloud copy may be partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
+    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
+    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
+    <value>Could not finish checking your Google Cloud storage</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Body" xml:space="preserve">
+    <value>This run was made on another computer, so this app will not delete its files. Choose Open storage page, then delete this run's folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Title" xml:space="preserve">
+    <value>Could not confirm this run is yours</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Body" xml:space="preserve">
+    <value>This app could not confirm that this run's files belong to this installation, so nothing was deleted. Choose Open storage page and check the folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Title" xml:space="preserve">
+    <value>Storage not found</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Body" xml:space="preserve">
+    <value>The Google Cloud storage for this run was not found, so nothing was changed. Open the Cloud page to check which project and storage this app is using.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Title" xml:space="preserve">
+    <value>Blocked by your organization</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
+    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
+    <value>Google is limiting requests</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Body" xml:space="preserve">
+    <value>Google's request limit for your project was reached, so the delete stopped. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Body" xml:space="preserve">
+    <value>Something unexpected stopped the delete, and nothing was deleted. Try Delete cloud copy again. Choose Save diagnostics in Settings if it keeps happening, and send us the file.</value>
+  </data>
+  <data name="RunsOpenStoragePageButton.Content" xml:space="preserve">
+    <value>Open storage page</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Title" xml:space="preserve">
+    <value>Not allowed to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Body" xml:space="preserve">
+    <value>Google did not allow the delete, and nothing was deleted. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Body" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project, so nothing was deleted. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="ViewerIndexFailed_Title" xml:space="preserve">
     <value>The viewer could not prepare this sequence file</value>
@@ -2706,6 +2760,57 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
+  <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
+    <value>Drag along the strip to open the viewer at that part of the sequence.</value>
+  </data>
+  <data name="DatabaseNewerThanApp" xml:space="preserve">
+    <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
+  </data>
+  <data name="DatabaseInUse" xml:space="preserve">
+    <value>Your run history is in use by another copy of DNA Entropy Graph, so this copy cannot start. Your history has not been changed. Close the other copy, then start the app again.</value>
+  </data>
+  <data name="DatabaseUnusable" xml:space="preserve">
+    <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
+  </data>
   <data name="SettingsTransferHeader.Text" xml:space="preserve">
     <value>Share settings</value>
   </data>
@@ -2808,105 +2913,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
     <value>IGV connection number</value>
   </data>
-  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
-    <value>Earlier version</value>
-  </data>
-  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
-    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
-  </data>
-  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
-    <value>Look for earlier runs</value>
-  </data>
-  <data name="PrototypeImportTitle" xml:space="preserve">
-    <value>Earlier runs found</value>
-  </data>
-  <data name="PrototypeImportBody" xml:space="preserve">
-    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
-  </data>
-  <data name="PrototypeImportZoneLine" xml:space="preserve">
-    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
-  </data>
-  <data name="PrototypeImportSshLine" xml:space="preserve">
-    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
-  </data>
-  <data name="PrototypeImportDone" xml:space="preserve">
-    <value>Added {0} earlier runs to Runs.</value>
-  </data>
-  <data name="PrototypeImportNothingFound" xml:space="preserve">
-    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
-  </data>
-  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
-    <value>Every earlier run found is already in Runs.</value>
-  </data>
-  <data name="PrototypeImportFailed" xml:space="preserve">
-    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
-    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
-  </data>
-  <data name="PageTitle_RunProgress" xml:space="preserve">
-    <value>Run progress</value>
-  </data>
-  <data name="PageTitle_Viewer" xml:space="preserve">
-    <value>Viewer</value>
-  </data>
-  <data name="PageTitle_Results" xml:space="preserve">
-    <value>Results</value>
-  </data>
-  <data name="RunsImportButton.Content" xml:space="preserve">
-    <value>Find runs from other computers</value>
-  </data>
-  <data name="Runs_Import_Running" xml:space="preserve">
-    <value>Looking in your cloud results for runs from other computers...</value>
-  </data>
-  <data name="Runs_Import_None" xml:space="preserve">
-    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
-  </data>
-  <data name="Runs_Import_Done_One" xml:space="preserve">
-    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
-  </data>
-  <data name="Runs_Import_Done_Many" xml:space="preserve">
-    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
-  </data>
-  <data name="Runs_Import_NoProject" xml:space="preserve">
-    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed" xml:space="preserve">
-    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
-  </data>
-  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
-    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
-  </data>
-  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
-    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed_Network" xml:space="preserve">
-    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
-  </data>
-  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
-    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
-  </data>
-  <data name="Runs_Imported_Badge" xml:space="preserve">
-    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
-  </data>
-  <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
-    <value>Drag along the strip to open the viewer at that part of the sequence.</value>
-  </data>
-  <data name="DatabaseNewerThanApp" xml:space="preserve">
-    <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
-  </data>
-  <data name="DatabaseInUse" xml:space="preserve">
-    <value>Your run history is in use by another copy of DNA Entropy Graph, so this copy cannot start. Your history has not been changed. Close the other copy, then start the app again.</value>
-  </data>
-  <data name="DatabaseUnusable" xml:space="preserve">
-    <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
-    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
   <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
     <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
   </data>
@@ -2915,9 +2921,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
     <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
-    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
   <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
     <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
@@ -3003,6 +3006,141 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
     <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
   </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
+    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
+    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
+    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
+  </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
+  </data>
+  <data name="RunError_proxy_blocked" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
+  </data>
+  <data name="RunError_network_certificate" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
+  </data>
+  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
+  </data>
+  <data name="SettingsProxyExpander.Header" xml:space="preserve">
+    <value>Network proxy</value>
+  </data>
+  <data name="ProxyExplainer.Text" xml:space="preserve">
+    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
+  </data>
+  <data name="ProxyModeBox.Header" xml:space="preserve">
+    <value>How to reach the internet</value>
+  </data>
+  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
+    <value>Use the Windows settings (recommended)</value>
+  </data>
+  <data name="ProxyModeManualItem.Content" xml:space="preserve">
+    <value>Use a proxy I type</value>
+  </data>
+  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
+    <value>No proxy</value>
+  </data>
+  <data name="ProxyAddressBox.Header" xml:space="preserve">
+    <value>Proxy address (host:port)</value>
+  </data>
+  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
+    <value>proxy.example.edu:8080</value>
+  </data>
+  <data name="ProxyUserNameBox.Header" xml:space="preserve">
+    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
+  </data>
+  <data name="ProxyPasswordBox.Header" xml:space="preserve">
+    <value>Proxy password</value>
+  </data>
+  <data name="ProxySignInSaved.Text" xml:space="preserve">
+    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
+  </data>
+  <data name="ProxyApplyButton.Content" xml:space="preserve">
+    <value>Apply</value>
+  </data>
+  <data name="ProxySaved" xml:space="preserve">
+    <value>Saved. The next connection uses this setting.</value>
+  </data>
+  <data name="ProxyAddressInvalid" xml:space="preserve">
+    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
+  </data>
+  <data name="ProxyPasswordNeeded" xml:space="preserve">
+    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
+  </data>
+  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
   <data name="Results_NotesSaved" xml:space="preserve">
     <value>Saved.</value>
   </data>
@@ -3050,20 +3188,5 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Results_ExportPng_YAxis" xml:space="preserve">
     <value>Entropy (bits, 0 to 2)</value>
-  </data>
-  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
-    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
-  </data>
-  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
-    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
-  </data>
-  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
-    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
-  </data>
-  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
-    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
-  </data>
-  <data name="CloudPage_ProjectChanged" xml:space="preserve">
-    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
 </root>

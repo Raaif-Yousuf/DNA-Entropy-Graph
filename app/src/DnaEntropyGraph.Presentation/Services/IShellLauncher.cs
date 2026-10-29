@@ -17,6 +17,9 @@ public interface IShellLauncher
     /// <summary>Opens File Explorer on <paramref name="folder"/>.</summary>
     bool OpenFolder(string folder);
 
+    /// <summary>Opens an https page in the default browser. Anything that is not an absolute https address is refused (false).</summary>
+    bool OpenUrl(string url);
+
     /// <summary>Puts <paramref name="text"/> on the clipboard.</summary>
     bool CopyText(string text);
 }
