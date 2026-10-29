@@ -59,6 +59,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         _pricing = pricing;
         _dispatcher = dispatcher;
         // Issue #828: a project switch while this page is open must not leave the old project's rows on screen with live buttons.
+        _lastSeenProject = account.SelectedProjectId;
         _account.AccountChanged += OnAccountChangedEvent;
     }
 
@@ -73,15 +74,38 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     /// <summary>The project the rows on screen were listed for; null while nothing is listed (first load in flight, last listing discarded). Every action compares it with the project chosen NOW (#828).</summary>
     private string? _listedProject;
 
-    /// <summary>The project a listing is in flight for, so a switch can cancel that listing and a mere token refresh (same project) cannot.</summary>
-    private string? _refreshingProject;
+    /// <summary>A listing in flight: the project it was started for and the token its gateway calls observe, so a switch can cancel it (and only it) when it goes stale.</summary>
+    private sealed record InFlightListing(string Project, CancellationTokenSource Cts);
+
+    private readonly List<InFlightListing> _inFlight = [];
+
+    /// <summary>Counts every real change of the chosen project (A to B, and B back to A, are two). A listing compares it with the value it started at, because the gateway reads the project at call time and "same id at the end" does not mean "same project all along".</summary>
+    private int _projectGeneration;
+
+    private string? _lastSeenProject;
 
     private void OnAccountChanged()
     {
-        // An in-flight listing for another project is stale: cancel it so Refresh is available again. The same project (token refresh, sign-in) leaves it alone.
-        if (_refreshingProject is not null && !string.Equals(_account.SelectedProjectId, _refreshingProject, StringComparison.Ordinal))
+        if (!string.Equals(_account.SelectedProjectId, _lastSeenProject, StringComparison.Ordinal))
         {
-            RefreshCommand.Cancel();
+            _projectGeneration++;
+            _lastSeenProject = _account.SelectedProjectId;
+        }
+
+        // Every in-flight listing for another project is stale: cancel it so Refresh is available again. The same project (token refresh, sign-in) leaves it alone.
+        foreach (var listing in _inFlight.ToArray())
+        {
+            if (!string.Equals(_account.SelectedProjectId, listing.Project, StringComparison.Ordinal))
+            {
+                try
+                {
+                    listing.Cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The listing finished in the meantime: nothing to cancel.
+                }
+            }
         }
 
         // Nothing was listed, so there is nothing stale to clear and nothing to announce.
@@ -90,16 +114,21 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             return;
         }
 
+        ForgetListing();
+        // No network from here: this view model is transient and the event is the account's, so a call per abandoned page would be waste. Refresh lists the new project.
+        ErrorText = Format("CloudPage_ProjectChanged");
+    }
+
+    /// <summary>Everything on screen that belongs to the listing of one project, forgotten together: rows, summary, running banner, empty state.</summary>
+    private void ForgetListing()
+    {
         Vms.Clear();
         Disks.Clear();
         _listedProject = null;
         IsEmpty = false;
         SummaryText = string.Empty;
         BannerText = string.Empty;
-        // No network from here: this view model is transient and the event is the account's, so a call per abandoned page would be waste. Refresh lists the new project.
-        ErrorText = Format("CloudPage_ProjectChanged");
     }
-
     private void OnUiThread(Action action)
     {
         if (_dispatcher is null)
@@ -150,21 +179,23 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
 
         IsBusy = true;
-        _refreshingProject = project;
+        var generation = _projectGeneration;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var listing = new InFlightListing(project, cts);
+        _inFlight.Add(listing);
         try
         {
             var installation = InstallationId.GetOrCreate(_settings);
-            var inventory = await _cleanup.InventoryAsync(project, installation, cancellationToken);
-            var everyone = await _compute.ListAppVmsAsync(cancellationToken);
+            var inventory = await _cleanup.InventoryAsync(project, installation, cts.Token);
+            var everyone = await _compute.ListAppVmsAsync(cts.Token);
             var pricing = LoadPricing();
 
             // The project changed while Google was answering: these lists belong to the old one. Show nothing of them and say why here (the account-changed
             // handler stays quiet when no listing was on screen); Refresh lists the new project.
-            if (!string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
+            // Also when it changed and changed back (the generation moved): the gateway reads the chosen project per call, so the answer may be for the other one.
+            if (generation != _projectGeneration || !string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
             {
-                Vms.Clear();
-                Disks.Clear();
-                _listedProject = null;
+                ForgetListing();
                 ErrorText = Format("CloudPage_ProjectChanged");
                 return;
             }
@@ -208,7 +239,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
         finally
         {
-            _refreshingProject = null;
+            _inFlight.Remove(listing);
             IsBusy = false;
         }
     }

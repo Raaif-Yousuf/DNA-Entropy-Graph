@@ -480,6 +480,96 @@ public class CloudResourcesViewModelTests
     }
 
     [Fact]
+    public async Task A_straddling_listing_also_forgets_the_old_banner_and_summary()
+    {
+        var viewModel = await LoadedAsync();
+        viewModel.BannerText.ShouldContain("CloudPage_RunningBanner", customMessage: "vacuity: the first listing set a banner");
+        viewModel.SummaryText.ShouldContain("CloudPage_Summary", customMessage: "vacuity: the first listing set a summary");
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            _account.SelectedProjectId.Returns(NewProject);
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.BannerText.ShouldBeEmpty();
+        viewModel.SummaryText.ShouldBeEmpty();
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+    }
+
+    [Fact]
+    public async Task A_straddling_listing_also_forgets_the_old_empty_state()
+    {
+        Vms();
+        _compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
+        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        var viewModel = await LoadedAsync();
+        viewModel.IsEmpty.ShouldBeTrue("vacuity: an empty project was listed");
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            _account.SelectedProjectId.Returns(NewProject);
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.IsEmpty.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_switch_away_and_back_during_one_listing_still_discards_it()
+    {
+        var viewModel = NewViewModel();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            // B and then A again while Google is answering: the id at the end equals the id at the start, but the answer may be for B.
+            _account.SelectedProjectId.Returns(NewProject);
+            _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+            _account.SelectedProjectId.Returns(Project);
+            _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+    }
+
+    [Fact]
+    public async Task A_switch_cancels_every_stale_listing_even_after_another_refresh_finished()
+    {
+        var viewModel = await LoadedAsync();
+        var gated = CancellationToken.None;
+        var started = new TaskCompletionSource();
+        var calls = 0;
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            if (Interlocked.Increment(ref calls) > 1)
+            {
+                return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+            }
+
+            gated = call.Arg<CancellationToken>();
+            var pending = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
+            gated.Register(() => pending.TrySetCanceled(gated));
+            started.SetResult();
+            return pending.Task;
+        });
+        var slow = viewModel.RefreshCommand.ExecuteAsync(null);
+        await started.Task;
+        await viewModel.Vms[0].StopCommand!.ExecuteAsync(null);
+
+        _account.SelectedProjectId.Returns(NewProject);
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        gated.IsCancellationRequested.ShouldBeTrue("the still-running listing is for the old project, though another refresh finished meanwhile");
+        await Should.ThrowAsync<OperationCanceledException>(slow);
+    }
+
+    [Fact]
     public async Task After_Detach_an_account_change_no_longer_touches_the_view_model()
     {
         var viewModel = await LoadedAsync();
