@@ -1984,7 +1984,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // Issue #498: a worker that is up (its status.json carries worker.version) but never reaches result.json by itself.
             var stuck = workerMode == FakeWorkerMode.StuckInModelLoading;
             var wedged = workerMode == FakeWorkerMode.StuckInRunning;
-            Put(_objects, (bucket, prefix + "status.json"), Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? "model-loading" : "running", windowsDone: wedged ? 3 : null)));
+            Put(_objects, (bucket, prefix + "status.json"), Encoding.UTF8.GetBytes(WorkerStatusJson(spec.JobId, 1, stuck ? WorkerStages.ModelLoading : WorkerStages.Running, windowsDone: wedged ? 3 : null)));
             if (wedged)
             {
                 // Issue #723: the heartbeat thread ticks on every look; the compute thread is wedged, so windowsDone and lastProgressAt never move.
@@ -1993,7 +1993,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
             if (stuck)
             {
-                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: "model-loading"));
+                Put(_liveWorkers, (bucket, prefix + "status.json"), new LiveWorker(spec.JobId, 1, ReadsLeft: int.MaxValue, Finish: () => { }, Stage: WorkerStages.ModelLoading));
             }
 
             Put(_objects, (bucket, prefix + "progress.jsonl"), Encoding.UTF8.GetBytes(_workerGpuLineMissing ? WorkerWarmupProgressLine() : WorkerFirstProgressLine(workerMode != FakeWorkerMode.NoGpuFirstLine)));
@@ -2013,7 +2013,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             {
                 ["schema"] = 1,
                 ["jobId"] = spec.JobId,
-                ["stage"] = "failed",
+                ["stage"] = WorkerStages.Failed,
                 ["error"] = new JsonObject { ["code"] = bootCode, ["retriable"] = false },
             };
             Put(_objects, (bucket, prefix + "status.json"), Encoding.UTF8.GetBytes(status.ToJsonString()));
@@ -2155,9 +2155,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
-    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = "running", bool CancelSeen = false, int? WindowsDone = null);
+    private sealed record LiveWorker(string JobId, long Seq, int ReadsLeft, Action Finish, string Stage = WorkerStages.Running, bool CancelSeen = false, int? WindowsDone = null);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = "running", bool cancelSeen = false, int? windowsDone = null)
+    private static string WorkerStatusJson(string jobId, long seq, string stage = WorkerStages.Running, bool cancelSeen = false, int? windowsDone = null)
     {
         var doc = new JsonObject
         {
@@ -2184,7 +2184,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         => new JsonObject
         {
             ["seq"] = 1,
-            ["stage"] = "restoring-cache",
+            ["stage"] = WorkerStages.RestoringCache,
             ["level"] = "notice",
             ["message"] = $"worker starting; GPU: {(gpu ? "NVIDIA L4 (driver 580.82.07)" : "no GPU detected")}; free disk 90 GB",
         }.ToJsonString() + "\n";
