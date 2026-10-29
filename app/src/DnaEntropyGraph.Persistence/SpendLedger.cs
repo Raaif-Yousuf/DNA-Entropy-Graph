@@ -174,6 +174,9 @@ public sealed class SpendLedger : ISpendCapGate
             return null;
         }
 
+        // Deliberately conservative, not exact: a flex-start run (#92) is priced at the on-demand rate (the price table has no flex rate and
+        // the row does not record flex), and a Spot run that was preempted and retried (#91) has IsSpot false by the end, so its whole
+        // span (the first attempt included) is booked at on-demand. Both over-estimate spend, which is the safe side of a hard stop.
         var rate = run.IsSpot == true ? machine.SpotUsdPerHour ?? machine.OnDemandUsdPerHour : machine.OnDemandUsdPerHour;
         var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
         var diskGb = options?.BootDiskGb ?? DefaultBootDiskGb;

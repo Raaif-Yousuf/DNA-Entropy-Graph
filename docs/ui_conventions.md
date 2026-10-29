@@ -35,6 +35,14 @@ Window placement: nothing is saved while the window is minimized or maximized, a
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
 
+Session restore (#244): `RecordingNavigator` wraps the app's `INavigator`, so every navigation (nav rail or any ViewModel) saves
+`session.page` and `session.run` (`SessionStore`). Only pages reopenable from a key are saved: New run, Runs, Cloud, Settings, and
+Results or Run progress with their run id; the viewer and the wizard leave the last page alone. At startup `MainWindow.Loaded`
+awaits `ShellViewModel.PrepareSessionAsync`, selects `StartupNavKey` (the remembered nav page, or Runs for a remembered run), and
+the first `NavigateTo` of that item opens the run page on top, once. A remembered run that is gone opens New run; a Run progress
+page whose run completed while the app was closed opens Results. An Open with or notification launch is routed by
+`ActivationRouter` after the shell is ready, so it still wins. Both keys are `Excluded` in `SettingsCatalog` (not shared).
+
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
 - **Every user-visible string lives in `Strings/en-US/Resources.resw`**, referenced by
@@ -302,6 +310,17 @@ Open folder, the status line and one line saying what is and is never included).
 panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
+
+### Share settings (issue #242)
+
+The last group on the page. **Export settings** and **Import settings** drive `SettingsTransferViewModel`; the import shows a
+preview (the plain name of each setting, its current value, its new value) and writes only on **Apply these changes**.
+What may travel is the allowlist `Core/SettingsPortability/SettingsCatalog`: every key is either `Exported` (with a validator, so
+an imported value is one the app itself would have written) or `Excluded` (with a reason). `Guards.Tests/SettingsKeyCatalogGuardTests`
+scans the source for settings keys and fails when one is in neither, so **a new setting must be added to the catalog in the
+same commit** (decide: share it, or say why not; a path, an id, a secret or a developer switch is always excluded). The file
+carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
+which every settings group already treats as "re-read the store".
 
 ## 11. The setup wizard (issue #99)
 

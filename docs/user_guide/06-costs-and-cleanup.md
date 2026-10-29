@@ -185,6 +185,10 @@ this app created.*
 
 A Spot computer is a cheaper rented computer that Google can take back (Spot). It is off in this version and the New run page has no switch for it yet. When it is on and Google takes the computer back in the middle of a run, the app deletes it and starts the run again, once, on a normal computer, so the run still finishes; the run's history row records the one interruption.
 
+## When Google has no graphics card free
+
+Sometimes Google has no free graphics card in any place the app tries, and the run stops with a message saying so. On the Runs page that run has a **Wait for a graphics card** button. It starts the same run again, but this time Google keeps your request in a queue until a card is free, for up to 2 hours. While it waits, the run page says it is waiting for a graphics card and the app has to stay open. Press **Cancel** to stop waiting; the waiting request is removed. If no card turns up in time, the run stops again with a message saying so, and you can press **Run again** later.
+
 ## Related
 
 [03-run.md](03-run.md), where the live cost estimate appears before you press Run.
