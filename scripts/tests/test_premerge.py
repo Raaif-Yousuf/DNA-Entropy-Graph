@@ -574,3 +574,29 @@ def test_a_timeout_keeps_partial_output_from_both_streams(tmp_path):
     result = pm.run_gate(pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=SLOW_START_TIMEOUT))
     assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
     assert "FROMOUT" in result.output and "FROMERR" in result.output
+
+
+@pytest.fixture(autouse=True)
+def _restore_termination_handlers():
+    """pm.main() installs SIGTERM/SIGHUP handlers; never let them leak into the rest of the pytest session."""
+    import signal
+
+    names = [n for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+    saved = {n: signal.getsignal(getattr(signal, n)) for n in names}
+    yield
+    for n, handler in saved.items():
+        signal.signal(getattr(signal, n), handler)
+
+
+def test_zz_a_main_call_installs_the_handlers_for_this_test_only_part_one():
+    import signal
+
+    pm.main(["--root", str(REPO_ROOT), "--list"])
+    assert signal.getsignal(signal.SIGTERM) is pm._raise_keyboard_interrupt
+
+
+def test_zz_the_handlers_were_restored_after_the_previous_test_part_two():
+    import signal
+
+    # Order-dependent on purpose: runs right after part one, so a missing restore shows here.
+    assert signal.getsignal(signal.SIGTERM) is not pm._raise_keyboard_interrupt

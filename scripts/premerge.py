@@ -467,6 +467,8 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
             ok = done.returncode == 0
         else:
             os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # the group was already gone: nothing survived
     except (OSError, subprocess.SubprocessError):
         ok = False
     finally:
