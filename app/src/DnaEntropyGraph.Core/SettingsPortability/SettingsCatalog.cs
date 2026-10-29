@@ -52,6 +52,7 @@ public static class SettingsCatalog
     {
         [InstallationId.SettingsKey] = "Identifies this PC's cloud resources (Hard Rules 9 and 10); sharing it would let two PCs claim each other's VMs.",
         ["MainWindowPlacement"] = "Where the window sits on this PC's screens.",
+        ["dismissed_imported_runs"] = "Imported-run rows this user dismissed on this PC (ImportedRunDismissals.SettingsKey, #111); they name job ids from the bucket and are re-derived from it, so they are not carried over.",
         ["onboarding_tour_done"] = "Whether the first-run tour was shown on this PC (TourSettings.CompletedKey, #143); a new PC should show it once, so it is not carried over.",
         [WorkerImageSettingKeys.DeveloperMode] = "Developer switch; an imported file must not be able to turn it on.",
         [WorkerImageSettingKeys.WorkerImage] = "An image the app would run on a rented computer; an imported file must not be able to choose one.",

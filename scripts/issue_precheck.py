@@ -159,10 +159,12 @@ from pathlib import Path
 # section for the measurement. stderr does not get the same treatment: it is
 # progress/diagnostic chatter only (see --progress), never the report itself,
 # and Python's own stderr is unbuffered/line-buffered by default already.
+# pyright types sys.stdout as TextIO, which has no .reconfigure; the real stream is a TextIOWrapper, and a
+# redirected one that is not raises the AttributeError suppressed here.
 with contextlib.suppress(AttributeError, ValueError):  # already-wrapped or non-reconfigurable
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)  # pyright: ignore[reportAttributeAccessIssue]
 with contextlib.suppress(AttributeError, ValueError):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # pyright: ignore[reportAttributeAccessIssue]
 
 REPO = "Raaif-Yousuf/DNA-Entropy-Graph"
 

@@ -114,6 +114,20 @@ public class RunRepositoryTests
         roundTripped.ShouldBe(run);
     }
 
+    [Fact]
+    public async Task The_preemption_count_round_trips_and_defaults_to_zero()
+    {
+        using var paths = new TempPaths();
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        await repository.UpsertAsync(new RunRecord("job-pre", JobPhase.Running, DateTimeOffset.UtcNow, IsSpot: true, PreemptionCount: 1), CancellationToken.None);
+        await repository.UpsertAsync(new RunRecord("job-none", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var all = await repository.GetAllAsync(CancellationToken.None);
+
+        all.Single(r => r.JobId == "job-pre").PreemptionCount.ShouldBe(1);
+        all.Single(r => r.JobId == "job-none").PreemptionCount.ShouldBe(0);
+    }
+
     /// <summary>
     /// The DDL comment calls out CreatedAt as a value that should never move
     /// once written; the UpsertSql deliberately leaves it out of its
