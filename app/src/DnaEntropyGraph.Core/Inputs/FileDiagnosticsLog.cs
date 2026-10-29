@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Inputs;
 /// <see cref="IDiagnosticsLog"/> as one line per event appended to <c>&lt;root&gt;\logs\app.log</c> (UTF-8, LF; every control character and the Unicode line and paragraph separators in a field become a space, so one event is one line; other text is kept as is): the same folder the
 /// diagnostics zip reads. Never throws (except for a fatal error the process cannot go on after): a log that cannot be written must not take the work it
 /// describes down, and it is called from inside the reconciler's own catch blocks, so any exception it let out would end that pass.
-/// The file is capped (issue #575): once it holds <c>maxBytes</c>, it is renamed to <c>app.log.1</c> (replacing the previous one) and a new
+/// The file is capped (issue #575): once it holds <c>maxBytes</c>, it is renamed to <c>app.1.log</c> (replacing the previous one) and a new
 /// <c>app.log</c> starts, so a row that fails on every launch and every reconnect costs at most about twice the cap on disk.
 /// </summary>
 public sealed class FileDiagnosticsLog : IDiagnosticsLog

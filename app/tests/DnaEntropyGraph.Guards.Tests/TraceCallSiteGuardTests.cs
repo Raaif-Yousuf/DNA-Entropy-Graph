@@ -12,7 +12,7 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public class TraceCallSiteGuardTests
 {
-    private static readonly Regex Call = new(@"Trace\.Trace(?:Warning|Error|Information)\(", RegexOptions.Compiled);
+    private static readonly Regex Call = new(@"(?:Trace\.Trace(?:Warning|Error|Information)|Trace\.(?:Write|WriteLine|Fail)|Debug\.(?:Write|WriteLine|Fail))\(", RegexOptions.Compiled);
 
     private static readonly Regex TypeNameHole = new(
         @"^\w+(?:\.GetBaseException\(\))?\.GetType\(\)\.Name$", RegexOptions.Compiled);
@@ -30,9 +30,34 @@ public class TraceCallSiteGuardTests
     {
         var bad = new List<string>();
         var arg = argument.Trim();
-        if (arg.StartsWith("$\"", StringComparison.Ordinal))
+        var interpolated = arg.StartsWith("$\"", StringComparison.Ordinal);
+        if (!interpolated && !arg.StartsWith('"'))
         {
-            foreach (Match hole in Regex.Matches(arg, @"\{([^{}]*)\}"))
+            // A variable, a call, a verbatim or raw string: not a constant message.
+            bad.Add(arg);
+            return bad;
+        }
+
+        // Walk to the closing quote of the one leading literal; anything after it (a + concatenation, a format argument list) is unsafe.
+        var i = interpolated ? 2 : 1;
+        for (; i < arg.Length && arg[i] != '"'; i++)
+        {
+            if (arg[i] == '\\')
+            {
+                i++;
+            }
+        }
+
+        var literal = i < arg.Length ? arg[..(i + 1)] : arg;
+        var rest = i < arg.Length ? arg[(i + 1)..].Trim() : "unterminated literal";
+        if (rest.Length > 0)
+        {
+            bad.Add("after the literal: " + rest);
+        }
+
+        if (interpolated)
+        {
+            foreach (Match hole in Regex.Matches(literal, @"\{([^{}]*)\}"))
             {
                 var expr = hole.Groups[1].Value.Trim();
                 if (!TypeNameHole.IsMatch(expr) && !Whitelist.ContainsKey(expr))
@@ -41,14 +66,9 @@ public class TraceCallSiteGuardTests
                 }
             }
         }
-        else if (!Regex.IsMatch(arg, "^\"(?:[^\"\\\\]|\\\\.)*\"$"))
-        {
-            bad.Add(arg);
-        }
 
         return bad;
     }
-
     /// <summary>Every call's argument text (up to the matching close parenthesis, string literals skipped over).</summary>
     internal static IEnumerable<string> Arguments(string source)
     {
@@ -144,17 +164,42 @@ public class TraceCallSiteGuardTests
     [InlineData("PATH")]
     [InlineData("VARIABLE")]
     [InlineData("CONCAT")]
+    [InlineData("INTERP_CONCAT")]
+    [InlineData("INTERP_ARGS")]
+    [InlineData("PLAIN_ARGS")]
+    [InlineData("VERBATIM")]
+    [InlineData("WRITE")]
+    [InlineData("WRITELINE")]
+    [InlineData("FAIL")]
+    [InlineData("DEBUG_WRITE")]
+    [InlineData("DEBUG_WRITELINE")]
+    [InlineData("DEBUG_FAIL")]
     public void The_scanner_catches_a_planted_unsafe_call(string kind)
     {
         // Built at run time so this file never contains a bad call itself.
+        var call = kind switch
+        {
+            "WRITE" => "Trace." + "Write(",
+            "WRITELINE" => "Trace." + "WriteLine(",
+            "FAIL" => "Trace." + "Fail(",
+            "DEBUG_WRITE" => "Debug." + "Write(",
+            "DEBUG_WRITELINE" => "Debug." + "WriteLine(",
+            "DEBUG_FAIL" => "Debug." + "Fail(",
+            _ => "System.Diagnostics.Trace." + "TraceWarning(",
+        };
         var planted = kind switch
         {
+            "INTERP_CONCAT" => "$\"x {ex.GetType().Name}\" + " + "path",
+            "INTERP_ARGS" => "$\"x {ex.GetType().Name}\", " + "path",
+            "PLAIN_ARGS" => "\"x {0}\", " + "path",
+            "VERBATIM" => "@\"C:\\" + "x\"",
+            "WRITE" or "WRITELINE" or "FAIL" or "DEBUG_WRITE" or "DEBUG_WRITELINE" or "DEBUG_FAIL" => "fileName",
             "MESSAGE" => "$\"failed: {" + "ex.Message}\"",
             "PATH" => "$\"could not open {" + "inputPath}\"",
             "VARIABLE" => "$\"seq {" + "sequence}\"",
             _ => "\"a \" + " + "fileName",
         };
-        var source = "System.Diagnostics.Trace." + "TraceWarning(" + planted + ");";
+        var source = call + planted + ");";
 
         Arguments(source).SelectMany(Violations).ShouldNotBeEmpty();
     }

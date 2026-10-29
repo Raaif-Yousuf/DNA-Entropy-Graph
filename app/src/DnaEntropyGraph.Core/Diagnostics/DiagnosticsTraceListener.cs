@@ -10,6 +10,9 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// Every call site in <c>app/src</c> passes only constant text plus an exception type name (a Guards test holds that), and every line is
 /// redacted again here (by <see cref="DiagnosticsRedactor"/>, the zip's own rules) because third-party code can also write to Trace: absolute paths, email addresses, tokens and long nucleotide runs become
 /// placeholders. Never throws into the caller.
+/// <para>Decision (#923): in a Debug build <c>Debug.WriteLine</c> output reaches this file too, because <see cref="Debug"/> and <see cref="Trace"/> share one listener
+/// collection. Kept, not filtered: the line is redacted here, again by the diagnostics bundle builder, and checked by its leak scan, and installing
+/// only in Release would hide the observable from a dev build.</para>
 /// </summary>
 public sealed class DiagnosticsTraceListener : TraceListener
 {
@@ -18,7 +21,12 @@ public sealed class DiagnosticsTraceListener : TraceListener
 
     private readonly AppLogFile _file;
     private readonly TimeProvider _time;
-    private readonly StringBuilder _pending = new();
+    /// <summary>Largest unfinished <c>Write</c> fragment kept before it is emitted as a line of its own.</summary>
+    public const int MaxPendingChars = 4096;
+
+    // Per thread, so a half line one thread wrote with Write can never be glued onto a line another thread finishes with WriteLine.
+    [ThreadStatic]
+    private static StringBuilder? _pending;
 
     public DiagnosticsTraceListener(string root, TimeProvider? time = null, long maxBytes = AppLogFile.DefaultMaxBytes)
     {
@@ -60,25 +68,28 @@ public sealed class DiagnosticsTraceListener : TraceListener
             return;
         }
 
-        lock (_pending)
+        var pending = _pending ??= new StringBuilder();
+        pending.Append(message);
+        if (pending.Length >= MaxPendingChars)
         {
-            _pending.Append(message);
+            // A Write that never meets its WriteLine must not grow without bound: emit what is there as a line.
+            Flush("INFO");
         }
     }
 
     public override void WriteLine(string? message)
     {
-        string text;
-        lock (_pending)
-        {
-            _pending.Append(message);
-            text = _pending.ToString();
-            _pending.Clear();
-        }
-
-        Emit("INFO", text);
+        _pending ??= new StringBuilder();
+        _pending.Append(message);
+        Flush("INFO");
     }
 
+    private void Flush(string level)
+    {
+        var text = _pending!.ToString();
+        _pending.Clear();
+        Emit(level, text);
+    }
     public override void TraceEvent(TraceEventCache? eventCache, string source, TraceEventType eventType, int id, string? message)
     {
         if (Filter is null || Filter.ShouldTrace(eventCache, source, eventType, id, message, null, null, null))

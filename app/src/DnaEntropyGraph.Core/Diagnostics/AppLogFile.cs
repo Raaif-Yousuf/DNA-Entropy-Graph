@@ -8,7 +8,7 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// Never throws (except for a fatal error the process cannot go on after): a log that cannot be written must not take the work it describes down.
 /// The file is capped (issue #575): once it holds <c>maxBytes</c>, it is renamed to <c>app.1.log</c> (a name the diagnostics bundle accepts, issue #923: the previous log travels with the zip) (replacing the previous one) and a new
 /// <c>app.log</c> starts, so a row that fails on every launch, or a storm of Trace lines, costs at most about twice the cap on disk.
-/// </summary>
+/// Known limit (#923, accepted): the lock is per process. A second app instance (the single-instance hand-off ends it early, but a portable copy or a crash\n/// restart can overlap) appending at the same moment can lose a line, and two processes can race on the roll (one move wins, the other fails and appends).\n/// A named mutex would fix it, but a log line is not worth a cross-process wait on the UI thread's path.\n/// </summary>
 public sealed class AppLogFile
 {
     /// <summary>One megabyte per file, two files at most: a diagnostics zip stays small and a day of failures still fits.</summary>
