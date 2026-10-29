@@ -303,6 +303,17 @@ panel and keeps this one. The run-error strings say "Choose Save diagnostics in 
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
 
+### Share settings (issue #242)
+
+The last group on the page. **Export settings** and **Import settings** drive `SettingsTransferViewModel`; the import shows a
+preview (the plain name of each setting, its current value, its new value) and writes only on **Apply these changes**.
+What may travel is the allowlist `Core/SettingsPortability/SettingsCatalog`: every key is either `Exported` (with a validator, so
+an imported value is one the app itself would have written) or `Excluded` (with a reason). `Guards.Tests/SettingsKeyCatalogGuardTests`
+scans the source for settings keys and fails when one is in neither, so **a new setting must be added to the catalog in the
+same commit** (decide: share it, or say why not; a path, an id, a secret or a developer switch is always excluded). The file
+carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
+which every settings group already treats as "re-read the store".
+
 ## 11. The setup wizard (issue #99)
 
 One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
