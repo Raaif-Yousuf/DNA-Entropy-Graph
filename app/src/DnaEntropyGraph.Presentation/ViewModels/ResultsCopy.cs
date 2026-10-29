@@ -77,6 +77,12 @@ public static class ResultsCopy
     public const string GeneiousNotFound = "Results_GeneiousNotFound";
     public const string GeneiousLaunchFailed = "Results_GeneiousLaunchFailed";
 
+    // Issue #141: notes and tags on the run.
+    public const string NotesSaved = "Results_NotesSaved";
+    public const string NotesSaveFailed = "Results_NotesSaveFailed";
+    public const string NotesRunGone = "Results_NotesRunGone";
+    public const string NotesEditedDuringSave = "Results_NotesEditedDuringSave";
+
     // The worker's direction tokens (DirectionKey maps a token to one of these).
     public const string DirectionBothCombined = "Results_Direction_BothCombined";
     public const string DirectionBothAveraged = "Results_Direction_BothAveraged";
@@ -113,7 +119,7 @@ public static class ResultsCopy
     [
         NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed, ExportPngNoFolder, ExportPngFailedInExports,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
-        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
+        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed, NotesRunGone, NotesEditedDuringSave,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
         ExportPngTitle, ExportPngXAxis, ExportPngYAxis, GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
