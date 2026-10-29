@@ -2157,7 +2157,10 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>Could not finish checking your Google Cloud storage</value>
   </data>
   <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
-    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings and send us the file.</value>
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
   </data>
   <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
     <value>Not deleted</value>

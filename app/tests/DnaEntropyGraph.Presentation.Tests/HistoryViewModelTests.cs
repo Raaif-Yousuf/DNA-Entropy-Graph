@@ -830,17 +830,17 @@ public sealed class HistoryViewModelTests
     }
 
     [Theory]
-    [InlineData(CloudResultsStatus.Failed, null)]
-    [InlineData(CloudResultsStatus.PartiallyDeleted, null)]
-    [InlineData(CloudResultsStatus.PartiallyDeleted, 3)]
-    public async Task A_cloud_delete_whose_listing_never_finished_toasts_the_stuck_copy_not_a_try_again_one(CloudResultsStatus status, int? left)
+    [InlineData(CloudResultsStatus.Failed, null, "Runs_DeleteCloud_ListingStuckNothing_Body")]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, null, "Runs_DeleteCloud_ListingStuck_Body")]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, 3, "Runs_DeleteCloud_ListingStuck_Body")]
+    public async Task A_cloud_delete_whose_listing_never_finished_toasts_the_stuck_copy_not_a_try_again_one(CloudResultsStatus status, int? left, string body)
     {
         _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(status, left, CloudErrorKind.Other, ListingStuck: true));
         var vm = await Loaded(Row("a"));
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_ListingStuck_Title", "Runs_DeleteCloud_ListingStuck_Body", ToastSeverity.Warning);
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_ListingStuck_Title", body, ToastSeverity.Warning);
     }
 
     [Fact]

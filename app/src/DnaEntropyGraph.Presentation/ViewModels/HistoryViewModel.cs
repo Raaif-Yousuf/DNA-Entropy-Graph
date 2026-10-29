@@ -519,7 +519,13 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             // A listing that never finished: the app cannot tell what is left and pressing the button again meets the same listing, so the copy says so and names the diagnostics file.
-            if (result.ListingStuck && result.Status is CloudResultsStatus.Failed or CloudResultsStatus.PartiallyDeleted)
+            // Failed means the listing got stuck before any delete was requested, so nothing was deleted; only a partial delete may have removed some files.
+            if (result.ListingStuck && result.Status == CloudResultsStatus.Failed)
+            {
+                return RunsCopy.DeleteCloudListingStuckNothingDeleted;
+            }
+
+            if (result.ListingStuck && result.Status == CloudResultsStatus.PartiallyDeleted)
             {
                 return RunsCopy.DeleteCloudListingStuck;
             }

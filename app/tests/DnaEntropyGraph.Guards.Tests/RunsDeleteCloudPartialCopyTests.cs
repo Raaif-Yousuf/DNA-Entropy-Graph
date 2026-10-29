@@ -139,11 +139,29 @@ public sealed class RunsDeleteCloudPartialCopyTests
         resw.ShouldContainKey(message.Body);
         var body = resw[message.Body];
         body.ShouldContain("Save diagnostics");
+        body.ShouldNotContain("send us", Case.Insensitive);
         body.ShouldNotContain("again", Case.Insensitive);
         body.ShouldNotContain("nothing was deleted", Case.Insensitive);
         body.ShouldContain("may have been deleted");
         body.ShouldNotContain("—");
         resw[message.Title].ShouldNotContain("—");
+    }
+
+    [Fact]
+    public void The_stuck_listing_copy_for_a_failed_delete_says_nothing_was_deleted_and_names_one_action()
+    {
+        var resw = Resw();
+        var message = RunsCopy.DeleteCloudListingStuckNothingDeleted;
+        resw.ShouldContainKey(message.Title);
+        resw.ShouldContainKey(message.Body);
+        var body = resw[message.Body];
+        body.ShouldContain("nothing was deleted", Case.Insensitive);
+        body.ShouldContain("cannot see");
+        body.ShouldContain("Save diagnostics");
+        body.ShouldNotContain("may have been deleted");
+        body.ShouldNotContain("again", Case.Insensitive);
+        body.ShouldNotContain("send us", Case.Insensitive);
+        body.ShouldNotContain("—");
     }
 
     [Fact]
@@ -154,6 +172,6 @@ public sealed class RunsDeleteCloudPartialCopyTests
         files.Length.ShouldBeGreaterThan(100, "the scan must see the source tree");
         var spelled = files.Where(f => !f.EndsWith("CloudErrorCodes.cs", StringComparison.Ordinal) && File.ReadAllText(f).Contains("LIST_PAGINATION_STUCK", StringComparison.Ordinal)).ToArray();
         spelled.ShouldBeEmpty("use CloudErrorCodes.ListPaginationStuck so a rename cannot silently fall back");
-        files.Count(f => File.ReadAllText(f).Contains("CloudErrorCodes.ListPaginationStuck", StringComparison.Ordinal)).ShouldBeGreaterThanOrEqualTo(4, "the three gateways files and RunCloudResults use it");
+        File.ReadAllText(files.Single(f => f.EndsWith("CloudErrorCodes.cs", StringComparison.Ordinal))).ShouldContain("\"LIST_PAGINATION_STUCK\"");
     }
 }
