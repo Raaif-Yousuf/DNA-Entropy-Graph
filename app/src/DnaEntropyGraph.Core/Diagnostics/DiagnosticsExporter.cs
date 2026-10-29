@@ -30,8 +30,7 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
             cancellationToken.ThrowIfCancellationRequested();
             var history = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
             var booked = await ReadBookedAsync(cancellationToken).ConfigureAwait(false);
-            var bookedSeconds = await ReadBookedSecondsAsync(cancellationToken).ConfigureAwait(false);
-            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), booked, bookedSeconds);
+            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), booked);
             await File.WriteAllBytesAsync(temp, zip, cancellationToken).ConfigureAwait(false);
             File.Move(temp, destinationPath, overwrite: true);
         }
@@ -50,7 +49,7 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
     }
 
     // Issue #100: the run row carries no cost; the figure a run was booked is its spend-ledger entry. A ledger that cannot be read leaves the figures null: a support zip is never worth failing for them.
-    private async Task<IReadOnlyDictionary<string, double>?> ReadBookedAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyDictionary<string, BookedRun>?> ReadBookedAsync(CancellationToken cancellationToken)
     {
         if (costs is null)
         {
@@ -59,24 +58,7 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
 
         try
         {
-            return await costs.GetBookedAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return null;
-        }
-    }
-
-    private async Task<IReadOnlyDictionary<string, long>?> ReadBookedSecondsAsync(CancellationToken cancellationToken)
-    {
-        if (costs is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return await costs.GetBookedSecondsAsync(cancellationToken).ConfigureAwait(false);
+            return await costs.GetBookedRunsAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

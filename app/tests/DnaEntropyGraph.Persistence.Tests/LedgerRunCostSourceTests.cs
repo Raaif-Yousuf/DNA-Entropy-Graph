@@ -95,7 +95,7 @@ public class LedgerRunCostSourceTests
             await runs.UpsertAsync(Ended("r1", 2, end: Now.AddHours(1)), CancellationToken.None);
 
             var entry = (await ledger.GetAllAsync(CancellationToken.None)).Single();
-            var seconds = await source.GetBookedSecondsAsync(CancellationToken.None);
+            var seconds = (await source.GetBookedRunsAsync(CancellationToken.None)).ToDictionary(kv => kv.Key, kv => kv.Value.Seconds);
             seconds["r1"].ShouldBe(7200L, "the span the entry froze, not the row's later one");
             seconds["r1"].ShouldBe((long)(entry.EndedUtc!.Value - entry.StartedUtc).TotalSeconds);
         }
@@ -110,7 +110,7 @@ public class LedgerRunCostSourceTests
             await runs.UpsertAsync(Ended("r1", 1, end: Now.AddHours(-3)), CancellationToken.None);
 
             (await source.GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(0.0);
-            (await source.GetBookedSecondsAsync(CancellationToken.None))["r1"].ShouldBe(0L);
+            (await source.GetBookedRunsAsync(CancellationToken.None))["r1"].Seconds.ShouldBe(0L);
         }
     }
 
@@ -122,7 +122,7 @@ public class LedgerRunCostSourceTests
         {
             await runs.UpsertAsync(Ended("r1", 10), CancellationToken.None); // 10 h row; default limit 4 h plus 15 min grace
 
-            (await source.GetBookedSecondsAsync(CancellationToken.None))["r1"].ShouldBe(255L * 60);
+            (await source.GetBookedRunsAsync(CancellationToken.None))["r1"].Seconds.ShouldBe(255L * 60);
             (await source.GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(255d / 60 * 1.015, 1e-9);
         }
     }
@@ -135,7 +135,7 @@ public class LedgerRunCostSourceTests
         {
             await runs.UpsertAsync(Ended("r1", 1, machine: null), CancellationToken.None);
 
-            (await source.GetBookedSecondsAsync(CancellationToken.None)).ShouldNotContainKey("r1");
+            (await source.GetBookedRunsAsync(CancellationToken.None)).ShouldNotContainKey("r1");
         }
     }
 
@@ -264,5 +264,34 @@ public class LedgerRunCostSourceTests
         await spend.BookUnbookedRunsAsync(CancellationToken.None);
         (await flaky.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1, "booked once; a second repair adds nothing");
         (await new LedgerRunCostSource(flaky).GetBookedAsync(CancellationToken.None))["r1"].ShouldBe(2 * 1.015, 1e-9);
+    }
+
+    [Fact]
+    public async Task One_read_returns_the_cost_and_the_seconds_of_the_same_entry()
+    {
+        var (runs, ledger, source, paths) = Make();
+        using (paths)
+        {
+            await runs.UpsertAsync(Ended("r1", 2), CancellationToken.None);
+
+            var entry = (await ledger.GetAllAsync(CancellationToken.None)).Single();
+            var one = (await source.GetBookedRunsAsync(CancellationToken.None))["r1"];
+            one.Usd.ShouldBe(entry.UsdEst!.Value, 1e-12);
+            one.Seconds.ShouldBe(7200L);
+        }
+    }
+
+    [Fact]
+    public async Task An_entry_with_no_end_books_zero_seconds_not_a_guess()
+    {
+        var (_, ledger, source, paths) = Make();
+        using (paths)
+        {
+            await ledger.AppendAsync(new CostLedgerEntry(SpendLedger.VmRuntimeKind, Now.AddHours(-1), "r1", EndedUtc: null, UsdEst: 1.0), CancellationToken.None);
+
+            var one = (await source.GetBookedRunsAsync(CancellationToken.None))["r1"];
+            one.Seconds.ShouldBe(0L, "an entry with no EndedUtc has no span to report");
+            one.Usd.ShouldBe(1.0);
+        }
     }
 }

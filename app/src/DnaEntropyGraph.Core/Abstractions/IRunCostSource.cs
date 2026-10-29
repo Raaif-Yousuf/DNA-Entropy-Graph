@@ -1,5 +1,8 @@
 namespace DnaEntropyGraph.Core.Abstractions;
 
+/// <summary>What one run's ledger entry booked: the estimate in USD and the seconds of VM time it was booked for (its frozen <c>EndedUtc - StartedUtc</c>, never less than zero).</summary>
+public readonly record struct BookedRun(double Usd, long Seconds);
+
 /// <summary>
 /// Issues #100 and #557: what each run COST, as the spend ledger booked it. The ledger entry (kind <c>vm_runtime</c>, keyed by the run's job id) is the ONLY source of a
 /// run's booked figure: the Results header and the Runs rows read it here, so they can never disagree with the month total. A run with no entry is simply absent.
@@ -10,9 +13,8 @@ public interface IRunCostSource
     Task<IReadOnlyDictionary<string, double>> GetBookedAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// The seconds of VM time each run's ledger entry was booked for (its frozen <c>EndedUtc - StartedUtc</c>, never less than zero), by job id: the same entry as the figure above, so
-    /// the support zip's seconds and cost can never describe two different spans even if the run row is changed later. A run with no entry is absent. The default is "none".
+    /// The cost AND the seconds of VM time each run's ledger entry booked, by job id, from ONE read of the ledger: the support zip's figures can never describe two different entries or
+    /// be half present (a booking between two reads, or the second read failing). A run with no entry is absent.
     /// </summary>
-    Task<IReadOnlyDictionary<string, long>> GetBookedSecondsAsync(CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyDictionary<string, long>>(new Dictionary<string, long>());
+    Task<IReadOnlyDictionary<string, BookedRun>> GetBookedRunsAsync(CancellationToken cancellationToken);
 }

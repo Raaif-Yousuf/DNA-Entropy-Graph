@@ -175,35 +175,115 @@ public class RunCostRepairStartupTests : IDisposable
         repair[0].Calls[1].ShouldBe((1, 1), "and found nothing left to book");
     }
 
-    [Fact]
-    public async Task A_launch_cancelled_before_the_repair_ends_leaves_no_unobserved_fault()
+    /// <summary>A repair the test controls: it records the token it was given, can throw, and can block its calling thread SYNCHRONOUSLY (what a Sqlite "async" call does).</summary>
+    private sealed class ScriptedRepair(Exception? throws = null, ManualResetEventSlim? gate = null) : IRunCostRepair
     {
-        var ledger = new WatchedLedger[1];
-        using var provider = Build(ledger);
-        await SeedUnbookedRunAsync(provider, "unbooked-5");
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool SawCancelledToken { get; private set; }
+
+        public Task Entered => _entered.Task;
+
+        public Task BookUnbookedRunsAsync(CancellationToken cancellationToken)
+        {
+            SawCancelledToken = cancellationToken.IsCancellationRequested;
+            _entered.TrySetResult();
+            gate?.Wait();
+            cancellationToken.ThrowIfCancellationRequested();
+            return throws is null ? Task.CompletedTask : throw throws;
+        }
+    }
+
+    private sealed class CountingLog : IDiagnosticsLog
+    {
+        private int _repairWarnings;
+
+        public int RepairWarnings => Volatile.Read(ref _repairWarnings);
+
+        public void Warning(string source, string? jobId, string errorClass)
+        {
+            if (source == "run-cost-repair")
+            {
+                Interlocked.Increment(ref _repairWarnings);
+            }
+        }
+    }
+
+    private ServiceProvider BuildWith(IRunCostRepair repair, IDiagnosticsLog log)
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
+        services.AddSingleton<IRunCostRepair>(repair);
+        services.AddSingleton<IDiagnosticsLog>(log);
+        return services.BuildServiceProvider();
+    }
+
+    [Fact]
+    public async Task A_cancelled_launch_reaches_the_repair_and_logs_no_warning()
+    {
+        var repair = new ScriptedRepair();
+        var log = new CountingLog();
+        using var provider = BuildWith(repair, log);
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var faulted = 0;
-        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e) => Interlocked.Increment(ref faulted);
-        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        await Record.ExceptionAsync(() => AppStartup.BeginAsync(provider, cts.Token)); // a cancelled launch may itself end cancelled
+
+        repair.SawCancelledToken.ShouldBeTrue("the launch's token reached the repair");
+        log.RepairWarnings.ShouldBe(0, "a requested stop is not a failure");
+    }
+
+    [Fact]
+    public async Task A_repair_that_throws_a_non_cancellation_exception_logs_exactly_one_warning()
+    {
+        var log = new CountingLog();
+        using var provider = BuildWith(new ScriptedRepair(throws: new IOException("locked")), log);
+
+        await Should.NotThrowAsync(() => AppStartup.BeginAsync(provider, TestContext.Current.CancellationToken));
+
+        log.RepairWarnings.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_repair_that_blocks_its_caller_does_not_hold_the_launch_call_or_the_reconcile()
+    {
+        // The UI thread calls BeginAsync and a Sqlite "async" call completes synchronously: a repair that runs inline blocks the call itself.
+        using var gate = new ManualResetEventSlim(false);
+        var repair = new ScriptedRepair(gate: gate);
+        using var provider = BuildWith(repair, new CountingLog());
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(
+            new RunRecord("local-killed-h", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: "local"), CancellationToken.None);
+        Task? launch = null;
+        var caller = new Thread(() => launch = AppStartup.BeginAsync(provider, CancellationToken.None)) { IsBackground = true };
         try
         {
-            await Record.ExceptionAsync(() => AppStartup.BeginAsync(provider, cts.Token)); // a cancelled launch may itself end cancelled; only the repair's fault matters here
-            for (var i = 0; i < 3; i++)
+            caller.Start();
+            caller.Join(TimeSpan.FromSeconds(20)).ShouldBeTrue("BeginAsync must return to its caller while the repair is still blocked");
+            (launch is null).ShouldBeFalse();
+            launch.IsCompleted.ShouldBeFalse("the launch task ends only after the repair has");
+            await repair.Entered.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            // The reconcile starts while the repair is still blocked: the killed This PC run is judged.
+            RunRecord? row = null;
+            for (var i = 0; i < 600 && row?.Phase != JobPhase.Failed; i++)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                row = (await provider.GetRequiredService<IRunRepository>().GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "local-killed-h");
+                if (row.Phase != JobPhase.Failed)
+                {
+                    await Task.Delay(50, TestContext.Current.CancellationToken);
+                }
             }
+
+            row!.Phase.ShouldBe(JobPhase.Failed, "the reconcile waited for the repair");
+            launch.IsCompleted.ShouldBeFalse();
         }
         finally
         {
-            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+            gate.Set();
         }
 
-        faulted.ShouldBe(0, "a cancelled repair is a requested stop, not a fault nobody observes");
+        await launch!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
     }
-
     [Fact]
     public async Task A_startup_repair_that_fails_is_logged_with_its_error_class_and_does_not_crash_the_launch()
     {

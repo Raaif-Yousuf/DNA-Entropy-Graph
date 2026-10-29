@@ -51,7 +51,7 @@ public class DiagnosticsExporterTests : IDisposable
         var path = Path.Combine(_folder, "cost.zip");
         var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud");
         var costs = Substitute.For<IRunCostSource>();
-        costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, double> { [run.JobId] = 2.5 });
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, BookedRun> { [run.JobId] = new(2.5, 60) });
 
         await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
 
@@ -68,8 +68,7 @@ public class DiagnosticsExporterTests : IDisposable
         // The row's FinishedAt moved after the booking (3 h); the ledger entry froze 30 minutes.
         var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud", VmReadyAt: start, FinishedAt: start.AddHours(3));
         var costs = Substitute.For<IRunCostSource>();
-        costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, double> { [run.JobId] = 0.5 });
-        costs.GetBookedSecondsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, long> { [run.JobId] = 1800 });
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, BookedRun> { [run.JobId] = new(0.5, 1800) });
 
         await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
 
@@ -84,13 +83,15 @@ public class DiagnosticsExporterTests : IDisposable
         var path = Path.Combine(_folder, "nocost.zip");
         var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud");
         var costs = Substitute.For<IRunCostSource>();
-        costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyDictionary<string, double>>>(_ => throw new InvalidOperationException("ledger unreadable"));
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyDictionary<string, BookedRun>>>(_ => throw new InvalidOperationException("ledger unreadable"));
 
         await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
 
         using var archive = ZipFile.OpenRead(path);
         using var reader = new StreamReader(archive.GetEntry("run-history.json")!.Open());
-        System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0].GetProperty("estimatedCostUsd").ValueKind.ShouldBe(System.Text.Json.JsonValueKind.Null);
+        var row = System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0];
+        row.GetProperty("estimatedCostUsd").ValueKind.ShouldBe(System.Text.Json.JsonValueKind.Null);
+        row.GetProperty("vmSeconds").ValueKind.ShouldBe(System.Text.Json.JsonValueKind.Null, "one read failed: neither figure is half present");
     }
 
     [Fact]

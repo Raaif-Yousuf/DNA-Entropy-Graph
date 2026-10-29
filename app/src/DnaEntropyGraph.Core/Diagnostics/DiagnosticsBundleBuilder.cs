@@ -51,7 +51,7 @@ public static partial class DiagnosticsBundleBuilder
     private static partial Regex LogFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
-    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info, IReadOnlyDictionary<string, double>? bookedUsd = null, IReadOnlyDictionary<string, long>? bookedSeconds = null)
+    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info, IReadOnlyDictionary<string, BookedRun>? booked)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(runs);
@@ -105,7 +105,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId), bookedUsd is not null && bookedUsd.TryGetValue(run.JobId, out var usd) ? usd : null, bookedSeconds is not null && bookedSeconds.TryGetValue(run.JobId, out var secs) ? secs : null)), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId), booked is not null && booked.TryGetValue(run.JobId, out var one) ? one : null)), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -299,7 +299,7 @@ public static partial class DiagnosticsBundleBuilder
 
     // The history as an allowlist of fields: identifiers, states, error codes, timings and hardware. Never the name,
     // the error detail (free text), the output folder, the project, bucket or VM names, notes or tags.
-    private static object ToHistoryRow(RunRecord run, string jobId, double? bookedUsd, long? bookedSeconds) => new
+    private static object ToHistoryRow(RunRecord run, string jobId, BookedRun? booked) => new
     {
         jobId,
         phase = run.Phase.ToString(),
@@ -316,8 +316,8 @@ public static partial class DiagnosticsBundleBuilder
         vmReused = run.VmReused,
         // Issue #100: nothing writes the run row's cost columns any more. The cost is the spend-ledger figure the caller read; the VM seconds are the span the SAME ledger entry froze at
         // booking (never re-derived from the row, which can change afterwards), and null when the ledger booked nothing (a This PC run, an unpriced one, no VM ever seen).
-        vmSeconds = bookedSeconds,
-        estimatedCostUsd = bookedUsd ?? run.EstimatedCostUsd,
+        vmSeconds = booked?.Seconds,
+        estimatedCostUsd = booked?.Usd ?? run.EstimatedCostUsd,
         actualCostUsd = run.ActualCostUsd,
         cloudResultsDeleted = run.CloudResultsDeleted,
         appVersion = run.AppVersion,

@@ -6,7 +6,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// <summary>
 /// The clamp on the VM span a finished run is booked for (issue #109): its start (<see cref="RunRecord.VmReadyAt"/>) to its end (<see cref="RunRecord.FinishedAt"/>), but never longer than the
 /// run's own limit (the run limit its options name plus the grace the VM is created with, Hard Rule 10), because Compute cannot have run it longer. The spend ledger prices
-/// this span at booking and freezes it in the entry; the support zip reports the entry's frozen span (<see cref="IRunCostSource.GetBookedSecondsAsync"/>), not a fresh derivation from the row.
+/// this span at booking and freezes it in the entry; the support zip reports the entry's frozen span (<see cref="IRunCostSource.GetBookedRunsAsync"/>), not a fresh derivation from the row.
 /// </summary>
 public static class BookedVmSpan
 {

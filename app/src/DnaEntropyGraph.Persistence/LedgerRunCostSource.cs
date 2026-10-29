@@ -10,31 +10,20 @@ namespace DnaEntropyGraph.Persistence;
 public sealed class LedgerRunCostSource(ICostLedgerRepository ledger) : IRunCostSource
 {
     public async Task<IReadOnlyDictionary<string, double>> GetBookedAsync(CancellationToken cancellationToken)
+        => (await GetBookedRunsAsync(cancellationToken).ConfigureAwait(false)).ToDictionary(kv => kv.Key, kv => kv.Value.Usd, StringComparer.Ordinal);
+
+    public async Task<IReadOnlyDictionary<string, BookedRun>> GetBookedRunsAsync(CancellationToken cancellationToken)
     {
-        var booked = new Dictionary<string, double>(StringComparer.Ordinal);
+        var booked = new Dictionary<string, BookedRun>(StringComparer.Ordinal);
         foreach (var entry in await ledger.GetByKindAsync(SpendLedger.VmRuntimeKind, cancellationToken).ConfigureAwait(false))
         {
+            // The first entry of a run stands; its cost and its seconds are the same entry.
             if (entry.Kind == SpendLedger.VmRuntimeKind && entry.RunId is { } run && entry.UsdEst is { } usd && double.IsFinite(usd) && usd >= 0)
             {
-                booked.TryAdd(run, usd);
+                booked.TryAdd(run, new BookedRun(usd, Math.Max(0L, (long)Math.Round(((entry.EndedUtc ?? entry.StartedUtc) - entry.StartedUtc).TotalSeconds))));
             }
         }
 
         return booked;
-    }
-
-    public async Task<IReadOnlyDictionary<string, long>> GetBookedSecondsAsync(CancellationToken cancellationToken)
-    {
-        var seconds = new Dictionary<string, long>(StringComparer.Ordinal);
-        foreach (var entry in await ledger.GetByKindAsync(SpendLedger.VmRuntimeKind, cancellationToken).ConfigureAwait(false))
-        {
-            // The same entry GetBookedAsync reads (the first of a run stands), so the cost and the seconds are one booking.
-            if (entry.Kind == SpendLedger.VmRuntimeKind && entry.RunId is { } run && entry.UsdEst is { } usd && double.IsFinite(usd) && usd >= 0)
-            {
-                seconds.TryAdd(run, Math.Max(0L, (long)Math.Round(((entry.EndedUtc ?? entry.StartedUtc) - entry.StartedUtc).TotalSeconds)));
-            }
-        }
-
-        return seconds;
     }
 }
