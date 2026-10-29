@@ -44,7 +44,8 @@ public enum CloudResultsStatus
 
 /// <summary>
 /// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
-/// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one.
+/// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one, or of a
+/// <see cref="CloudResultsStatus.PartiallyDeleted"/> whose count could not be read (some files may have been deleted: the cause picks the action).
 /// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
 /// </summary>
 public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null)
@@ -220,7 +221,8 @@ public sealed class RunCloudResults : IRunCloudResults
         catch (PartialCloudDeleteException partial)
         {
             // Some objects are gone and some are not: the row is NOT marked deleted, so Delete cloud copy stays offered and the next press finishes it.
-            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining);
+            // With no count, the classified cause that stopped the sweep rides along so the page names its action (an unreadable count is not proof that nothing went).
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, partial.Remaining is null ? (partial.InnerException as CloudOperationException)?.Kind : null);
         }
         catch (CloudDeleteRefusedException refused)
         {

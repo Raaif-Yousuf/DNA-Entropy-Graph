@@ -528,6 +528,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.DeleteCloud(result.Status);
             }
 
+            // The count could not be read but the sweep stopped on a known cause: some files may be gone, and that cause picks the one action to take.
+            if (result.ObjectsLeft is null && result.ErrorKind is { } cause)
+            {
+                return RunsCopy.DeleteCloudPartialMaybe(cause);
+            }
+
             // Partway through: say how many are left (or that it could not be counted) and that the same button finishes it.
             if (result.ObjectsLeft is { } left)
             {

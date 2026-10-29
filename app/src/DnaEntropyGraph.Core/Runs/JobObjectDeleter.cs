@@ -7,7 +7,8 @@ namespace DnaEntropyGraph.Core.Runs;
 
 /// <summary>
 /// A job's cloud copy was only partly deleted (issues #262 and #534): some objects went and some are still there.
-/// <see cref="Remaining"/> is how many were under the prefix when the sweep stopped, or null when that could not be read.
+/// <see cref="Remaining"/> is how many were under the prefix when the sweep stopped, or null when that could not be read (then some may have gone or none:
+/// it is not known). <see cref="Exception.InnerException"/> is the classified failure that stopped the sweep, when there was one.
 /// Nothing is recorded as deleted; the same press finishes it.
 /// </summary>
 public sealed class PartialCloudDeleteException : Exception
@@ -121,9 +122,10 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         var left = await CountLeftAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
         if (left is null && failure is not null)
         {
-            // The count after the sweep could not be read, but the sweep itself failed with a real, classified error: that is what the person acts on.
-            // A partial delete of unknown size would lose it.
-            failure.Throw();
+            // The count after the sweep could not be read, and the sweep itself failed with a real, classified error: some objects may have gone before it
+            // (the failure can come after any number of them). That is a possibly-partial delete that CARRIES the classified cause as its inner exception, so
+            // the page can name the action for that cause without claiming that nothing was deleted (it does not know).
+            throw new PartialCloudDeleteException(null, failure.SourceException);
         }
 
         if (left == 0)

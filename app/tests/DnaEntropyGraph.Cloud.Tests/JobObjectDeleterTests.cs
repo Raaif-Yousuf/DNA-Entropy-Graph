@@ -43,22 +43,46 @@ public sealed class JobObjectDeleterTests
     [Fact]
     public void Is_available_because_a_real_gateway_is_behind_it() => Make().IsAvailable.ShouldBeTrue();
 
-    [Fact]
-    public async Task A_failed_sweep_whose_read_back_also_fails_surfaces_the_classified_sweep_failure_not_a_partial_delete_of_unknown_size()
+    /// <summary>A storage that really deletes two objects and then answers 403, and whose count after the sweep cannot be read.</summary>
+    private IStorageGateway SweepThat403sAfterTwoWithUnreadableReadBack()
     {
-        // Issue #262 review M2: the read-back swallows its own failure as "unknown"; that must not hide the real, classified error.
+        Seed(JobId, 4);
+        _gcp.WithPrefixDeleteFailingAfter(2, CloudErrorKind.Permission);
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
-        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
-            Task.FromResult(new PrefixUsage(3, 30)),
-            Task.FromException<PrefixUsage>(new IOException("read-back failed")));
-        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
-        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<int>(new CloudOperationException(new CloudError("FORBIDDEN", 403, "scripted"), CloudErrorKind.Permission)));
+        var counts = 0;
+        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
+            ? _gcp.GetPrefixUsageAsync(Bucket, Prefix, call.Arg<CancellationToken>())
+            : Task.FromException<PrefixUsage>(new IOException("read-back failed")));
+        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
+        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => _gcp.DeletePrefixAsync(Bucket, Prefix, call.Arg<CancellationToken>()));
+        return storage;
+    }
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => new JobObjectDeleter(storage, () => Installation).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+    [Fact]
+    public async Task A_sweep_that_deleted_some_then_failed_with_an_unreadable_read_back_is_a_possibly_partial_delete_that_carries_the_classified_cause()
+    {
+        // Issue #262 review round 2 (M): the old behaviour rethrew the bare 403, which the page worded as "nothing was deleted" although two objects had gone.
+        var storage = SweepThat403sAfterTwoWithUnreadableReadBack();
 
-        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        var ex = await Should.ThrowAsync<PartialCloudDeleteException>(() => new JobObjectDeleter(storage, () => Installation).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
+
+        ex.Remaining.ShouldBeNull();
+        ex.InnerException.ShouldBeOfType<CloudOperationException>().Kind.ShouldBe(CloudErrorKind.Permission);
+        _gcp.ObjectKeys(Bucket).Count.ShouldBe(3, "two objects really were deleted before the 403");
+    }
+
+    [Fact]
+    public async Task Run_cloud_results_maps_that_possibly_partial_delete_to_partially_deleted_with_the_cause_and_keeps_the_row()
+    {
+        var storage = SweepThat403sAfterTwoWithUnreadableReadBack();
+        var runs = new InMemoryRunRepository();
+        var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), runs, () => Path.GetTempPath(), TimeProvider.System);
+
+        var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, CloudErrorKind.Permission));
+        runs.AllRecordedInOrder.ShouldBeEmpty();
+        results.CanDelete(Run()).ShouldBeTrue();
     }
 
     [Fact]

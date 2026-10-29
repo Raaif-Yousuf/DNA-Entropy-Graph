@@ -2108,6 +2108,30 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
     <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
   </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
+    <value>Cloud copy may be partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
+    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
+    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
+  </data>
   <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
     <value>Not deleted</value>
   </data>

@@ -721,6 +721,26 @@ public sealed class HistoryViewModelTests
         _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
     }
 
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_PartialMaybe_Body_Permission")]
+    [InlineData(CloudErrorKind.OrgPolicy, "Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_PartialMaybe_Body_Billing")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_PartialMaybe_Body_Api")]
+    [InlineData(CloudErrorKind.Quota, "Runs_DeleteCloud_PartialMaybe_Body_Quota")]
+    [InlineData(CloudErrorKind.Network, "Runs_DeleteCloud_PartialMaybe_Body_Network")]
+    [InlineData(CloudErrorKind.Other, "Runs_DeleteCloud_PartialMaybe_Body_Other")]
+    public async Task A_possibly_partial_cloud_delete_with_a_known_cause_says_some_files_may_be_gone_and_names_that_causes_action(CloudErrorKind kind, string body)
+    {
+        // Issue #262 review round 2 (M): never "nothing was deleted" when the sweep may have removed some.
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialMaybe_Title", body, ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), Arg.Is<string>(b => b.StartsWith("Runs_DeleteCloud_Failed", StringComparison.Ordinal)), Arg.Any<ToastSeverity>());
+    }
+
     [Fact]
     public async Task A_partial_cloud_delete_with_one_file_left_uses_the_singular_copy()
     {

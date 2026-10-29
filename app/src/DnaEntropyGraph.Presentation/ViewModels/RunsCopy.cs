@@ -95,6 +95,21 @@ public static class RunsCopy
         _ => Pair("Runs_DeleteCloud_FailedOther_Title", "Runs_DeleteCloud_FailedOther_Body", ToastSeverity.Error),
     };
 
+    /// <summary>
+    /// A cloud delete that stopped on a classified failure and could not read what is left: some files may have been deleted and some may not, so it never says
+    /// "nothing was deleted". Each cause names its own one action, as <see cref="DeleteCloudFailed"/> does.
+    /// </summary>
+    public static RunsMessage DeleteCloudPartialMaybe(CloudErrorKind kind) => kind switch
+    {
+        CloudErrorKind.Permission => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Permission", ToastSeverity.Warning),
+        CloudErrorKind.OrgPolicy => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy", ToastSeverity.Warning),
+        CloudErrorKind.Billing => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Billing", ToastSeverity.Warning),
+        CloudErrorKind.ApiDisabled => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Api", ToastSeverity.Warning),
+        CloudErrorKind.Quota => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Quota", ToastSeverity.Warning),
+        CloudErrorKind.Network => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Network", ToastSeverity.Warning),
+        _ => Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialMaybe_Body_Other", ToastSeverity.Warning),
+    };
+
     /// <summary>One file left in storage after a partial cloud delete (singular body).</summary>
     public static readonly RunsMessage DeleteCloudPartialOne = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
 
@@ -139,6 +154,7 @@ public static class RunsCopy
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
         .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
+        .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
     ];
 
