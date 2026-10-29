@@ -2829,4 +2829,33 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
+  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
+    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
+    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
+    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
+  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
+    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
+    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
+  </data>
+  <data name="RunError_stockout_waited" xml:space="preserve">
+    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
+  </data>
+  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
+    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
+  </data>
+  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
+    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
+  </data>
+  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
+    <value>Wait for a graphics card</value>
+  </data>
 </root>
