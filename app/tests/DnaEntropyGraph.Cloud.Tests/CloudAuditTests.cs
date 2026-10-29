@@ -85,9 +85,84 @@ public class CloudAuditTests
         var create = log.Entries.Single(e => e.Operation == "Compute.CreateVm");
         create.JobId.ShouldBe("job-1");
         create.Resource.ShouldContain("deg-job-1");
-        create.RequestId.ShouldBe("job-1");
+        create.RequestId.ShouldNotBeNullOrEmpty();
         log.Entries.Single(e => e.Operation == "Compute.StopVm").JobId.ShouldBe("job-1");
         log.Entries.Where(e => e.Operation == "Storage.Upload").ShouldAllBe(e => e.Resource.EndsWith("/jobs/job-1", StringComparison.Ordinal) && e.JobId == "job-1");
+    }
+
+    [Fact]
+    public async Task Through_the_fake_the_started_and_finished_lines_of_a_CreateVm_carry_the_same_request_id()
+    {
+        // Issue #245 review M1: the fake used to overwrite the id the auditor minted before the started line.
+        var (runner, _, log) = Rig();
+
+        await runner.RunAsync(Request("job-m1"), CancellationToken.None);
+
+        var started = log.Started.Single(e => e.Operation == "Compute.CreateVm");
+        var finished = log.Entries.Single(e => e.Operation == "Compute.CreateVm");
+        started.RequestId.ShouldNotBeNullOrEmpty();
+        finished.RequestId.ShouldBe(started.RequestId);
+    }
+
+    [Fact]
+    public async Task A_timeout_while_the_callers_token_is_not_cancelled_is_not_recorded_as_cancelled()
+    {
+        // Issue #245 review M2: an HttpClient timeout surfaces as TaskCanceledException with the caller's token untouched.
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => null, TimeProvider.System);
+
+        await Should.ThrowAsync<TaskCanceledException>(() => auditor.RunAsync<int>("Test.Op", () => ("r", null), () => throw new TaskCanceledException("timed out"), cancellationToken: CancellationToken.None));
+
+        log.Entries.Single().Outcome.ShouldBe("timeout");
+    }
+
+    [Fact]
+    public async Task A_cancellation_the_caller_asked_for_is_still_recorded_as_cancelled()
+    {
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => null, TimeProvider.System);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => auditor.RunAsync<int>("Test.Op", () => ("r", null), () => throw new OperationCanceledException(cts.Token), cancellationToken: cts.Token));
+
+        log.Entries.Single().Outcome.ShouldBe("cancelled");
+    }
+
+    [Fact]
+    public async Task A_decorator_passes_the_callers_token_so_a_timeout_is_told_from_a_cancel()
+    {
+        var log = new MemoryLog();
+        var inner = Substitute.For<IComputeGateway>();
+        inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(Task.FromException(new TaskCanceledException("timed out")));
+        var gateway = new AuditedComputeGateway(inner, new CloudAuditor(log, () => null, TimeProvider.System));
+
+        await Should.ThrowAsync<TaskCanceledException>(() => gateway.StopVmAsync("deg-j", "z", CancellationToken.None));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Should.ThrowAsync<TaskCanceledException>(() => gateway.StopVmAsync("deg-j", "z", cts.Token));
+
+        log.Entries.Select(e => e.Outcome).ShouldBe(["timeout", "cancelled"]);
+    }
+
+    [Fact]
+    public async Task The_installation_id_is_read_once_and_a_null_is_retried_not_cached()
+    {
+        // Issue #245 review M3.
+        var reads = 0;
+        string? answer = null;
+        var log = new MemoryLog();
+        var auditor = new CloudAuditor(log, () => { reads++; return answer; }, TimeProvider.System);
+
+        await auditor.RunAsync("Test.Op", () => ("r", null), () => Task.CompletedTask, cancellationToken: TestContext.Current.CancellationToken);
+        log.Entries[0].InstallationId.ShouldBeNull();
+        answer = "install-9";
+        await auditor.RunAsync("Test.Op", () => ("r", null), () => Task.CompletedTask, cancellationToken: TestContext.Current.CancellationToken);
+        await auditor.RunAsync("Test.Op", () => ("r", null), () => Task.CompletedTask, cancellationToken: TestContext.Current.CancellationToken);
+
+        log.Entries[1].InstallationId.ShouldBe("install-9");
+        log.Entries[2].InstallationId.ShouldBe("install-9");
+        reads.ShouldBe(2, "a null is asked again, a real id exactly once");
     }
 
     [Fact]
@@ -419,7 +494,7 @@ public class CloudAuditTests
             });
             CloudAuditContext.Note("outer-req", null);
             return 1;
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         log.Entries.Single(e => e.Operation == "Inner").RequestId.ShouldBe("inner-req");
         log.Entries.Single(e => e.Operation == "Outer").RequestId.ShouldBe("outer-req");

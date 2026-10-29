@@ -1535,7 +1535,7 @@ Every call that changes something in the user's Google Cloud project leaves one 
   `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext`; other calls leave them null because
   the gateway interface does not surface them). The insert's `requestId` is client-made: the create decorator mints it BEFORE the started
   line (`mintRequestId`), the gateway sends that same id (`CloudAuditContext.RequestIdForCall`), so the started line and a finished line
-  for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`, `cancelled`, or the `CloudErrorClassifier` bucket), `errorCode`
+  for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`; `cancelled` only when the caller's own token was cancelled; `timeout` for any other cancellation, such as an HttpClient timeout; or the `CloudErrorClassifier` bucket), `errorCode`
   (Google's structured code, never the message) and `durationMs`.
 - **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
   email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and

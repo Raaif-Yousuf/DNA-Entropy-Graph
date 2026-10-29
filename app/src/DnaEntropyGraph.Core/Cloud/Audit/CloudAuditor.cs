@@ -5,6 +5,9 @@ namespace DnaEntropyGraph.Core.Cloud.Audit;
 /// <summary>Runs one mutating gateway call and records it: time, installation, operation, resource, ids, outcome class and duration. Reads are never passed here.</summary>
 public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> installationId, TimeProvider time)
 {
+    // Issue #245 review M3: a real id is read once and kept; a null (an unusable file) is not cached, so the next entry asks again.
+    private string? _installation;
+
     [GeneratedRegex(@"^[A-Za-z0-9_-]{1,64}$")]
     private static partial Regex SafeId();
 
@@ -29,7 +32,7 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
     /// <param name="describe">Names the resource and job id. Run INSIDE the guarded region: an argument that is null makes the call fail (and be recorded) instead of throwing out of the decorator.</param>
     /// <param name="started">True for a long mutation (create, reuse, start, delete a VM): a <c>started</c> line is written before the call, so a process killed mid-call still leaves evidence; the finished line carries the same correlation id.</param>
     /// <param name="mintRequestId">True when the gateway sends a client-made request id (the compute insert): one is minted here, before the <c>started</c> line, and the gateway reads it through <see cref="CloudAuditContext.RequestIdForCall"/>, so the started line and a failed finished line both carry it.</param>
-    public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false, bool mintRequestId = false)
+    public async Task<T> RunAsync<T>(string operation, Func<(string Resource, string? JobId)> describe, Func<Task<T>> call, Func<T, string?>? resourceFrom = null, bool started = false, bool mintRequestId = false, CancellationToken cancellationToken = default)
     {
         var start = time.GetTimestamp();
         using var scope = CloudAuditContext.Begin();
@@ -66,7 +69,7 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
             var (outcome, code) = ex switch
             {
                 CloudOperationException cloud => (Name(cloud.Kind), cloud.Error.Code),
-                OperationCanceledException => ("cancelled", null),
+                OperationCanceledException => (cancellationToken.IsCancellationRequested ? "cancelled" : "timeout", null),
                 _ => ("other", null),
             };
             Record(operation, resource, jobId, scope.Holder, outcome, code, start, "finished", correlation);
@@ -74,12 +77,12 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
         }
     }
 
-    public async Task RunAsync(string operation, Func<(string Resource, string? JobId)> describe, Func<Task> call, bool started = false)
+    public async Task RunAsync(string operation, Func<(string Resource, string? JobId)> describe, Func<Task> call, bool started = false, CancellationToken cancellationToken = default)
         => await RunAsync<bool>(operation, describe, async () =>
         {
             await call().ConfigureAwait(false);
             return true;
-        }, null, started).ConfigureAwait(false);
+        }, null, started, cancellationToken: cancellationToken).ConfigureAwait(false);
 
 
     public static string Name(CloudErrorKind kind) => kind switch
@@ -102,7 +105,7 @@ public sealed partial class CloudAuditor(ICloudAuditLog log, Func<string?> insta
             string? installation = null;
             try
             {
-                installation = installationId();
+                installation = _installation ??= installationId();
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
