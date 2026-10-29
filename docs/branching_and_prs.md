@@ -138,10 +138,13 @@ a moment after the PR opens). Console output is ASCII. Without the flag nothing 
 
 In order: fetch; the sha must be the branch tip (a stale sha refuses); a control-byte scan of the changed text files
 (MEASURED 2026-10-02: an agent's `scripts\v` became `\x0b`); a detached worktree under `%TEMP%\landwt` at the sha; origin/main
-merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine; **any other
+merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine, then normalised: a `## Queue` row that repeats an
+earlier row's issue + "Do this" (the key `check_totest_format.py` uses) is dropped keeping main's copy, and a row missing its closing `|`
+is closed, so a stacked chain whose bottom just landed no longer fails premerge (#892); **any other
 conflict aborts the merge and refuses with the file list**, so the lane resolves it); premerge inside the worktree with
 `worker\.venv` reached through a junction and `PYTHONPATH=<wt>\worker\src`; on green, `HEAD` is pushed to
-`refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. Red premerge prints the failing gates and the
+`refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. The sha recorded for the `gh pr merge` hook (`landed-prs.json`) is the pushed `HEAD` (the PR head, a merge
+commit when the branch was behind), so `gh pr merge <n> --match-head-commit <that sha>` is allowed (#904). Red premerge prints the failing gates and the
 log path and pushes nothing.
 
 **The junction is removed with `os.rmdir`, then checked, then `git worktree remove`, on success and on every failure**

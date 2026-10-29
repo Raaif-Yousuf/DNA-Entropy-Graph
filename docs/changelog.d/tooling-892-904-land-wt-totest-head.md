@@ -1,0 +1,1 @@
+- land_wt normalises docs/ToTest.md after the union (drops duplicate rows, closes missing pipes) and records the pushed head for the merge hook (#892, #904).

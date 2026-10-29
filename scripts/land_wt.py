@@ -623,6 +623,40 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
+def normalize_totest(text: str, main_text: str) -> tuple[str, int, int]:
+    """After the union: close table rows missing their trailing `|`, then drop a row that repeats an earlier row's
+    duplicate key (check_totest_format's own: issue + "Do this"). The copy kept is main's: the union puts main's
+    lines after the lane's, so it is the LAST copy that main also carries; with none from main, the first.
+    Only `## Queue` table rows are touched. Returns (text, rows dropped, rows closed)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check_totest_format as ctf
+
+    lines = text.splitlines(keepends=True)
+    closed = 0
+    rows = ctf.parse_rows(text)
+    for row in rows:
+        body = lines[row.line_no - 1]
+        bare = body.rstrip("\r\n")
+        if not bare.rstrip().endswith("|"):
+            lines[row.line_no - 1] = bare.rstrip() + " |" + body[len(bare) :]
+            closed += 1
+    closed_text = "".join(lines)
+    main_rows = {ln.strip() for ln in main_text.splitlines()} if main_text else set()
+    by_key: dict[tuple[str, str], list[int]] = {}
+    for row in ctf.parse_rows(closed_text):
+        key = ctf.duplicate_key(row)
+        if key is not None:
+            by_key.setdefault(key, []).append(row.line_no - 1)
+    drop: set[int] = set()
+    for at in by_key.values():
+        if len(at) < 2:
+            continue
+        keep = next((i for i in reversed(at) if lines[i].strip() in main_rows), at[0])  # the union puts main after the lane
+        drop.update(i for i in at if i != keep)
+    kept = "".join(ln for i, ln in enumerate(lines) if i not in drop)
+    return kept, len(drop), closed
+
+
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     if git(wt, "merge-base", "--is-ancestor", f"{REMOTE}/{BASE}", "HEAD", check=False).returncode == 0:
         return
@@ -657,7 +691,16 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
             for path, data in zip((ours, base, theirs), parts, strict=True):
                 path.write_bytes(data)
             git(wt, "merge-file", "--union", str(ours), str(base), str(theirs), check=False)
-            (wt / name).write_bytes(ours.read_bytes())
+            merged_bytes = ours.read_bytes()
+        if name == TOTEST:
+            try:
+                fixed, dropped, closed = normalize_totest(merged_bytes.decode("utf-8"), parts[2].decode("utf-8"))
+            except UnicodeDecodeError:  # not text we can reason about: leave the union as git made it
+                fixed, dropped, closed = merged_bytes.decode("utf-8", errors="replace"), 0, 0
+            if dropped or closed:
+                merged_bytes = fixed.encode("utf-8")
+                ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")
+        (wt / name).write_bytes(merged_bytes)
         git(wt, "add", "--", name)
         ctx.say(f"- union-resolved {name}")
     git(wt, *ident, "commit", "--no-edit", "-q")
@@ -918,7 +961,7 @@ def land(
         _push(ctx, wt, land_branch, pushed_head)
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
-        _record_landed(ctx, url, full_sha)
+        _record_landed(ctx, url, pushed_head)  # the PR head the hook must allow, not the pre-merge lane tip (#904)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
             rc = _merge_when_green(ctx, url, pushed_head, checks_timeout, checks_poll, rerun_failed_once)
