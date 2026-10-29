@@ -175,7 +175,110 @@ public sealed partial class ViewerViewModel : ObservableObject
                 RetryCommand.NotifyCanExecuteChanged();
                 GoToContigCommand.NotifyCanExecuteChanged();
                 SyncPageKeys();
+                OnPropertyChanged(nameof(AreSmoothedTracksEnabled));
             }
+        }
+    }
+
+    /// <summary>Issue #552: the run's smoothed entropy tracks, each a switch (off at first: the raw track stays primary).</summary>
+    public ObservableCollection<ViewerOptionalTrack> SmoothedTracks { get; } = [];
+
+    [ObservableProperty]
+    private bool _hasSmoothedTracks;
+
+    /// <summary>Why a switched-on track is not drawn (the page could not load it): one reason, one action. Empty when there is nothing to say.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsTrackNoticeVisible))]
+    private string _trackNoticeText = string.Empty;
+
+    public bool IsTrackNoticeVisible => TrackNoticeText.Length > 0;
+
+    /// <summary>The switches work only while the page shows the run: a track cannot be added to a page that has not drawn it.</summary>
+    public bool AreSmoothedTracksEnabled => _pageReady && Status == ViewerStatus.Ready;
+
+    private bool _settingTracks;
+
+    private void FillSmoothedTracks(IReadOnlyList<SmoothedTrackOption> options)
+    {
+        SmoothedTracks.Clear();
+        foreach (var o in options)
+        {
+            var window = o.Window.ToString(System.Globalization.CultureInfo.CurrentCulture);
+            SmoothedTracks.Add(new ViewerOptionalTrack(
+                o.Window,
+                o.Format,
+                o.Url,
+                string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("Viewer_SmoothedToggle"), window),
+                string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("Viewer_SmoothedTrackName"), window),
+                OnOptionalTrackChanged));
+        }
+
+        HasSmoothedTracks = SmoothedTracks.Count > 0;
+        TrackNoticeText = string.Empty;
+        OnPropertyChanged(nameof(AreSmoothedTracksEnabled));
+    }
+
+    // The page could not draw a track the user switched on: put the switch back to off (without telling the page) and say what to do.
+    private void OnTrackFailed(string? name)
+    {
+        var track = SmoothedTracks.FirstOrDefault(t => t.Name == name);
+        if (track is null)
+        {
+            return;
+        }
+
+        _settingTracks = true;
+        try
+        {
+            track.IsOn = false;
+        }
+        finally
+        {
+            _settingTracks = false;
+        }
+
+        TrackNoticeText = string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("Viewer_TrackFailed"), track.Window);
+    }
+
+    // A freshly drawn page has none of the optional tracks, so the switches go back to off without telling the page.
+    private void ResetSmoothedSwitches()
+    {
+        _settingTracks = true;
+        try
+        {
+            foreach (var track in SmoothedTracks)
+            {
+                track.IsOn = false;
+            }
+        }
+        finally
+        {
+            _settingTracks = false;
+        }
+    }
+
+    private void OnOptionalTrackChanged(ViewerOptionalTrack track)
+    {
+        if (_settingTracks || !AreSmoothedTracksEnabled)
+        {
+            return;
+        }
+
+        TrackNoticeText = string.Empty;
+
+        if (track.IsOn)
+        {
+            // The same 0 to 2 bit scale as the raw track (Hard Rule 3), so the two are comparable by eye.
+            Send(new
+            {
+                cmd = "track",
+                op = "add",
+                config = new { type = "wig", format = track.Format, name = track.Name, url = track.Url, min = 0, max = 2, autoscale = false },
+            });
+        }
+        else
+        {
+            Send(new { cmd = "track", op = "remove", name = track.Name });
         }
     }
 
@@ -349,6 +452,7 @@ public sealed partial class ViewerViewModel : ObservableObject
 
         FallbackContig = null;
         _loadJson = plan.LoadMessageJson;
+        FillSmoothedTracks(plan.SmoothedTracks);
         // Map first: the host remaps run.deg on this change, before the load command goes out.
         MapRunFolder = plan.RunFolder;
         ShowLoading();
@@ -472,6 +576,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         {
             case "ready":
                 _pageReady = true;
+                OnPropertyChanged(nameof(AreSmoothedTracksEnabled));
                 _keysOn = false;
                 if (_dark)
                 {
@@ -493,6 +598,7 @@ public sealed partial class ViewerViewModel : ObservableObject
 
                     // The page reports where it landed, so the keys work before the first mouse pan (the locus listener attaches after the first draw).
                     _locus = ViewerLocus.TryParse(ReadString(json, "locus"), out var first) ? first : null;
+                    ResetSmoothedSwitches();
                     Status = ViewerStatus.Ready;
                     // A freshly drawn page shows the first record; keep the selector in step with it.
                     SelectWithoutGoto(InitialContig());
@@ -519,6 +625,9 @@ public sealed partial class ViewerViewModel : ObservableObject
                 break;
             case "key":
                 OnViewerKey(json);
+                break;
+            case "trackFailed":
+                OnTrackFailed(ReadString(json, "name"));
                 break;
         }
     }
@@ -557,6 +666,7 @@ public sealed partial class ViewerViewModel : ObservableObject
     public void OnViewerProcessFailed()
     {
         _pageReady = false;
+        OnPropertyChanged(nameof(AreSmoothedTracksEnabled));
         _keysOn = false;
         FailKeepingRun(ViewerFailure.ProcessFailed);
     }
@@ -630,6 +740,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         _loadJson = null;
         _locus = null;
         MapRunFolder = null;
+        FillSmoothedTracks([]);
         _contigGeneration++;
         ClearContigs();
         FallbackContig = null;
