@@ -101,6 +101,64 @@ public sealed class RunTransferResumeReviewTests : IDisposable
         Directory.GetFiles(outside, "*", SearchOption.AllDirectories).ShouldBeEmpty("nothing lands in the junction's target");
     }
 
+    [Theory]
+    [InlineData(@"Q:\a", @"Q:\", true)]
+    [InlineData(@"Q:\a\b", @"Q:\", false)]
+    [InlineData(@"C:\out\stem", @"C:\out", true)]
+    [InlineData(@"C:\out\stem\deeper", @"C:\out", false)]
+    [InlineData(@"C:\out", @"C:\out", false)]
+    [InlineData(@"C:\other\stem", @"C:\out", false)]
+    public void Resume_reuses_only_a_direct_child_of_the_output_folder(string folder, string outputFolder, bool expected)
+    {
+        // The run folder is always created directly under the output folder (CreateUnique), so a deeper recorded path is not one of ours.
+        RunTransfer.IsInsideOutputFolder(folder, outputFolder).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void A_link_check_that_fails_on_the_disk_is_the_runs_download_failure_not_a_raw_exception()
+    {
+        var ex = Should.Throw<RunFailureException>(() => RunTransfer.EnsureNoLinkedFolder(@"C:\run", @"C:\run\seq\x", "Result file 1 of input in1", (_, _) => throw new UnauthorizedAccessException("no access")));
+
+        ex.Code.ShouldBe(RunErrorCodes.DownloadFailed);
+    }
+
+    [Fact]
+    public async Task The_run_folder_itself_swapped_for_a_junction_is_noticed_and_nothing_lands_in_its_target()
+    {
+        const string jobId = "job-resume-swap-root";
+        var request = TestInputs.Request(jobId, new VmSpec("my-project", "install-1", jobId, "evo2_7b", "0.1.0", "stop", "g2-standard-8", TimeSpan.FromHours(4), "DELETE"));
+        var outside = Path.Combine(_base, "outside-root");
+        Directory.CreateDirectory(Path.Combine(outside, "seq"));
+        var worker = "worker bytes"u8.ToArray();
+        var doc = new WorkerResultDocument("done", [new WorkerInputResult("in1", "done", [new WorkerResultFile("output/seq/seq.bedgraph", Convert.ToHexString(SHA256.HashData(worker)), worker.Length)], null, null)], null, null);
+
+        var swapped = false;
+        var storage = Substitute.For<IStorageGateway>();
+        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            var partial = ci.ArgAt<string>(2);
+            File.WriteAllBytes(partial, worker);
+            var runFolder = Path.GetDirectoryName(Path.GetDirectoryName(partial))!;
+
+            // The run folder itself (not a folder below it) becomes a junction, so no component below it is a link.
+            Directory.Move(runFolder, runFolder + "-moved");
+            swapped = TryMakeJunction(runFolder, outside);
+            return Task.FromResult(true);
+        });
+
+        var settings = new CloudRunSettings();
+        var transfer = new RunTransfer(storage, new GatewayCalls(settings, _gcp), settings, new RunRowStore(_runs, null), null);
+
+        var failure = await Should.ThrowAsync<RunFailureException>(() => transfer.DownloadAsync(request, Bkt, doc, CancellationToken.None));
+
+        if (!swapped)
+        {
+            Assert.Skip("A junction could not be created on this machine.");
+        }
+
+        failure.Message.ShouldContain("linked folder");
+        Directory.GetFiles(outside, "*", SearchOption.AllDirectories).ShouldBeEmpty("nothing lands in the junction's target");
+    }
     private bool TryMakeJunction(string link, string target)
     {
         try

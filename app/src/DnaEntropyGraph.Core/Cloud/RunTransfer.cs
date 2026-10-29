@@ -125,10 +125,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 }
 
                 // Hard Rule 14: a junction or symlink below the run folder would send the temp file, the rename and the final move somewhere else.
-                EnsureNoLinkedFolder(runFolderFull, destination, label);
-
                 try
                 {
+                    EnsureNoLinkedFolder(runFolderFull, destination, label);
                     await DownloadFileAsync(runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
@@ -155,15 +154,30 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         }
     }
 
-    /// <summary>Throws when any folder from the run folder down to the file's folder is a junction or symlink. Called again just before the temp file is created, after it is streamed and before the final move, because a link can appear in between.</summary>
-    private static void EnsureNoLinkedFolder(string runFolderFull, string destination, string label)
+    /// <summary>
+    /// Throws when the run folder itself or any folder from it down to the file's folder is a junction or symlink. Called again just before the temp file is created, after it is
+    /// streamed and before the final move, because a link can appear in between. A disk or access error while checking is the run's download failure, never a raw exception.
+    /// <paramref name="noLinks"/> is a test seam for the walk below the run folder.
+    /// </summary>
+    internal static void EnsureNoLinkedFolder(string runFolderFull, string destination, string label, Func<string, string, bool>? noLinks = null)
     {
-        if (!RunOutputRoot.NoReparseBetween(runFolderFull, Path.GetDirectoryName(destination)!))
+        bool clean;
+        try
+        {
+            var runFolderInfo = new DirectoryInfo(runFolderFull);
+            clean = !(runFolderInfo.Exists && runFolderInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    && (noLinks ?? ((root, path) => RunOutputRoot.NoReparseBetween(root, path)))(runFolderFull, Path.GetDirectoryName(destination)!);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} could not be checked for linked folders: {ex.GetType().Name}.");
+        }
+
+        if (!clean)
         {
             throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
         }
     }
-
     private async Task DownloadFileAsync(string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
@@ -320,6 +334,15 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         return folder;
     }
 
+    /// <summary>The run folder is always created directly under the output folder (CreateUnique), so only a direct child with no link on the way is ours to reuse.</summary>
+    private static bool ReusableRunFolder(string folder, string outputFolder)
+    {
+        var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)));
+        return parent is not null
+               && string.Equals(Path.TrimEndingDirectorySeparator(parent), Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputFolder)), StringComparison.OrdinalIgnoreCase)
+               && RunOutputRoot.IsUnderRootWithoutLinks(folder, outputFolder);
+    }
+
     /// <summary>
     /// Whether a recorded run folder may be reused: inside the output folder and a real folder with no link below it (a whole-drive output folder is fine, reuse only writes the
     /// run's own files). A check that fails on the disk or the path means "not reusable", never an exception out of resume. <paramref name="containment"/> is a test seam.
@@ -328,7 +351,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
     {
         try
         {
-            return (containment ?? RunOutputRoot.IsUnderRootWithoutLinks)(folder, outputFolder);
+            return (containment ?? ReusableRunFolder)(folder, outputFolder);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
         {
