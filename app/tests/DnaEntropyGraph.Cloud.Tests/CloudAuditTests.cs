@@ -425,6 +425,7 @@ public class CloudAuditTests
         [typeof(IBillingGateway)] = ([("LinkProjectAsync", "Billing.LinkProject")], ["GetBillingStatusAsync", "ListOpenBillingAccountsAsync"]),
         [typeof(IProjectCatalogGateway)] = ([("CreateProjectAsync", "ProjectCatalog.CreateProject")], ["ListActiveProjectsAsync", "GetProjectAsync"]),
         [typeof(IQuotaGateway)] = ([("RequestQuotaIncreaseAsync", "Quota.RequestQuotaIncrease")], ["GetGpuQuotaAsync", "ReadQuotaAsync", "GetQuotaIncreaseEligibilityAsync"]),
+        [typeof(IPricingCatalogGateway)] = ([], ["ListComputeSkusAsync"]),
     };
 
     [Fact]

@@ -199,3 +199,16 @@ public sealed class AuditedQuotaGateway(IQuotaGateway inner, CloudAuditor audito
     public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
         => inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken);
 }
+
+public sealed class AuditedPricingCatalogGateway : IPricingCatalogGateway, IAuditedGateway
+{
+    private readonly IPricingCatalogGateway _inner;
+
+    // The auditor is taken like every decorator's (the registration and the guard build all of them the same way) but not used: a pure read of the public price catalog (#214) changes nothing in the user's project, so nothing is logged.
+    public AuditedPricingCatalogGateway(IPricingCatalogGateway inner, CloudAuditor auditor) => _inner = inner;
+
+    public object Inner => _inner;
+
+    public Task<IReadOnlyList<CatalogSku>> ListComputeSkusAsync(CancellationToken cancellationToken)
+        => _inner.ListComputeSkusAsync(cancellationToken);
+}
