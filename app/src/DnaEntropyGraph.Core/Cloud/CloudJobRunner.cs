@@ -119,6 +119,12 @@ public sealed class CloudJobRunner
     /// <summary>Issue #675: told when a stage is taking longer than usual (75 percent of its deadline) and when a stall question opens or is withdrawn. Called on the runner's own task: a UI must marshal. A handler that throws is ignored.</summary>
     public Action<RunNotice>? OnNotice { get => _settings.OnNotice; init => _settings.OnNotice = value; }
 
+    /// <summary>Issue #938: how long after a cancel gave up on an in-flight create the app keeps watching to delete the VM that create makes when it lands (default 15 minutes).</summary>
+    public TimeSpan LateCreateReapWindow { get => _settings.LateCreateReapWindow; init => _settings.LateCreateReapWindow = value; }
+
+    /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Called on a background task: a UI must marshal. A handler that throws is ignored.</summary>
+    public Action<LateCreateOutcome>? OnLateCreate { get => _settings.OnLateCreate; init => _settings.OnLateCreate = value; }
+
     /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires, instead of the VM being ended at once; see <see cref="StallDecision"/>. Null keeps the old behaviour.</summary>
     public StallDecision? OnStall { get => _settings.OnStall; init => _settings.OnStall = value; }
 
@@ -187,7 +193,7 @@ public sealed class CloudJobRunner
         _transfer = new RunTransfer(storageGateway, _calls, _settings, _rows);
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
-        _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings));
+        _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings), _settings);
         _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
     }

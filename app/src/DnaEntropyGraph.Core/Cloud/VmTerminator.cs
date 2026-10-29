@@ -226,9 +226,126 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return error;
     }
 
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken)
+    /// <summary>
+    /// The VM a create that answered made, looked at AGAIN now (never a remembered descriptor): null when it is gone (the worker or the platform ended it) or is not this
+    /// job's, else what is there to delete. Issue #938: the label listing can lag a create that already answered, so a cancel also deletes these by name.
+    /// </summary>
+    private async Task<VmDescriptor?> LookAgainAsync(string jobId, VmDescriptor answered, CancellationToken cancellationToken)
     {
-        var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+        var fresh = await calls.CallAsync(token => compute.GetVmAsync(answered.Name, answered.Zone, token), cancellationToken).ConfigureAwait(false);
+        return fresh is not null && (fresh.Labels is null ? fresh.Name == $"deg-{jobId}" : fresh.Labels.TryGetValue("job-id", out var owner) && owner == jobId) ? fresh : null;
+    }
+
+    private static string ErrorClassOf(Exception ex)
+        => (ex as CloudOperationException)?.Kind.ToString().ToLowerInvariant() ?? "other";
+
+    /// <summary>
+    /// Issue #938: a create the cancel stopped waiting for has landed (or failed, or never will within <see cref="CloudRunSettings.LateCreateReapWindow"/>). Deletes the VM it made, by
+    /// name, bounded by <see cref="CloudRunSettings.LifecycleTimeout"/> and a per-call deadline, and reads it back. The VM is looked at again first, and a delete that errors is
+    /// judged by that look (another delete, the worker or the platform may have got there first), so a lost race is never a failure. Never throws.
+    /// </summary>
+    public async Task<LateCreateOutcome> ReapLateCreateAsync(string jobId, Task<VmDescriptor> create)
+    {
+        try
+        {
+            var winner = await Task.WhenAny(create, Task.Delay(settings.LateCreateReapWindow, settings.TimeProvider)).ConfigureAwait(false);
+            if (winner != create)
+            {
+                return new LateCreateOutcome(jobId, LateCreateState.GaveUp);
+            }
+
+            if (create.IsFaulted || create.IsCanceled)
+            {
+                _ = create.Exception;
+                return new LateCreateOutcome(jobId, LateCreateState.CreateFailed);
+            }
+
+            var answered = create.Result;
+            var clockStart = settings.StartClock();
+            string? lastError = null;
+            var deleteSent = false;
+            while (true)
+            {
+                VmDescriptor? present;
+                try
+                {
+                    present = await LookAgainAsync(jobId, answered, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    lastError = ErrorClassOf(ex);
+                    present = answered; // an unreadable VM is treated as present: the delete below is the safe move
+                }
+
+                if (present is null)
+                {
+                    return new LateCreateOutcome(jobId, deleteSent ? LateCreateState.Deleted : LateCreateState.NothingToDelete);
+                }
+
+                try
+                {
+                    await calls.CallAsync(
+                        async token =>
+                        {
+                            try
+                            {
+                                await compute.DeleteVmAsync(answered.Name, answered.Zone, token).ConfigureAwait(false);
+                            }
+                            catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+                            {
+                                // Already gone: the state wanted.
+                            }
+
+                            return true;
+                        },
+                        CancellationToken.None).ConfigureAwait(false);
+                    lastError = null;
+                    deleteSent = true;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ErrorClassOf(ex);
+                }
+
+                if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
+                {
+                    // One last look: a delete that errored or lagged may still have worked.
+                    try
+                    {
+                        if (await LookAgainAsync(jobId, answered, CancellationToken.None).ConfigureAwait(false) is null)
+                        {
+                            return new LateCreateOutcome(jobId, LateCreateState.Deleted);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError ??= ErrorClassOf(ex);
+                    }
+
+                    return new LateCreateOutcome(jobId, LateCreateState.DeleteFailed, lastError ?? "other");
+                }
+
+                await settings.DelayAsync(settings.LifecyclePollInterval, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            return new LateCreateOutcome(jobId, LateCreateState.DeleteFailed, ErrorClassOf(ex));
+        }
+    }
+
+    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken, IReadOnlyList<VmDescriptor>? answeredCreates = null)
+    {
+        var owned = (await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false)).ToList();
+        foreach (var answered in answeredCreates ?? [])
+        {
+            // The listing may lag a create that already answered (#938): such a VM is found by name, and only if it is still there and this job's.
+            if (!owned.Any(o => o.Name == answered.Name && o.Zone == answered.Zone) && await LookAgainAsync(jobId, answered, cancellationToken).ConfigureAwait(false) is { } still)
+            {
+                owned.Add(still);
+            }
+        }
+
         string? deleteError = null;
         foreach (var vm in owned)
         {
@@ -265,15 +382,24 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         var clockStart = settings.StartClock();
         while (true)
         {
-            var remaining = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
-            if (remaining.Count == 0)
+            var remaining = (await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false)).Count;
+            foreach (var answered in answeredCreates ?? [])
+            {
+                // Read back by name too: a lagging listing says "none" for a VM that is still there.
+                if (await LookAgainAsync(jobId, answered, cancellationToken).ConfigureAwait(false) is not null)
+                {
+                    remaining++;
+                }
+            }
+
+            if (remaining == 0)
             {
                 break;
             }
 
             if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
             {
-                return $"{remaining.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete.";
+                return $"{remaining} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete.";
             }
 
             await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
@@ -281,7 +407,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
         return createsSettled
             ? null
-            : $"A create request was still in flight after {settings.CreateSettleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s, so a VM may still appear.";
+            : $"A create request was still in flight after {settings.CreateSettleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s, so a VM may still appear. The app deletes it if it does; check the Cloud page to be sure.";
     }
 
     /// <summary>

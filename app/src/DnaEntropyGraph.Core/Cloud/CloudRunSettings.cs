@@ -11,6 +11,15 @@ internal sealed class CloudRunSettings
 
     public TimeSpan CreateSettleTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Issue #938: how long after a cancel gave up on an in-flight create the app keeps watching for it, to delete the VM it makes when it lands. After this
+    /// the VM's own maxRunDuration (Hard Rule 10) is the backstop. THEORY (unverified): 15 minutes outlasts any create Compute accepts; a real one answers in seconds.
+    /// </summary>
+    public TimeSpan LateCreateReapWindow { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Null means nobody is listening (it is still done).</summary>
+    public Action<LateCreateOutcome>? OnLateCreate { get; set; }
+
     public TimeSpan? UploadTimeout { get; set; }
 
     public TimeSpan BootTimeout { get; set; } = TimeSpan.FromMinutes(8);

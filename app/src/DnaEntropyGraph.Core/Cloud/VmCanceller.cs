@@ -7,7 +7,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// delete every VM this job's id owns (by label lookup, not a remembered zone), then record exactly one terminal state.
 /// The in-flight state stays owned by <see cref="VmProvisioner"/>; this only asks it to settle.
 /// </summary>
-internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, VmTerminator terminator, GracefulCancel graceful)
+internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, VmTerminator terminator, GracefulCancel graceful, CloudRunSettings settings)
 {
     public async Task CancelAsync(string jobId, CancellationToken cancellationToken)
     {
@@ -39,6 +39,14 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         // A create the caller gave up on can still land. Wait for it (bounded) before looking, or the VM appears
         // after the run is recorded Cancelled and nothing ever deletes it.
         var settled = await provisioner.SettleInflightCreatesAsync(jobId).ConfigureAwait(false);
+
+        // Issue #938: the creates of THIS attempt, taken now, so they belong to this cancel alone (a later attempt of the job registers its own). One that answered is
+        // deleted by name below even when the label listing lags; one still in flight is cleaned up when it lands, after the outcome is recorded.
+        var attemptCreates = provisioner.TakeOwnedCreates(jobId);
+        // One look at each, so a create that finishes during the partition lands in exactly one list and none is missed.
+        var looked = attemptCreates.Select(t => (Task: t, Done: t.IsCompleted)).ToList();
+        var answered = looked.Where(x => x.Done && x.Task.IsCompletedSuccessfully).Select(x => x.Task.Result).ToList();
+        var late = looked.Where(x => !x.Done).Select(x => x.Task).ToList();
 
         // Issue #92: a request still queued is deleted by its own name as well as by label.
         var queued = provisioner.TakePendingRequests(jobId);
@@ -76,7 +84,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 }
             }
 
-            failure = await DeleteAllAsync(jobId, settled, queued, cancellationToken).ConfigureAwait(false);
+            failure = await DeleteAllAsync(jobId, settled, queued, answered, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -88,7 +96,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // last attempt that the caller's token cannot cut, then the terminal state is recorded from what it finds.
             try
             {
-                failure = await DeleteAllAsync(jobId, settled, queued, CancellationToken.None).ConfigureAwait(false);
+                failure = await DeleteAllAsync(jobId, settled, queued, answered, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -98,12 +106,54 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         // Hard Rule 11: a cancel ends in exactly one recorded terminal state. Failed names the VM to delete by hand.
         await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
+
+        foreach (var create in late)
+        {
+            _ = Task.Run(() => ReapLateCreateAsync(jobId, create));
+        }
     }
 
-    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, CancellationToken cancellationToken)
+    /// <summary>
+    /// Issue #938: waits (bounded by the reap window) for one create the cancel stopped waiting for, deletes the VM it made, tells the listener how that ended (ids and classes only),
+    /// and, when the cancel was recorded Failed for exactly this, says in the row what became of the VM. Never throws.
+    /// </summary>
+    private async Task ReapLateCreateAsync(string jobId, Task<VmDescriptor> create)
+    {
+        var outcome = await terminator.ReapLateCreateAsync(jobId, create).ConfigureAwait(false);
+        try
+        {
+            var detail = outcome.State switch
+            {
+                LateCreateState.Deleted => "The create request that was still in flight landed later, and the VM it made was deleted.",
+                LateCreateState.NothingToDelete => "The create request that was still in flight landed later, and no VM of this run was left to delete.",
+                LateCreateState.CreateFailed => "The create request that was still in flight failed, so it made no VM.",
+                LateCreateState.DeleteFailed => "The create request that was still in flight landed later, and its VM could not be deleted. Delete it from the Cloud page.",
+                _ => "The create request that was still in flight had not landed after the app stopped watching for it. If a VM appears, delete it from the Cloud page.",
+            };
+            await rows.UpdateRowAsync(
+                jobId,
+                row => row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed ? row with { ErrorDetail = $"{row.ErrorDetail} {detail}".Trim() } : row,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The row is a courtesy; the clean-up already happened.
+        }
+
+        try
+        {
+            settings.OnLateCreate?.Invoke(outcome);
+        }
+        catch (Exception)
+        {
+            // A listener that throws must not matter to the clean-up.
+        }
+    }
+
+    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<VmDescriptor> answered, CancellationToken cancellationToken)
     {
         var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
-        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
+        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken, answered).ConfigureAwait(false);
         return ownedNote ?? queuedNote;
     }
 

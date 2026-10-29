@@ -766,6 +766,20 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private volatile bool _labelListingBlind;
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(string Name, string Zone)> _deleteAttempts = new();
+
+    /// <summary>Issue #938: while true <see cref="FindByJobIdAsync"/> lists nothing, as a label index that has not caught up with a create that already answered. <see cref="GetVmAsync"/> still sees the VM.</summary>
+    public bool LabelListingBlind
+    {
+        get => _labelListingBlind;
+        set => _labelListingBlind = value;
+    }
+
+    /// <summary>Every <see cref="DeleteVmAsync"/> request made so far, in order, whether or not the VM existed or the call was scripted to fail.</summary>
+    public IReadOnlyList<(string Name, string Zone)> DeleteAttempts => _deleteAttempts.ToArray();
+
     /// <summary>Completes when a blocked <see cref="CreateVmAsync"/> has started waiting.</summary>
     public Task CreateVmEntered => _createGate?.Entered.Task ?? Task.CompletedTask;
 
@@ -1670,6 +1684,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        _deleteAttempts.Enqueue((vmName, zone));
         ThrowIfScriptedTransient();
         var delay = TimeSpan.FromTicks(Interlocked.Exchange(ref _firstDeleteDelayTicks, 0));
         if (delay > TimeSpan.Zero)
@@ -1738,6 +1753,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ExpireOverdueVms();
+        if (_labelListingBlind)
+        {
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>([]);
+        }
+
         var name = $"deg-{jobId}";
         // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
         IReadOnlyList<VmDescriptor> matches = _vms.Values

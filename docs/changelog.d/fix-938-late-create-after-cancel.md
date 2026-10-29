@@ -1,0 +1,1 @@
+- fix(cloud): a VM whose create landed after a cancel stopped waiting for it is now deleted when it lands (bounded, retried, read back, reported through OnLateCreate), a create that answered while the label listing lagged is deleted by name, and neither ever touches a later attempt of the same job or a reused VM. #938
