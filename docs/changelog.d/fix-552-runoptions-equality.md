@@ -1,0 +1,1 @@
+- Run options now compare by value including the smoothing windows (#552): a run read back from history equals the options it was started with, so Rerun and the WaitForGpu rerun start the same run again, and two option sets with the same windows are equal. No user-visible text changed.

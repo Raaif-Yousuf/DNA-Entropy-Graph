@@ -30,6 +30,8 @@ public sealed partial class SettingsPage : Page
     public SettingsTransferViewModel Transfer { get; }
     public TourViewModel Tour { get; }
 
+    public PrototypeImportViewModel PrototypeImport { get; }
+
     public SettingsPage()
     {
         Budget = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<BudgetSettingsViewModel>();
@@ -44,6 +46,7 @@ public sealed partial class SettingsPage : Page
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         Transfer = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsTransferViewModel>();
+        PrototypeImport = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<PrototypeImportViewModel>();
         Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();
         InitializeComponent();
     }

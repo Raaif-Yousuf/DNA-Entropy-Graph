@@ -9,7 +9,9 @@ against. The copy rules in section 2 are mechanically guarded by `Guards.Tests`
 `StringResourceKeyGuardTests`, `CodeBehindBranchingGuardTests`). Screen-by-screen detail
 beyond what is summarized here lives in
 [Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux);
-the viewer page is described in `docs/viewer.md` (issue #312).
+the viewer page is described in `docs/viewer.md` (issue #312). The Results page also lists the gene
+tables (`*.genes.tsv`, issue #552: one `ResultsGeneTable` per file, sorted on the numbers not the shown text, first 500 rows drawn; the ten headings are bound properties reading `Results_GeneColumn_*`, the same strings the sort line uses, so no heading has a second copy in the .resw), and
+the Viewer page lists the run's smoothed entropy tracks as switches that add and remove a track through the bridge.
 
 ---
 
@@ -31,9 +33,28 @@ Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 is selected at startup (`NavigationView.Loaded`), so header, selection and frame agree; a
 destination with no page registered in `Startup/NavigationRoutes.cs` shows the one generic
 `PlaceholderPage` instead of an empty frame; the OS window title is `AppDisplayName`.
+Header and selection follow the frame, not the click (#499, #701, #807): the shell subscribes to
+`INavigator.CurrentPageChanged`, so a nav item, a page's own `NavigateTo`, Back and a deep link all
+update `CurrentPageTitle` and `SelectedNavKey`. The in-page headings of RunProgress (the stage title), Results (the run's name) and Viewer (an
+error title only) say something other than the page name, so the NavigationView header is kept above them (checked
+2026-10-16: no page repeats its own `PageTitle_<key>`). The rule for a page with no nav item (RunProgress,
+Results, Viewer, Wizard): it shows its own `PageTitle_<key>` header and NO item is selected (a
+NavigationView raises no selection change for an already-selected item, so keeping the parent
+selected would make the parent's nav item unclickable). `NavSelectionBinder` mirrors
+`SelectedNavKey` onto the NavigationView; `ShellViewModel.NavigateTo` ignores a null key and the
+page the frame already shows, so that mirror never pushes a duplicate page. `RecordingNavigator`
+must forward `CurrentPageKey` and `CurrentPageChanged`: DI hands the shell the decorator.
 Window placement: nothing is saved while the window is minimized or maximized, a saved
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
+
+Session restore (#244): `RecordingNavigator` wraps the app's `INavigator`, so every navigation (nav rail or any ViewModel) saves
+`session.page` and `session.run` (`SessionStore`). Only pages reopenable from a key are saved: New run, Runs, Cloud, Settings, and
+Results or Run progress with their run id; the viewer and the wizard leave the last page alone. At startup `MainWindow.Loaded`
+awaits `ShellViewModel.PrepareSessionAsync`, selects `StartupNavKey` (the remembered nav page, or Runs for a remembered run), and
+the first `NavigateTo` of that item opens the run page on top, once. A remembered run that is gone opens New run; a Run progress
+page whose run completed while the app was closed opens Results. An Open with or notification launch is routed by
+`ActivationRouter` after the shell is ready, so it still wins. Both keys are `Excluded` in `SettingsCatalog` (not shared).
 
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
@@ -313,6 +334,18 @@ scans the source for settings keys and fails when one is in neither, so **a new 
 same commit** (decide: share it, or say why not; a path, an id, a secret or a developer switch is always excluded). The file
 carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
 which every settings group already treats as "re-read the store".
+
+### Earlier version import (issue #243)
+
+`PrototypeImportViewModel` (one singleton, shared by the shell and the Settings "Earlier version" group). On the first launch of a
+profile `MainWindow.Loaded` calls `ShellViewModel.RunStartupOffersAsync` after `MarkReady`; it scans off the UI thread, sets
+`prototype_import_done` whatever it finds, and asks (a `ConfirmAsync` dialog) only when there are runs not already in history.
+The scan reads the places the prototype's own code used (MEASURED 2026-10-16 from `worker/legacy`: `%APPDATA%\dna-entropy\config.json`
+with `last_zone` and `ssh_key_file`, and `%USERPROFILE%\Downloads\<name>\<name>.entropy.bedgraph`, which is the profile folder, not the
+Windows known folder). It never writes there. An imported row is `Completed`, `Imported = true`, target `local`, with no bucket,
+prefix or VM, so every cloud action is off; its `OutputDir` is the folder it was found in. Ids are `legacy-` plus a hash of the
+folder, so a second import adds nothing. A folder holding `provenance.json` was written by this app and is skipped.
+`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog, in either call order (whichever of the two runs first starts the one offers task; the tour starts however it ended). A prototype row's Delete cloud copy tooltip is its own string (`Runs_DeleteCloud_Hint_Prototype`, pointing to Open).
 
 ## 11. The setup wizard (issue #99)
 

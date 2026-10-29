@@ -1,0 +1,1 @@
+- feat(tooling): `prune_worktrees.py` treats a branch whose content is already in origin/main or a `--contained-in` tip (`git merge-tree --write-tree` equals that tip's tree) as landed, for local branch deletion and worktree removal; `--remote` also deletes contained origin branches with no open PR (dry run unless `--apply`) (#812)

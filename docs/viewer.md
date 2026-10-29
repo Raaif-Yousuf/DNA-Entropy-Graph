@@ -59,6 +59,8 @@ failure. File names are the worker's writer names ([`science_and_formats.md`](sc
   file per track. Each is a `wig` track fixed to **0 to 2 bits with autoscale off** (Hard Rule 3), named
   "Entropy (bits)", "Entropy, forward (bits)" and "Entropy, reverse complement (bits)".
 - **Genes:** `<name>.genes.gff3`, if present, as an `annotation` track named "Genes".
+- **Regions (issue #552):** `<name>.regions.bed`, else `<name>.regions.gff3`, as an `annotation` (feature) track named "Entropy regions". At most one.
+- **Smoothed tracks (issue #552):** `<name>.entropy.smooth<W>.bedgraph` (or `.wig`) are NOT in the load command. `IgvLoadPlan.SmoothedTracks` lists them by window; `ViewerViewModel.SmoothedTracks` turns each into a switch on the Viewer page (off at first, so the raw track stays the one drawn). Switching one on sends `{cmd:"track", op:"add", config}` (a `wig` track fixed to 0 to 2 bits); off sends `{cmd:"track", op:"remove", name}`. If the page cannot load a track it posts `{evt:"trackFailed", name}`; the model turns that switch back off and shows a message. The switches work only while the page shows the run, and a redrawn page starts with them all off.
 - URLs are `https://run.deg/` plus the URL-escaped file name.
 
 Failures never guess: no FASTA (`NoSequenceFile`), no entropy file for any FASTA (`NoEntropyTrack`), more than one
@@ -77,6 +79,7 @@ Commands, host to page:
 | --- | --- |
 | `{cmd:"load", config}` | Removes any existing igv browser, then `igv.createBrowser` with `config.reference` and `config.tracks` |
 | `{cmd:"theme", dark:bool}` | Toggles the `dark` class on `<body>` |
+| `{cmd:"track", op:"add", config}` / `{cmd:"track", op:"remove", name}` | Adds or removes one optional track by name (`browser.loadTrack` / `removeTrackByName`); adding twice or removing an absent one does nothing |
 | `{cmd:"goto", locus}` | `browser.search(locus)` |
 | `{cmd:"snapshot"}` | Replies with the browser's SVG |
 
