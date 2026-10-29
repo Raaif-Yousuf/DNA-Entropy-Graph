@@ -12,6 +12,28 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
+    // Issue #109 round 8: what each job's creates ANSWERED (a create that lands after the caller gave up never reaches Observe), and the jobs whose cancel has started.
+    // A cancel deletes and books these by NAME, not only by a label listing that may lag; a create that lands after the cancel stopped waiting is deleted the moment it lands.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<VmDescriptor>> _landed = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _cancelled = new(StringComparer.Ordinal);
+
+    /// <summary>The cancel of <paramref name="jobId"/> has started: a create that answers from now on is deleted by name as soon as it answers.</summary>
+    public void NoteCancelled(string jobId) => _cancelled[jobId] = true;
+
+    /// <summary>The VMs this instance's creates for the job answered so far (drained: a second call returns none), for the cancel to delete and book by name.</summary>
+    public IReadOnlyList<VmDescriptor> TakeLanded(string jobId)
+    {
+        if (!_landed.TryRemove(jobId, out var list))
+        {
+            return [];
+        }
+
+        lock (list)
+        {
+            return [.. list];
+        }
+    }
+
     /// <summary>The GPU machine families (G2 = L4, A2 = A100, A3 = H100); anything else is a CPU smoke VM.</summary>
     public static bool ExpectsGpu(string machineType)
         => machineType.StartsWith("g2-", StringComparison.Ordinal)
@@ -231,6 +253,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 if (vm is not null)
                 {
+                    // Issue #109: an adopted VM billed from its own start like any other; without this the run books nothing for it.
+                    progress.Observe(vm);
                     return ZoneAttempt.Win(zone);
                 }
             }
@@ -835,6 +859,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             t =>
             {
                 _ = t.Exception;
+                if (t.IsCompletedSuccessfully && t.Result is VmDescriptor landed)
+                {
+                    RememberLanded(jobId, landed);
+                }
+
                 _inflightCreates.TryRemove(placeholder.Task, out _);
                 placeholder.TrySetResult();
             },
@@ -842,6 +871,37 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return task;
+    }
+
+    /// <summary>
+    /// A create answered with <paramref name="vm"/>. Remembered for the cancel (which books and deletes it by name); and when the job's cancel has already started, this is a
+    /// landing the cancel may have stopped waiting for: the VM is deleted here, by its own name, so it never bills until its maxRunDuration. Best effort: a delete that fails
+    /// leaves the VM for the cancel's own look, the left-running scan and the VM's backstop limit.
+    /// </summary>
+    private void RememberLanded(string jobId, VmDescriptor vm)
+    {
+        var list = _landed.GetOrAdd(jobId, _ => []);
+        lock (list)
+        {
+            list.Add(vm);
+        }
+
+        if (!_cancelled.ContainsKey(jobId))
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await compute.DeleteVmAsync(vm.Name, vm.Zone, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Already gone (the cancel's own delete won) or not deletable now: nothing more this can do.
+            }
+        });
     }
 
     /// <summary>

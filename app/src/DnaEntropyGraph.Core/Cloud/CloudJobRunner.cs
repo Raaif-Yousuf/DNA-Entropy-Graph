@@ -188,7 +188,7 @@ public sealed class CloudJobRunner
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings));
-        _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
+        _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator, (jobId, at) => _rows.UpdateRowAsync(jobId, row => row with { LastHeartbeatAt = at }, CancellationToken.None));
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
     }
 
@@ -449,7 +449,7 @@ public sealed class CloudJobRunner
                 else
                 {
                     var row = await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false);
-                    progress.VmEndedAt ??= VmSpan.LastKnownAlive(row, VmSpan.ResultFinishedAt(finished));
+                    progress.VmEndedAt ??= VmSpan.EndOfGone(progress.VmCreatedAt ?? row?.VmReadyAt, request.Spec.MaxRunDuration, row, VmSpan.ResultFinishedAt(finished));
                 }
 
                 await _rows.StampVmSpanAsync(request.JobId, progress.VmCreatedAt, progress.VmEndedAt).ConfigureAwait(false);

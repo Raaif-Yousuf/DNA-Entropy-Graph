@@ -8,7 +8,9 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// canceller's delete, the reconciler). Start = the VM's own platform start (<see cref="VmDescriptor.RunClockStart"/>) from ANY observation of the VM, settled
 /// or not; the app's own clock is never a start. A VM the app never observed has no span. End = the VM's stop time when it was observed stopped; when the VM is
 /// gone by the time the app looks (it deleted itself), the last time the app knew it was alive (<see cref="LastKnownAlive"/>); when it is still running, null,
-/// which the terminal write fills with "now". The result is stored on the run row (<c>VmReadyAt</c>, <c>FinishedAt</c>) by
+/// which the terminal write fills with "now". A gone VM with NO evidence at all (no heartbeat on the row, no result finish time, no status write) ends at its start plus the run's
+/// own limit (<see cref="EndOfGone"/>), never at "now". VmEndedAt is first-wins for a run (<see cref="RunProgress.Observe"/>): a stopped VM the run adopted and then restarted keeps the stop
+/// first observed, so that gap is not re-opened; the span a run books is its first observed start to its first observed end. The result is stored on the run row (<c>VmReadyAt</c>, <c>FinishedAt</c>) by
 /// <see cref="RunRowStore.StampVmSpanAsync"/>; the spend ledger quotes from those two columns and nothing else.
 /// </summary>
 internal static class VmSpan
@@ -16,6 +18,43 @@ internal static class VmSpan
     /// <summary>The span of an observed VM, or of a VM that is gone (<paramref name="vm"/> null) whose last known sign of life was <paramref name="lastKnownAlive"/>.</summary>
     public static (DateTimeOffset? Start, DateTimeOffset? End) Of(VmDescriptor? vm, DateTimeOffset? lastKnownAlive)
         => vm is null ? (null, lastKnownAlive) : (vm.RunClockStart, EndOfObserved(vm));
+
+    /// <summary>
+    /// The span of several VMs one job owned (a cancel can find more than one): the earliest start and the latest end, and still open (null end) when any of them was running.
+    /// No VM, or none with a start, has no span.
+    /// </summary>
+    public static (DateTimeOffset? Start, DateTimeOffset? End) Across(IEnumerable<VmDescriptor> vms)
+    {
+        DateTimeOffset? start = null;
+        DateTimeOffset? end = null;
+        var open = false;
+        foreach (var vm in vms)
+        {
+            var (s, e) = Of(vm, null);
+            if (s is { } started && (start is null || started < start))
+            {
+                start = started;
+            }
+
+            if (e is null)
+            {
+                open = true;
+            }
+            else if (end is null || e > end)
+            {
+                end = e;
+            }
+        }
+
+        return (start, open ? null : end);
+    }
+
+    /// <summary>
+    /// The end of a VM that is gone (it deleted itself, or the platform removed it): the last time anything knew it was alive; with no evidence at all, the run's start plus its own
+    /// limit (<paramref name="limit"/>, the VM's maxRunDuration), because Compute cannot have run it longer, and never "now" (the hours the app was closed). Null only when the start is unknown too.
+    /// </summary>
+    public static DateTimeOffset? EndOfGone(DateTimeOffset? start, TimeSpan limit, RunRecord? row, params DateTimeOffset?[] signs)
+        => LastKnownAlive(row, signs) ?? (start is { } began && limit > TimeSpan.Zero ? began + limit : null);
 
     /// <summary>
     /// When billing for a VM that is no longer running ended, or null for a VM that is running (it bills until the run ends). A stopped VM with no stop time
