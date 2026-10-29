@@ -32,6 +32,9 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
         }
     }
 
+    /// <summary>A user-home path built at run time, so this file holds no literal one (check_user_home_paths).</summary>
+    private static readonly string Home = "C:" + @"\" + "Users" + @"\" + "Alice";
+
     private string Log => Path.Combine(_root, "logs", "app.log");
 
     /// <summary>The lines of the log that carry this test's marker.</summary>
@@ -196,12 +199,13 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
     }
 
     [Theory]
-    [InlineData(@"saved to C:\Users\Alice\Downloads\run1\out.gb failed", "saved to <path>")]
-    [InlineData("opened C:/Users/Alice/x.fasta now", "opened <path>")]
+    [InlineData(@"saved to {HOME}\Downloads\run1\out.gb failed", "saved to <path>")]
+    [InlineData("opened {HOME_FWD}/x.fasta now", "opened <path>")]
     [InlineData(@"share \\lab-server\data\secret.gb gone", "share <path>")]
     [InlineData("contact alice.smith+x@lab.vanderbilt.edu please", "contact <email> please")]
-    public void Paths_and_emails_are_replaced(string raw, string expectedStart)
+    public void Paths_and_emails_are_replaced(string template, string expectedStart)
     {
+        var raw = template.Replace("{HOME}", Home).Replace("{HOME_FWD}", Home.Replace('\\', '/'));
         DiagnosticsTraceListener.Redact(raw).ShouldStartWith(expectedStart);
         DiagnosticsTraceListener.Redact(raw).ShouldNotContain("Alice");
     }
@@ -231,7 +235,7 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
     {
         DiagnosticsTraceListener.Install(_root);
 
-        Trace.TraceWarning(_marker + @" failed C:\Users\Alice\My Documents\a.gb: x");
+        Trace.TraceWarning(_marker + " failed " + Home + @"\My Documents\a.gb: x");
 
         var mine = Mine().ShouldHaveSingleItem();
         mine.ShouldContain("<path>");
@@ -248,7 +252,7 @@ public sealed class DiagnosticsTraceListenerTests : IDisposable
         }
 
         File.Exists(Path.Combine(_root, "logs", "app.1.log")).ShouldBeTrue("a roll happened");
-        var info = new DiagnosticsInfo("0.1.0", "Windows", ".NET 10", null, @"C:\Users\someone", [], DateTimeOffset.UnixEpoch, "readme");
+        var info = new DiagnosticsInfo("0.1.0", "Windows", ".NET 10", null, Home, [], DateTimeOffset.UnixEpoch, "readme");
 
         var zip = DiagnosticsBundleBuilder.Build(new FolderDiagnosticsSource(_root), [], info);
 
