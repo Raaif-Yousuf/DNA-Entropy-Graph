@@ -73,15 +73,34 @@ public sealed class PresetPickerTests : IDisposable
         await AddFasta();
 
         Picker.SelectedItem = Item("plasmid_qc");
+        // Read before Run: a started run empties the page (issue #527), and the summary describes the run about to start.
+        var summary = Picker.SummaryText;
         await _viewModel.StartRunCommand.ExecuteAsync(null);
 
         await _jobEngine.Received(1).StartRunAsync(
             Arg.Is<RunOptions>(o => o.Topology == Topology.Circular && o.Direction == Direction.BothCombined
                 && o.OutputFiles.HasFlag(OutputFileKinds.Regions) && o.PresetId == "plasmid_qc" && o.PresetName == "Plasmid QC"),
             Arg.Any<CancellationToken>());
-        Picker.SummaryText.ShouldContain("both strands combined");
-        Picker.SummaryText.ShouldContain("a circle");
-        Picker.SummaryText.ShouldContain("Regions");
+        summary.ShouldContain("both strands combined");
+        summary.ShouldContain("a circle");
+        summary.ShouldContain("Regions");
+    }
+
+    [Fact]
+    public async Task A_started_run_empties_the_files_but_keeps_the_preset_and_the_ticked_outputs_for_the_next_run()
+    {
+        // Issue #527 decision: the preset (and the run target, which is the Settings picker) is the user's intent and persists; only per-file state resets.
+        await AddFasta();
+        Picker.SelectedItem = Item("plasmid_qc");
+        var ticked = _viewModel.OutputChoices.Where(c => c.IsChecked).Select(c => c.Entry.Kind).ToList();
+        ticked.ShouldNotBeEmpty();
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        _viewModel.Items.ShouldBeEmpty();
+        Picker.SelectedItem.ShouldBe(Item("plasmid_qc"));
+        await AddFasta();
+        _viewModel.OutputChoices.Where(c => c.IsChecked).Select(c => c.Entry.Kind).ShouldBe(ticked);
     }
 
     [Fact]

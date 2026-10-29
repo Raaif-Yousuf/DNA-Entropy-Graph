@@ -19,4 +19,10 @@ public interface IFilePicker
     /// Null when the picker was cancelled.
     /// </summary>
     Task<string?> PickSaveZipAsync(string suggestedFileName, CancellationToken cancellationToken);
+
+    /// <summary>Lets the user choose a settings file made by Export settings (#242). Null when the picker was cancelled.</summary>
+    Task<string?> PickSettingsFileAsync(CancellationToken cancellationToken);
+
+    /// <summary>Lets the user choose where to save the settings file, starting in Documents with <paramref name="suggestedFileName"/> (#242). Null when cancelled.</summary>
+    Task<string?> PickSaveSettingsAsync(string suggestedFileName, CancellationToken cancellationToken);
 }

@@ -232,6 +232,18 @@ Check with `git config merge.resw.driver` and `git check-attr merge -- app/src/D
 
 `land_wt.py` does not depend on that setup: for its merge of origin/main it passes the driver (this checkout's script, the running venv python) as `-c merge.resw.driver=...` and the attribute through a unique temp `core.attributesFile` (the user's own global attributes text plus the resw line, deleted after the merge), so a lane branch that predates the `.gitattributes` line still merges and nothing leaks into the shared repo config. A real conflict still refuses and names the file.
 
+## Landing a queue of worktree branches: `scripts/land_queue.py`
+
+```powershell
+worker\.venv\Scripts\python.exe scripts\land_queue.py add feat/1-x <sha> 1 "feat: x (#1)" [--full] [--red "<check>"]
+worker\.venv\Scripts\python.exe scripts\land_queue.py run [--once] [--replace]     # land_wt.py --merge-when-green, one item at a time; run it detached; --replace takes over a live but stuck runner
+worker\.venv\Scripts\python.exe scripts\land_queue.py status [--check] | stop | retry feat/1-x@<sha>   # status: runner alive / alive, NO PROGRESS / DEAD
+```
+
+A runner whose pid is alive is never replaced automatically: `run` refuses (a second runner would double-land). `status` shows `alive, NO PROGRESS for N min - inspect; replace with run --replace` when its progress clock is older than the checks timeout plus 30 min; a human inspects it, then `run --replace` kills its process tree (only when the pid AND the creation time recorded in `runner.json` still match; it refuses otherwise or if the process survives), logs `REPLACED pid N (killed)` to `done.log` (THEORY, unverified: `taskkill /T` follows the parent link, so a grandchild whose parent already exited is orphaned and not killed), and the in-flight item is recorded `FAILED interrupted` (then `retry` resumes its open PR). A recorded pid whose process creation time differs from the one in `runner.json` (Windows reuses pids) counts as dead. A runner that finds `runner.json` no longer holds its pid logs `DISPLACED` and returns before taking another item. Every gh/git call in both scripts has a timeout (gh 300 s, git 600 s in `land_wt.py`; 600 s in `land_queue.py`) and a timeout kills the whole process tree (`taskkill /T /F /PID <that pid>` on Windows, the process group elsewhere); a hung `gh pr checks` read counts as a failed read, so the 30 min deadline is enforced. `land_wt.py` also bounds premerge (`--premerge-timeout`, default 7200 s, heavy.py slot wait included; a timeout is a red result, exit 3, nothing pushed) and `land_queue.py` bounds `land_wt.py` at premerge + 2 x checks wait + 20 git calls x 600 s + 11 gh calls x 300 s + 30 min (the formula is next to `LAND_WT_TIMEOUT_SECONDS`). The PR head read before the merge is retried 3 times with a 2 s, 4 s backoff before giving up (exit 6). After a `git push` timeout land_wt asks `git ls-remote` whether the branch arrived and carries on if it did, else says `not on origin` or `branch may exist on origin: <b>`. Its own `gh pr merge` is pinned with `--match-head-commit` to the sha it pushed and refuses (exit 5) if the PR head moved. A lock a killed git leaves in the throwaway worktree goes with `git worktree remove --force` (tested); no lock file is ever deleted by hand.
+
+Tests: `scripts/tests/test_land_queue.py` (fake gh/git runner, no network). Details: `branching_and_prs.md`.
+
 ## Landing a PR from the shared checkout: `scripts/land_pr.py`
 
 One command for the seven git/gh steps, safe while other lanes have uncommitted edits in the same tree (#445):
@@ -270,6 +282,8 @@ machine do not share slots.
 The machine limit lives in one place, `<lock dir>\slots.txt`, set with `heavy.py --set-slots N`. Precedence:
 `--slots` flag (for tests and one-offs only) > `slots.txt` > `$HEAVY_SLOTS` > 2. Callers that disagree on
 `$HEAVY_SLOTS` therefore cannot exceed the file's limit.
+
+The build folder follows the CWD, not heavy.py's own location (#874): the default `--artifacts-path` base is `<git toplevel of the CWD>\app\.artifacts\<lane>`, falling back to heavy.py's own repo outside any repo. A worktree lane can therefore run the primary's `heavy.py` (the venv lives there) from its own `app\` and build and test its own tree; no hand-passed `--artifacts-path` is needed. The test helpers that locate the repo (`RepoPaths`, `FixturePaths`, `TestPaths`, `ContractFixtures`) also walk up from their own source file (`CallerFilePath`) before the binary's directory, so Guards.Tests scan the tree that was compiled. Source-first means a test run scans the source tree its binary was compiled from; if that path no longer exists (the binary was moved to another machine or the checkout was deleted) the helpers fall back to walking up from the binary's directory. When the CWD is not inside a repo with `app\DnaEntropyGraph.sln`, heavy.py falls back to its own repo and prints a `heavy: warning:` line to stderr naming both. Until the fixed heavy.py is on the primary, run the worktree's copy: `python <worktree>\scripts\heavy.py ...`.
 
 For `dotnet build|test|run|pack|publish` it adds `--artifacts-path <repo>\app\.artifacts\<lane>` unless one is
 given (not for `dotnet format`), so concurrent lanes never share `obj/`. `--lane <name>` is **required** for
@@ -594,7 +608,7 @@ visible, image pull failed) writes the same two objects with `exitCode` 7 and an
 script refuses (exit 2) a `-JobId` whose result object already exists, and does not trust a result whose `image` or `vm.name` is not this
 run's (a stale PASS). A run whose GPU tests were all
 skipped, or none ran, is exit code 6, never a pass (THEORY (unverified), from reading `test_evo_predictor.py`'s `importorskip` fixtures:
-without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run.
+without torch/evo2 every gpu test skips and pytest still exits 0). The image must be built from `Dockerfile.cuda` after #759, or it has no tests to run. To build and pin a dev image from a branch (no release), see `release_runbook.md` section 6b (`image-dev.yml`).
 
 **A failed create is never read as clean**: the delete is retried up to 3 times (`-SettleSeconds` apart) while it finds nothing, a delete
 exit 5 is reported as "not proof it is gone", the scan and the table still run, and the run exits 1. A failing final table call also exits 1.
