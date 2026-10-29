@@ -49,18 +49,18 @@ public class DecoratorMembersGuardTests
     internal static IEnumerable<Violation> FindViolations(IEnumerable<Type> types)
     {
         foreach (var cls in types)
-        foreach (var decorated in DecoratedInterfaces(cls))
-        {
-            foreach (var iface in new[] { decorated }.Concat(decorated.GetInterfaces()))
+            foreach (var decorated in DecoratedInterfaces(cls))
             {
-                var map = cls.GetInterfaceMap(iface);
-                for (var i = 0; i < map.InterfaceMethods.Length; i++)
+                foreach (var iface in new[] { decorated }.Concat(decorated.GetInterfaces()))
                 {
-                    if (map.TargetMethods[i].DeclaringType != cls)
-                        yield return new Violation(cls, iface, map.InterfaceMethods[i].Name);
+                    var map = cls.GetInterfaceMap(iface);
+                    for (var i = 0; i < map.InterfaceMethods.Length; i++)
+                    {
+                        if (map.TargetMethods[i].DeclaringType != cls)
+                            yield return new Violation(cls, iface, map.InterfaceMethods[i].Name);
+                    }
                 }
             }
-        }
     }
 
     internal static IReadOnlyList<Assembly> AppSrcAssemblies()
