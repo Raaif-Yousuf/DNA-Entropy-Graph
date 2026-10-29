@@ -91,7 +91,10 @@ public class SpendLedgerRunnerTests
     [Fact]
     public async Task A_granted_flex_VM_whose_run_is_still_Provisioning_is_counted_toward_the_hard_stop()
     {
-        var gcp = new FakeGcp().WithFlexStartGrantedAfter(TimeSpan.FromMilliseconds(50));
+        // Both clocks pinned: the platform stamps the VM at T0, the ledger reads "now" ten minutes later, so a positive figure never depends on which of two real clocks was read first.
+        var platformClock = new ManualTimeProvider(new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var ledgerClock = new ManualTimeProvider(platformClock.GetUtcNow().AddMinutes(10));
+        var gcp = new FakeGcp(platformClock).WithFlexStartGrantedAfter(TimeSpan.FromMilliseconds(50));
         var repo = new InMemoryRunRepository();
         var flexOptions = RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true });
         await repo.UpsertAsync(new RunRecord("job-l1", JobPhase.Uploading, DateTimeOffset.UtcNow, Target: "cloud", MachineType: "g2-standard-8", OptionsJson: flexOptions), CancellationToken.None);
@@ -108,7 +111,7 @@ public class SpendLedgerRunnerTests
                 }
 
                 await snapshot.UpsertAsync(next, token);
-                var ledger = new SpendLedger(new MemoryLedger(), new Pricing(), new Settings(), TimeProvider.System, TimeZoneInfo.Utc, snapshot);
+                var ledger = new SpendLedger(new MemoryLedger(), new Pricing(), new Settings(), ledgerClock, TimeZoneInfo.Utc, snapshot);
                 seen.Add((await ledger.MonthToDateAsync(token)).InProgressUsd);
             }
         };
@@ -139,42 +142,116 @@ public class SpendLedgerRunnerTests
         gcp.ReleaseCreate();
     }
 
-    [Fact]
-    public async Task The_cancels_own_delete_reports_a_VM_it_found()
+    private static async Task<(FakeGcp Gcp, ManualTimeProvider Time, InMemoryRunRepository Repo)> CancelRigAsync(string jobId, TimeSpan vmRanFor, bool stopped)
     {
-        var gcp = new FakeGcp();
-        var spec = Spec("job-l3");
-        await gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
-        var settings = new CloudRunSettings { LifecyclePollInterval = TimeSpan.FromMilliseconds(1), LifecycleTimeout = TimeSpan.FromSeconds(2) };
-        var calls = new GatewayCalls(settings, gcp);
-        var terminator = new VmTerminator(gcp, calls, settings);
-        var found = false;
+        var time = new ManualTimeProvider(DateTimeOffset.UtcNow.AddHours(-10));
+        var gcp = new FakeGcp(time);
+        var repo = new InMemoryRunRepository();
+        await gcp.CreateVmAsync(Spec(jobId), Zone, CancellationToken.None);
+        time.Advance(vmRanFor);
+        if (stopped)
+        {
+            await gcp.StopVmAsync($"deg-{jobId}", Zone, CancellationToken.None);
+        }
 
-        var none = await terminator.DeleteOwnedVmsAndVerifyAsync("job-nobody", true, CancellationToken.None, () => found = true);
-        none.ShouldBeNull();
-        found.ShouldBeFalse("no VM carries that job id");
-
-        var note = await terminator.DeleteOwnedVmsAndVerifyAsync("job-l3", true, CancellationToken.None, () => found = true);
-        note.ShouldBeNull();
-        found.ShouldBeTrue();
+        time.Advance(TimeSpan.FromHours(1)); // the app was closed for a while after that
+        await repo.UpsertAsync(new RunRecord(jobId, JobPhase.Cancelling, DateTimeOffset.UtcNow.AddHours(-10)), CancellationToken.None);
+        return (gcp, time, repo);
     }
 
     [Fact]
-    public void An_unsettled_create_gives_a_start_only_when_the_cancel_found_a_VM()
+    public async Task A_cancel_in_a_fresh_process_books_from_the_VMs_own_start_it_found()
     {
-        var settings = new CloudRunSettings();
-        var gcp = new FakeGcp();
-        var calls = new GatewayCalls(settings, gcp);
-        var provisioner = new VmProvisioner(gcp, calls, settings, new VmTerminator(gcp, calls, settings));
+        // M3: a Cancelling row resumed after a restart has no create of this process in flight, so nothing remembers a landing; the VM the delete found says when it started.
+        var (gcp, time, repo) = await CancelRigAsync("job-m3", TimeSpan.FromMinutes(30), stopped: false);
+        var vmStart = time.GetUtcNow() - TimeSpan.FromMinutes(90);
 
-        provisioner.TakeVmStartForCancel("j", settled: false, vmFoundByCancel: false).ShouldBeNull();
-        provisioner.TakeVmStartForCancel("j", settled: false, vmFoundByCancel: true).ShouldNotBeNull();
-        provisioner.TakeVmStartForCancel("j", settled: true, vmFoundByCancel: false).ShouldBeNull("a settled create with no landing made no VM");
+        await Runner(gcp, repo).CancelAsync("job-m3", CancellationToken.None);
+
+        var row = LastRow(repo, "job-m3");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.VmReadyAt.ShouldBe(vmStart, "the VM billed from its platform start, not from the moment the cancel looked");
+        row.FinishedAt.ShouldNotBeNull();
+        (DateTimeOffset.UtcNow - row.FinishedAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(1), "a VM still running when the cancel found it billed until the delete");
     }
 
     [Fact]
-    public async Task A_create_that_lands_after_the_run_ended_leaves_no_start_for_a_later_cancel_to_adopt()
+    public async Task A_cancel_that_finds_an_already_stopped_VM_books_until_it_stopped()
     {
+        var (gcp, time, repo) = await CancelRigAsync("job-m3b", TimeSpan.FromMinutes(30), stopped: true);
+        var vmStart = time.GetUtcNow() - TimeSpan.FromMinutes(90);
+
+        await Runner(gcp, repo).CancelAsync("job-m3b", CancellationToken.None);
+
+        var row = LastRow(repo, "job-m3b");
+        row.VmReadyAt.ShouldBe(vmStart);
+        row.FinishedAt.ShouldBe(vmStart + TimeSpan.FromMinutes(30), "the VM stopped at +30 min; the cancel an hour later must not book that hour");
+    }
+
+    [Fact]
+    public async Task A_cancel_that_finds_no_VM_books_no_span()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-m3c", JobPhase.Cancelling, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await Runner(gcp, repo).CancelAsync("job-m3c", CancellationToken.None);
+
+        LastRow(repo, "job-m3c").VmReadyAt.ShouldBeNull("the app never saw a VM for this job");
+    }
+
+    private static async Task<(FakeGcp Gcp, InMemoryRunRepository Repo, DateTimeOffset T0)> SelfDeletedAfterResultAsync(string jobId, DateTimeOffset? heartbeat, string? resultFinishedAt)
+    {
+        var t0 = DateTimeOffset.UtcNow.AddHours(-10);
+        var time = new ManualTimeProvider(t0);
+        var gcp = new FakeGcp(time);
+        var repo = new InMemoryRunRepository();
+        await gcp.CreateVmAsync(Spec(jobId), Zone, CancellationToken.None);
+        time.Advance(TimeSpan.FromMinutes(50));
+        await gcp.DeleteVmAsync($"deg-{jobId}", Zone, CancellationToken.None); // the VM deleted itself after the worker finished
+        var track = FakeGcp.TrackBytes("seq");
+        var bucket = FakeGcp.BucketName(Project);
+        gcp.PutObject(bucket, $"jobs/{jobId}/output/seq/seq.bedgraph", track);
+        var finished = resultFinishedAt is null ? string.Empty : $",\"finishedAt\":\"{resultFinishedAt}\"";
+        gcp.PutObject(bucket, $"jobs/{jobId}/result.json", System.Text.Encoding.UTF8.GetBytes(
+            $$"""{"schema":1,"jobId":"{{jobId}}","status":"done"{{finished}},"inputs":[{"id":"in1","status":"done","outputs":["output/seq/seq.bedgraph"],"files":[{"path":"output/seq/seq.bedgraph","sha256":"{{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(track))}}","bytes":{{track.Length}}}],"notices":[],"stats":null,"error":null}],"error":null}"""));
+        await repo.UpsertAsync(new RunRecord(jobId, JobPhase.Running, t0, Target: "cloud", VmReadyAt: t0, LastHeartbeatAt: heartbeat), CancellationToken.None);
+        return (gcp, repo, t0);
+    }
+
+    [Fact]
+    public async Task A_VM_that_deleted_itself_is_booked_until_the_last_time_the_app_knew_it_was_alive_not_until_the_app_came_back()
+    {
+        // M1: the app was closed for ten hours; the VM was gone when it looked.
+        var t0 = DateTimeOffset.UtcNow.AddHours(-10);
+        var (gcp, repo, _) = await SelfDeletedAfterResultAsync("job-m1", t0.AddMinutes(40), null);
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-m1", Spec("job-m1")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-m1");
+        row.FinishedAt.ShouldNotBeNull();
+        (row.FinishedAt!.Value - row.VmReadyAt!.Value).TotalMinutes.ShouldBe(40, 0.01, "booked until the last heartbeat the row knew, not the ten hours the app was closed");
+    }
+
+    [Fact]
+    public async Task A_VM_that_deleted_itself_is_booked_until_the_results_own_finish_time_when_that_is_later_than_the_last_heartbeat()
+    {
+        var t0 = DateTimeOffset.UtcNow.AddHours(-10);
+        var (gcp, repo, _) = await SelfDeletedAfterResultAsync("job-m1b", t0.AddMinutes(40), t0.AddMinutes(48).ToString("O"));
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-m1b", Spec("job-m1b")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-m1b");
+        (row.FinishedAt!.Value - row.VmReadyAt!.Value).TotalMinutes.ShouldBe(48, 0.01);
+    }
+
+    [Fact]
+    public async Task A_create_that_lands_after_the_run_ended_books_nothing_but_the_VM_is_found_by_its_labels()
+    {
+        // L1 (recorded, no booking change): the run ended before the create landed, so the row never learned a start. The VM is not lost: it carries the
+        // standard labels, which is how the left-running scan (ListByInstallationAsync) and the Cloud page discover it.
         var landing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(55));
         gcp.CreateLandingGate = landing.Task;
@@ -185,9 +262,10 @@ public class SpendLedgerRunnerTests
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         landing.TrySetResult();
         await gcp.WhenDelayedCreateLandedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        runner.LandedCreateCount.ShouldBe(0, "the run ended terminal; an entry added afterwards would be adopted by anything later asking about this job");
+        LastRow(repo, "job-l4").VmReadyAt.ShouldBeNull();
+        var listed = await gcp.ListByInstallationAsync("install-1", CancellationToken.None);
+        listed.ShouldContain(v => v.Name == "deg-job-l4" && v.Labels != null && v.Labels["job-id"] == "job-l4");
     }
 
     [Fact]

@@ -77,6 +77,34 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
     }
 
     /// <summary>
+    /// Issue #109: stores the span <see cref="VmSpan"/> worked out, the only writer of the ledger's two inputs. Each column keeps a value already there (a re-attach must not move the
+    /// start; the terminal write keeps a finish that is set), and a row that is already terminal takes no end. A record, not a step: a failure here is swallowed.
+    /// </summary>
+    public async Task StampVmSpanAsync(string jobId, DateTimeOffset? start, DateTimeOffset? end)
+    {
+        if (start is null && end is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await UpdateRowAsync(
+                jobId,
+                row => row with
+                {
+                    VmReadyAt = row.VmReadyAt ?? start,
+                    FinishedAt = row.FinishedAt ?? (JobStateMachine.IsTerminal(row.Phase) ? null : end),
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The row keeps what it had; the terminal write still lands.
+        }
+    }
+
+    /// <summary>
     /// Issue #91: the one automatic on-demand retry after a Spot preemption. The row goes back to Provisioning (so the UI shows a computer being started again;
     /// <see cref="SetPhaseAsync"/> would treat that as an already-passed phase and do nothing), records that this attempt is not Spot, and counts the preemption,
     /// in ONE write. Throws the state machine's own error for a phase that may not go back (a cancel that won the race is Cancelling), which the runner's guard

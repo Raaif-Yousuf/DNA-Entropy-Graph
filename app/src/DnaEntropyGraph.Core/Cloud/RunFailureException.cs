@@ -38,18 +38,22 @@ internal sealed class RunProgress
     public long? VmStartMark { get; set; }
 
     /// <summary>
-    /// Wall-clock time at which a create (or the start of a reused VM) by THIS run was answered with success, so billing for the VM began
-    /// at or just before it (issue #109). Set by the provisioner the moment it knows, also for a create that answered late and was
-    /// then deleted; the runner copies it to <c>RunRecord.VmReadyAt</c> even when provisioning goes on to fail. Null when no VM was made.
+    /// Issue #109: the start of the span this run's VM billed, the VM's own platform start (see <see cref="VmSpan"/>), set by <see cref="Observe"/> from any observation
+    /// of the VM (a create's answer, a reuse, an adoption, also a create that answered late and was then deleted). The runner copies it to <c>RunRecord.VmReadyAt</c>
+    /// even when provisioning goes on to fail. Null when no VM was observed.
     /// </summary>
     public DateTimeOffset? VmCreatedAt { get; set; }
 
-    /// <summary>
-    /// Issue #109 (round 3): when the VM this run is on stopped, for a VM that was already stopped when the run found it (a resume hours after the worker finished
-    /// and the VM stopped itself). The ledger books the span the VM RAN, so the row's end is this and not the moment the app came back. Null for a VM still running
-    /// (its billing ends when the run does). An unknown stop time is recorded as the VM's own start: nothing is booked past what is known.
-    /// </summary>
+    /// <summary>The end of that span when it is already known: a VM observed stopped, or gone (see <see cref="VmSpan"/>). Null for a VM still running: its billing ends when the run does.</summary>
     public DateTimeOffset? VmEndedAt { get; set; }
+
+    /// <summary>Records what <paramref name="vm"/> says about its own span, keeping what an earlier observation already set.</summary>
+    public void Observe(VmDescriptor vm)
+    {
+        var (start, end) = VmSpan.Of(vm, null);
+        VmCreatedAt ??= start;
+        VmEndedAt ??= end;
+    }
 
     /// <summary>
     /// Issue #92 round 3 (F2 iii): true when the VM the run is on was found already there (adopted after the app closed), false when this run created or
@@ -124,13 +128,6 @@ internal static class VmFacts
     /// real VM shows, so both count.
     /// </summary>
     public static bool IsStopped(VmDescriptor vm) => vm.Status is "STOPPED" or "TERMINATED";
-
-    /// <summary>
-    /// Issue #109 (round 3): when billing for a VM that is no longer running ended, or null for a VM that is running (it bills until the run ends). A stopped VM with no stop time
-    /// reported ends at its own start: the span is not extended beyond what is known (the ledger then books about nothing rather than the hours the app was closed).
-    /// </summary>
-    public static DateTimeOffset? StoppedSpanEnd(VmDescriptor vm)
-        => IsStopped(vm) ? vm.StoppedAt ?? vm.RunClockStart : null;
 
     public static bool IsHealthyRunning(VmDescriptor? vm, out string? reason)
     {
