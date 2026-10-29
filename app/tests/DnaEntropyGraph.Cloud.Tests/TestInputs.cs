@@ -18,14 +18,22 @@ internal static class TestInputs
 
     // Unique per call, never keyed by the job id alone: several test classes reuse job-1..job-5 and run in
     // parallel, and a shared path made one test's File.WriteAllText collide with another's read (finding 10).
-    public static StagedInput Stage(string jobId, string fileName = "seq.gb")
+    public static StagedInput Stage(string jobId, string fileName = "seq.gb", string? content = null)
     {
         var dir = Path.Combine(Root, jobId + "-" + Guid.NewGuid().ToString("N"), "input");
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, fileName);
-        File.WriteAllText(path, InputContent(Path.GetFileNameWithoutExtension(fileName)));
+        File.WriteAllText(path, content ?? InputContent(Path.GetFileNameWithoutExtension(fileName)));
         return new StagedInput(path, fileName);
     }
+
+    /// <summary>A real FASTA record named chr1, and a GFF3 that places one gene on it: a pair the AnnotationPairValidator accepts (issue #720).</summary>
+    public const string PairedFasta = ">chr1\nACGTACGTACGTACGTACGT\n";
+
+    public const string PairedGff3 = "##gff-version 3\nchr1\t.\tgene\t1\t12\t.\t+\t.\tID=g1\n";
+
+    /// <summary>A GFF3 whose only sequence name is on no FASTA record: the validator refuses it (no name match).</summary>
+    public const string MismatchedGff3 = "##gff-version 3\nother\t.\tgene\t1\t12\t.\t+\t.\tID=g1\n";
 
     public static string OutputParent(string jobId)
     {

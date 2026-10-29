@@ -55,6 +55,8 @@ your sequences, file names, results, email address or sign-in.
 
 A collapsed group. **Reset all settings** asks first, then puts every setting back to its starting value; your runs, results and input files are not touched. Nothing needs a restart: the theme goes back to Use system at once. A note says whether this copy is using a pretend cloud for testing. The analysis program image box is for developers: it works only when developer mode is already on in the settings file. If you paste an address that is not a full one, the box says so and the shipped image is used until you paste a full one. After a reset, every group on the page shows its starting values at once.
 
+**Network proxy** is a second collapsed section in this group. Leave it on **Use the Windows settings** unless the app says your network's proxy refused the connection (see [When something goes wrong](07-when-something-goes-wrong.md)). If your IT help desk gave you a proxy address, choose **Use a proxy I type**, enter it as host:port, add a user name and password only if the proxy needs them, and click **Apply**. The change is used by the next connection, with no restart. The password is stored encrypted for your Windows account and is never written to the settings file or to a diagnostics file; **Reset all settings** forgets it.
+
 ## External viewers
 
 The buttons **Open in IGV** and **Open in Geneious** on the Results page start those programs

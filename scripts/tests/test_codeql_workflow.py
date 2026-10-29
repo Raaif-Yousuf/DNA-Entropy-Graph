@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "codeql.yml"
 CONFIG = ROOT / ".github" / "codeql" / "codeql-config.yml"
+APP_PROJECT = "src/DnaEntropyGraph.App/DnaEntropyGraph.App.csproj"
+TOOLS_PROJECT = "tools/DnaEntropyGraph.CloudCli/DnaEntropyGraph.CloudCli.csproj"
 PATHS = ("app/**", "worker/**", "scripts/**", ".github/workflows/**")
 
 
@@ -67,7 +69,7 @@ def test_config_ignores_the_legacy_trees():
 
 def test_csharp_build_step_is_intact():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "dotnet restore" in text and "dotnet build -c Release -p:Platform=x64 --no-restore" in text
+    assert f"dotnet restore {APP_PROJECT}" in text and f"dotnet build {APP_PROJECT} -c Release -p:Platform=x64 --no-restore" in text
     assert re.search(r"languages: \$\{\{ matrix\.language \}\}", text)
 
 
@@ -111,6 +113,49 @@ def test_non_csharp_lanes_still_upload_from_analyze_directly():
     assert re.search(r"if: matrix\.language != 'csharp'\n\s+with:\n\s+category:", body)
 
 
+def _csharp_build_run() -> str:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    m = re.search(r"- name: build \(csharp\)\n(?:        .*\n)*?        run: \|\n((?:          .*\n)+)", text)
+    assert m, "build (csharp) step not found"
+    return m.group(1)
+
+
+def test_csharp_build_is_product_code_only_not_the_solution():
+    # #761 / #653: MEASURED 2026-10-28: test stubs `GetString(key) => key` flowed into product
+    # string.Format calls (cs/invalid-string-formatting, alerts 1383/1417/1466/1467) and most
+    # cs/path-combine noise. Building only product projects keeps tests out of the CodeQL database. That
+    # does NOT remove the product provider's own `return key` fallback as a flow source, which is why
+    # cs/invalid-string-formatting is also excluded (next test).
+    run = _csharp_build_run()
+    # Exact project paths, not a "tests not in run" substring: restore and build name the same two projects.
+    assert re.findall(r"dotnet restore (\S+)", run) == [APP_PROJECT, TOOLS_PROJECT]
+    assert re.findall(r"dotnet build (\S+)", run) == [APP_PROJECT, TOOLS_PROJECT]
+
+
+def test_built_projects_reach_every_product_project_so_the_extractor_sees_all_product_code():
+    # app/src projects are reached through the App project; app/tools (CloudCli) is not referenced by
+    # App, so the workflow must build it by name. Tests are never in either set.
+    def refs(csproj: Path) -> set[Path]:
+        text = csproj.read_text(encoding="utf-8")
+        return {(csproj.parent / r.replace("\\", "/")).resolve() for r in re.findall(r'ProjectReference Include="([^"]+)"', text)}
+
+    built = re.findall(r"dotnet build (\S+\.csproj)", _csharp_build_run())
+    assert APP_PROJECT in built and TOOLS_PROJECT in built, built
+    seen: set[Path] = set()
+    todo = [(ROOT / "app" / b).resolve() for b in built]
+    while todo:
+        cur = todo.pop()
+        if cur not in seen:
+            seen.add(cur)
+            todo.extend(refs(cur))
+    product = {p.resolve() for p in (ROOT / "app" / "src").glob("*/*.csproj")} | {
+        p.resolve() for p in (ROOT / "app" / "tools").glob("*/*.csproj")
+    }
+    assert len(product) >= 7, "vacuous: expected the six app/src projects and CloudCli"
+    assert product <= seen, f"not built or referenced, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"
+    assert not any("tests" in p.parts[-3:] for p in seen), "a test project is in the CodeQL build"
+
+
 _NOISE_RULES = (
     "cs/xmldoc/missing-summary",
     "cs/linq/missed-select",
@@ -128,3 +173,52 @@ def test_config_excludes_the_style_only_rules_triaged_as_noise():
     excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
     assert set(_NOISE_RULES) <= excluded
     assert "cs/path-combine" not in excluded, "path-combine stays visible: it is the rule that flags a rooted second argument"
+
+
+def _filter_patterns() -> list[str]:
+    """The pattern lines of the filter-sarif step (a block scalar of `-glob` lines)."""
+    step = next(s for s in _steps(_csharp_filter_steps()) if re.search(r"filter-sarif@[0-9a-f]{40}", s))
+    head, sep, tail = step.partition("          patterns: |\n")
+    assert sep, "filter-sarif has no patterns block"
+    out: list[str] = []
+    for line in tail.splitlines():
+        if not line.startswith("            "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def test_sarif_filter_drops_test_projects_even_if_a_product_project_ever_compiles_them():
+    # Defence in depth (#761 / #653): the build above names no test project, but if the App build ever
+    # reached app/tests (a ProjectReference, a Compile glob), no test-project alert may gate a PR.
+    patterns = _filter_patterns()
+    assert "-app/tests/**" in patterns, patterns
+    assert "-**/obj/**" in patterns and "-**/bin/**" in patterns, patterns
+
+
+def test_config_ignores_python_test_roots_for_the_interpreted_lanes():
+    # paths-ignore is honoured for python (interpreted), so the pytest trees never raise alerts (#761).
+    text = CONFIG.read_text(encoding="utf-8")
+    ignored = set(re.findall(r"^  - '?([^'\n]+?)'?$", text.partition("paths-ignore:\n")[2].partition("\n\n")[0], re.MULTILINE))
+    assert {"worker/tests/**", "scripts/tests/**"} <= ignored, ignored
+    for root in ("worker/tests", "scripts/tests"):
+        assert (ROOT / root).is_dir(), f"vacuous: {root} no longer exists"
+    assert (ROOT / "app" / "tests").is_dir()
+
+
+def test_cs_path_combine_and_catch_all_stay_on():
+    # DECISION (agent-made, reversible) in codeql-config.yml: product hits of both rules take
+    # caller-supplied segments or are not all top-level, so neither is excluded.
+    text = CONFIG.read_text(encoding="utf-8")
+    excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
+    assert not {"cs/path-combine", "cs/catch-of-all-exceptions"} & excluded
+
+
+def test_invalid_string_formatting_is_excluded_because_the_arity_script_replaces_it():
+    # DECISION (agent-made, reversible): ReswStringResourceProvider.GetString returns `key` on an empty
+    # value and in its catch, the same flow source as the test stubs, so CodeQL can still raise the rule
+    # on correct product sites. scripts/check_format_arity.py reads the real template instead.
+    text = CONFIG.read_text(encoding="utf-8")
+    excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
+    assert "cs/invalid-string-formatting" in excluded
+    assert "check_format_arity.py" in text.partition("cs/invalid-string-formatting")[0].rpartition("DECISION")[2]

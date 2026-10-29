@@ -37,8 +37,8 @@ tier on this PC, the start-up time comes from them (the middle value of the last
 the analysis time for your file is added on top, so a long sequence costs more than a short
 one even with history; otherwise both come from a built-in model of about 5 minutes on a warm computer or 12 minutes on a fresh one, plus
 about 2 seconds of analysis for every thousand letters. Those built-in minutes are our
-design guess until the first real GPU runs have been measured. The app does not look up
-live prices yet, so the price list is only as fresh as the release you installed, and a
+design guess until the first real GPU runs have been measured. When you are signed in and Google answers, the app uses Google's own live price list (read at most once a day and kept on this PC); when it cannot
+reach it, the price list that came with the app is used instead, as fresh as the release you installed. A
 Spot price it does not know is left out rather than guessed. Spot is off by default.
 Every figure is labelled an estimate because the app cannot see your real bill. If the price
 list has no price for a kind of computer yet (the H100 tier, for example), the page says
