@@ -1525,7 +1525,7 @@ Numbering note: this was section 19 on its own branch; main now holds 19 (Spot V
 | Browser sign-in page, open-in-IGV, folder launch | `Process.Start` of other programs | their own settings | unchanged |
 | Loopback receiver | `HttpListener` on 127.0.0.1 | n/a | loopback never uses a proxy |
 
-NCBI/Entrez: not present in `app/`. A scripted test handler (`HttpHandler` option) still replaces the whole stack, proxy included.
+Cloud Quotas (`GoogleRestClient.CreateHttpClient`, the quota preflight before every create) and the NCBI accession lookup (#684, `ProxiedHttpClient`) are plain `HttpClient`s over the same `ProxyHttpClientFactory.NewHandler`, so they follow the policy too (both were bare clients before the round-3 review); `ProxyBareClientGuardTests` fails on a `new HttpClient`, `SocketsHttpHandler` or `HttpClientHandler` anywhere in `app/src` outside the three proxy builder files. A scripted test handler (`HttpHandler` option) still replaces the whole stack, proxy included.
 
 **Failure classes.** A proxy failure is `CloudErrorKind.Network` (so it still aborts as a network class) but carries its own `CloudError.Code`, because the `network` copy ("check your internet connection") would send the user the wrong way:
 

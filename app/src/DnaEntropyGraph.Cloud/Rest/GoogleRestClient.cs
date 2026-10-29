@@ -39,7 +39,7 @@ internal static class GoogleRestClient
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(options);
-        HttpMessageHandler inner = options.HttpHandler is { } handler ? new NonDisposingHandler(handler) : new SocketsHttpHandler();
+        HttpMessageHandler inner = options.HttpHandler is { } handler ? new NonDisposingHandler(handler) : Net.ProxyHttpClientFactory.NewHandler(new DnaEntropyGraph.Core.Net.PolicyWebProxy(options.Proxy ?? DnaEntropyGraph.Core.Net.ProxyPolicy.SystemDefault));
         return new HttpClient(new BearerHandler(tokens, inner), disposeHandler: true);
     }
 

@@ -371,16 +371,15 @@ public static class ServiceRegistration
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
-        services.AddSingleton<IAccessionLookup>(_ =>
+        services.AddSingleton<IAccessionLookup>(sp =>
         {
             if (cloud != CloudBackend.Google)
             {
                 return new ScriptedAccessionLookup();
             }
 
-            var http = new HttpClient { MaxResponseContentBufferSize = 1024 * 1024 };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("dna-entropy-graph");
-            return new NcbiAccessionLookup(http);
+            // Issue #239: through the one proxy policy, like every other outbound client (a bare HttpClient would ignore a typed proxy).
+            return new NcbiAccessionLookup(DnaEntropyGraph.Cloud.Net.ProxiedHttpClient.Create(sp.GetRequiredService<IProxyPolicy>(), 1024 * 1024, "dna-entropy-graph"));
         });
         services.AddSingleton<JobEngine>();
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<JobEngine>());

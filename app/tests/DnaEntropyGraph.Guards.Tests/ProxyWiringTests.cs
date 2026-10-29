@@ -56,6 +56,14 @@ public class ProxyWiringTests : IDisposable
     }
 
     [Fact]
+    public void The_ncbi_accession_lookup_is_built_over_the_proxy_policy()
+    {
+        var registration = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Startup", "ServiceRegistration.cs"));
+
+        System.Text.RegularExpressions.Regex.IsMatch(registration, @"new NcbiAccessionLookup\(DnaEntropyGraph\.Cloud\.Net\.ProxiedHttpClient\.Create\(sp\.GetRequiredService<IProxyPolicy>\(\)").ShouldBeTrue();
+    }
+
+    [Fact]
     public void The_diagnostics_zip_is_given_the_policy_so_it_can_record_the_mode()
     {
         var registration = File.ReadAllText(Path.Combine(RepoPaths.AppRoot, "src", "DnaEntropyGraph.App", "Startup", "ServiceRegistration.cs"));
