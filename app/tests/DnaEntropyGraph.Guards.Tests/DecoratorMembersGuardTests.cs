@@ -37,7 +37,10 @@ public class DecoratorMembersGuardTests
         var candidates = new HashSet<Type>();
         void Collect(Type t)
         {
-            if (!candidates.Add(t) || !t.IsGenericType) return;
+            // Strings, primitives and other value types implement IComparable/IEquatable/IEnumerable<char>: counting them would make every record a "decorator".
+            var noise = t == typeof(string) || t.IsPrimitive || t.IsEnum || (t.IsValueType && t.Namespace?.StartsWith("System", StringComparison.Ordinal) == true) || typeof(Delegate).IsAssignableFrom(t) || (!t.IsInterface && t.IsAssignableFrom(cls));
+            if (!noise && !candidates.Add(t)) return;
+            if (!t.IsGenericType) return;
             foreach (var arg in t.GetGenericArguments()) Collect(arg);
         }
         foreach (var ctor in cls.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
