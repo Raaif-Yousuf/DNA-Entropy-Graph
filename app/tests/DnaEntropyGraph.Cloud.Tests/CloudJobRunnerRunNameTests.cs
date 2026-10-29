@@ -68,6 +68,17 @@ public class CloudJobRunnerRunNameTests
     }
 
     [Fact]
+    public async Task A_template_with_path_separators_cannot_leave_the_output_folder()
+    {
+        var request = Request("job-n5", @"..\..\x");
+
+        var folder = await RunAsync(request);
+
+        Path.GetDirectoryName(folder).ShouldBe(request.OutputFolder);
+        Path.GetFileName(folder).ShouldNotContain("\\");
+    }
+
+    [Fact]
     public async Task The_default_template_gives_the_folder_the_input_stem_as_before()
     {
         var folder = await RunAsync(Request("job-n2", template: null));

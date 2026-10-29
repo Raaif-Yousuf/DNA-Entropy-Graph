@@ -8,6 +8,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class RunOutputFolders
 {
+    private const string DefaultTemplate = "{file}";
+
     /// <summary>
     /// The default output folder when the user chose none: the Downloads known folder as reported by
     /// <paramref name="downloadsKnownFolder"/> (a redirected or OneDrive Downloads included), or
@@ -51,7 +53,9 @@ public static class RunOutputFolders
         // An accession has no file name, and its output stem holds no dot, so the stem is what {file} must see; a file goes in by its
         // name so RunNamer drops the extension exactly as StagedInput.OutputStem does.
         var file = input.IsAccession ? input.OutputStem : input.FileName;
-        return RunNamer.Resolve(options.NameTemplate, file, options.ModelId, now, 1, []);
+        // A blank template is the default, not "run": a user who clears the box gets the file's name, as before the box existed.
+        var template = string.IsNullOrWhiteSpace(options.NameTemplate) ? DefaultTemplate : options.NameTemplate;
+        return RunNamer.Resolve(template, file, options.ModelId, now, 1, []);
     }
 
     /// <summary>

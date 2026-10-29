@@ -180,6 +180,27 @@ public sealed class NewRunViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Starting_a_run_refreshes_the_preview_so_the_time_shown_is_the_time_taken()
+    {
+        _viewModel = NamedViewModel();
+        var path = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.NameTemplate = "{file}_{time}";
+        var raised = 0;
+        var raisedWhenTheEngineWasCalled = -1;
+        _viewModel.PropertyChanged += (_, e) => raised += e.PropertyName == nameof(NewRunViewModel.RunNamePreview) ? 1 : 0;
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            raisedWhenTheEngineWasCalled = raised;
+            return Task.FromResult("job-1");
+        });
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        raisedWhenTheEngineWasCalled.ShouldBeGreaterThan(0, "the preview is raised before the options are built, so the page shows the time the run takes");
+    }
+
+    [Fact]
     public async Task Run_sends_the_typed_template_and_the_preview_is_the_name_the_runner_will_use()
     {
         _viewModel = NamedViewModel();

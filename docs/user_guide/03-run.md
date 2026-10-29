@@ -74,7 +74,7 @@ if that is what you meant.
 
 ## Name your run
 
-The **Run name** box on **New run** sets the name of the folder your results are saved into, inside your chosen output folder. It starts as `{file}`, which means the name of the file you added (without its ending), so a file called `SetTnpB.fasta` gives a folder called `SetTnpB`. You can also use `{date}` (like 2026-10-29), `{time}` (like 1405), `{model}` (like evo2_7b) and `{n}` (the file's number in the run, 1 for now). For example `{file}_{model}` gives `SetTnpB_evo2_7b`. The line under the box, "This run will be named", shows the name for the file selected in the list. If a folder with that name is already there, the new one gets `_2`, then `_3` and so on, and the older results are never touched.
+The **Run name** box on **New run** sets the name of the folder your results are saved into, inside your chosen output folder. It starts as `{file}`, which means the name of the file you added (without its ending), so a file called `SetTnpB.fasta` gives a folder called `SetTnpB`. You can also use `{date}` (like 2026-10-29), `{time}` (like 1405), `{model}` (like evo2_7b) and `{n}` (the file's number in the run, 1 for now). For example `{file}_{model}` gives `SetTnpB_evo2_7b`. The line under the box, "This run will be named", shows the name for the file selected in the list; the date and time in it are taken when you press Run, so they can differ from what the line showed a moment before. If a folder with that name is already there, the new one gets `_2`, then `_3` and so on, and the older results are never touched.
 
 ## The basic options
 

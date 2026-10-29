@@ -150,6 +150,24 @@ public sealed class RunOutputFoldersTests : IDisposable
         input.OutputStem.ShouldBe("sample.v2");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_template_falls_back_to_the_file_name_not_run(string template)
+        => RunOutputFolders.RunFolderName(Options(template), new Core.Contract.StagedInput("x/SetTnpB.fasta", "SetTnpB.fasta"), Clock).ShouldBe("SetTnpB");
+
+    [Fact]
+    public void A_stem_over_100_characters_is_cut_to_100()
+    {
+        var name = RunOutputFolders.RunFolderName(Options("{file}"), new Core.Contract.StagedInput("x/long.fasta", new string('a', 150) + ".fasta"), Clock);
+
+        name.ShouldBe(new string('a', 100));
+    }
+
+    [Fact]
+    public void A_device_name_as_the_file_is_renamed_so_Windows_can_create_it()
+        => RunOutputFolders.RunFolderName(Options("{file}"), new Core.Contract.StagedInput("x/CON.fasta", "CON.fasta"), Clock).ShouldBe("run_CON");
+
     [Fact]
     public void An_accession_input_is_named_by_its_output_stem_not_cut_at_the_version_dot()
     {

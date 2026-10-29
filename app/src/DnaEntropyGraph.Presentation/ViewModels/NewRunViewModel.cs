@@ -995,6 +995,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
         var startedItem = SelectedItem!;
+
+        // {date} and {time} are read when the name is made: raise the preview now so the page shows the same minute the run takes (#514).
+        OnPropertyChanged(nameof(RunNamePreview));
         var options = new RunOptions
         {
             ModelId = Gpu.ModelId,
