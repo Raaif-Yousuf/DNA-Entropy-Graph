@@ -1,0 +1,1 @@
+- Type-clean the prune_worktrees tests for the pyright ratchet (#812).
