@@ -7,11 +7,24 @@ public interface ICostEstimateService
 {
     /// <summary>The estimate for a run on <paramref name="machineType"/> with a boot disk of <paramref name="bootDiskGb"/> GB. Never throws except for cancellation: a problem is a <see cref="CostEstimateResult"/> with a reason.</summary>
     Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Raised (on whatever thread the price read finished on) when a background price read changed the prices an estimate uses, so an estimate already
+    /// on screen was made from older ones and the page should ask again. Never raised for a read that changed nothing.
+    /// </summary>
+    event Action? PricesChanged;
 }
 
 /// <summary>Joins the shipped price list, this PC's run history and <see cref="CostEstimator"/>.</summary>
-public sealed class CostEstimateService : ICostEstimateService
+public sealed class CostEstimateService : ICostEstimateService, IDisposable
 {
+    /// <summary>Cancelled when the service is disposed (the container does so at exit), so a background price read is owned by something and never outlives the app's shutdown.</summary>
+    private readonly CancellationTokenSource _lifetime = new();
+
+    public event Action? PricesChanged;
+
+    public void Dispose() => _lifetime.Cancel();
+
     private readonly Lazy<PricingLoadResult> _pricing;
     private readonly IPricingSource _source;
     private readonly IRunRepository _runs;
@@ -83,16 +96,30 @@ public sealed class CostEstimateService : ICostEstimateService
     }
 
     // Not tied to the estimate's token: the page cancels an estimate whenever the inputs change, and that must not abandon the daily read.
+    // It is tied to the service's lifetime instead (Dispose). Started on the thread pool: the source reads files before it asks the network,
+    // and the caller of an estimate can be the UI thread.
     // A source never throws but for cancellation (IPricingRefresh); anything else is swallowed here so a background task cannot fault unobserved.
-    private static async Task RunRefreshAsync(IPricingRefresh refresh)
+    private Task RunRefreshAsync(IPricingRefresh refresh)
     {
-        try
+        var lifetime = _lifetime.Token;
+        return Task.Run(async () =>
         {
-            await refresh.RefreshIfStaleAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            // The source is left on whatever it was serving.
-        }
+            try
+            {
+                var before = Fingerprint();
+                await refresh.RefreshIfStaleAsync(lifetime).ConfigureAwait(false);
+                if (before != Fingerprint())
+                {
+                    PricesChanged?.Invoke();
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // The source is left on whatever it was serving; a handler that threw is the page's problem, not the read's.
+            }
+        });
     }
+
+    /// <summary>The prices a source serves right now, as the text a changed price changes; null when it serves none.</summary>
+    private string? Fingerprint() => _source.Load().Table?.ToJson();
 }

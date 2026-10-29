@@ -110,6 +110,7 @@ public sealed class CostEstimateServiceTests
         }
     }
 
+    /// <summary>A refresh that waits to be released and only THEN moves the price it serves, so a price seen by an estimate can only have come through the service reading the source again.</summary>
     private sealed class SlowSource : IPricingSource, IPricingRefresh
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -117,18 +118,29 @@ public sealed class CostEstimateServiceTests
 
         public int Refreshes { get; private set; }
 
-        public void Finish()
-        {
-            _onDemand = 1.7;
-            _release.SetResult();
-        }
+        public void Finish() => _release.SetResult();
 
-        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good.Replace("0.85", _onDemand.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good.Replace("0.85", Volatile.Read(ref _onDemand).ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
         public async Task RefreshIfStaleAsync(CancellationToken cancellationToken)
         {
             Refreshes++;
             await _release.Task.ConfigureAwait(false);
+            Volatile.Write(ref _onDemand, 1.7);
+        }
+    }
+
+    /// <summary>A refresh that never ends on its own; it hands out the token it was given.</summary>
+    private sealed class HangingSource : IPricingSource, IPricingRefresh
+    {
+        public TaskCompletionSource<CancellationToken> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good);
+
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            Started.TrySetResult(cancellationToken);
+            return Task.Delay(Timeout.Infinite, cancellationToken);
         }
     }
 
@@ -138,23 +150,99 @@ public sealed class CostEstimateServiceTests
         // Issue #214 review M1: the page waits for an estimate; a catalog read that takes a minute must not.
         var source = new SlowSource();
         var service = new CostEstimateService(source, _runs, TimeSpan.FromMilliseconds(50));
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.PricesChanged += () => changed.TrySetResult();
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var first = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
         var again = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        source.Refreshes.ShouldBe(1, "a refresh still running is not started a second time");
 
         source.Finish();
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         var later = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         var shipped = await Service().EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
         first.Estimate!.MaxUsd.ShouldBe(shipped.Estimate!.MaxUsd, "the first estimate is made from what is known now");
         again.Estimate!.MaxUsd.ShouldBe(first.Estimate.MaxUsd);
-        source.Refreshes.ShouldBe(2, "a refresh still running is not started a second time; the one after it finished is");
-        later.Estimate!.MaxUsd.ShouldBeGreaterThan(first.Estimate.MaxUsd, "the refresh that finished in the background reaches the next estimate");
+        later.Estimate!.MaxUsd.ShouldBeGreaterThan(first.Estimate.MaxUsd, "the refresh that finished in the background reaches the next estimate, through the service reading the source again");
     }
 
+    [Fact]
+    public async Task A_background_refresh_that_changed_nothing_raises_no_prices_changed()
+    {
+        var source = new SlowSource();
+        var service = new CostEstimateService(new UnchangedAfterRefresh(source), _runs, TimeSpan.FromMilliseconds(20));
+        var raised = 0;
+        service.PricesChanged += () => Interlocked.Increment(ref raised);
+
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        source.Finish();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        raised.ShouldBe(0, "the refresh left the prices as they were, so there is nothing for the page to redo");
+    }
+
+    /// <summary>Takes the refresh of a source but always serves the shipped price.</summary>
+    private sealed class UnchangedAfterRefresh(SlowSource inner) : IPricingSource, IPricingRefresh
+    {
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good);
+
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken) => inner.RefreshIfStaleAsync(cancellationToken);
+    }
+
+    [Fact]
+    public async Task Disposing_the_service_cancels_a_refresh_that_is_still_running()
+    {
+        // Issue #214 review round 2 (M): the background read used CancellationToken.None and was owned by nobody.
+        var source = new HangingSource();
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromMilliseconds(20));
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        var token = await source.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        token.IsCancellationRequested.ShouldBeFalse("a running read is not cancelled by the estimate that stopped waiting for it");
+
+        ((IDisposable)service).Dispose();
+
+        token.IsCancellationRequested.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_refresh_does_not_start_on_the_callers_thread()
+    {
+        // Issue #214 review round 2 (L): the source reads files first; on the UI thread that is a stall.
+        var started = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new ThreadRecordingSource(started);
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromMilliseconds(20));
+        var callerThread = 0;
+
+        // A thread of its own (not a pool thread that the refresh could land on by chance) stands for the UI thread.
+        var caller = new Thread(() =>
+        {
+            callerThread = Environment.CurrentManagedThreadId;
+            service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None).GetAwaiter().GetResult();
+        });
+        caller.Start();
+        caller.Join();
+
+        (await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldNotBe(callerThread);
+        source.Complete();
+    }
+
+    private sealed class ThreadRecordingSource(TaskCompletionSource<int> started) : IPricingSource, IPricingRefresh
+    {
+        private readonly TaskCompletionSource _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Complete() => _done.TrySetResult();
+
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good);
+
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            started.TrySetResult(Environment.CurrentManagedThreadId);
+            return _done.Task;
+        }
+    }
     [Fact]
     public async Task A_source_that_can_refresh_is_refreshed_first_and_read_again_so_a_new_price_reaches_the_estimate()
     {

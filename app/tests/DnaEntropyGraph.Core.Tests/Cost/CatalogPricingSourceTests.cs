@@ -283,6 +283,22 @@ public sealed class CatalogPricingSourceTests
     }
 
     [Fact]
+    public async Task A_clock_that_moves_back_after_loading_does_not_keep_a_far_future_cache_fresh()
+    {
+        // Issue #214 review round 2 (L): NeedsRefresh trusted any AsOf >= today; EnsureLoaded already refuses one more than a day ahead.
+        await Source().RefreshIfStaleAsync(CancellationToken.None);
+        _gateway.ClearReceivedCalls();
+        _clock.Advance(TimeSpan.FromDays(-1));
+        var source = Source();
+        source.Current.Origin.ShouldBe(PricingOrigin.Cache);
+
+        _clock.Advance(TimeSpan.FromDays(-2));
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        await _gateway.Received(1).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public void The_default_read_budget_fits_a_paged_read_where_each_page_may_take_the_pipelines_30_second_attempt()
     {
         // Issue #214 review M1: 10 s for the whole read could never finish one slow page, let alone several.
