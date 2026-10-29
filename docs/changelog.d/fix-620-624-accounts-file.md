@@ -1,1 +1,2 @@
 - Two copies of the app changing the saved account list at once no longer lose a change: a sign-in in one and a project choice in the other both persist (every change is applied to the file as it is under the lock; same account and field, the later writer wins) (#620).
+- When the saved account list is held open by another program at launch, the setup page now says so with a Try again button instead of looking signed out, and the account appears once the file can be read (#624).

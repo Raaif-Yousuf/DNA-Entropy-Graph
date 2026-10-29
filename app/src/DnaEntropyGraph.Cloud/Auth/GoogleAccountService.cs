@@ -73,36 +73,81 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     {
         get
         {
+            var state = LoadState(force: false, out var becameReadable);
+            if (becameReadable)
+            {
+                // Outside the lock: a handler reads this service again.
+                RaiseChanged();
+            }
+
+            return state;
+        }
+    }
+
+    /// <summary>
+    /// True when the saved account list exists but could not be read (issue #624): <see cref="IsSignedIn"/> is false and <see cref="Accounts"/> empty only
+    /// because it is unread. A damaged file the folder would not let the app move aside is a folder problem, not a hold, so it is not this.
+    /// </summary>
+    public bool IsAccountsFileLocked
+    {
+        get
+        {
+            _ = State;
             lock (_loadLock)
             {
-                if (_state is not null)
-                {
-                    return _state;
-                }
-
-                var now = _options.TimeProvider.GetUtcNow();
-                if (_accountsFileLocked && now < _retryLoadAfter)
-                {
-                    // The file was just found held: do not touch it (and wait on the mutex) again on every read, which may be the UI thread.
-                    return AccountsFile.Empty;
-                }
-
-                var loaded = Reconcile(_registry.Load());
-                _accountsFileSetAside = _registry.QuarantinedTo is not null;
-                // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
-                _accountsFileLocked = _registry.Unreadable;
-                _accountsFileFolderProblem = _registry.QuarantineFailed;
-                if (_accountsFileLocked)
-                {
-                    _retryLoadAfter = now + LockedRetryWindow;
-                }
-                else
-                {
-                    _state = loaded;
-                }
-
-                return loaded;
+                return _accountsFileLocked && !_accountsFileFolderProblem;
             }
+        }
+    }
+
+    /// <summary>
+    /// Try again (issue #624): reads <c>accounts.json</c> now, whatever the window since the last failed read, and raises <see cref="AccountChanged"/> if it
+    /// had been locked and can be read. Chosen over a timer: a timer would read the file on a pool thread unasked, and the user is looking at a
+    /// message that says what to do.
+    /// </summary>
+    public void RecheckAccountsFile()
+    {
+        _ = LoadState(force: true, out var becameReadable);
+        if (becameReadable)
+        {
+            RaiseChanged();
+        }
+    }
+
+    private AccountsFile LoadState(bool force, out bool becameReadable)
+    {
+        becameReadable = false;
+        lock (_loadLock)
+        {
+            if (_state is not null)
+            {
+                return _state;
+            }
+
+            var now = _options.TimeProvider.GetUtcNow();
+            if (!force && _accountsFileLocked && now < _retryLoadAfter)
+            {
+                // The file was just found held: do not touch it (and wait on the mutex) again on every read, which may be the UI thread.
+                return AccountsFile.Empty;
+            }
+
+            var wasLocked = _accountsFileLocked;
+            var loaded = Reconcile(_registry.Load());
+            _accountsFileSetAside = _registry.QuarantinedTo is not null;
+            // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
+            _accountsFileLocked = _registry.Unreadable;
+            _accountsFileFolderProblem = _registry.QuarantineFailed;
+            if (_accountsFileLocked)
+            {
+                _retryLoadAfter = now + LockedRetryWindow;
+            }
+            else
+            {
+                _state = loaded;
+                becameReadable = wasLocked;
+            }
+
+            return loaded;
         }
     }
 
