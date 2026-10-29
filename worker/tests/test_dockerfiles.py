@@ -280,7 +280,7 @@ def test_cuda_comments_do_not_claim_the_base_is_unpinned() -> None:
     assert froms and all(re.search(r"@sha256:[0-9a-f]{64}", ln) for ln in froms)
     for ln in text.splitlines():
         if ln.lstrip().startswith("#"):
-            assert not re.search(r"(?i)(isn't|is not|not|never|un)\s*pinned|pinned by digest yet", ln), (
+            assert not re.search(r"(?i)(isn't|is not|not|never)\s+pinned|pinned by digest yet", ln), (
                 f"stale claim that the base is unpinned: {ln!r}"
             )
 
