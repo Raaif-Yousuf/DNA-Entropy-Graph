@@ -175,6 +175,9 @@
   <data name="RunError_lifecycle_unverified" xml:space="preserve">
     <value>Your results were saved, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
+  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
+    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
+  </data>
   <data name="RunError_cancel_failed" xml:space="preserve">
     <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
   </data>

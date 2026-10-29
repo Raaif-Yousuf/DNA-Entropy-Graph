@@ -173,7 +173,7 @@ public sealed class RunCloudResults : IRunCloudResults
                 return CloudResultsStatus.Refused;
             }
 
-            StalePartSweeper.Sweep(folder, _time);
+            StalePartSweeper.Sweep(folder, result.Inputs.SelectMany(i => i.Files).Select(f => RunTransfer.ResultSubDirectory(f.Path)));
             foreach (var file in result.Inputs.SelectMany(i => i.Files))
             {
                 await DownloadFileAsync(run, folder, file, tally, cancellationToken).ConfigureAwait(false);

@@ -22,7 +22,10 @@ internal static class StreamedDownload
     /// <summary>A unique temp name per attempt, so two downloads of one file (a re-download beside a run) never write the same file.</summary>
     public static string TempPathFor(string destination) => destination + "." + Guid.NewGuid().ToString("N")[..12] + ".part";
 
-    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken)
+    /// <summary>The file's current length, or -1 when it does not exist yet. May throw <see cref="IOException"/> if the file vanishes or is locked mid-read.</summary>
+    private static long ProbeLength(string path) => File.Exists(path) ? new FileInfo(path).Length : -1;
+
+    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken, Func<string, long>? lengthProbe = null)
     {
         using var inner = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var cap = TotalCap(expectedBytes);
@@ -40,7 +43,18 @@ internal static class StreamedDownload
                     while (true)
                     {
                         await Task.Delay(poll, clock, inner.Token).ConfigureAwait(false);
-                        var length = File.Exists(tempPath) ? new FileInfo(tempPath).Length : -1;
+                        long length;
+                        try
+                        {
+                            length = (lengthProbe ?? ProbeLength)(tempPath);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            // The file vanished or is locked between the check and the read: that is "no progress observed yet", never a stall by itself
+                            // (a probe that keeps failing still ends in the stall deadline below, because lastProgress does not move).
+                            length = lastLength;
+                        }
+
                         if (length != lastLength)
                         {
                             lastLength = length;

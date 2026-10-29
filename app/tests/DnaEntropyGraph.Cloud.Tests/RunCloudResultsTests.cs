@@ -344,6 +344,7 @@ public sealed class RunCloudResultsTests : IDisposable
             }
 
             raced = true;
+            File.WriteAllText(destination, "someone else got there first");
             return new IOException("name taken");
         });
 
@@ -363,7 +364,17 @@ public sealed class RunCloudResultsTests : IDisposable
         var kept = Path.Combine(folder, "sample.bedgraph");
         File.WriteAllText(kept, "my edits");
         var attempts = 0;
-        var mover = new ScriptedMover((_, destination) => destination.Contains("(changed", StringComparison.Ordinal) && ++attempts > 0 ? new IOException("name taken") : null);
+        var mover = new ScriptedMover((_, destination) =>
+        {
+            if (!destination.Contains("(changed", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            attempts++;
+            File.WriteAllText(destination, "someone else got there first");
+            return new IOException("name taken");
+        });
 
         (await Make(mover: mover).RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Failed);
 

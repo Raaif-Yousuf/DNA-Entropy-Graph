@@ -73,9 +73,10 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
 
         await rows.SetPhaseAsync(request.JobId, JobPhase.Finalizing, cancellationToken).ConfigureAwait(false);
         await rows.SetPhaseAsync(request.JobId, JobPhase.Downloading, cancellationToken).ConfigureAwait(false);
+        var keptAside = 0;
         try
         {
-            await transfer.DownloadAsync(request, bucket, result, cancellationToken).ConfigureAwait(false);
+            keptAside = await transfer.DownloadAsync(request, bucket, result, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -94,6 +95,13 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
             // A good result with an unconfirmed VM: finished, with the code that tells the user to check the Cloud page.
             await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.LifecycleUnverified, lifecycleError).ConfigureAwait(false);
             return new CloudJobResult(finalPhase, CloudErrorKind.Other, lifecycleError, RunErrorCodes.LifecycleUnverified);
+        }
+
+        if (keptAside > 0)
+        {
+            // Hard Rule 14: a file the user had changed was renamed aside, not overwritten. A finished run still, with the code that tells the user where to look (the count is not text a user reads).
+            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.ChangedFilesKeptAside, $"{keptAside} changed file(s) kept under a changed name.").ConfigureAwait(false);
+            return new CloudJobResult(finalPhase, null, null, RunErrorCodes.ChangedFilesKeptAside);
         }
 
         await rows.SetPhaseAsync(request.JobId, finalPhase, cancellationToken).ConfigureAwait(false);

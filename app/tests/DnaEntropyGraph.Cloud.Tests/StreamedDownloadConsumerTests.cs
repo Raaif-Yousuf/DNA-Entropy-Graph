@@ -173,7 +173,7 @@ public sealed class StreamedDownloadConsumerTests : IDisposable
         var request = TestInputs.Request(jobId, new VmSpec(
             ProjectId: "my-project", InstallationId: "install-1", JobId: jobId, Model: "evo2_7b", AppVersion: "0.1.0", Lifecycle: "stop",
             MachineType: "g2-standard-8", MaxRunDuration: TimeSpan.FromHours(4), TerminationAction: "DELETE"));
-        var folder = Path.Combine(_root, "resumed");
+        var folder = Path.Combine(request.OutputFolder, "resumed");
         Directory.CreateDirectory(folder);
         var settings = new CloudRunSettings();
         var rows = new RunRowStore(_runs, null);
@@ -287,8 +287,8 @@ public sealed class StreamedDownloadConsumerTests : IDisposable
         PutResult(content);
         var folder = Path.Combine(_root, "sample");
         Directory.CreateDirectory(folder);
-        var stale = Path.Combine(folder, "old.deadbeef.part");
-        var fresh = Path.Combine(folder, "new.cafe.part");
+        var stale = Path.Combine(folder, "sample.bedgraph.0123456789ab.part");
+        var fresh = Path.Combine(folder, "sample.bedgraph.abcdef012345.part");
         File.WriteAllBytes(stale, [1]);
         File.WriteAllBytes(fresh, [1]);
         File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-2));

@@ -10,7 +10,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// Everything that moves bytes between the user's disk and the bucket: the input upload, the output download with its
 /// path-safety and checksum rules (Hard Rule 14), and the run's output folder.
 /// </summary>
-internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, CloudRunSettings settings, RunRowStore rows)
+internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, CloudRunSettings settings, RunRowStore rows, IRunFileMover? fileMover = null)
 {
     /// <summary>
     /// One upload's deadline: <see cref="CloudRunSettings.UploadTimeout"/> when set, else a floor of 2 minutes plus 1 second per 128 KiB
@@ -94,12 +94,13 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
     /// the chosen output folder (Hard Rule 14), verifying each against the checksum <c>result.json</c>
     /// gives. A file lands under its final name only once complete and verified.
     /// </summary>
-    public async Task DownloadAsync(CloudJobRequest request, string bucket, WorkerResultDocument result, CancellationToken cancellationToken)
+    public async Task<int> DownloadAsync(CloudJobRequest request, string bucket, WorkerResultDocument result, CancellationToken cancellationToken)
     {
         var runFolder = await ResolveRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
         var runFolderFull = Path.GetFullPath(runFolder);
         var prefix = WorkerManifestBuilder.JobPrefix(request.JobId);
-        StalePartSweeper.Sweep(runFolderFull, settings.TimeProvider);
+        StalePartSweeper.Sweep(runFolderFull, result.Inputs.SelectMany(i => i.Files).Select(f => ResultSubDirectory(f.Path)));
+        var keptAside = 0;
 
         // Every input that listed files, whatever its status: a failed or cancelled input's partial files are kept
         // (docs/job_contract.md sections 6 and 7). Messages name the input id and file number, never the path, because
@@ -119,7 +120,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
                 try
                 {
-                    await DownloadFileAsync(bucket, prefix + file.Path, destination, file, label, cancellationToken).ConfigureAwait(false);
+                    keptAside += await DownloadFileAsync(bucket, prefix + file.Path, destination, file, label, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
                 {
@@ -128,9 +129,24 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 }
             }
         }
+
+        return keptAside;
     }
 
-    private async Task DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, CancellationToken cancellationToken)
+    /// <summary>The folder (relative to the run folder) a result file lands in; a path that is not a safe output path names none here, and fails with its own label when it is downloaded.</summary>
+    internal static string ResultSubDirectory(string path)
+    {
+        try
+        {
+            return Path.GetDirectoryName(SafeRelativeOutputPath(path, "A result file")) ?? string.Empty;
+        }
+        catch (RunFailureException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private async Task<int> DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
         try
@@ -169,17 +185,37 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
             // Hard Rule 14: a resumed run finds its earlier files here, and the user may have edited one. Identical bytes are kept as they are; anything else is
             // renamed aside ("name (changed time).ext") before the verified download takes its place, never overwritten.
+            string? aside = null;
             if (File.Exists(destination))
             {
                 if (new FileInfo(destination).Length == written && await FileSha256Async(destination, cancellationToken).ConfigureAwait(false) == actualHash)
                 {
-                    return;
+                    return 0;
                 }
 
-                ChangedFileAside.Move(destination, settings.TimeProvider, Mover);
+                aside = ChangedFileAside.Move(destination, settings.TimeProvider, Mover);
             }
 
-            Mover.Move(partial, destination);
+            try
+            {
+                Mover.Move(partial, destination);
+            }
+            catch (Exception) when (aside is not null)
+            {
+                // The user's file must never be left renamed with nothing in its place: put it back, and only then report the failure.
+                try
+                {
+                    Mover.Move(aside, destination);
+                }
+                catch (IOException)
+                {
+                    // Could not put it back; it is still safe under its changed name.
+                }
+
+                throw;
+            }
+
+            return aside is null ? 0 : 1;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -198,7 +234,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         }
     }
 
-    private static readonly DiskRunFileMover Mover = new();
+    private static readonly DiskRunFileMover DiskMover = new();
+
+    private IRunFileMover Mover => fileMover ?? DiskMover;
 
     private static async Task<string> FileSha256Async(string path, CancellationToken cancellationToken)
     {
@@ -237,7 +275,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
     private async Task<string> ResolveRunFolderAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
         var existing = (await rows.LatestRecordAsync(request.JobId, cancellationToken).ConfigureAwait(false))?.OutputDir;
-        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing))
+        // Hard Rule 14 and the same containment RunCloudResults applies: a recorded folder is reused only while it is strictly inside the output folder this run was given
+        // and is a real folder (a junction or symlink there could point anywhere).
+        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && RunOutputRoot.IsStrictlyInside(existing, request.OutputFolder) && StalePartSweeper.NoReparseBetween(Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputFolder)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(existing))))
         {
             return existing;
         }

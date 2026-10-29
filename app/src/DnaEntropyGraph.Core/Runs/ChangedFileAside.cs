@@ -15,14 +15,27 @@ internal static class ChangedFileAside
         return (attempt == 1 ? stem + ")" : $"{stem} {attempt})") + Path.GetExtension(path);
     }
 
-    /// <summary>Moves <paramref name="path"/> to a free changed-name and returns it. A name taken between the check and the move is not an error: the next counter is tried.</summary>
+    /// <summary>The most time spent looking for a free name; a clock the caller injects (the same one the name's timestamp uses) keeps this testable.</summary>
+    public static readonly TimeSpan MaxTotal = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Moves <paramref name="path"/> to a free changed-name and returns it. A name that is taken (found taken, or taken between the check and the move) is not an error:
+    /// the next counter is tried at once. Any other failure (a sharing violation the mover already retried on this same name) is thrown as it is, because another
+    /// name would not release the file. The whole search is bounded by <see cref="MaxTotal"/>.
+    /// </summary>
     public static string Move(string path, TimeProvider time, IRunFileMover mover)
     {
+        var started = time.GetTimestamp();
         for (var attempt = 1; attempt <= MaxTries; attempt++)
         {
             var candidate = Candidate(path, attempt, time);
             if (File.Exists(candidate))
             {
+                if (time.GetElapsedTime(started) > MaxTotal)
+                {
+                    break;
+                }
+
                 continue;
             }
 
@@ -31,8 +44,9 @@ internal static class ChangedFileAside
                 mover.Move(path, candidate);
                 return candidate;
             }
-            catch (IOException) when (attempt < MaxTries)
+            catch (IOException) when (File.Exists(candidate) && attempt < MaxTries && time.GetElapsedTime(started) <= MaxTotal)
             {
+                // Taken between the check and the move: the next name.
             }
         }
 
