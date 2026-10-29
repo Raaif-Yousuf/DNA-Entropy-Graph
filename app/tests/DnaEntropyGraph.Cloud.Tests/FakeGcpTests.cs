@@ -381,6 +381,165 @@ public class FakeGcpTests
         gcp.BeforeGrantWrite = null;
         (await gcp.GetVmAsync(name, Zone, CancellationToken.None)).ShouldBeNull();
     }
+    // ---- cold review round 2 ----
+
+    [Fact]
+    public async Task A_vm_made_again_between_a_deletes_removal_and_its_cleanup_keeps_its_own_scheduled_preemption()
+    {
+        var gcp = new FakeGcp().WithSpotPreemptions(2);
+        var first = await gcp.CreateVmAsync(SpotSpec("job-1"), Zone, CancellationToken.None);
+        VmDescriptor? second = null;
+        gcp.BeforePlanCleanup = () => second = gcp.CreateVmAsync(SpotSpec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+        await gcp.DeleteVmAsync(first.Name, first.Zone, CancellationToken.None);
+        gcp.BeforePlanCleanup = null;
+
+        var seen = await gcp.GetVmAsync(second!.Name, second.Zone, CancellationToken.None);
+
+        seen!.Status.ShouldBe("TERMINATED", "the second VM's own preemption was not wiped by the first one's cleanup");
+        (await WasPreempted(gcp, second)).ShouldBeTrue();
+        (await WasPreempted(gcp, first)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_vm_made_again_between_a_polls_failed_write_and_its_cleanup_keeps_its_own_scheduled_preemption()
+    {
+        var gcp = new FakeGcp().WithSpotPreemptions(2);
+        var first = await gcp.CreateVmAsync(SpotSpec("job-1"), Zone, CancellationToken.None);
+        VmDescriptor? second = null;
+        gcp.BeforePollWrite = () =>
+        {
+            gcp.DeleteVmAsync(first.Name, first.Zone, CancellationToken.None).GetAwaiter().GetResult();
+            gcp.BeforePlanCleanup = () => second = gcp.CreateVmAsync(SpotSpec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+        };
+        (await gcp.GetVmAsync(first.Name, first.Zone, CancellationToken.None)).ShouldBeNull();
+        gcp.BeforePollWrite = null;
+        gcp.BeforePlanCleanup = null;
+
+        var seen = await gcp.GetVmAsync(second!.Name, second.Zone, CancellationToken.None);
+
+        seen!.Status.ShouldBe("TERMINATED");
+        (await WasPreempted(gcp, second)).ShouldBeTrue();
+    }
+
+    private static byte[] Manifest => """{"inputs":[{"name":"seq.gb"}]}"""u8.ToArray();
+
+    [Fact]
+    public async Task A_reuse_has_the_workers_files_in_the_bucket_before_the_vm_reads_running()
+    {
+        var gcp = new FakeGcp();
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-2/manifest.json", Manifest);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+        var filesBeforeStart = false;
+        var statusBeforeStart = "";
+        gcp.BeforeStartWrite = () =>
+        {
+            filesBeforeStart = gcp.ObjectKeys(bucket).Contains("jobs/job-2/result.json");
+            statusBeforeStart = gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult()!.Status;
+        };
+
+        await gcp.ReuseVmAsync(ValidSpec("job-2"), created.Name, created.Zone, CancellationToken.None);
+
+        statusBeforeStart.ShouldBe("STOPPED");
+        filesBeforeStart.ShouldBeTrue("files first, then the VM becomes visible as RUNNING (#784)");
+    }
+
+    [Fact]
+    public async Task A_reuse_whose_worker_cannot_read_the_manifest_leaves_the_vm_stopped_and_no_worker_files()
+    {
+        var gcp = new FakeGcp();
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-2/manifest.json", "this is not json"u8.ToArray());
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+
+        await Should.ThrowAsync<Exception>(() => gcp.ReuseVmAsync(ValidSpec("job-2"), created.Name, created.Zone, CancellationToken.None));
+
+        (await gcp.GetVmAsync(created.Name, created.Zone, CancellationToken.None))!.Status.ShouldBe("STOPPED");
+        gcp.ObjectKeys(bucket).ShouldNotContain("jobs/job-2/result.json");
+    }
+
+    [Fact]
+    public async Task A_reuse_deleted_mid_flight_leaves_no_worker_objects_and_no_pending_end()
+    {
+        var gcp = new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete);
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-2/manifest.json", Manifest);
+        var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
+        gcp.BeforeStartWrite = () => gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
+
+        await Should.ThrowAsync<CloudOperationException>(() => gcp.ReuseVmAsync(ValidSpec("job-2"), created.Name, created.Zone, CancellationToken.None));
+
+        gcp.ObjectKeys(bucket).Where(k => k.StartsWith("jobs/job-2/", StringComparison.Ordinal)).ShouldBe(["jobs/job-2/manifest.json"]);
+        gcp.PendingWorkerEndCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_flex_start_grant_cancelled_by_a_delete_leaves_no_worker_objects_for_the_job()
+    {
+        var gcp = new FakeGcp().WithFlexStartHeld();
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-1/manifest.json", Manifest);
+        var create = gcp.CreateVmAsync(FlexSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        var name = FlexSpec("job-1").VmName;
+        gcp.BeforeGrantWrite = () => gcp.DeleteVmAsync(name, Zone, CancellationToken.None).GetAwaiter().GetResult();
+        gcp.GrantFlexStart();
+
+        await Should.ThrowAsync<CloudOperationException>(() => create.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+
+        (await gcp.TryDownloadAsync(bucket, "jobs/job-1/result.json", CancellationToken.None)).ShouldBeNull();
+        gcp.ObjectKeys(bucket).Where(k => k.StartsWith("jobs/job-1/", StringComparison.Ordinal)).ShouldBe(["jobs/job-1/manifest.json"]);
+        gcp.PendingWorkerEndCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_queued_request_whose_row_was_relabelled_still_leaves_no_row_when_it_expires()
+    {
+        var gcp = new FakeGcp().WithFlexStartExpiringAfter(TimeSpan.FromMilliseconds(600));
+        var create = gcp.CreateVmAsync(FlexSpec("job-1"), Zone, CancellationToken.None);
+        await gcp.FlexStartQueued.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        var name = FlexSpec("job-1").VmName;
+        gcp.BeforeGrantWrite = () => gcp.SimulateExternalRelabel(name, Zone, new Dictionary<string, string> { ["x"] = "y" }); // a CAS changes the queued row after the expiry read it
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => create.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+
+        ex.Error.Code.ShouldBe("FLEX_START_REQUEST_EXPIRED");
+        (await gcp.GetVmAsync(name, Zone, CancellationToken.None)).ShouldBeNull("no PROVISIONING ghost row stays");
+    }
+
+    [Fact]
+    public async Task A_deferred_worker_stop_never_stops_a_later_vm_made_under_the_same_name()
+    {
+        var gcp = new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Stop);
+        var bucket = FakeGcp.BucketName("fake-project");
+        gcp.PutObject(bucket, "jobs/job-1/manifest.json", Manifest);
+        var first = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None); // its worker's stop is pending
+        gcp.WithWorker(FakeWorkerMode.Never);
+        VmDescriptor? later = null;
+        gcp.BeforeStopWrite = () =>
+        {
+            gcp.DeleteVmAsync(first.Name, first.Zone, CancellationToken.None).GetAwaiter().GetResult();
+            later = gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None).GetAwaiter().GetResult();
+        };
+
+        await gcp.TryDownloadAsync(bucket, "jobs/job-1/result.json", CancellationToken.None); // the worker's stop fires here
+
+        later.ShouldNotBeNull();
+        (await gcp.GetVmAsync(later.Name, later.Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+    }
+
+    [Fact]
+    public async Task A_vm_that_already_existed_has_an_instance_id_so_a_worker_end_binds_to_it()
+    {
+        var gcp = new FakeGcp().WithAlreadyExists("deg-existing", Zone);
+
+        var vm = await gcp.GetVmAsync("deg-existing", Zone, CancellationToken.None);
+
+        vm!.InstanceId.ShouldNotBeNull();
+    }
     [Fact]
     public async Task Created_vm_is_found_by_name_and_zone()
     {
