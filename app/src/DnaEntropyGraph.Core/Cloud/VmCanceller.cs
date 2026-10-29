@@ -47,6 +47,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         // The ask sits INSIDE the same guard as the delete: whatever it throws (a caller who gave up, an unexpected failure of a look), the VM is still deleted and the row
         // still ends terminal. Nothing in the ask may skip the delete.
         var outcome = GracefulOutcome.NotAsked;
+        var found = new System.Runtime.CompilerServices.StrongBox<bool>(false);
         string? failure;
         try
         {
@@ -76,7 +77,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 }
             }
 
-            failure = await DeleteAllAsync(jobId, settled, queued, cancellationToken).ConfigureAwait(false);
+            failure = await DeleteAllAsync(jobId, settled, queued, found, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -88,7 +89,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // last attempt that the caller's token cannot cut, then the terminal state is recorded from what it finds.
             try
             {
-                failure = await DeleteAllAsync(jobId, settled, queued, CancellationToken.None).ConfigureAwait(false);
+                failure = await DeleteAllAsync(jobId, settled, queued, found, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -98,7 +99,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         // Issue #109 (M2): a run abandoned mid-create never stamped when its VM started (the stamp lives on the runner's own path), so the cancel does, or the
         // ledger books nothing for a VM that billed until this delete. Kept if the row already has one.
-        if (provisioner.TakeVmStartForCancel(jobId, settled) is { } vmStart)
+        if (provisioner.TakeVmStartForCancel(jobId, settled, found.Value) is { } vmStart)
         {
             try
             {
@@ -114,10 +115,10 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
     }
 
-    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, CancellationToken cancellationToken)
+    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, System.Runtime.CompilerServices.StrongBox<bool> found, CancellationToken cancellationToken)
     {
         var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
-        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
+        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken, () => found.Value = true).ConfigureAwait(false);
         return ownedNote ?? queuedNote;
     }
 

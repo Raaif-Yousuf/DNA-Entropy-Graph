@@ -225,9 +225,15 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return error;
     }
 
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken)
+    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken, Action? foundVm = null)
     {
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+        if (owned.Count > 0)
+        {
+            // Issue #109 (round 3): a VM the delete found is proof one existed, which an unsettled create alone is not.
+            foundVm?.Invoke();
+        }
+
         string? deleteError = null;
         foreach (var vm in owned)
         {

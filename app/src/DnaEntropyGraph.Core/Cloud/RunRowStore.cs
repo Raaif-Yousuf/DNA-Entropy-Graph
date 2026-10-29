@@ -136,7 +136,7 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
                     : existing with { Phase = phase };
                 if (JobStateMachine.IsTerminal(phase))
                 {
-                    next = next with { FinishedAt = now };
+                    next = next with { FinishedAt = next.FinishedAt ?? now };
                 }
 
                 if (errorCode is not null)
