@@ -94,6 +94,31 @@ public class SpendLedgerTests
         }
     }
 
+    private sealed class ChangingPricing : IPricingSource
+    {
+        public string Json { get; set; } = PricingJson;
+
+        public PricingLoadResult Load() => PricingTable.Parse(Json);
+    }
+
+    [Fact]
+    public async Task A_price_table_that_changes_after_the_first_load_prices_the_next_booking_at_the_new_rate_and_leaves_the_booked_row_alone()
+    {
+        // The registered source is the catalog source, whose Load() follows a refresh; the ledger must not freeze the first table for the session.
+        using var paths = new TempPaths();
+        var repo = new CostLedgerRepository(new SqliteDatabase(paths.DatabasePath));
+        var pricing = new ChangingPricing();
+        var ledger = new SpendLedger(repo, pricing, new Settings(), new FixedTime(Now), TimeZoneInfo.Utc, null);
+
+        (await ledger.RecordRunAsync(Finished("r1", hours: 1), CancellationToken.None)).ShouldNotBeNull();
+        pricing.Json = PricingJson.Replace("\"onDemandUsdPerHour\":1.0", "\"onDemandUsdPerHour\":3.0");
+        (await ledger.RecordRunAsync(Finished("r2", hours: 1), CancellationToken.None)).ShouldNotBeNull();
+
+        var rows = (await repo.GetAllAsync(CancellationToken.None)).ToDictionary(r => r.RunId!);
+        rows["r1"].UsdEst.ShouldNotBeNull().ShouldBe(1.0 + 0.015, 1e-9, "a booked run keeps its booked figure");
+        rows["r2"].UsdEst.ShouldNotBeNull().ShouldBe(3.0 + 0.015, 1e-9, "the refreshed rate prices the next booking");
+    }
+
     [Fact]
     public async Task A_run_that_never_had_a_VM_books_nothing_whatever_its_phase_and_machine_type()
     {

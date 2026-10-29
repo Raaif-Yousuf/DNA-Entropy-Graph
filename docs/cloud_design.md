@@ -608,7 +608,7 @@ exercise.
  COUNTED: a VM kept alive or left stopped after its run ended (the run's row stops at its end;
  the Cloud page lists those), time before the VM existed (upload, preflight, stockout retries),
  bucket storage, and anything Google bills that this app did not start. Every figure is an
- ESTIMATE; a machine the price list lacks writes no row. The run row is stored first, then the
+ ESTIMATE; a machine the price list lacks writes no row. The ledger reads the price table at each use (the registered source serves the latest one, so a catalog refresh prices the next booking; a booked row keeps its figure). The run row is stored first, then the
  ledger row (a failed store books nothing; the retry books it once). Issue #557 will replace the
  estimate with the instance-timestamp figure. `MonthlySpend` is not stored: the
  month-to-date is summed from the ledger over the local calendar month (the PC's time zone, by
