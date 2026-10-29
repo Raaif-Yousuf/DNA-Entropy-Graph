@@ -162,7 +162,7 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   naming an unknown gate, is exit 2, never a green run.
 - **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
   (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
-  old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT`. A timed-out pytest gate is
+  old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT` (kept at 1800 s after #959: the parallel run measured 549 s, 3.3x headroom). A timed-out pytest gate is
   `ERROR` (never `PASS`, never `FAIL`) with its own text, `timed out after Ns with N passed and N failed so far (NOT a pass; ...)`,
   counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. The timeout
   kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
@@ -447,11 +447,12 @@ name-matched, not type-resolved, and it says so in detail.
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
 
 ```powershell
-uv run --with pytest --with pyyaml python -m pytest scripts\tests -q
+uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts\tests -q -n 8
 ```
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
+**Parallel (#959):** `scripts/tests` runs under pytest-xdist (MIT, a dev-only `uv run --with`, like pyyaml, so not in `THIRD-PARTY-NOTICES.md`, which lists the `[dev]` extra only). `premerge.py` passes `-n scripts_test_workers()` (half the CPUs, 2 to 8; the log shows `created: N/N workers`), `ci-docs.yml` passes `-n auto`. MEASURED 2026-10-29: serial `1874 passed, 19 skipped in 1600.06s` vs `-n 8` `1879 passed, 19 skipped in 549.17s` under the same agent load. `--basetemp` becomes per-worker (`popen-gwN`). To debug one test, run it serially without `-n`. Running tests in parallel found one real race: `premerge_stamp._landed_lock` died on Windows PermissionError when another holder was deleting the lock (fixed, retried).
 **Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
 (`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
 `scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the

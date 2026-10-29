@@ -121,7 +121,9 @@ def _landed_lock(path: Path):
         try:
             os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             break
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # PermissionError: on Windows O_EXCL on a lock another holder is deleting (delete-pending) raises it, not
+            # FileExistsError (MEASURED 2026-10-29 #959: under 8 xdist workers it lost a PR record). Retry until the deadline.
             if _take_over_stale(lock):
                 continue
             if time.monotonic() > deadline:

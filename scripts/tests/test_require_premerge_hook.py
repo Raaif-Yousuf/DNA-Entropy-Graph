@@ -271,6 +271,23 @@ def test_concurrent_record_landed_loses_nothing(repo):
     assert sorted(data, key=int) == [str(n) for n in range(1, 13)]
 
 
+def test_a_lock_that_is_delete_pending_is_retried_not_fatal(repo, monkeypatch):
+    """#959: on Windows O_EXCL on a lock another holder is deleting raises PermissionError (not FileExistsError);
+    MEASURED 2026-10-29 under 8 xdist workers this killed a record_landed thread and lost its PR record."""
+    real_open = os.open
+    calls = {"n": 0}
+
+    def flaky(file, flags, *a, **k):
+        if str(file).endswith("landed-prs.lock") and calls["n"] < 3:
+            calls["n"] += 1
+            raise PermissionError(13, "Permission denied")
+        return real_open(file, flags, *a, **k)
+
+    monkeypatch.setattr(stamp.os, "open", flaky)
+    stamp.record_landed(repo, "7", SHA)
+    assert calls["n"] == 3 and stamp.landed_head(repo, "7") == SHA
+
+
 def test_a_stale_lock_does_not_wedge_record_landed(repo):
     lock = stamp.landed_path(repo).with_name("landed-prs.lock")
     lock.write_text("x", encoding="utf-8")
