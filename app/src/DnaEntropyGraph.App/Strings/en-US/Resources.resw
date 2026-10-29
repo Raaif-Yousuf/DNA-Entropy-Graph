@@ -884,10 +884,10 @@
     <value>There is no cost estimate because the price list that comes with this app could not be read. Reinstall the app to bring it back. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoPrice" xml:space="preserve">
-    <value>There is no cost estimate for this kind of computer yet, because the price list that comes with this app has no price for it. You can still press Run.</value>
+    <value>There is no cost estimate for this kind of computer yet, because the price list this app uses has no price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateNoSpotPrice" xml:space="preserve">
-    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list that comes with this app has no Spot price for it. You can still press Run.</value>
+    <value>There is no cost estimate for a discounted (Spot) computer of this kind yet, because the price list this app uses has no Spot price for it. You can still press Run.</value>
   </data>
   <data name="NewRunEstimateModelPoint" xml:space="preserve">
     <value>Estimate: about {0}, about {1}, because you have no earlier runs on this PC yet. This is a guess, not a bill.</value>
@@ -2831,8 +2831,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
     <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
-    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
   <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
     <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
@@ -2851,5 +2849,179 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
     <value>Wait for a graphics card</value>
+  </data>
+  <data name="RunError_proxy_blocked" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
+  </data>
+  <data name="RunError_network_certificate" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
+  </data>
+  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
+  </data>
+  <data name="SettingsProxyExpander.Header" xml:space="preserve">
+    <value>Network proxy</value>
+  </data>
+  <data name="ProxyExplainer.Text" xml:space="preserve">
+    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
+  </data>
+  <data name="ProxyModeBox.Header" xml:space="preserve">
+    <value>How to reach the internet</value>
+  </data>
+  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
+    <value>Use the Windows settings (recommended)</value>
+  </data>
+  <data name="ProxyModeManualItem.Content" xml:space="preserve">
+    <value>Use a proxy I type</value>
+  </data>
+  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
+    <value>No proxy</value>
+  </data>
+  <data name="ProxyAddressBox.Header" xml:space="preserve">
+    <value>Proxy address (host:port)</value>
+  </data>
+  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
+    <value>proxy.example.edu:8080</value>
+  </data>
+  <data name="ProxyUserNameBox.Header" xml:space="preserve">
+    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
+  </data>
+  <data name="ProxyPasswordBox.Header" xml:space="preserve">
+    <value>Proxy password</value>
+  </data>
+  <data name="ProxySignInSaved.Text" xml:space="preserve">
+    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
+  </data>
+  <data name="ProxyApplyButton.Content" xml:space="preserve">
+    <value>Apply</value>
+  </data>
+  <data name="ProxySaved" xml:space="preserve">
+    <value>Saved. The next connection uses this setting.</value>
+  </data>
+  <data name="ProxyAddressInvalid" xml:space="preserve">
+    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
+  </data>
+  <data name="ProxyPasswordNeeded" xml:space="preserve">
+    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
+  </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="Results_GenesTruncated" xml:space="preserve">
+    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  </data>
+  <data name="Results_GenesUnreadable" xml:space="preserve">
+    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_GenesRowsSkipped" xml:space="preserve">
+    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
+  </data>
+  <data name="Results_GenesOrderFile" xml:space="preserve">
+    <value>in the file's order</value>
+  </data>
+  <data name="Results_GenesOrderSorted" xml:space="preserve">
+    <value>sorted by {0}</value>
+  </data>
+  <data name="Results_GenesSortedAscending" xml:space="preserve">
+    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GenesSortedDescending" xml:space="preserve">
+    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GeneColumn_contig" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="Results_GeneColumn_gene" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="Results_GeneColumn_begin" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Results_GeneColumn_end" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="Results_GeneColumn_strand" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="Results_GeneColumn_length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="Results_GeneColumn_mean" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="Results_GeneColumn_min" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_max" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_low" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="Viewer_TrackFailed" xml:space="preserve">
+    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
+  </data>
+  <data name="Viewer_SmoothedToggle" xml:space="preserve">
+    <value>Smoothed over {0} bases</value>
+  </data>
+  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
+    <value>Smoothed entropy, {0} bases (bits)</value>
+  </data>
+  <data name="ResultsGenesHeading.Text" xml:space="preserve">
+    <value>Genes</value>
+  </data>
+  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
+    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
   </data>
 </root>

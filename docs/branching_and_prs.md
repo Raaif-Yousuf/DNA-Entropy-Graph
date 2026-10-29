@@ -124,6 +124,8 @@ flag, after the PR opens the script polls `gh pr checks <pr> --json name,bucket,
 | a check still pending, or no check reported at all, at the timeout | 6 | no, the PR stays open |
 | every check green but `gh pr merge` itself fails | 4 | no |
 
+**CodeQL triage lines (#920).** When a failed check is named `CodeQL` (or starts with `analyze `), every refusal that involves one (the first red with `--no-rerun-failed-once`, `could not be re-run`, or a second red after the re-run; printed once per run, never when the re-run goes green) is followed by a read-only listing of the open code-scanning alerts on the PR's merge ref, which includes alerts already on main (`gh api repos/<owner>/<repo>/code-scanning/alerts?ref=refs/pull/<n>/merge&state=open`): one line `CodeQL: <N> open alert(s) on PR <n>: <rule> <count> (<top-level dir> <count>, ...)`, sorted by count, then one line saying whether every alert is under `app/tests/`, `worker/tests/` or `scripts/tests/`. Triage from it: alerts only in test paths are usually fixture noise (decide dismiss-or-fix by hand in the Security tab); a rule concentrated in one directory points at one pattern to fix. The script never dismisses anything and never changes the exit code or the merge decision; if `gh` cannot list them it prints `- could not list CodeQL alerts: <reason>` and carries on. `land_queue.py` writes all of land_wt's output to `land-<slug>-<sha7>.log`, so the lines land there too.
+
 **`--rerun-failed-once` (on by default with the flag; `--no-rerun-failed-once` disables).** MEASURED 2026-10-15: wall-clock
 timed tests flaked on loaded CI runners and blocked merges (#664, #673). The first red result re-runs each failed run once
 (`gh run rerun <run> --failed`; the run ids come from the check links, and it waits until no other check is still running,
@@ -138,10 +140,15 @@ a moment after the PR opens). Console output is ASCII. Without the flag nothing 
 
 In order: fetch; the sha must be the branch tip (a stale sha refuses); a control-byte scan of the changed text files
 (MEASURED 2026-10-02: an agent's `scripts\v` became `\x0b`); a detached worktree under `%TEMP%\landwt` at the sha; origin/main
-merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine; **any other
+merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine, then normalised: a `## Queue` row whose cells are identical to main's copy is dropped (a stacked chain whose bottom just landed no
+longer fails premerge, #892); a row with the same issue and "Do this" (the key `check_totest_format.py` uses) but different cells, or a
+duplicate main does not carry, is left and named in a `WARNING` (issue, "Do this" prefix, differing columns), and premerge refuses it
+until the lane reconciles it; a row missing its closing `|` is closed; a ToTest.md that is not UTF-8 is left as the union made it, with
+one line saying so; **any other
 conflict aborts the merge and refuses with the file list**, so the lane resolves it); premerge inside the worktree with
 `worker\.venv` reached through a junction and `PYTHONPATH=<wt>\worker\src`; on green, `HEAD` is pushed to
-`refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. Red premerge prints the failing gates and the
+`refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. The sha recorded for the `gh pr merge` hook (`landed-prs.json`) is the pushed `HEAD` (the PR head, a merge
+commit when the branch was behind), so `gh pr merge <n> --match-head-commit <that sha>` is allowed (#904). Red premerge prints the failing gates and the
 log path and pushes nothing.
 
 **The junction is removed with `os.rmdir`, then checked, then `git worktree remove`, on success and on every failure**

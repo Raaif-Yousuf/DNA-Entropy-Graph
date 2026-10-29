@@ -57,6 +57,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+import check_totest_format as ctf  # noqa: E402
+
 REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
@@ -623,6 +629,75 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
+def _prefix(row: ctf.Row) -> str:
+    return repr(row.cells[3][:40]) if len(row.cells) > 3 else ""
+
+
+def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str]]:
+    """After the union: close `## Queue` table rows missing their trailing `|`, then drop a row that duplicates a row
+    main carries. A row is dropped ONLY when its cells (stripped) equal the kept row's; the kept copy is main's (the
+    union puts main's lines after the lane's, so the LAST copy whose cells main also has). A row that shares the
+    duplicate key (check_totest_format's: issue + "Do this") but differs in any cell, or a duplicate main does not
+    carry, is left alone and reported, so premerge refuses it and the lane reconciles it instead of losing an edit.
+    Other lines are byte-identical. Returns (text, rows dropped, rows closed, one message per unresolved pair)."""
+    lines = text.splitlines(keepends=True)
+    closed = 0
+    for row in ctf.parse_rows(text):
+        body = lines[row.line_no - 1]
+        content = body.splitlines()[0] if body.splitlines() else body
+        if not content.rstrip().endswith("|"):
+            lines[row.line_no - 1] = content.rstrip() + " |" + body[len(content) :]
+            closed += 1
+    main_cells = {row.cells for row in ctf.parse_rows(main_text)} if main_text else set()
+    by_key: dict[tuple[str, str], list[ctf.Row]] = {}
+    for row in ctf.parse_rows("".join(lines)):
+        key = ctf.duplicate_key(row)
+        if key is not None:
+            by_key.setdefault(key, []).append(row)
+    drop: set[int] = set()
+    problems: list[str] = []
+    for group in by_key.values():
+        if len(group) < 2:
+            continue
+        keep = next((r for r in reversed(group) if r.cells in main_cells), None)
+        if keep is None:
+            first = group[0]
+            problems.append(
+                f"{TOTEST} has {len(group)} rows for {first.cells[0]} ({_prefix(first)}) and main does not carry them: "
+                "reconcile the rows (keep one) before landing"
+            )
+            continue
+        for other in group:
+            if other is keep:
+                continue
+            if other.cells == keep.cells:
+                drop.add(other.line_no - 1)
+                continue
+            differing = [name for name, a, b in zip(ctf.COLUMNS, keep.cells, other.cells, strict=False) if a != b]
+            problems.append(
+                f"{TOTEST} row {keep.cells[0]} ({_prefix(keep)}) differs from main's copy in: "
+                f"{', '.join(differing)}: reconcile the row (keep one) before landing"
+            )
+    kept = "".join(ln for i, ln in enumerate(lines) if i not in drop)
+    return kept, len(drop), closed, problems
+
+
+def _normalise_union_totest(ctx: Ctx, name: str, merged: bytes, main: bytes) -> bytes:
+    """Normalise the union-resolved ToTest.md (see normalize_totest); a file that is not UTF-8 is returned untouched."""
+    try:
+        text, main_text = merged.decode("utf-8"), main.decode("utf-8")
+    except UnicodeDecodeError:
+        ctx.say(f"- {name} is not UTF-8: ToTest normalisation skipped, the union is left as git made it")
+        return merged
+    fixed, dropped, closed, unresolved = normalize_totest(text, main_text)
+    for message in unresolved:
+        ctx.say(f"WARNING: {message}")
+    if not (dropped or closed):
+        return merged
+    ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")
+    return fixed.encode("utf-8")
+
+
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     if git(wt, "merge-base", "--is-ancestor", f"{REMOTE}/{BASE}", "HEAD", check=False).returncode == 0:
         return
@@ -657,7 +732,10 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
             for path, data in zip((ours, base, theirs), parts, strict=True):
                 path.write_bytes(data)
             git(wt, "merge-file", "--union", str(ours), str(base), str(theirs), check=False)
-            (wt / name).write_bytes(ours.read_bytes())
+            merged_bytes = ours.read_bytes()
+        if name == TOTEST:
+            merged_bytes = _normalise_union_totest(ctx, name, merged_bytes, parts[2])
+        (wt / name).write_bytes(merged_bytes)
         git(wt, "add", "--", name)
         ctx.say(f"- union-resolved {name}")
     git(wt, *ident, "commit", "--no-edit", "-q")
@@ -798,6 +876,90 @@ def _read_pr_head(ctx: Ctx, pr: str) -> str:
     return ""
 
 
+TEST_PATH_PREFIXES = ("app/tests/", "worker/tests/", "scripts/tests/")
+
+
+def _is_codeql(check: dict[str, str]) -> bool:
+    name = str(check.get("name", "")).strip().lower()
+    return name == "codeql" or name.startswith("analyze ")
+
+
+def _ascii(text: str) -> str:
+    """Hard Rule 5: every console line is ASCII; gh-derived text (paths, stderr) may not be."""
+    return text.encode("ascii", "replace").decode("ascii")
+
+
+def _alert_pages(raw: str) -> list[dict[str, Any]]:
+    """`gh api --paginate` prints one JSON array per page back to back (whitespace between); decode them all.
+    Anything that is not a non-empty run of JSON arrays is `unexpected response`, never a count of zero."""
+    dec, pos, out = json.JSONDecoder(), 0, []
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("unexpected response")
+    while pos < len(raw):
+        try:
+            page, pos = dec.raw_decode(raw, pos)
+        except ValueError:
+            raise ValueError("unexpected response") from None
+        if not isinstance(page, list):
+            raise ValueError("unexpected response")
+        out.extend(a for a in page if isinstance(a, dict))
+        while pos < len(raw) and raw[pos].isspace():
+            pos += 1
+    return out
+
+
+def _codeql_summary_lines(ctx: Ctx, pr: str) -> list[str]:
+    """The triage lines for `pr`; raises on any failure (the caller turns that into one `- could not list` line)."""
+    number = pr.rstrip("/").rsplit("/", 1)[-1]
+    m = re.match(r"https?://[^/]+/([^/]+/[^/]+)/pull/\d+", pr)
+    slug = m.group(1) if m else "{owner}/{repo}"
+    api = f"repos/{slug}/code-scanning/alerts?ref=refs/pull/{number}/merge&state=open&per_page=100"
+    try:
+        proc = run_bounded([*ctx.gh, "api", api, "--paginate"], timeout=ctx.gh_timeout)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"gh timed out after {int(ctx.gh_timeout)} s") from None
+    if proc.returncode != 0:
+        raise ValueError(f"rc={proc.returncode}: {(_text(proc.stderr) or _text(proc.stdout))[:200] or '(no output)'}")
+    alerts = _alert_pages(_text(proc.stdout))
+    if not alerts:
+        return [f"CodeQL: 0 open alert(s) on PR {number} (the failure is a build/analysis error, not alerts)"]
+    rules: dict[str, list[str]] = {}
+    paths: list[str] = []
+    for a in alerts:
+        rule = a.get("rule")
+        rid = str(rule.get("id", "?")) if isinstance(rule, dict) else "?"
+        inst = a.get("most_recent_instance")
+        loc = inst.get("location") if isinstance(inst, dict) else None
+        path = str(loc.get("path", "")) if isinstance(loc, dict) else ""
+        rules.setdefault(rid, []).append(path)
+        paths.append(path)
+    parts = []
+    for rid, plist in sorted(rules.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        dirs: dict[str, int] = {}
+        for p in plist:
+            top = p.split("/", 1)[0] if "/" in p else (p or "?")
+            dirs[top] = dirs.get(top, 0) + 1
+        dtxt = ", ".join(f"{d} {n}" for d, n in sorted(dirs.items(), key=lambda kv: (-kv[1], kv[0])))
+        parts.append(f"{rid} {len(plist)} ({dtxt})")
+    verdict = "every alert is under a test path" if all(p.startswith(TEST_PATH_PREFIXES) for p in paths) else "not all under a test path"
+    return [
+        f"CodeQL: {len(alerts)} open alert(s) on PR {number}: " + ", ".join(parts),
+        f"- {verdict} (app/tests/, worker/tests/, scripts/tests/)",
+    ]
+
+
+def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
+    """Read-only triage (#920) after a red CodeQL check. Never dismisses anything, never changes the exit code, never raises:
+    any failure at all (gh, parsing, an odd payload) is one ASCII `- could not list CodeQL alerts: <reason>` line."""
+    try:
+        lines = [_ascii(ln) for ln in _codeql_summary_lines(ctx, pr)]
+    except Exception as err:  # noqa: BLE001  (a triage aid must not break the refusal path)
+        lines = [_ascii(f"- could not list CodeQL alerts: {' '.join(str(err).split()) or type(err).__name__}")]
+    for line in lines:
+        ctx.say(line)
+
+
 def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
     """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
 
@@ -806,6 +968,8 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
     deadline = ctx.monotonic() + timeout
     rerun_spent = False
     gh_warned = False
+    triaged = False  # the CodeQL alert summary prints at most once per run, on whichever refusal comes first
+    red: list[dict[str, str]] = []
     while True:
         checks = _read_checks(ctx, pr)
         if checks is None and ctx.checks_error and not gh_warned:
@@ -824,14 +988,23 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
                     ctx.sleep(poll)  # let the rerun replace the stale red before it is read again
                     continue
                 ctx.say(f"ERROR: not merging {pr}: failed check(s) {_names(red)} could not be re-run. Re-run them by hand; the PR stays open")
+                if any(_is_codeql(c) for c in red) and not triaged:
+                    triaged = True
+                    _report_codeql_alerts(ctx, pr)
                 return EXIT_CHECKS_RED
             elif red:
                 again = " (still red after one re-run)" if rerun_spent else ""
                 ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
+                if any(_is_codeql(c) for c in red) and not triaged:
+                    triaged = True
+                    _report_codeql_alerts(ctx, pr)
                 return EXIT_CHECKS_RED
             if not waiting and not red:
                 break
         if ctx.monotonic() >= deadline:
+            if any(_is_codeql(c) for c in red) and not triaged:
+                triaged = True
+                _report_codeql_alerts(ctx, pr)
             if waiting:
                 what = f"still pending: {_names(waiting)}"
             elif ctx.checks_error:
@@ -841,6 +1014,9 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             ctx.say(
                 f"ERROR: not merging {pr}: {what} after {int(timeout)} s. Run `gh pr checks {pr} --watch`, then merge by hand; the PR stays open"
             )
+            if any(_is_codeql(c) for c in red) and not triaged:
+                triaged = True
+                _report_codeql_alerts(ctx, pr)
             return EXIT_CHECKS_PENDING
         ctx.sleep(min(poll, deadline - ctx.monotonic()))
     # Never merge a head other than the one that was verified and pushed: read the PR's head now and pin the merge to it.
@@ -918,7 +1094,7 @@ def land(
         _push(ctx, wt, land_branch, pushed_head)
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
-        _record_landed(ctx, url, full_sha)
+        _record_landed(ctx, url, pushed_head)  # the PR head the hook must allow, not the pre-merge lane tip (#904)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
             rc = _merge_when_green(ctx, url, pushed_head, checks_timeout, checks_poll, rerun_failed_once)

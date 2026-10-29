@@ -1078,6 +1078,32 @@ public sealed class NewRunViewModelTests : IDisposable
         await _estimates.Received().EstimateAsync("g2-standard-8", false, Dna.Length, 150, Arg.Any<CancellationToken>());
     }
 
+    private sealed class QueueDispatcher : IDispatcher
+    {
+        public List<Action> Queued { get; } = [];
+
+        public void Enqueue(Action action) => Queued.Add(action);
+    }
+
+    [Fact]
+    public async Task A_price_change_signalled_after_the_estimate_was_shown_asks_for_the_estimate_again_through_the_dispatcher()
+    {
+        // Issue #214 review round 2 (M): the first estimate of the day is made from the shipped prices; the background read finishing must reach the page.
+        var dispatcher = new QueueDispatcher();
+        _viewModel = new NewRunViewModel(_picker, _jobEngine, _navigator, _strings, new LocalPastedInputStore(_appData), _estimates, new OutputSelectionStore(Substitute.For<ISettingsStore>()), _log, TestGpu.Plan(), dispatcher: dispatcher);
+        EstimateReturns(Point(9, 0.13));
+        await AddOne(Write("p.fasta", ">a\n" + Dna + "\n"));
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
+
+        EstimateReturns(Point(9, 0.26));
+        _estimates.PricesChanged += Raise.Event<Action>();
+
+        _viewModel.EstimateText.ShouldBe("Estimate: about $0.13, about 9 minutes", "the signal arrives on a pool thread; nothing touches the page until the dispatcher runs it");
+        dispatcher.Queued.Count.ShouldBe(1);
+        dispatcher.Queued[0]();
+        (await EstimateTextWhen(t => t.Contains("0.26", StringComparison.Ordinal))).ShouldBe("Estimate: about $0.26, about 9 minutes");
+    }
+
     [Fact]
     public async Task A_model_estimate_shows_a_range_in_dollars_and_minutes()
     {

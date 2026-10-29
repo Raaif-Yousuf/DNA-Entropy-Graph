@@ -90,6 +90,79 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         vm.ActionNoticeText.ShouldBeEmpty();
     }
 
+    private async Task<ResultsViewModel> ResultsFor(RunRecord run, string exportParent, IOverviewImageExporter exporter)
+    {
+        var repository = Substitute.For<IRunRepository>();
+        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { run });
+        _source.Load(run.OutputDir!).Returns(Overview("chr1"));
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent));
+        await vm.LoadAsync(run.JobId, TestContext.Current.CancellationToken);
+        return vm;
+    }
+
+    private static IOverviewImageExporter WritingExporter()
+    {
+        var exporter = Substitute.For<IOverviewImageExporter>();
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<string>()).Returns(call =>
+        {
+            File.WriteAllBytes(call.Arg<string>(), [1, 2, 3]);
+            return true;
+        });
+        return exporter;
+    }
+
+    [Fact]
+    public async Task An_imported_runs_png_goes_to_a_new_app_folder_and_its_own_folder_is_left_exactly_as_it_was()
+    {
+        // Hard Rule 14: the folder of a run imported from the earlier version is the user's own; nothing is written into it.
+        var own = Path.Combine(_dir, "proto");
+        Directory.CreateDirectory(own);
+        File.WriteAllText(Path.Combine(own, "proto.entropy.bedgraph"), "x");
+        var before = Directory.EnumerateFileSystemEntries(own, "*", SearchOption.AllDirectories).Order().ToList();
+        var exports = Path.Combine(_dir, "exports");
+        var vm = await ResultsFor(Row("legacy-1", own) with { Imported = true }, exports, WritingExporter());
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.EnumerateFileSystemEntries(own, "*", SearchOption.AllDirectories).Order().ToList().ShouldBe(before);
+        var written = Directory.EnumerateFiles(exports, "*.png", SearchOption.AllDirectories).ShouldHaveSingleItem();
+        Path.GetDirectoryName(Path.GetDirectoryName(written)).ShouldBe(exports);
+        vm.ActionNoticeText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_second_export_never_overwrites_the_first()
+    {
+        var own = Path.Combine(_dir, "mine");
+        Directory.CreateDirectory(own);
+        var vm = await ResultsFor(Row("job2", own), Path.Combine(_dir, "unused"), WritingExporter());
+        var first = Path.Combine(own, "chr1.entropy.overview.png");
+        File.WriteAllBytes(first, [9, 9, 9]);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        File.ReadAllBytes(first).ShouldBe([9, 9, 9]);
+        File.Exists(Path.Combine(own, "chr1.entropy.overview_2.png")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_imported_run_with_no_export_folder_configured_exports_nothing_and_says_so()
+    {
+        var own = Path.Combine(_dir, "proto2");
+        Directory.CreateDirectory(own);
+        var repository = Substitute.For<IRunRepository>();
+        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { Row("legacy-2", own) with { Imported = true } });
+        _source.Load(own).Returns(Overview("chr1"));
+        var exporter = WritingExporter();
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter);
+        await vm.LoadAsync("legacy-2", TestContext.Current.CancellationToken);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        exporter.DidNotReceiveWithAnyArgs().Export(default!, default!);
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailed);
+    }
+
     [Fact]
     public async Task A_contig_name_that_is_not_a_file_name_cannot_choose_where_the_png_goes()
     {
