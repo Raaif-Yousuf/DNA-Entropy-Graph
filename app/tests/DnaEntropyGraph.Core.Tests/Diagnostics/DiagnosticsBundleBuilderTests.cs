@@ -436,6 +436,28 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void A_truncated_cloud_audit_file_keeps_every_line_valid_json_with_no_note_line()
+    {
+        // Issue #245 review L5: a "[truncated: ...]" first line would make the .jsonl unparseable line by line.
+        var folder = new Dictionary<string, string>
+        {
+            ["logs/cloud-audit.jsonl"] = "{\"operation\":\"A\",\"n\":1}\n{\"operation\":\"B\",\"n\":2}\n{\"operation\":\"C\",\"n\":3}\n",
+        };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 40), [], Info));
+
+        var text = entries["files/logs/cloud-audit.jsonl"];
+        text.ShouldContain("\"C\"");
+        text.ShouldNotContain("[truncated");
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.ShouldNotBeEmpty();
+        foreach (var line in lines)
+        {
+            Should.NotThrow(() => System.Text.Json.JsonDocument.Parse(line));
+        }
+    }
+
+    [Fact]
     public void The_final_scan_is_stricter_than_the_redactor_and_names_the_entry()
     {
         DiagnosticsLeakScan.FindLeak(new Dictionary<string, string> { ["a.json"] = "{}", ["b.log"] = "x acgtacgtacgtacgtacgtn y" }).ShouldBe("b.log");
