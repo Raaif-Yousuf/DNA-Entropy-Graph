@@ -233,51 +233,36 @@ public class BudgetServiceTests
     }
 
     [Fact]
-    public async Task Not_being_allowed_to_read_whether_the_API_is_on_does_not_block_a_save_that_the_budget_call_accepts()
+    public async Task Not_being_allowed_to_read_whether_the_API_is_on_stops_the_save_before_any_budget_call()
     {
-        // Issue #148 review round 4 (L): a user with the billing role but without serviceusage.services.get used to be stopped here even when the API was already on.
+        // Proceeding blind would let Save patch a budget the page could not show, and would name the wrong person to ask.
         var services = ReadRefusedServices();
-        var gcp = await LinkedAsync();
-        var service = new BudgetService(gcp, gcp, services, Installation("inst-a"), (_, _) => Task.CompletedTask);
-
-        var saved = await service.SaveAsync(Project, 50m, CancellationToken.None);
-
-        saved.AmountUsd.ShouldBe(50m);
-        gcp.BudgetUpsertCalls.ShouldBe(1);
-        await services.DidNotReceive().EnableServicesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
-    }
-
-    [Theory]
-    [InlineData(CloudErrorKind.Permission)]
-    [InlineData(CloudErrorKind.ApiDisabled)]
-    public async Task A_refused_read_then_a_budget_call_that_fails_as_api_off_or_refused_names_the_project_and_the_read_step(CloudErrorKind kind)
-    {
-        var budgetFailure = new CloudOperationException(new CloudError("BUDGET", 403, "raw budget text"), kind);
         var budgets = NSubstitute.Substitute.For<IBudgetGateway>();
-        budgets.UpsertAsync(Arg.Any<BudgetSpec>(), Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw budgetFailure);
         var gcp = await LinkedAsync();
-        var service = new BudgetService(budgets, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
+        var service = new BudgetService(budgets, gcp, services, Installation("inst-a"), (_, _) => Task.CompletedTask);
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
-        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiEnablePermission);
-        ex.Error.Message.ShouldContain("Checking whether", Case.Sensitive, "the diagnostic names the step that was refused: the read, not the enable");
-        ex.InnerException.ShouldBeSameAs(budgetFailure);
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiReadPermission);
+        ex.Error.Message.ShouldContain("Checking whether", Case.Sensitive, "the diagnostic says the READ was refused");
+        ex.InnerException.ShouldBeOfType<CloudOperationException>().Error.Code.ShouldBe("PERMISSION_DENIED");
+        await budgets.DidNotReceiveWithAnyArgs().UpsertAsync(default!, TestContext.Current.CancellationToken);
+        await services.DidNotReceive().EnableServicesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task A_refused_read_then_a_budget_call_that_fails_for_another_reason_keeps_that_reason()
+    public async Task A_refused_read_leaves_an_existing_budget_exactly_as_it_was()
     {
-        var budgetFailure = new CloudOperationException(new CloudError("BUDGET", 503, "down"), CloudErrorKind.Network);
-        var budgets = NSubstitute.Substitute.For<IBudgetGateway>();
-        budgets.UpsertAsync(Arg.Any<BudgetSpec>(), Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw budgetFailure);
         var gcp = await LinkedAsync();
-        var service = new BudgetService(budgets, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
+        await Service(gcp).SaveAsync(Project, 500m, TestContext.Current.CancellationToken);
+        var calls = gcp.BudgetUpsertCalls;
+        var blind = new BudgetService(gcp, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
+        await Should.ThrowAsync<CloudOperationException>(() => blind.SaveAsync(Project, 50m, CancellationToken.None));
 
-        ex.ShouldBeSameAs(budgetFailure);
+        gcp.BudgetUpsertCalls.ShouldBe(calls, "no budget call at all after a refused read");
+        gcp.Budgets.Single().AmountUsd.ShouldBe(500m);
     }
 
     [Fact]

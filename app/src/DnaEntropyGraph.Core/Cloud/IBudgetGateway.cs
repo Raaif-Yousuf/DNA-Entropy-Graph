@@ -100,6 +100,12 @@ public static class BudgetErrorCodes
     /// </summary>
     public const string ApiEnablePermission = "BUDGET_API_ENABLE_PERMISSION";
 
+    /// <summary>
+    /// Reading whether the Cloud Billing Budget API is on was refused (no right to view the project's APIs). The save stops before any budget call, because
+    /// the page could not show an existing budget either. Action: ask a project owner for the Service Usage Viewer role.
+    /// </summary>
+    public const string ApiReadPermission = "BUDGET_API_READ_PERMISSION";
+
     /// <summary>The amount is not a usable number. Action: type an amount.</summary>
     public const string InvalidAmount = "BUDGET_INVALID_AMOUNT";
 }

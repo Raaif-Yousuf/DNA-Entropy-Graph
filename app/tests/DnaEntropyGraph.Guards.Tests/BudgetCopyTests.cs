@@ -25,6 +25,7 @@ public sealed class BudgetCopyTests
         ["BudgetStatusExistsNoAmount"] = 1,
         ["BudgetRequestText"] = 2,
         ["BudgetRequestText_OrgPolicy"] = 2,
+        ["BudgetRequestText_ApiRead"] = 1, // the code passes the amount too; this request names no amount, so the extra argument is unused
         ["BudgetThresholdItem"] = 1,
         ["BudgetThresholdsAnd"] = 2,
     };

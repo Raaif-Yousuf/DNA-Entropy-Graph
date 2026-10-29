@@ -191,6 +191,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             // False means Google held none (already gone): say that, not "removed".
             var removed = await _budgets.RemoveAsync(project, cancellationToken);
             HasBudget = false;
+            RestoreDefaultAmountIfEmpty();
             StatusText = _strings.GetString(removed ? "BudgetRemoved" : "BudgetRemovedNone");
         }, project, cancellationToken, removing: true);
     }
@@ -251,6 +252,12 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
                 ErrorText = _strings.GetString("BudgetError_ApiEnablePermission");
                 ConsoleLink = new Uri(BudgetLinks.ForApi(project));
                 break;
+            case CloudErrorKind.Permission when ex.Error.Code == BudgetErrorCodes.ApiReadPermission:
+                // The read of the project's API state was refused: the person to ask is a project owner (Service Usage Viewer), and nothing was saved.
+                ErrorText = _strings.GetString("BudgetError_ApiReadPermission");
+                _requestKey = "BudgetRequestText_ApiRead";
+                ShowCopyRequest = true;
+                break;
             case CloudErrorKind.Permission when removing:
                 // The create request would ask for the wrong thing; the budget is removed on Google's own page.
                 ErrorText = _strings.GetString("BudgetError_PermissionRemove");
@@ -301,6 +308,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         HasBudget = budget is not null;
         if (budget is null)
         {
+            RestoreDefaultAmountIfEmpty();
             StatusText = _strings.GetString("BudgetStatusNone");
             return;
         }
@@ -314,8 +322,9 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
                 SetAmount(string.Empty);
             }
 
+            // The box is empty here, so "press Create or update" alone would only ask for an amount: this wording says to type one first.
             StatusText = budget.ThresholdPercents.Count == 0
-                ? _strings.GetString("BudgetStatusNoThresholds")
+                ? _strings.GetString("BudgetStatusNoThresholdsNoAmount")
                 : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExistsNoAmount"), Thresholds(budget));
             return;
         }
@@ -342,6 +351,15 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         return parts.Count == 1
             ? parts[0]
             : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetThresholdsAnd"), string.Join(_strings.GetString("BudgetThresholdsJoiner"), parts.Take(parts.Count - 1)), parts[^1]);
+    }
+
+    // A follow-last-month budget leaves the box empty; once there is no budget the box offers the default again. Typed text is never touched.
+    private void RestoreDefaultAmountIfEmpty()
+    {
+        if (string.IsNullOrWhiteSpace(AmountText))
+        {
+            SetAmount(Format(BudgetNaming.DefaultAmountUsd));
+        }
     }
 
     private void SetAmount(string text)

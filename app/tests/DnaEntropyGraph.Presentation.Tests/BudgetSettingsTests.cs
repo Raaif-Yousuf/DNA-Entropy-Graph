@@ -339,6 +339,65 @@ public sealed class BudgetSettingsTests
     }
 
     [Fact]
+    public async Task A_refused_read_of_the_API_state_names_the_project_owner_and_offers_the_view_request_not_the_billing_one()
+    {
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission));
+        _shell.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = Open();
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_ApiReadPermission");
+        vm.ShowCopyRequest.ShouldBeTrue();
+        vm.ConsoleLink.ShouldBeNull("one action: the request to the project owner, not a second link");
+        vm.HasBudget.ShouldBeFalse();
+        vm.CopyRequestCommand.Execute(null);
+        _shell.Received(1).CopyText("BudgetRequestText_ApiRead");
+    }
+
+    [Fact]
+    public async Task A_budget_without_thresholds_and_without_an_amount_asks_for_an_amount_not_just_a_press()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false, ThresholdPercents = [] });
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBeEmpty();
+        vm.StatusText.ShouldBe("BudgetStatusNoThresholdsNoAmount");
+    }
+
+    [Fact]
+    public async Task After_a_budget_that_left_the_box_empty_is_removed_the_default_amount_is_back()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false });
+        _budgets.RemoveAsync(Project, Arg.Any<CancellationToken>()).Returns(true);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText.ShouldBeEmpty();
+
+        await vm.RemoveCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBe("50");
+    }
+
+    [Fact]
+    public async Task Finding_no_budget_restores_the_default_in_an_empty_box_but_never_overwrites_typed_text()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false }, (BudgetInfo?)null);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText.ShouldBeEmpty();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText.ShouldBe("50");
+
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        vm.AmountText = "77";
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText.ShouldBe("77");
+    }
+
+    [Fact]
     public async Task A_refused_remove_says_it_could_not_remove_and_does_not_offer_the_create_request()
     {
         // Issue #148 review L5.

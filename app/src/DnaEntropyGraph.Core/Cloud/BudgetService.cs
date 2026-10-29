@@ -67,30 +67,28 @@ public sealed class BudgetService : IBudgetService
 
         var account = status.AccountId;
 
-        // A refused READ of the API's state (no serviceusage.services.get) says nothing about whether the API is on, and a user with the billing role but not that right
-        // could save before. So it is not the end: the budget call decides, and only if THAT fails as "api off" or "refused" is the read named as the missing right.
-        CloudOperationException? readRefused = null;
+        // A refused READ of the API's state (no serviceusage.services.get) stops the save before any budget call: the page could not show an existing budget either,
+        // so saving blind would overwrite one the user never saw, and the person to ask is a project owner, not a billing administrator.
+        bool enabled;
         try
         {
-            bool enabled;
-            try
-            {
-                enabled = await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false);
-            }
-            catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
-            {
-                readRefused = ex;
-                enabled = true;
-            }
-
-            if (!enabled)
-            {
-                await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
-            }
+            enabled = await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
         {
-            throw ApiPermission(ex, "Switching on the Cloud Billing Budget API was refused for this project.");
+            throw ApiPermission(ex, BudgetErrorCodes.ApiReadPermission, "Checking whether the Cloud Billing Budget API is on was refused for this project; no budget call was made.");
+        }
+
+        if (!enabled)
+        {
+            try
+            {
+                await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
+            {
+                throw ApiPermission(ex, BudgetErrorCodes.ApiEnablePermission, "Switching on the Cloud Billing Budget API was refused for this project.");
+            }
         }
 
         var spec = new BudgetSpec(account, projectId, InstallationId.GetOrCreate(_settings), BudgetNaming.RoundToCents(amountUsd));
@@ -105,10 +103,6 @@ public sealed class BudgetService : IBudgetService
                 // Google can still answer "service disabled" for a short while after the enable returned. Only that kind is retried, and
                 // UpsertAsync looks the budget up first, so a replay never creates a second one.
                 await _delay(FirstBackoff * Math.Pow(2, attempt - 1), cancellationToken).ConfigureAwait(false);
-            }
-            catch (CloudOperationException ex) when (readRefused is not null && ex.Kind is CloudErrorKind.ApiDisabled or CloudErrorKind.Permission)
-            {
-                throw ApiPermission(ex, "Checking whether the Cloud Billing Budget API is on was refused for this project, and the budget call then failed.");
             }
         }
     }
@@ -138,8 +132,8 @@ public sealed class BudgetService : IBudgetService
     }
 
     // A right on the PROJECT (read or switch on an API) when SAVING; a plain look keeps its own Permission, which the page words as "cannot see budgets"; the budget's own refusal (a billing role) is a different problem with a different person to ask, so it gets its own code.
-    private static CloudOperationException ApiPermission(CloudOperationException original, string diagnostic)
-        => new(new CloudError(BudgetErrorCodes.ApiEnablePermission, original.Error.HttpStatus, diagnostic), CloudErrorKind.Permission, original);
+    private static CloudOperationException ApiPermission(CloudOperationException original, string code, string diagnostic)
+        => new(new CloudError(code, original.Error.HttpStatus, diagnostic), CloudErrorKind.Permission, original);
 
     private async Task<string?> LinkedAccountAsync(string projectId, CancellationToken cancellationToken)
     {
