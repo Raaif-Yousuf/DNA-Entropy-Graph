@@ -252,6 +252,365 @@
           "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
         ]
       }
+    },
+    {
+      "id": "genbank_second_locus_line_in_the_header_is_header_text",
+      "text": "LOCUS       a\nLOCUS       b\nORIGIN\n        1 acgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_skipped_record_id_is_the_first_locus_name_when_a_second_follows",
+      "text": "LOCUS       longname                  8 bp    DNA     linear   UNK 01-JAN-2000\nLOCUS       b\nORIGIN\n//\nLOCUS       z                  8 bp    DNA     linear   UNK 01-JAN-2000\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "Skipped GenBank record 1 (id 8 chars): no nucleotide sequence.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_second_locus_line_does_not_set_the_topology",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nLOCUS       b                  8 bp    DNA     circular   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            6..2\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank record 1: 1 gene feature(s) were dropped because their location text could not be read (gene '6..2'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_locus_line_after_the_feature_table_is_not_a_new_record",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            1..4\n                     /gene=\"x\"\nLOCUS       b\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_outside_the_sequence_is_dropped_with_a_notice",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_outside_the_sequence_is_replaced_by_the_cds_of_the_same_gene",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     CDS             1..6\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_one_gene_outside_the_sequence_the_other_is_kept",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     gene            1..4\n                     /gene=\"y\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_only_the_dropped_gene_is_replaced_by_its_cds",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     gene            1..4\n                     /gene=\"y\"\n     CDS             1..3\n                     /gene=\"x\"\n     CDS             2..4\n                     /gene=\"y\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 2
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 2 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_and_its_cds_both_outside_the_sequence",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     CDS             25..30\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank feature 'x' has coordinates 25..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_unreadable_gene_location_is_replaced_by_the_cds_of_the_same_gene",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            abc\n                     /gene=\"x\"\n     CDS             1..6\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank record 1: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "GenBank record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_without_a_name_is_not_replaced_by_a_cds",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n     CDS             1..6\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'gene' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_locus_tag_names_the_gene_for_the_cds_replacement",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /locus_tag=\"lt1\"\n     CDS             1..6\n                     /locus_tag=\"lt1\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature 'lt1' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('lt1'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_a_kept_gene_with_the_same_id_blocks_the_cds_replacement",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     gene            1..4\n                     /gene=\"x\"\n     CDS             1..3\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_two_cds_of_one_gene_id_only_one_stands_in",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"x\"\n     CDS             1..3\n                     /gene=\"x\"\n     CDS             4..6\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_four_replaced_genes_name_three_and_count_the_rest",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            20..30\n                     /gene=\"a\"\n     gene            20..30\n                     /gene=\"b\"\n     gene            20..30\n                     /gene=\"c\"\n     gene            20..30\n                     /gene=\"d\"\n     CDS             1..3\n                     /gene=\"a\"\n     CDS             1..3\n                     /gene=\"b\"\n     CDS             1..3\n                     /gene=\"c\"\n     CDS             1..3\n                     /gene=\"d\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 4
+          }
+        ],
+        "notices": [
+          "GenBank feature 'a' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank feature 'b' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank feature 'c' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank feature 'd' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "GenBank record 1: 4 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('a', 'b', 'c', and 1 more). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 4 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_between_two_bases_is_dropped_with_a_notice",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            3^4\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has a location between two bases (a site such as 1^2), not a span of bases, so it has no bases to measure; dropped from the gene features. Give it a span in the source file (for example 1..42) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_with_a_position_too_large_is_dropped_with_a_notice",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            1..99999999999999999999\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has a position too large to be a real coordinate (more than 9223372036854775807); dropped from the gene features. Correct the position in the source file (for example 1..42) and run again.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_ending_past_the_sequence_with_a_greater_than_mark_is_kept",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            1..>40\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_gene_with_a_partial_start_outside_the_sequence_is_dropped",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            <20..30\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_cds_outside_the_sequence_in_a_record_with_no_genes_is_dropped",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     CDS             20..30\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 20..30, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_single_part_join_outside_the_sequence_is_dropped",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            join(1..40)\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 1..40, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "genbank_two_part_join_outside_the_sequence_is_dropped",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            join(1..2,4..50)\n                     /gene=\"x\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "GenBank feature 'x' has coordinates 1..50, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      }
     }
   ],
   "embl_cases": [
@@ -670,6 +1029,56 @@
         "notices": [
           "Skipped EMBL record 1 (id 5 chars): no nucleotide sequence.",
           "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_gene_outside_the_sequence_is_dropped_with_a_notice",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            20..30\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt        8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 0
+          }
+        ],
+        "notices": [
+          "EMBL feature 'x' has coordinates 20..30, which fall outside record 'toy.1''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 0 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_gene_outside_the_sequence_is_replaced_by_the_cds_of_the_same_gene",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            20..30\nFT                   /gene=\"x\"\nFT   CDS             1..6\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt        8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "EMBL feature 'x' has coordinates 20..30, which fall outside record 'toy.1''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "EMBL record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_unreadable_gene_location_is_replaced_by_the_cds_of_the_same_gene",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\nFH   Key             Location/Qualifiers\nFH\nFT   gene            abc\nFT                   /gene=\"x\"\nFT   CDS             1..6\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt        8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "EMBL record 1: 1 gene feature(s) were dropped because their location text could not be read (gene 'abc'). A gene with an unreadable location is missing from the exported tracks. Correct the location in the source file (for example 1..42 or complement(85..126)) and run again.",
+          "EMBL record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
         ]
       }
     }

@@ -29,7 +29,7 @@ public static class EmblLite
         var phase = Phase.Header;
         long? idLength = null; // the ID line's length and topology decide how an origin-wrapping location reads
         var idCircular = false;
-        var tableFeatures = new List<(string Key, string? DroppedText)>();
+        var tableFeatures = new List<TableFeature>();
         var recordIndex = 0;
         var seq = new StringBuilder();
 
@@ -46,7 +46,7 @@ public static class EmblLite
             else
             {
                 // #796: the same dropped-location rule and counts as a GenBank record (the worker shares records_from_parsed).
-                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, notices, coded);
+                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, recSeq.Length, identity!.Id, notices, coded);
                 records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex) { MappedCount = mapped });
             }
             identity = null;
@@ -101,7 +101,7 @@ public static class EmblLite
                                 throw GenBankFeatureTable.RefuseLocation(recordIndex + 1, FeatureTableFormat.Embl);
                             }
 
-                            tableFeatures.Add((feature.Key, reading.Verdict == LocationVerdict.Dropped ? reading.QuotedText : null));
+                            tableFeatures.Add(new TableFeature(feature.Key, feature.Id, reading));
                         }
 
                         phase = Phase.AfterTable;
