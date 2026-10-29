@@ -50,7 +50,16 @@ class Shape:
 SHAPES = (
     Shape("g2-standard-8", "1x NVIDIA L4", 8, 32, "G2 Instance Core", "G2 Instance Ram", "Nvidia L4 GPU"),
     Shape("a2-highgpu-1g", "1x NVIDIA A100 40GB", 12, 85, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 GPU"),
-    Shape("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU", catalog_priced=False),
+    Shape(
+        "a2-ultragpu-1g",
+        "1x NVIDIA A100 80GB",
+        12,
+        170,
+        "A2 Instance Core",
+        "A2 Instance Ram",
+        "Nvidia Tesla A100 80GB GPU",
+        catalog_priced=False,
+    ),
 )
 
 

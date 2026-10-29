@@ -186,7 +186,9 @@ def test_machine_shapes_match_the_csharp_resolver():
     found = [(m[0], m[1], int(m[2]), int(m[3]), m[4], m[5], m[6], m[7] != "false") for m in pattern.findall(text)]
 
     assert found, "the scanner found no MachineShape in CatalogPriceResolver.cs, so it checks nothing"
-    assert found == [(s.machine_type, s.accelerator, s.vcpus, s.ram_gb, s.core_token, s.ram_token, s.gpu_token, s.catalog_priced) for s in gen.SHAPES]
+    assert found == [
+        (s.machine_type, s.accelerator, s.vcpus, s.ram_gb, s.core_token, s.ram_token, s.gpu_token, s.catalog_priced) for s in gen.SHAPES
+    ]
 
 
 def _first(pattern: str, text: str) -> str:
