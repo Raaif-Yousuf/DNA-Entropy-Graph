@@ -8,6 +8,7 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// <param name="UserProfilePath">The user's profile folder (<c>%USERPROFILE%</c>); every path under it becomes <c>&lt;user&gt;</c>.</param>
 /// <param name="SensitiveValues">Literal strings that must never appear (the user's email, their account name).</param>
 /// <param name="CreatedUtc">When the bundle was made.</param>
+/// <param name="ProxyMode">Which network proxy choice is on ("system", "manual" or "none"; issue #239), or null when not known. Only the mode: never the proxy's address (it can name the user's institution) and never a sign-in.</param>
 /// <param name="ReadmeText">The text of the zip's <c>README.txt</c>. User-visible, so the caller reads it from the resw file (Hard Rule 13); Core holds no copy.</param>
 public sealed record DiagnosticsInfo(
     string AppVersion,
@@ -17,7 +18,8 @@ public sealed record DiagnosticsInfo(
     string UserProfilePath,
     IReadOnlyList<string> SensitiveValues,
     DateTimeOffset CreatedUtc,
-    string ReadmeText);
+    string ReadmeText,
+    string? ProxyMode = null);
 
 /// <summary>The bundle refused to be written because sequence, a credential, an email, a path or one of the user's own identifiers survived redaction.</summary>
 public sealed class DiagnosticsLeakException(LeakFinding finding)
