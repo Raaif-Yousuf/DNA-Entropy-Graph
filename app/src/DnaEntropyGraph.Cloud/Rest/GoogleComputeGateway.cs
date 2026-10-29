@@ -117,7 +117,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         }
 
         var zones = new List<string>();
-        var paging = new PageTokenGuard("the zone list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -339,7 +339,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.installation-id = \"{installationId}\")";
         var found = new List<DiskDescriptor>();
-        var paging = new PageTokenGuard("the disk list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -438,7 +438,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         var project = RequireProject();
         var targetSuffix = $"/zones/{zone}/instances/{vmName}";
-        var paging = new PageTokenGuard("the zone operations list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         for (var page = 0; page < 5; page++)
         {
@@ -543,7 +543,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ? $"labels.app = \"{VmSpec.AppLabelValue}\""
             : $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.{labelKey} = \"{labelValue}\")";
         var found = new List<VmDescriptor>();
-        var paging = new PageTokenGuard("the VM list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {

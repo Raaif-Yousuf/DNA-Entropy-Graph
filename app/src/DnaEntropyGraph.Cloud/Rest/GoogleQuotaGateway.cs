@@ -177,7 +177,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     /// <summary>The project's preference for this quota and these dimensions, under whatever id; null when there is none. Pages with a stuck-token guard (a short list would read as "none" and create a conflicting one).</summary>
     private async Task<ExistingPreference?> FindPreferenceAsync(string projectId, string parent, string quotaId, IReadOnlyDictionary<string, string> dimensions, CancellationToken cancellationToken)
     {
-        var paging = new PageTokenGuard("the quota request list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -346,7 +346,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<QuotaMetric>>> ListRegionsAsync(string projectId, CancellationToken cancellationToken)
     {
         var table = new Dictionary<string, IReadOnlyList<QuotaMetric>>(StringComparer.OrdinalIgnoreCase);
-        var paging = new PageTokenGuard("the region quota list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {

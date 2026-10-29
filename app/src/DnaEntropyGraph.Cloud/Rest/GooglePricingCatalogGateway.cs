@@ -33,7 +33,7 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
     {
         var skus = new List<CatalogSku>();
         string? pageToken = null;
-        var paging = new PageTokenGuard("the price catalog");
+        var paging = new PageTokenGuard();
         do
         {
             var requested = pageToken;

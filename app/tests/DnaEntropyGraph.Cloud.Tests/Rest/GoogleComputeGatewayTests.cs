@@ -597,7 +597,7 @@ public class GoogleComputeGatewayTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.FindByJobIdAsync("job1", CancellationToken.None));
 
         ex.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
-        ex.Kind.ShouldBe(CloudErrorKind.Other, "issue #933: a stuck listing is not 'no answer'; see docs/cloud_design.md, Paging");
+        ex.Kind.ShouldBe(CloudErrorKind.Network, "issue #933 DECISION: a stuck listing is kind Network (retried, deferred by the reconciler); see docs/cloud_design.md, Paging");
     }
 
     [Fact]

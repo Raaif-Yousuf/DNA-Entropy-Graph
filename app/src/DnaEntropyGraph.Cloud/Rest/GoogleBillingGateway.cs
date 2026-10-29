@@ -41,7 +41,7 @@ internal sealed partial class GoogleBillingGateway : IBillingGateway
     public async Task<IReadOnlyList<BillingAccountSummary>> ListOpenBillingAccountsAsync(CancellationToken cancellationToken)
     {
         var accounts = new List<BillingAccountSummary>();
-        var paging = new PageTokenGuard("the billing account list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {

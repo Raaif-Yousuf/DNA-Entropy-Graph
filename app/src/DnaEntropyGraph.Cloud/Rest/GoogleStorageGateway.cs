@@ -200,7 +200,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// <summary>Every page of <c>objects.list</c> under <paramref name="prefix"/>. A repeated page token fails the listing (a short total must never read as complete).</summary>
     private async IAsyncEnumerable<StorageData.Objects> ListPagesAsync(string bucket, string prefix, string? delimiter, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var paging = new PageTokenGuard("the object list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -264,7 +264,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     private async Task<List<StorageData.Bucket>> ListOursAsync(string projectId, CancellationToken cancellationToken)
     {
         var ours = new List<StorageData.Bucket>();
-        var paging = new PageTokenGuard("the bucket list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {

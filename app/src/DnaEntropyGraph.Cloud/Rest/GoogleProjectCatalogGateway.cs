@@ -34,7 +34,7 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
     public async Task<IReadOnlyList<ProjectSummary>> ListActiveProjectsAsync(CancellationToken cancellationToken)
     {
         var projects = new List<ProjectSummary>();
-        var paging = new PageTokenGuard("the project list");
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
