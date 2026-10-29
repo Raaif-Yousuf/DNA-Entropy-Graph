@@ -130,6 +130,9 @@ public static class RunsCopy
     /// <summary>One file left in storage after a partial cloud delete (singular body).</summary>
     public static readonly RunsMessage DeleteCloudPartialOne = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
 
+    /// <summary>A cloud delete whose storage listing never finished (it repeated a page token): the app cannot tell what is left. Pressing the button again does not help, so the one action is the diagnostics file.</summary>
+    public static readonly RunsMessage DeleteCloudListingStuck = Pair("Runs_DeleteCloud_ListingStuck_Title", "Runs_DeleteCloud_ListingStuck_Body", ToastSeverity.Warning);
+
     public static RunsMessage DeleteCloud(CloudResultsStatus status) => status switch
     {
         CloudResultsStatus.OtherComputer => Pair("Runs_DeleteCloud_OtherComputer_Title", "Runs_DeleteCloud_OtherComputer_Body", ToastSeverity.Warning),
@@ -169,7 +172,7 @@ public static class RunsCopy
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
-        .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne), .. Flatten(DeleteCloudPartialUnconfirmed),
+        .. Flatten(DeleteCloudListingStuck), .. Flatten(DeleteCloudPartialUnknown), .. Flatten(DeleteCloudPartialOne), .. Flatten(DeleteCloudPartialUnconfirmed),
         .. Enum.GetValues<CloudErrorKind>().Select(DeleteCloudPartialKnown).Where(m => m is not null).SelectMany(m => Flatten(m!.Value)).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),

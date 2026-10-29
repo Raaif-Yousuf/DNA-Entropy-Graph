@@ -129,4 +129,31 @@ public sealed class RunsDeleteCloudPartialCopyTests
         resw[message.Body].ShouldContain("Choose Delete cloud copy again");
         resw[message.Body].ShouldNotContain("—");
     }
+
+    [Fact]
+    public void The_stuck_listing_copy_does_not_promise_that_trying_again_works_and_names_one_action()
+    {
+        var resw = Resw();
+        var message = RunsCopy.DeleteCloudListingStuck;
+        resw.ShouldContainKey(message.Title);
+        resw.ShouldContainKey(message.Body);
+        var body = resw[message.Body];
+        body.ShouldContain("Save diagnostics");
+        body.ShouldNotContain("again", Case.Insensitive);
+        body.ShouldNotContain("nothing was deleted", Case.Insensitive);
+        body.ShouldContain("may have been deleted");
+        body.ShouldNotContain("—");
+        resw[message.Title].ShouldNotContain("—");
+    }
+
+    [Fact]
+    public void The_stuck_listing_code_is_one_constant_and_no_other_source_file_spells_it()
+    {
+        CloudErrorCodes.ListPaginationStuck.ShouldBe("LIST_PAGINATION_STUCK");
+        var files = RepoPaths.AllCSharpFiles;
+        files.Length.ShouldBeGreaterThan(100, "the scan must see the source tree");
+        var spelled = files.Where(f => !f.EndsWith("CloudErrorCodes.cs", StringComparison.Ordinal) && File.ReadAllText(f).Contains("LIST_PAGINATION_STUCK", StringComparison.Ordinal)).ToArray();
+        spelled.ShouldBeEmpty("use CloudErrorCodes.ListPaginationStuck so a rename cannot silently fall back");
+        files.Count(f => File.ReadAllText(f).Contains("CloudErrorCodes.ListPaginationStuck", StringComparison.Ordinal)).ShouldBeGreaterThanOrEqualTo(4, "the three gateways files and RunCloudResults use it");
+    }
 }

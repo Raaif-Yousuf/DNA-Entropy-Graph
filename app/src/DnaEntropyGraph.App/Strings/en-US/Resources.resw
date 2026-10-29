@@ -2153,6 +2153,12 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
     <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
   </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
+    <value>Could not finish checking your Google Cloud storage</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings and send us the file.</value>
+  </data>
   <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
     <value>Not deleted</value>
   </data>

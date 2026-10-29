@@ -92,7 +92,7 @@ public class GoogleStorageCloudPageTests
     [Fact]
     public async Task DeletePrefix_cut_by_an_HttpRequestException_reaches_the_caller_as_a_network_failure_through_the_pipeline()
     {
-        // The sweep has no arm of its own for this: CloudCallPipeline maps it. The code is not the sweep's TRANSPORT_FAILED, which would mean a second classifier answered.
+        // The sweep catches IOException and SocketException itself (TRANSPORT_FAILED) but has no arm for HttpRequestException: CloudCallPipeline maps that one. The code is not the sweep's TRANSPORT_FAILED, which would mean a second classifier answered.
         var rig = new GoogleGatewayHarness(retries: 0);
         rig.Handler
             .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/a", 1), ObjectJson("jobs/j1/b", 1)]))

@@ -518,6 +518,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 _storagePageOffered.Add(run.JobId);
             }
 
+            // A listing that never finished: the app cannot tell what is left and pressing the button again meets the same listing, so the copy says so and names the diagnostics file.
+            if (result.ListingStuck && result.Status is CloudResultsStatus.Failed or CloudResultsStatus.PartiallyDeleted)
+            {
+                return RunsCopy.DeleteCloudListingStuck;
+            }
+
             if (result.Status == CloudResultsStatus.Failed)
             {
                 return RunsCopy.DeleteCloudFailed(result.ErrorKind);

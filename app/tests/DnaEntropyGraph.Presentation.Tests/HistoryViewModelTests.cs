@@ -829,6 +829,20 @@ public sealed class HistoryViewModelTests
         _toasts.Received(1).ShowToast(title, body, ToastSeverity.Error);
     }
 
+    [Theory]
+    [InlineData(CloudResultsStatus.Failed, null)]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, null)]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, 3)]
+    public async Task A_cloud_delete_whose_listing_never_finished_toasts_the_stuck_copy_not_a_try_again_one(CloudResultsStatus status, int? left)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(status, left, CloudErrorKind.Other, ListingStuck: true));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_ListingStuck_Title", "Runs_DeleteCloud_ListingStuck_Body", ToastSeverity.Warning);
+    }
+
     [Fact]
     public void Delete_cloud_failure_copy_without_a_known_kind_is_the_general_other_copy_not_the_network_one()
     {

@@ -467,7 +467,7 @@ public sealed class RunCloudResultsTests : IDisposable
         _runs.AllRecordedInOrder.ShouldBeEmpty();
     }
 
-    private static CloudOperationException Stuck() => new(new CloudError("LIST_PAGINATION_STUCK", null, "same token twice"), CloudErrorKind.Network);
+    private static CloudOperationException Stuck() => new(new CloudError(CloudErrorCodes.ListPaginationStuck, null, "same token twice"), CloudErrorKind.Network);
 
     [Fact]
     public async Task A_failed_delete_whose_listing_repeated_a_page_token_is_not_told_to_check_the_internet()
@@ -479,6 +479,16 @@ public sealed class RunCloudResultsTests : IDisposable
 
         result.Status.ShouldBe(CloudResultsStatus.Failed);
         result.ErrorKind.ShouldBe(CloudErrorKind.Other);
+        result.ListingStuck.ShouldBeTrue("the page picks the stuck-listing copy by this flag");
+    }
+
+    [Fact]
+    public async Task A_failure_that_is_not_a_stuck_listing_does_not_set_the_stuck_flag()
+    {
+        var dropped = new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "dropped"), CloudErrorKind.Network);
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw dropped);
+
+        (await Make().DeleteAsync(Run(), CancellationToken.None)).ListingStuck.ShouldBeFalse();
     }
 
     [Theory]
@@ -491,6 +501,7 @@ public sealed class RunCloudResultsTests : IDisposable
         var result = await Make().DeleteAsync(Run(), CancellationToken.None);
 
         result.ErrorKind.ShouldBe(CloudErrorKind.Other);
+        result.ListingStuck.ShouldBeTrue();
         result.ObjectsLeft.ShouldBe(remaining);
     }
 

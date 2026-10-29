@@ -208,7 +208,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
             var next = document.RootElement.TryGetProperty("nextPageToken", out var token) && token.ValueKind == JsonValueKind.String && token.GetString() is { Length: > 0 } t ? t : null;
             if (next is not null && next == pageToken)
             {
-                throw new CloudOperationException(new CloudError("LIST_PAGINATION_STUCK", null, "The Cloud Quotas API returned the same page token twice, so the quota request list may be incomplete."), CloudErrorKind.Network);
+                throw new CloudOperationException(new CloudError(CloudErrorCodes.ListPaginationStuck, null, "The Cloud Quotas API returned the same page token twice, so the quota request list may be incomplete."), CloudErrorKind.Network);
             }
 
             pageToken = next;
@@ -378,7 +378,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
             {
                 // A partial table would read as "this region has no quota", so the whole read fails instead.
                 throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the region quota list may be incomplete."),
+                    new CloudError(CloudErrorCodes.ListPaginationStuck, null, "Compute Engine returned the same page token twice, so the region quota list may be incomplete."),
                     CloudErrorKind.Network);
             }
 

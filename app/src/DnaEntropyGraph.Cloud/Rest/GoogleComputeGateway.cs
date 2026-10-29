@@ -391,7 +391,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             if (next is not null && next == pageToken)
             {
                 throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the disk list may be incomplete."),
+                    new CloudError(CloudErrorCodes.ListPaginationStuck, null, "Compute Engine returned the same page token twice, so the disk list may be incomplete."),
                     CloudErrorKind.Network);
             }
 
@@ -599,7 +599,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             if (next is not null && next == pageToken)
             {
                 throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the VM list may be incomplete."),
+                    new CloudError(CloudErrorCodes.ListPaginationStuck, null, "Compute Engine returned the same page token twice, so the VM list may be incomplete."),
                     CloudErrorKind.Network);
             }
 

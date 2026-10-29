@@ -49,7 +49,7 @@ public enum CloudResultsStatus
 /// <see cref="SweepCompleted"/> is true when the sweep itself finished without error and only the count read back afterwards failed or disagreed.
 /// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
 /// </summary>
-public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null, bool SweepCompleted = false)
+public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null, bool SweepCompleted = false, bool ListingStuck = false)
 {
     public static implicit operator CloudDeleteResult(CloudResultsStatus status) => new(status);
 }
@@ -233,7 +233,7 @@ public sealed class RunCloudResults : IRunCloudResults
             };
 
             // A completed sweep (the count after it is what failed or disagrees) is the exception's own flag: the page must not say it stopped.
-            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.SweepCompleted);
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.SweepCompleted, ListingStuck: partial.InnerException is CloudOperationException stuck && IsStuck(stuck));
         }
         catch (CloudDeleteRefusedException refused)
         {
@@ -249,7 +249,7 @@ public sealed class RunCloudResults : IRunCloudResults
         catch (CloudOperationException cloud)
         {
             // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
-            return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud));
+            return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud), ListingStuck: IsStuck(cloud));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -261,13 +261,12 @@ public sealed class RunCloudResults : IRunCloudResults
     }
 
     /// <summary>
-    /// The cause the delete copy is chosen by. A listing that repeated a page token (<c>LIST_PAGINATION_STUCK</c>) keeps the gateway's Network kind for everyone else (the reconciler
+    /// The cause the delete copy is chosen by. A listing that repeated a page token (<see cref="CloudErrorCodes.ListPaginationStuck"/>) keeps the gateway's Network kind for everyone else (the reconciler
     /// reads Network as "no answer"), but it is not a dropped connection, so the delete copy must not tell the user to check their internet: it reads as Other here.
     /// </summary>
-    private static CloudErrorKind CauseOf(CloudOperationException cloud) => cloud.Error.Code == ListPaginationStuckCode ? CloudErrorKind.Other : cloud.Kind;
+    private static bool IsStuck(CloudOperationException cloud) => cloud.Error.Code == CloudErrorCodes.ListPaginationStuck;
 
-    // The code the Google gateways give a listing that returned the same page token twice.
-    private const string ListPaginationStuckCode = "LIST_PAGINATION_STUCK";
+    private static CloudErrorKind CauseOf(CloudOperationException cloud) => IsStuck(cloud) ? CloudErrorKind.Other : cloud.Kind;
 
     private CloudResultsStatus? Classify(RunRecord run)
     {
