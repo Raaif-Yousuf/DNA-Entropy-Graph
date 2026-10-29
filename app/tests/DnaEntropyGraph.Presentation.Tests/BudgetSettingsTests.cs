@@ -36,6 +36,14 @@ public sealed class BudgetSettingsTests
 
     private BudgetSettingsViewModel Open() => new(_budgets, _account, _shell, _strings);
 
+    // Save and Remove exist only after a successful read (round 9): open the page and let the first look finish. An unconfigured substitute answers "no budget".
+    private async Task<BudgetSettingsViewModel> OpenKnownAsync()
+    {
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        return vm;
+    }
+
     private static BudgetInfo Existing(decimal amount) => new("billingAccounts/AAA/budgets/b-1", "DNA Entropy Graph inst-a", "billingAccounts/AAA", amount, [50, 90, 100]);
 
     private static CloudOperationException Failure(CloudErrorKind kind, string? code = null)
@@ -73,7 +81,7 @@ public sealed class BudgetSettingsTests
     public async Task Saving_sends_the_typed_amount_for_the_selected_project()
     {
         _budgets.SaveAsync(Project, 120m, Arg.Any<CancellationToken>()).Returns(Existing(120m));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
         vm.AmountText = "120";
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -92,7 +100,7 @@ public sealed class BudgetSettingsTests
     [InlineData("9999999999")]
     public async Task An_unusable_amount_is_refused_before_any_cloud_call(string text)
     {
-        var vm = Open();
+        var vm = await OpenKnownAsync();
         vm.AmountText = text;
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -105,7 +113,7 @@ public sealed class BudgetSettingsTests
     public async Task A_missing_billing_role_says_who_to_ask_and_offers_the_console_page_and_a_copyable_request()
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -125,7 +133,7 @@ public sealed class BudgetSettingsTests
     public async Task A_project_with_no_billing_account_points_at_the_billing_page()
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Billing, BudgetErrorCodes.NoBilling));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -140,7 +148,7 @@ public sealed class BudgetSettingsTests
     public async Task Every_other_failure_still_says_one_thing_to_try(CloudErrorKind kind, string expected)
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(kind));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -195,7 +203,9 @@ public sealed class BudgetSettingsTests
     {
         var gate = new TaskCompletionSource<BudgetInfo>();
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns(gate.Task);
-        var vm = Open();
+        var vm = await OpenKnownAsync();
+        _budgets.ClearReceivedCalls();
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns(gate.Task);
 
         var save = vm.SaveCommand.ExecuteAsync(null);
         await vm.RefreshCommand.ExecuteAsync(null);
@@ -209,7 +219,7 @@ public sealed class BudgetSettingsTests
     public async Task An_organization_policy_refusal_asks_for_the_organizations_administrator_with_a_copyable_request()
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.OrgPolicy));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -221,7 +231,7 @@ public sealed class BudgetSettingsTests
     public async Task A_budget_service_that_is_still_off_offers_the_page_that_switches_it_on()
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.ApiDisabled));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -234,7 +244,7 @@ public sealed class BudgetSettingsTests
     {
         var gate = new TaskCompletionSource<BudgetInfo>();
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns(gate.Task);
-        var vm = Open();
+        var vm = await OpenKnownAsync();
         vm.CanEdit.ShouldBeTrue();
 
         var save = vm.SaveCommand.ExecuteAsync(null);
@@ -249,7 +259,7 @@ public sealed class BudgetSettingsTests
     public async Task A_linked_account_that_is_switched_off_has_its_own_message_and_link()
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Billing, BudgetErrorCodes.BillingDisabled));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -262,7 +272,7 @@ public sealed class BudgetSettingsTests
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.OrgPolicy));
         _shell.CopyText(Arg.Any<string>()).Returns(true);
-        var vm = Open();
+        var vm = await OpenKnownAsync();
         await vm.SaveCommand.ExecuteAsync(null);
 
         vm.CopyRequestCommand.Execute(null);
@@ -329,7 +339,7 @@ public sealed class BudgetSettingsTests
     {
         // Issue #148 review M1: the missing right is on the project, so the billing-administrator request is the wrong action.
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiEnablePermission));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -343,7 +353,7 @@ public sealed class BudgetSettingsTests
     {
         _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission));
         _shell.CopyText(Arg.Any<string>()).Returns(true);
-        var vm = Open();
+        var vm = await OpenKnownAsync();
 
         await vm.SaveCommand.ExecuteAsync(null);
 
@@ -576,7 +586,7 @@ public sealed class BudgetSettingsTests
     {
         _strings.GetString("BudgetSaved").Returns("saved:{0}|{1}");
         _budgets.SaveAsync(Project, 120m, Arg.Any<CancellationToken>()).Returns(Existing(120m));
-        var vm = Open();
+        var vm = await OpenKnownAsync();
         vm.AmountText = "120";
 
         await vm.SaveCommand.ExecuteAsync(null);
@@ -595,5 +605,114 @@ public sealed class BudgetSettingsTests
         await vm.RefreshCommand.ExecuteAsync(null);
 
         vm.AmountText.ShouldBe("99");
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Network, null)]
+    [InlineData(CloudErrorKind.Other, null)]
+    [InlineData(CloudErrorKind.Permission, null)]
+    [InlineData(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission)]
+    public async Task Any_failed_read_of_the_budget_state_makes_save_and_remove_impossible_and_touches_nothing(CloudErrorKind kind, string? code)
+    {
+        // Round 9 invariant: Save and Remove exist only after the last read for the shown project SUCCEEDED; blind, they could overwrite or delete a 500 budget.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(500m));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.SaveCommand.CanExecute(null).ShouldBeTrue("a successful read allows editing");
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(kind, code));
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+        vm.RemoveCommand.CanExecute(null).ShouldBeFalse();
+        await vm.SaveCommand.ExecuteAsync(null);
+        await vm.RemoveCommand.ExecuteAsync(null);
+        await _budgets.DidNotReceiveWithAnyArgs().SaveAsync(default!, default, TestContext.Current.CancellationToken);
+        await _budgets.DidNotReceiveWithAnyArgs().RemoveAsync(default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Save_is_impossible_before_the_first_read_has_succeeded()
+    {
+        var vm = Open();
+
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+        vm.RemoveCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_refused_read_of_the_API_state_on_open_names_the_project_owner_and_offers_the_request()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission));
+        _shell.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.ShowCopyRequest.ShouldBeTrue();
+        vm.StatusText.ShouldBe("BudgetStatusApiReadNoAccess");
+        vm.ErrorText.ShouldBeEmpty();
+        vm.CopyRequestCommand.Execute(null);
+        _shell.Received(1).CopyText("BudgetRequestText_ApiRead");
+        vm.StatusText.ShouldBe("BudgetRequestCopied_ApiRead");
+    }
+
+    [Fact]
+    public async Task A_refused_budget_read_names_a_billing_administrator_and_never_tells_the_user_to_press_create()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo?>>(_ => throw Failure(CloudErrorKind.Permission));
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("BudgetStatusNoAccess");
+        vm.ShowCopyRequest.ShouldBeFalse("the request text asks for a budget to be created; the refusal here is of the read");
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, null, "BudgetRequestText", "BudgetRequestCopied")]
+    [InlineData(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission, "BudgetRequestText_ApiRead", "BudgetRequestCopied_ApiRead")]
+    [InlineData(CloudErrorKind.OrgPolicy, null, "BudgetRequestText_OrgPolicy", "BudgetRequestCopied_OrgPolicy")]
+    public async Task The_copy_confirmation_names_the_recipient_of_the_request_that_was_copied(CloudErrorKind kind, string? code, string requestKey, string confirmationKey)
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(kind, code));
+        _shell.CopyText(Arg.Any<string>()).Returns(true);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.CopyRequestCommand.Execute(null);
+
+        _shell.Received(1).CopyText(requestKey);
+        vm.StatusText.ShouldBe(confirmationKey);
+    }
+
+    [Fact]
+    public async Task A_refused_remove_at_the_API_state_step_says_api_read_not_the_billing_account()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(50m));
+        _budgets.RemoveAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<bool>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiReadPermission));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        await vm.RemoveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_ApiReadPermission");
+        vm.ShowCopyRequest.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_box_the_user_deliberately_cleared_is_not_refilled_with_the_default_when_no_budget_is_found()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText = string.Empty;
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBeEmpty();
     }
 }

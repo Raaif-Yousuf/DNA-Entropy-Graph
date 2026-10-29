@@ -48,6 +48,12 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
     private bool _hasProject;
 
+    // True only while the LAST read of the budget state succeeded for the shown project. Save and Remove need it: blind, they could overwrite or delete a budget the page never showed.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
+    private bool _stateKnown;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SaveCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
@@ -99,6 +105,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
 
         ClearMessages();
+        StateKnown = false;
         HasProject = ProjectId() is not null;
         if (ProjectId() is not { } project)
         {
@@ -135,7 +142,17 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         {
             // Nobody asked for this look, so a refusal is quiet information, not a red error; red is for a Save the user pressed.
             System.Diagnostics.Trace.TraceWarning($"Budget look refused: {ex.Kind}");
-            StatusText = _strings.GetString(ex.Kind == CloudErrorKind.Permission ? "BudgetStatusNoAccess" : "BudgetStatusCouldNotCheck");
+            if (ex.Kind == CloudErrorKind.Permission && ex.Error.Code == BudgetErrorCodes.ApiReadPermission)
+            {
+                // The refused read was of the PROJECT's API state: the person to ask is a project owner, and the request text says so.
+                StatusText = _strings.GetString("BudgetStatusApiReadNoAccess");
+                _requestKey = "BudgetRequestText_ApiRead";
+                ShowCopyRequest = true;
+            }
+            else
+            {
+                StatusText = _strings.GetString(ex.Kind == CloudErrorKind.Permission ? "BudgetStatusNoAccess" : "BudgetStatusCouldNotCheck");
+            }
         }
         catch (Exception ex)
         {
@@ -151,6 +168,12 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanSave))]
     private async Task SaveAsync(CancellationToken cancellationToken)
     {
+        // ExecuteAsync does not consult CanExecute: the invariant (no write after a failed or missing read) is enforced here.
+        if (!CanSave())
+        {
+            return;
+        }
+
         ClearMessages();
         if (ProjectId() is not { } project)
         {
@@ -175,11 +198,16 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }, project, cancellationToken);
     }
 
-    private bool CanSave() => HasProject && !IsBusy;
+    private bool CanSave() => HasProject && StateKnown && !IsBusy;
 
     [RelayCommand(CanExecute = nameof(CanRemove))]
     private async Task RemoveAsync(CancellationToken cancellationToken)
     {
+        if (!CanRemove())
+        {
+            return;
+        }
+
         ClearMessages();
         if (ProjectId() is not { } project)
         {
@@ -196,7 +224,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }, project, cancellationToken, removing: true);
     }
 
-    private bool CanRemove() => HasBudget && HasProject && !IsBusy;
+    private bool CanRemove() => HasBudget && HasProject && StateKnown && !IsBusy;
 
     /// <summary>Copies the plain-words request the user can send to their billing administrator.</summary>
     [RelayCommand]
@@ -205,7 +233,14 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         // The parsed amount (or the default offered), never the raw box text: "abc" must not become "a monthly budget of abc".
         var amount = BudgetAmountParser.TryParse(AmountText, CultureInfo.CurrentCulture, out var parsed) && BudgetNaming.IsValidAmount(parsed) ? parsed : BudgetNaming.DefaultAmountUsd;
         var text = string.Format(CultureInfo.CurrentCulture, _strings.GetString(_requestKey), ProjectId() ?? string.Empty, Format(amount));
-        StatusText = _strings.GetString(_shell.CopyText(text) ? "BudgetRequestCopied" : "BudgetRequestCopyFailed");
+        // The confirmation names who the copied request is for, so it follows the request that was copied.
+        var copied = _requestKey switch
+        {
+            "BudgetRequestText_ApiRead" => "BudgetRequestCopied_ApiRead",
+            "BudgetRequestText_OrgPolicy" => "BudgetRequestCopied_OrgPolicy",
+            _ => "BudgetRequestCopied",
+        };
+        StatusText = _strings.GetString(_shell.CopyText(text) ? copied : "BudgetRequestCopyFailed");
     }
 
     private async Task RunAsync(Func<Task> action, string project, CancellationToken cancellationToken, bool removing = false)
@@ -305,6 +340,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
     private void Show(BudgetInfo? budget)
     {
+        StateKnown = true;
         HasBudget = budget is not null;
         if (budget is null)
         {
@@ -353,10 +389,10 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetThresholdsAnd"), string.Join(_strings.GetString("BudgetThresholdsJoiner"), parts.Take(parts.Count - 1)), parts[^1]);
     }
 
-    // A follow-last-month budget leaves the box empty; once there is no budget the box offers the default again. Typed text is never touched.
+    // A follow-last-month budget leaves the box empty; once there is no budget the box offers the default again. Typed text is never touched, and a box the user cleared stays cleared.
     private void RestoreDefaultAmountIfEmpty()
     {
-        if (string.IsNullOrWhiteSpace(AmountText))
+        if (!_amountEdited && string.IsNullOrWhiteSpace(AmountText))
         {
             SetAmount(Format(BudgetNaming.DefaultAmountUsd));
         }

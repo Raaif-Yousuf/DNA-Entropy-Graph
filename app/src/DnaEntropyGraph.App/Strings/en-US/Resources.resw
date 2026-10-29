@@ -2171,14 +2171,23 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="BudgetRequestCopied" xml:space="preserve">
     <value>The request is copied. Paste it into an email to your billing administrator.</value>
   </data>
+  <data name="BudgetStatusApiReadNoAccess" xml:space="preserve">
+    <value>Your Google account is not allowed to see which Google services are switched on for this project, so the app cannot check for a budget alert and Create or update is turned off. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
+  </data>
+  <data name="BudgetRequestCopied_ApiRead" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to a project owner of your Google Cloud project.</value>
+  </data>
+  <data name="BudgetRequestCopied_OrgPolicy" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to whoever manages your organization's Google Cloud.</value>
+  </data>
   <data name="BudgetRequestCopyFailed" xml:space="preserve">
     <value>The request could not be copied. Press Copy a request for my administrator again in a moment.</value>
   </data>
   <data name="BudgetStatusNoAccess" xml:space="preserve">
-    <value>This Google account cannot see budgets on your billing account, so any existing alert is not shown. To make one, press Create or update the alert.</value>
+    <value>This Google account cannot see budgets on your billing account, so an existing alert is not shown and Create or update is turned off. Ask your billing administrator to give you the Billing Account Costs Manager role, then open Settings again.</value>
   </data>
   <data name="BudgetStatusCouldNotCheck" xml:space="preserve">
-    <value>The app could not check for an existing budget alert. To make or change one, press Create or update the alert.</value>
+    <value>The app could not check for an existing budget alert, so Create or update is turned off for now. Open Settings again to check once more.</value>
   </data>
   <data name="BudgetError_OrgPolicy" xml:space="preserve">
     <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>

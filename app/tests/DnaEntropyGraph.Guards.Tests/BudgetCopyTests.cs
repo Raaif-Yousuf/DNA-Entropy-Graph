@@ -17,7 +17,10 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public sealed class BudgetCopyTests
 {
-    /// <summary>The number of format arguments the view model passes for each Budget key that is formatted; every other Budget key is plain text.</summary>
+    /// <summary>
+    /// The number of placeholders each formatted Budget key USES (its highest {n} plus one); every other Budget key is plain text. The check is exact on the copy. The code may pass MORE
+    /// arguments than a key uses, and only where listed in <see cref="ExtraArgumentsPassed"/> with the reason: string.Format ignores a surplus argument, so a request text that names no amount is safe.
+    /// </summary>
     private static readonly Dictionary<string, int> PassedArguments = new(StringComparer.Ordinal)
     {
         ["BudgetStatusExists"] = 2,
@@ -25,9 +28,15 @@ public sealed class BudgetCopyTests
         ["BudgetStatusExistsNoAmount"] = 1,
         ["BudgetRequestText"] = 2,
         ["BudgetRequestText_OrgPolicy"] = 2,
-        ["BudgetRequestText_ApiRead"] = 1, // the code passes the amount too; this request names no amount, so the extra argument is unused
+        ["BudgetRequestText_ApiRead"] = 1,
         ["BudgetThresholdItem"] = 1,
         ["BudgetThresholdsAnd"] = 2,
+    };
+
+    /// <summary>Keys the code formats with more arguments than they use. CopyRequest passes (project, amount) to every request text; this one names no amount.</summary>
+    private static readonly Dictionary<string, int> ExtraArgumentsPassed = new(StringComparer.Ordinal)
+    {
+        ["BudgetRequestText_ApiRead"] = 1,
     };
 
     private static Dictionary<string, string> Resw()
@@ -59,6 +68,12 @@ public sealed class BudgetCopyTests
         foreach (var (key, text) in budgetKeys)
         {
             HighestPlaceholder(text).ShouldBe(PassedArguments.GetValueOrDefault(key, 0), $"{key}: its highest {{n}} must match the arguments the code passes (a key the code formats must be listed in PassedArguments)");
+        }
+
+        // The request texts are formatted with (project, amount) by CopyRequest: any request key that uses fewer must be listed as an extra on purpose.
+        foreach (var (key, used) in PassedArguments.Where(p => p.Key.StartsWith("BudgetRequestText", StringComparison.Ordinal)))
+        {
+            (used + ExtraArgumentsPassed.GetValueOrDefault(key, 0)).ShouldBe(2, $"{key}: CopyRequest passes two arguments, so a key using fewer must be listed in ExtraArgumentsPassed");
         }
 
         foreach (var key in PassedArguments.Keys)

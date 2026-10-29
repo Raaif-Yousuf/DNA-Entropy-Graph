@@ -330,6 +330,33 @@ public class BudgetServiceTests
     }
 
     [Fact]
+    public async Task Looking_when_the_read_of_the_API_state_is_refused_says_api_read_not_the_billing_role()
+    {
+        // Review M: this refusal is the project owner's problem (Service Usage Viewer), the same as Save's; the budget list was never reached.
+        var budgets = NSubstitute.Substitute.For<IBudgetGateway>();
+        var gcp = await LinkedAsync();
+        var service = new BudgetService(budgets, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => service.GetAsync(Project, CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiReadPermission);
+        await budgets.DidNotReceiveWithAnyArgs().FindAsync(default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Removing_when_the_read_of_the_API_state_is_refused_says_api_read_and_deletes_nothing()
+    {
+        var gcp = await LinkedAsync();
+        await Service(gcp).SaveAsync(Project, 500m, TestContext.Current.CancellationToken);
+        var blind = new BudgetService(gcp, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => blind.RemoveAsync(Project, CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiReadPermission);
+        gcp.Budgets.Single().AmountUsd.ShouldBe(500m);
+    }
+    [Fact]
     public async Task Removing_deletes_this_installations_budget_only()
     {
         var gcp = await LinkedAsync();
