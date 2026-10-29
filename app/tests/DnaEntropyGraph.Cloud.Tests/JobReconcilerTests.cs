@@ -318,12 +318,24 @@ public class JobReconcilerTests
     public async Task A_run_whose_VM_is_gone_with_no_evidence_at_all_books_no_longer_than_its_run_limit()
     {
         var env = new Env();
-        var vmStart = DateTimeOffset.UtcNow.AddHours(-21);
+        var vmStart = Launch.AddHours(-21); // the reconciler's injected clock is Launch
         await env.SeedAsync("job-ne", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = vmStart });
 
         await OneAsync(env.Reconciler(), "job-ne");
 
         env.Row("job-ne").FinishedAt.ShouldBe(vmStart + RunLimit, "no heartbeat and no status: capped at start + the run's limit, never the 21 hours until the app came back");
+    }
+
+    [Fact]
+    public async Task A_run_whose_VM_died_five_minutes_in_and_is_found_ten_minutes_after_it_started_books_ten_minutes_not_its_run_limit()
+    {
+        var env = new Env();
+        var vmStart = Launch.AddMinutes(-10);
+        await env.SeedAsync("job-ne10", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = vmStart });
+
+        await OneAsync(env.Reconciler(), "job-ne10");
+
+        env.Row("job-ne10").FinishedAt.ShouldBe(Launch, "no evidence: start + the limit is hours ahead of the injected clock, and a gone VM never books past now");
     }
 
     // Issue #679 (b), reviewed: a gone VM is run_time_limit only on the worker's OWN evidence of how long the VM lived (status.json startedAt to

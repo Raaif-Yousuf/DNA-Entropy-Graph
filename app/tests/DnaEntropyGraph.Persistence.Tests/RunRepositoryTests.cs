@@ -21,6 +21,24 @@ public class RunRepositoryTests
     }
 
     [Fact]
+    public async Task Get_returns_the_one_row_of_a_job_with_every_column_and_null_for_a_job_it_never_saw()
+    {
+        using var paths = new TempPaths();
+        IRunRepository repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        var beat = new DateTimeOffset(2026, 10, 1, 12, 20, 0, TimeSpan.Zero);
+        await repository.UpsertAsync(new RunRecord("job-g1", JobPhase.Running, DateTimeOffset.UtcNow, LastHeartbeatAt: beat, Bucket: "b"), CancellationToken.None);
+        await repository.UpsertAsync(new RunRecord("job-g2", JobPhase.Completed, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var row = await repository.GetAsync("job-g1", CancellationToken.None);
+
+        row.ShouldNotBeNull();
+        row.JobId.ShouldBe("job-g1");
+        row.LastHeartbeatAt.ShouldBe(beat);
+        row.Bucket.ShouldBe("b");
+        (await repository.GetAsync("job-none", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Upserting_the_same_job_id_again_replaces_it_rather_than_duplicating()
     {
         using var paths = new TempPaths();

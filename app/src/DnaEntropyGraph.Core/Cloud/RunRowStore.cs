@@ -47,6 +47,29 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
         }
     }
 
+    /// <summary>
+    /// Issue #109: records <paramref name="at"/> (the worker's own heartbeat time) as the row's last sign of life, only when it is newer than the one already recorded (a stale
+    /// status.json found on a resume must not move it). Reads this job's row alone, never the whole table, and honours <paramref name="cancellationToken"/> (a cancelled run
+    /// writes no more heartbeats; the cancellation propagates). Conditional on the phase read, like every row write.
+    /// </summary>
+    public async Task RecordHeartbeatAsync(string jobId, DateTimeOffset at, CancellationToken cancellationToken)
+    {
+        using var _ = await LockJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+        for (var attempt = 0; attempt <= MaxLostRaces; attempt++)
+        {
+            var existing = await runs.GetAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (existing is null || (existing.LastHeartbeatAt is { } recorded && recorded >= at))
+            {
+                return;
+            }
+
+            if (await runs.TryUpsertIfPhaseAsync(existing with { LastHeartbeatAt = at }, existing.Phase, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+        }
+    }
+
     /// <summary>The result a persisted terminal row stands for.</summary>
     public static CloudJobResult ResultFromRow(RunRecord row)
         => new(row.Phase, row.ErrorCode is null ? null : CloudErrorKind.Other, row.ErrorDetail, row.ErrorCode);

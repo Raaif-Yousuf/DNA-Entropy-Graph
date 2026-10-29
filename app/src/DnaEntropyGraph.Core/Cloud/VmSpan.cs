@@ -9,7 +9,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// or not; the app's own clock is never a start. A VM the app never observed has no span. End = the VM's stop time when it was observed stopped; when the VM is
 /// gone by the time the app looks (it deleted itself), the last time the app knew it was alive (<see cref="LastKnownAlive"/>); when it is still running, null,
 /// which the terminal write fills with "now". A gone VM with NO evidence at all (no heartbeat on the row, no result finish time, no status write) ends at its start plus the run's
-/// own limit (<see cref="EndOfGone"/>), never at "now". VmEndedAt is first-wins for a run (<see cref="RunProgress.Observe"/>): a stopped VM the run adopted and then restarted keeps the stop
+/// own limit (<see cref="EndOfGone"/>), and never later than "now". VmEndedAt is first-wins for a run (<see cref="RunProgress.Observe"/>): a stopped VM the run adopted and then restarted keeps the stop
 /// first observed, so that gap is not re-opened; the span a run books is its first observed start to its first observed end. The result is stored on the run row (<c>VmReadyAt</c>, <c>FinishedAt</c>) by
 /// <see cref="RunRowStore.StampVmSpanAsync"/>; the spend ledger quotes from those two columns and nothing else.
 /// </summary>
@@ -51,10 +51,12 @@ internal static class VmSpan
 
     /// <summary>
     /// The end of a VM that is gone (it deleted itself, or the platform removed it): the last time anything knew it was alive; with no evidence at all, the run's start plus its own
-    /// limit (<paramref name="limit"/>, the VM's maxRunDuration), because Compute cannot have run it longer, and never "now" (the hours the app was closed). Null only when the start is unknown too.
+    /// limit (<paramref name="limit"/>, the VM's maxRunDuration plus the grace: the one limit the ledger clamps to), because Compute cannot have run it longer, and never later than <paramref name="now"/> (a VM that died 5 minutes in, found 10 minutes later, books about 10 minutes, not the limit). Null only when the start is unknown too.
     /// </summary>
-    public static DateTimeOffset? EndOfGone(DateTimeOffset? start, TimeSpan limit, RunRecord? row, params DateTimeOffset?[] signs)
-        => LastKnownAlive(row, signs) ?? (start is { } began && limit > TimeSpan.Zero ? began + limit : null);
+    public static DateTimeOffset? EndOfGone(DateTimeOffset? start, TimeSpan limit, DateTimeOffset now, RunRecord? row, params DateTimeOffset?[] signs)
+        => LastKnownAlive(row, signs) ?? (start is { } began && limit > TimeSpan.Zero ? Min(began + limit, now) : null);
+
+    private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a <= b ? a : b;
 
     /// <summary>
     /// When billing for a VM that is no longer running ended, or null for a VM that is running (it bills until the run ends). A stopped VM with no stop time

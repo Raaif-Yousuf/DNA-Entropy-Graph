@@ -16,6 +16,25 @@ public interface IRunRepository
     Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// One job's row (the newest when a repository keeps every version), or null. A write path that only needs its own row (a heartbeat, written every minute) uses this
+    /// instead of reading the whole table. The default reads the table and picks the row, so a test double keeps compiling; the SQLite repository overrides it with a keyed read.
+    /// </summary>
+    async Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var all = await GetAllAsync(cancellationToken).ConfigureAwait(false);
+        RunRecord? latest = null;
+        foreach (var run in all)
+        {
+            if (run.JobId == jobId && (latest is null || run.CreatedUtc >= latest.CreatedUtc))
+            {
+                latest = run;
+            }
+        }
+
+        return latest;
+    }
+
+    /// <summary>
     /// Inserts a new row, or replaces every column of an existing one keyed
     /// by <see cref="RunRecord.JobId"/> - never a partial update, so a
     /// caller always upserts the full record it has. <see cref="RunRecord.CreatedUtc"/>

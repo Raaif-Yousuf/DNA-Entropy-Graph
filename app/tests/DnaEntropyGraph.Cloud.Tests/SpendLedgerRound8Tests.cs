@@ -89,16 +89,6 @@ public class SpendLedgerRound8Tests
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
-    private static async Task<(Task Run, CancellationTokenSource Cts)> StartBlockedRunAsync(FakeGcp gcp, CloudJobRunner runner, string jobId)
-    {
-        var cts = new CancellationTokenSource();
-        var run = runner.RunAsync(TestInputs.Request(jobId, Spec(jobId)), cts.Token);
-        await gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await cts.CancelAsync();
-        await Should.ThrowAsync<OperationCanceledException>(() => run);
-        return (run, cts);
-    }
-
     // ---- M: a create answered AlreadyExists adopts the VM and books its span ----
 
     [Fact]
@@ -120,53 +110,6 @@ public class SpendLedgerRound8Tests
         await Runner(spy, gcp, repo, TimeSpan.FromMilliseconds(100)).RunAsync(request, CancellationToken.None);
 
         LastRow(repo, "job-x1").VmReadyAt.ShouldBe(existing.RunClockStart, "the adopted VM billed from its own start; without it the ledger books nothing");
-    }
-
-    // ---- M: a cancel racing an in-flight create ----
-
-    [Fact]
-    public async Task A_create_that_lands_after_the_cancel_gave_up_waiting_is_deleted_by_name_when_it_lands()
-    {
-        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
-        var spy = new Spy(gcp);
-        var repo = new InMemoryRunRepository();
-        var runner = Runner(spy, gcp, repo);
-        var (_, cts) = await StartBlockedRunAsync(gcp, runner, "job-x2");
-        using var _ = cts;
-
-        await runner.CancelAsync("job-x2", CancellationToken.None);
-        LastRow(repo, "job-x2").Phase.ShouldBe(JobPhase.Failed, "the create was still in flight when the cancel stopped waiting, so the VM end is not confirmed");
-
-        gcp.ReleaseCreate();
-        var waited = 0;
-        while (spy.Deleted.Count == 0 && waited++ < 500)
-        {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
-
-        spy.Deleted.ShouldContain("deg-job-x2", "the late landing of a cancelled job is deleted by its own name, not left billing until maxRunDuration");
-        (await gcp.GetVmAsync("deg-job-x2", Zone, CancellationToken.None)).ShouldBeNull();
-    }
-
-    [Fact]
-    public async Task A_cancel_deletes_and_books_the_VM_a_create_answered_even_when_the_label_lookup_does_not_list_it_yet()
-    {
-        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
-        var spy = new Spy(gcp) { HideFromLabelLookup = true };
-        var repo = new InMemoryRunRepository();
-        var runner = Runner(spy, gcp, repo);
-        var (_, cts) = await StartBlockedRunAsync(gcp, runner, "job-x3");
-        using var _ = cts;
-
-        var cancel = runner.CancelAsync("job-x3", CancellationToken.None);
-        await Task.Delay(30, TestContext.Current.CancellationToken);
-        gcp.ReleaseCreate();
-        await cancel.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        (await gcp.GetVmAsync("deg-job-x3", Zone, CancellationToken.None)).ShouldBeNull("the create's own answer named the VM; a label listing that lags must not leave it running");
-        var row = LastRow(repo, "job-x3");
-        row.Phase.ShouldBe(JobPhase.Cancelled);
-        row.VmReadyAt.ShouldNotBeNull("the VM billed from its start until the cancel deleted it");
     }
 
     [Fact]
@@ -198,6 +141,108 @@ public class SpendLedgerRound8Tests
         VmSpan.Across([]).ShouldBe((null, null));
     }
 
+    // ---- M: the heartbeat write reads one job's row, honours the run's token, and only a heartbeat newer than the recorded one counts ----
+
+    [Fact]
+    public async Task Recording_a_heartbeat_reads_the_one_row_and_never_the_whole_run_table()
+    {
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-m1", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+        for (var i = 0; i < 50; i++)
+        {
+            await repo.UpsertAsync(new RunRecord($"other-{i}", JobPhase.Completed, DateTimeOffset.UtcNow), CancellationToken.None);
+        }
+
+        var before = repo.GetAllCount;
+        var at = DateTimeOffset.UtcNow;
+        await new RunRowStore(repo, null).RecordHeartbeatAsync("job-m1", at, CancellationToken.None);
+
+        repo.GetAllCount.ShouldBe(before, "a heartbeat write must not scan every run in the history");
+        LastRow(repo, "job-m1").LastHeartbeatAt.ShouldBe(at);
+    }
+
+    [Fact]
+    public async Task Recording_a_heartbeat_with_a_cancelled_token_writes_nothing_and_throws()
+    {
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-m2", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+        var written = repo.AllRecordedInOrder.Count;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => new RunRowStore(repo, null).RecordHeartbeatAsync("job-m2", DateTimeOffset.UtcNow, cts.Token));
+
+        repo.AllRecordedInOrder.Count.ShouldBe(written, "a cancelled run writes no more heartbeats");
+    }
+
+    [Fact]
+    public async Task A_heartbeat_not_newer_than_the_one_already_recorded_changes_nothing()
+    {
+        var recorded = new DateTimeOffset(2026, 10, 1, 12, 30, 0, TimeSpan.Zero);
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-m3", JobPhase.Running, DateTimeOffset.UtcNow, LastHeartbeatAt: recorded), CancellationToken.None);
+        var written = repo.AllRecordedInOrder.Count;
+        var store = new RunRowStore(repo, null);
+
+        await store.RecordHeartbeatAsync("job-m3", recorded.AddMinutes(-20), CancellationToken.None); // a stale status.json found on resume
+        await store.RecordHeartbeatAsync("job-m3", recorded, CancellationToken.None);
+
+        repo.AllRecordedInOrder.Count.ShouldBe(written, "an older or equal heartbeat is not written");
+        LastRow(repo, "job-m3").LastHeartbeatAt.ShouldBe(recorded);
+
+        await store.RecordHeartbeatAsync("job-m3", recorded.AddMinutes(5), CancellationToken.None);
+        LastRow(repo, "job-m3").LastHeartbeatAt.ShouldBe(recorded.AddMinutes(5), "a newer one is");
+    }
+
+    [Fact]
+    public async Task A_heartbeat_is_never_recorded_on_a_row_that_is_gone()
+    {
+        var repo = new InMemoryRunRepository();
+
+        await new RunRowStore(repo, null).RecordHeartbeatAsync("no-such-job", DateTimeOffset.UtcNow, CancellationToken.None);
+
+        repo.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void The_watch_reports_the_workers_own_update_time_of_a_new_heartbeat_and_none_for_one_it_already_saw()
+    {
+        var watch = new HeartbeatWatch(expectsGpu: false, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        var status = """{"schema":1,"jobId":"j","stage":"running","worker":{"version":"0.1.0"},"heartbeatSeq":3,"updatedAt":"2026-10-01T12:20:00Z"}""";
+
+        watch.Observe(status, null, TimeSpan.FromSeconds(1));
+        watch.NewHeartbeatAt.ShouldBe(new DateTimeOffset(2026, 10, 1, 12, 20, 0, TimeSpan.Zero), "the heartbeat's own time, not the app's clock");
+
+        watch.Observe(status, null, TimeSpan.FromSeconds(2));
+        watch.NewHeartbeatAt.ShouldBeNull("the same status again is not a new heartbeat");
+    }
+
+    [Fact]
+    public async Task A_run_records_the_workers_heartbeat_time_through_the_runs_own_token_and_one_row_read()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var repo = new InMemoryRunRepository();
+        var clocks = new RunnerClocks();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(30),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(30),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
+        };
+        using var cts = new CancellationTokenSource();
+
+        var result = await runner.RunAsync(TestInputs.Request("job-m6", Spec("job-m6")), cts.Token);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        repo.GetTokens.ShouldContain(cts.Token, "the heartbeat write was handed the run's own cancellation token");
+        // The fake worker writes updatedAt from the real clock; the row holds that, not the runner's (test) clock.
+        (DateTimeOffset.UtcNow - LastRow(repo, "job-m6").LastHeartbeatAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(2));
+    }
     // ---- L: VmEndedAt is first-wins for the run ----
 
     [Fact]

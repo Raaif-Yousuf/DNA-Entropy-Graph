@@ -46,15 +46,15 @@ internal enum BootOutcome
 /// (including the worker's own error code from <c>status.json</c>). Every way out but success ends the run through
 /// <see cref="RunFailureException"/>, with the VM ended first and the outcome of that recorded (Hard Rule 11).
 /// </summary>
-internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, DateTimeOffset, Task>? recordHeartbeat = null)
+internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, DateTimeOffset, CancellationToken, Task>? recordHeartbeat = null)
 {
     /// <summary>The most often a fresh worker heartbeat is written to the run row (issue #109): the row only needs "alive until about here", not every poll.</summary>
     private static readonly TimeSpan HeartbeatRecordInterval = TimeSpan.FromMinutes(1);
 
     /// <summary>Writes the heartbeat the run just saw to its row, at most once per <see cref="HeartbeatRecordInterval"/> (monotonic). A record, not a step: a failure never ends the run.</summary>
-    private async Task<long?> RecordHeartbeatAsync(string jobId, bool advanced, long? lastMark)
+    private async Task<long?> RecordHeartbeatAsync(string jobId, DateTimeOffset? heartbeatAt, long? lastMark, CancellationToken cancellationToken)
     {
-        if (!advanced || recordHeartbeat is null || (lastMark is { } mark && settings.ElapsedSince(mark) < HeartbeatRecordInterval))
+        if (heartbeatAt is not { } at || recordHeartbeat is null || (lastMark is { } mark && settings.ElapsedSince(mark) < HeartbeatRecordInterval))
         {
             return lastMark;
         }
@@ -62,11 +62,11 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var written = settings.StartClock();
         try
         {
-            await recordHeartbeat(jobId, settings.TimeProvider.GetUtcNow()).ConfigureAwait(false);
+            await recordHeartbeat(jobId, at, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            // The row keeps its last heartbeat; the run goes on.
+            // The row keeps its last heartbeat; the run goes on. A cancelled run is the one thing that is not swallowed.
         }
 
         return written;
@@ -381,7 +381,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
-                heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.HeartbeatAdvanced, heartbeatMark).ConfigureAwait(false);
+                heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.NewHeartbeatAt, heartbeatMark, cancellationToken).ConfigureAwait(false);
                 if (watch.TakeSlowNotice() is { } slow)
                 {
                     Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
