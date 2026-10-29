@@ -237,7 +237,7 @@ public sealed class HistoryViewModelTests
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
-        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Bucket = null, JobPrefix = null };
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
         var vm = await Loaded(imported, Row("own", outputDir: @"C:\out\own"));
 
         Item(vm, "legacy-1").CanDeleteLocal.ShouldBeFalse();
@@ -251,12 +251,43 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_prototype_import_row_has_no_cloud_badge_and_the_earlier_version_hint()
+    {
+        // Built exactly as PrototypeImport builds it: Target local, no installation id, no bucket.
+        var proto = new RunRecord("legacy-p", JobPhase.Completed, Now, "p", Target: DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, OutputDir: @"C:\Users\me\Downloads\proto", FinishedAt: Now, Imported: true);
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        var vm = await Loaded(proto);
+
+        Item(vm, "legacy-p").IsImported.ShouldBeFalse();
+        Item(vm, "legacy-p").ImportedText.ShouldBeNull();
+        Item(vm, "legacy-p").HasImportedText.ShouldBeFalse();
+        Item(vm, "legacy-p").DeleteLocalHint.ShouldBe("imported-hint");
+        Item(vm, "legacy-p").CanDeleteLocal.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_cloud_found_row_has_the_cloud_badge_and_not_the_earlier_version_hint()
+    {
+        // Built exactly as RunImporter builds it: cloud target, installation id, bucket, Imported.
+        var found = new RunRecord("20261014-aaaa", JobPhase.Completed, Now, "f", Bucket: "b", JobPrefix: "jobs/20261014-aaaa/", InstallationId: "inst-pc-a-long", Imported: true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        var vm = await Loaded(found);
+
+        Item(vm, "20261014-aaaa").IsImported.ShouldBeTrue();
+        Item(vm, "20261014-aaaa").ImportedText.ShouldBe("badge inst-pc-");
+        Item(vm, "20261014-aaaa").DeleteLocalHint.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task An_imported_run_offers_no_redownload_or_cloud_delete_and_run_again_says_it_has_no_options_and_starts_nothing()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
         _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
         _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false);
-        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Bucket = null, JobPrefix = null };
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
         var vm = await Loaded(imported);
 
         Item(vm, "legacy-1").CanRedownload.ShouldBeFalse();
