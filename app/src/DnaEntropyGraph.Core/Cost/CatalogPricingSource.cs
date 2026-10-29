@@ -102,8 +102,11 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
     /// <summary>A failed read is not repeated on every estimate.</summary>
     public static readonly TimeSpan RetryAfterFailure = TimeSpan.FromHours(1);
 
-    /// <summary>A catalog that does not answer must not hold up the page that is waiting for an estimate.</summary>
-    public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// The budget for the WHOLE paged read (several requests, each of which the pipeline may take up to its 30 second attempt cap over), so a slow link
+    /// still gets a multi-page catalog. Nothing waits on it that long: <see cref="CostEstimateService"/> answers from what is known and lets the read finish.
+    /// </summary>
+    public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(90);
 
     private readonly IPricingSource _shipped;
     private readonly IPricingCatalogGateway _gateway;
@@ -194,9 +197,16 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
                 });
                 return;
             }
-            catch (AccountAuthException)
+            catch (AccountAuthException ex)
             {
-                Failed(PricingFallbackReason.SignedOut);
+                // Only "there is no sign-in" is SignedOut (which is retried at once after signing in). A network problem backs off like any other
+                // network failure, and any other auth failure is Other: neither may hammer the catalog on every estimate.
+                Failed(ex.Code switch
+                {
+                    AuthErrorCodes.SigninExpired or AuthErrorCodes.AccountNotFound => PricingFallbackReason.SignedOut,
+                    AuthErrorCodes.NetworkUnavailable => PricingFallbackReason.Network,
+                    _ => PricingFallbackReason.Other,
+                });
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -299,9 +309,11 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
             var shipped = _shipped.Load();
 
             // A cache written beside another shipped list (the app was updated since) can hold rows kept from that older list, so it is not used.
-            if (_cache.Read() is { } json && FingerprintMatches(json, shipped.Table) && PricingTable.Parse(json) is { Table: { } cached })
+            // A cache dated tomorrow or later than one day ahead did not come from a clock this one agrees with: one day of slack covers a time zone
+            // or a clock a little ahead; anything further is not trusted (it would otherwise read as fresh for a long time and never refresh).
+            if (_cache.Read() is { } json && FingerprintMatches(json, shipped.Table) && PricingTable.Parse(json) is { Table: { } cached } && cached.AsOf <= Today().AddDays(1))
             {
-                var fresh = cached.AsOf == Today();
+                var fresh = cached.AsOf >= Today();
                 _serving = new PricingLoadResult(cached, null, null);
                 _snapshot = new PricingSnapshot(fresh ? PricingOrigin.Cache : PricingOrigin.CacheStale, cached.AsOf, PricingFallbackReason.None, ReadSpotKept(json));
                 return;

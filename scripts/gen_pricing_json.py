@@ -25,6 +25,12 @@ DEFAULT_FILE = Path(__file__).resolve().parent.parent / "app" / "src" / "DnaEntr
 ON_DEMAND = "OnDemand"
 SPOT = "Preemptible"
 EXCLUDED = ("commitment", "custom", "sole tenancy", "reserved", "reservation", "regional", "snapshot", "flex", "dws")
+# The C# resolver's version; test_the_matching_rules_match_the_csharp_resolver fails when one side moves alone.
+RESOLVER_VERSION = 4
+# (usage unit, name suffix) of the core, memory and GPU picks, in that order; the disk is one more pick.
+PICKS = (("h", " running"), ("GBy.h", " running"), ("h", ""))
+DISK_TOKEN = "Balanced PD Capacity"
+DISK_UNIT = "GBy.mo"
 
 
 @dataclass(frozen=True)
@@ -37,12 +43,14 @@ class Shape:
     ram_token: str
     gpu_token: str
     gpus: int = 1
+    # False while the shape is only a theory (a2-ultragpu-1g): its shipped row is kept, never a theory-priced row labelled as the catalog's.
+    catalog_priced: bool = True
 
 
 SHAPES = (
     Shape("g2-standard-8", "1x NVIDIA L4", 8, 32, "G2 Instance Core", "G2 Instance Ram", "Nvidia L4 GPU"),
     Shape("a2-highgpu-1g", "1x NVIDIA A100 40GB", 12, 85, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 GPU"),
-    Shape("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU"),
+    Shape("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU", catalog_priced=False),
 )
 
 
@@ -113,9 +121,9 @@ def _price(rows: list[dict], shape: Shape, usage: str) -> float | None:
     def pick(unit: str, token: str) -> float | None:
         return _single([r for r in rows if r["family"] == "Compute" and r["usage"] == usage and r["unit"] == unit and _named(r, token)])
 
-    core = pick("h", shape.core_token + " running")
-    ram = pick("GBy.h", shape.ram_token + " running")
-    gpu = pick("h", shape.gpu_token)
+    core = pick(PICKS[0][0], shape.core_token + PICKS[0][1])
+    ram = pick(PICKS[1][0], shape.ram_token + PICKS[1][1])
+    gpu = pick(PICKS[2][0], shape.gpu_token + PICKS[2][1])
     if core is None or ram is None or gpu is None:
         return None
     return shape.vcpus * core + shape.ram_gb * ram + shape.gpus * gpu
@@ -127,16 +135,18 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
     now = datetime.combine(datetime.fromisoformat(as_of).date(), time.max, tzinfo=UTC)
     rows = [r for r in to_rows(skus, now) if r["usd"] > 0 and region.lower() in [x.lower() for x in r["regions"]]]
     disk = _single(
-        [r for r in rows if r["family"] == "Storage" and r["usage"] == ON_DEMAND and r["unit"] == "GBy.mo" and _named(r, "Balanced PD Capacity")]
+        [r for r in rows if r["family"] == "Storage" and r["usage"] == ON_DEMAND and r["unit"] == DISK_UNIT and _named(r, DISK_TOKEN)]
     )
+    # A disk price the catalog cannot give (missing, or two prices) keeps the previous one; it does not cost the machines their own prices.
+    disk_from_shipped = disk is None
     if disk is None:
-        return None
+        disk = float(shipped["disk"]["usdPerGbMonth"])
 
     machines: dict[str, dict] = {}
     kept: list[str] = []
     spot_kept: list[str] = []
     for shape in SHAPES:
-        on_demand = _price(rows, shape, ON_DEMAND)
+        on_demand = _price(rows, shape, ON_DEMAND) if shape.catalog_priced else None
         if on_demand is None:
             if shape.machine_type in shipped["machines"]:
                 machines[shape.machine_type] = shipped["machines"][shape.machine_type]
@@ -163,6 +173,8 @@ def resolve(skus: list[dict], shipped: dict, as_of: str) -> dict | None:
     source = f"Cloud Billing Catalog API, {region}, read {as_of}. An estimate, not a quote."
     if kept:
         source += " Kept from the previous list (the catalog did not price them): " + ", ".join(kept) + "."
+    if disk_from_shipped:
+        source += " The disk price is kept from the previous list (the catalog gave no single price for it)."
     if spot_kept:
         source += " Spot price kept from the previous list (the catalog gave none): " + ", ".join(spot_kept) + "."
     return {

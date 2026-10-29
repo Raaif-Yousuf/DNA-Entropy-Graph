@@ -12,9 +12,10 @@ public sealed record CatalogResolveResult(PricingTable? Table, string? Problem, 
 /// "G2 Instance Core running in Americas", "Spot Preemptible G2 Instance Ram running in Americas", "Nvidia L4 GPU running in Americas" and
 /// "Nvidia L4 GPU attached to Spot Preemptible VMs running in Americas", so a GPU is matched by name alone (the usage type tells Spot from on demand).
 /// THEORY (unverified): a2-ultragpu-1g is billed from the A2 core and memory SKUs plus the 80GB GPU (the explorer lists no A2 Ultra core or memory SKU).
+/// Until that is measured the shape has <c>CatalogPriced</c> false: its shipped row is kept and the source says so, never a theory-priced row labelled as the catalog's.
 /// A machine whose parts are not found is left to the shipped list, never guessed.
 /// </summary>
-internal sealed record MachineShape(string MachineType, string Accelerator, int VCpus, int RamGb, string CoreToken, string RamToken, string GpuToken, int Gpus = 1);
+internal sealed record MachineShape(string MachineType, string Accelerator, int VCpus, int RamGb, string CoreToken, string RamToken, string GpuToken, int Gpus = 1, bool CatalogPriced = true);
 
 /// <summary>
 /// Turns catalog SKUs into hourly machine prices and a disk price (issue #214). Pure: a list in, a table out. For each machine it sums
@@ -27,9 +28,10 @@ public static class CatalogPriceResolver
     /// <summary>
     /// Bump this whenever the matching rules or the machine shapes change: it is part of the cache fingerprint, so an app update that
     /// changes what the resolver makes of the same SKUs does not keep serving today's cache. History: 1 first version, 2 real SKU wording
-    /// (GPU matched by name, Spot kept from the shipped list), 3 the kept-Spot list is recorded.
+    /// (GPU matched by name, Spot kept from the shipped list), 3 the kept-Spot list is recorded,
+    /// 4 a2-ultragpu-1g is no longer priced from the catalog (theory) and a disk price the catalog cannot give keeps the shipped one.
     /// </summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     private const string OnDemand = "OnDemand";
     private const string Spot = "Preemptible";
@@ -40,7 +42,7 @@ public static class CatalogPriceResolver
     [
         new("g2-standard-8", "1x NVIDIA L4", 8, 32, "G2 Instance Core", "G2 Instance Ram", "Nvidia L4 GPU"),
         new("a2-highgpu-1g", "1x NVIDIA A100 40GB", 12, 85, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 GPU"),
-        new("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU"),
+        new("a2-ultragpu-1g", "1x NVIDIA A100 80GB", 12, 170, "A2 Instance Core", "A2 Instance Ram", "Nvidia Tesla A100 80GB GPU", CatalogPriced: false),
     ];
 
     public static CatalogResolveResult Resolve(IReadOnlyList<CatalogSku> skus, PricingTable shipped, DateOnly asOf)
@@ -51,18 +53,17 @@ public static class CatalogPriceResolver
         var region = shipped.Region;
         var inRegion = skus.Where(s => s.UsdPerUnit > 0 && s.Regions.Contains(region, StringComparer.OrdinalIgnoreCase)).ToList();
 
+        // A disk price the catalog cannot give (missing, or two prices) keeps the shipped one; it does not cost the machines their own prices.
         var disk = Single(inRegion.Where(s => s.ResourceFamily == "Storage" && s.UsageType == OnDemand && s.UsageUnit == "GBy.mo" && Named(s, "Balanced PD Capacity")));
-        if (disk is not { } diskPrice)
-        {
-            return new CatalogResolveResult(null, "No single zonal Balanced PD Capacity price in " + region + ".");
-        }
+        var diskFromShipped = disk is null;
+        var diskPrice = disk ?? shipped.DiskUsdPerGbMonth;
 
         var machines = new List<MachinePrice>();
         var kept = new List<string>();
         var spotKept = new List<string>();
         foreach (var shape in Shapes)
         {
-            var onDemand = Price(inRegion, shape, OnDemand);
+            var onDemand = shape.CatalogPriced ? Price(inRegion, shape, OnDemand) : null;
             var fromShipped = shipped.Find(shape.MachineType);
             if (onDemand is null)
             {
@@ -100,6 +101,7 @@ public static class CatalogPriceResolver
 
         var source = $"Cloud Billing Catalog API, {region}, read {asOf:yyyy-MM-dd}. An estimate, not a quote."
             + (kept.Count > 0 ? " Kept from the list that ships with the app (the catalog did not price them): " + string.Join(", ", kept) + "." : string.Empty)
+            + (diskFromShipped ? " The disk price is kept from the list that ships with the app (the catalog gave no single price for it)." : string.Empty)
             + (spotKept.Count > 0 ? " Spot price kept from the list that ships with the app (the catalog gave none): " + string.Join(", ", spotKept) + "." : string.Empty);
         return new CatalogResolveResult(PricingTable.Create(asOf, region, source, diskPrice, machines), null, spotKept.Count > 0 ? spotKept : null);
     }

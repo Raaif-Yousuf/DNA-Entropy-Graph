@@ -114,9 +114,36 @@ def test_the_pricing_entry_in_force_wins_whatever_the_order(shipped):
     assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
 
 
-def test_a_catalog_with_no_disk_or_no_machine_is_refused(shipped):
+def test_a_catalog_with_no_machine_is_refused(shipped):
     assert gen.resolve([], shipped, "2026-10-16") is None
-    assert gen.resolve([s for s in g2_and_disk() if "Storage" not in s["category"]["resourceFamily"]], shipped, "2026-10-16") is None
+
+
+def test_a_missing_or_ambiguous_disk_price_keeps_the_shipped_disk_price_and_the_machines(shipped):
+    # Issue #214 review M2: one piece the catalog cannot give must not cost the pieces it can.
+    no_disk = [s for s in g2_and_disk() if "Storage" not in s["category"]["resourceFamily"]]
+    two_disks = g2_and_disk() + [sku("Balanced PD Capacity", "Storage", "OnDemand", 0.99, "GBy.mo")]
+
+    for skus in (no_disk, two_disks):
+        doc = resolve_ok(skus, shipped, "2026-10-16")
+        assert doc["disk"]["usdPerGbMonth"] == shipped["disk"]["usdPerGbMonth"]
+        assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
+        assert "disk price is kept" in doc["source"]
+
+
+def test_a2_ultra_is_kept_from_the_shipped_list_while_its_shape_is_a_theory(shipped):
+    # Issue #214 review M3: the C# resolver does the same (CatalogPriced: false).
+    skus = g2_and_disk() + [
+        sku("A2 Instance Core running in Americas", "Compute", "OnDemand", 0.05),
+        sku("A2 Instance Ram running in Americas", "Compute", "OnDemand", 0.006, "GBy.h"),
+        sku("Nvidia Tesla A100 80GB GPU running in Americas", "Compute", "OnDemand", 4.0),
+    ]
+    shipped = json.loads(json.dumps(shipped))
+    shipped["machines"]["a2-ultragpu-1g"] = {"accelerator": "1x NVIDIA A100 80GB", "onDemandUsdPerHour": 5.05, "spotUsdPerHour": None}
+
+    doc = resolve_ok(skus, shipped, "2026-10-16")
+
+    assert doc["machines"]["a2-ultragpu-1g"]["onDemandUsdPerHour"] == 5.05
+    assert "a2-ultragpu-1g" in doc["source"]
 
 
 def test_two_prices_for_one_component_is_not_resolved(shipped):
@@ -155,11 +182,34 @@ def test_main_writes_the_file_from_pages_and_leaves_it_alone_on_a_bad_catalog(tm
 
 def test_machine_shapes_match_the_csharp_resolver():
     text = RESOLVER_CS.read_text(encoding="utf-8")
-    pattern = re.compile(r'new\("([\w-]+)", "([^"]+)", (\d+), (\d+), "([^"]+)", "([^"]+)", "([^"]+)"\)')
-    found = [(m[0], m[1], int(m[2]), int(m[3]), m[4], m[5], m[6]) for m in pattern.findall(text)]
+    pattern = re.compile(r'new\("([\w-]+)", "([^"]+)", (\d+), (\d+), "([^"]+)", "([^"]+)", "([^"]+)"(?:, CatalogPriced: (true|false))?\)')
+    found = [(m[0], m[1], int(m[2]), int(m[3]), m[4], m[5], m[6], m[7] != "false") for m in pattern.findall(text)]
 
     assert found, "the scanner found no MachineShape in CatalogPriceResolver.cs, so it checks nothing"
-    assert found == [(s.machine_type, s.accelerator, s.vcpus, s.ram_gb, s.core_token, s.ram_token, s.gpu_token) for s in gen.SHAPES]
+    assert found == [(s.machine_type, s.accelerator, s.vcpus, s.ram_gb, s.core_token, s.ram_token, s.gpu_token, s.catalog_priced) for s in gen.SHAPES]
+
+
+def _first(pattern: str, text: str) -> str:
+    found = re.search(pattern, text)
+    assert found, f"the scanner found nothing for {pattern} in CatalogPriceResolver.cs, so it checks nothing"
+    return found[1]
+
+
+def test_the_matching_rules_match_the_csharp_resolver_not_only_the_shapes():
+    # Issue #214 review L8: the excluded words, usage types, units and name suffixes are duplicated; changing one side alone goes red.
+    text = RESOLVER_CS.read_text(encoding="utf-8")
+    excluded = re.search(r"Excluded = \[([^\]]+)\]", text)
+    assert excluded, "the scanner found no Excluded list in CatalogPriceResolver.cs, so it checks nothing"
+    assert tuple(re.findall(r'"([^"]+)"', excluded[1])) == gen.EXCLUDED
+    assert _first(r'const string OnDemand = "([^"]+)"', text) == gen.ON_DEMAND
+    assert _first(r'const string Spot = "([^"]+)"', text) == gen.SPOT
+    assert _first(r"Version = (\d+);", text) == str(gen.RESOLVER_VERSION)
+    # The disk pick comes first in the C# file, then the core, memory and GPU picks (the order of gen.PICKS).
+    picks = re.findall(r's\.UsageUnit == "([^"]+)" && Named\(s, (?:shape\.\w+(?: \+ "( running)")?|"([^"]+)")\)', text)
+    assert [(unit, suffix or disk) for unit, suffix, disk in picks] == [(gen.DISK_UNIT, gen.DISK_TOKEN), *gen.PICKS]
+    assert gen.PICKS == (("h", " running"), ("GBy.h", " running"), ("h", ""))
+    assert gen.DISK_TOKEN == "Balanced PD Capacity"
+    assert gen.DISK_UNIT == "GBy.mo"
 
 
 def test_a_date_only_or_naive_effective_time_is_read_as_utc_and_never_raises(shipped):
@@ -177,3 +227,19 @@ def test_a_date_only_or_naive_effective_time_is_read_as_utc_and_never_raises(shi
     doc = resolve_ok(skus, shipped, "2026-10-16")
 
     assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.03 + 32 * 0.004 + 0.5)
+
+
+def test_nine_digit_fractional_seconds_in_an_effective_time_are_read_not_dropped(shipped):
+    # Issue #214 review L10: MEASURED on Python 3.12, datetime.fromisoformat already truncates 9 digits; this keeps it so.
+    skus = g2_and_disk()
+    base = skus[0]["pricingInfo"][0]
+    old = json.loads(json.dumps(base))
+    old["effectiveTime"] = "2020-01-01T00:00:00Z"
+    newer = json.loads(json.dumps(base))
+    newer["effectiveTime"] = "2026-10-01T00:00:00.123456789Z"
+    newer["pricingExpression"]["tieredRates"][1]["unitPrice"]["nanos"] = 40_000_000
+    skus[0]["pricingInfo"] = [old, newer]
+
+    doc = resolve_ok(skus, shipped, "2026-10-16")
+
+    assert doc["machines"]["g2-standard-8"]["onDemandUsdPerHour"] == pytest.approx(8 * 0.04 + 32 * 0.004 + 0.5)

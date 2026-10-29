@@ -525,11 +525,11 @@ exercise.
  scripts 403, API disabled and network failures; a half-read catalog is a failure, never a shorter list). `CatalogPriceResolver` (pure) turns SKUs into the table:
  for each machine, cores x core rate + GB x memory rate + GPUs x GPU rate, on demand and Spot (`usageType` `Preemptible`), plus zonal Balanced PD
  per GB-month, in the shipped table's region. A SKU that is another region, a commitment, a custom shape or a regional disk is ignored; a component that
- is missing, not positive or priced two ways leaves that machine to its shipped row (Spot becomes null, never zero); a catalog that prices no machine or no disk is
+ is missing, not positive or priced two ways leaves that machine to its shipped row (Spot becomes null, never zero); a disk price the catalog cannot give (missing, or two prices) keeps the shipped disk price (named in `source`); a catalog that prices no machine is
  `NoMatch` and the shipped list is used whole. `CatalogPricingSource` is the app's `IPricingSource`: `Load()` is instant and never touches the network
- (today's cache, an older cache that is not older than the shipped list, or the shipped list); `RefreshIfStaleAsync` asks the catalog at most once a day (cache
- file `pricing-cache.json` in the app data folder, the same schema as `pricing.json`, `asOf` = the day it was read), waits at most 10 seconds, and after a failure
- does not ask again for an hour. `CostEstimateService` calls it before each estimate, so the first estimate of a day waits for the read and every other one is instant.
+ (today's cache, an older cache made beside this exact shipped list and resolver version (the fingerprint below), or the shipped list; a cache dated more than a day ahead of this PC's clock is not trusted, one a day ahead counts as today's); `RefreshIfStaleAsync` asks the catalog at most once a day (cache
+ file `pricing-cache.json` in the app data folder, the same schema as `pricing.json`, `asOf` = the day it was read), has a 90 second budget for the whole paged read, and after a failure
+ does not ask again for an hour (a sign-in that is gone is retried at once; a network or other auth failure backs off). `CostEstimateService` starts it on each estimate but waits at most 3 seconds for a read still running: that estimate uses what is known now and the read finishes in the background (one at a time, not tied to the page's cancellation), so the next estimate uses the new prices. The Google gateway bypasses the shared circuit breaker (the price list is optional and must not open the breaker that guards creating and polling a run) and fails a listing that repeats any page token seen earlier in the walk as `LIST_PAGINATION_STUCK`.
  `IPricingStatus.Current` is `(Origin: Shipped | Catalog | Cache | CacheStale, AsOf, Reason: None | SignedOut | PermissionDenied | ApiDisabled | Network | Other | NoMatch)`
  for the page to say which list the numbers come from and why it fell back (the page line is issue #814). A kept Spot price (the catalog gave none) is
  named in the table's `source` note. A cache is only used beside the exact shipped list it was made with (a hash of that list is stored in it), so an app update never serves rows kept from an older build.
@@ -541,7 +541,7 @@ exercise.
  (3178-715E-CFB6), `Spot Preemptible A2 Instance Ram running in Americas` (65A3-16DB-D57A), `Nvidia Tesla A100 GPU attached to Spot Preemptible VMs running in Americas` (39D4-516A-0317),
  `Nvidia Tesla A100 80GB GPU attached to Spot Preemptible VMs running in Americas` (DD90-547C-2AAA), and the disk `Balanced PD Capacity` (6AE1-525F-8B80, with `Balanced PD Capacity in <place>` per location).
  Separate `G2 Custom Instance Core/Ram` SKUs exist for custom shapes and are ignored on purpose, as are `Regional Balanced PD Capacity`. The explorer lists no `A2 Ultra` core or memory SKU, so
- THEORY (unverified): a2-ultragpu-1g is the A2 core and memory SKUs plus the 80GB GPU. THEORY (unverified, no live read): the `resourceFamily`/`usageType`/`serviceRegions` values of these SKUs
+ THEORY (unverified): a2-ultragpu-1g is the A2 core and memory SKUs plus the 80GB GPU; until that is measured the resolver does NOT price it from the catalog (`MachineShape.CatalogPriced` false, resolver version 4): its shipped row is kept and named in `source`, so no theory-priced row is ever labelled "Cloud Billing Catalog". THEORY (unverified, no live read): the `resourceFamily`/`usageType`/`serviceRegions` values of these SKUs
  (the explorer does not show them), whether a signed-in user's token may list the catalog, and which exact `serviceRegions` the Americas SKUs carry; docs/ToTest.md carries the row.
  Resolver, gateway and fallback behaviour are MEASURED 2026-10-16 only against scripted payloads that use these real descriptions.
 - `scripts/gen_pricing_json.py --catalog <pages.json> --as-of <date>` regenerates `Assets/pricing.json` from a catalog dump a person with a project fetched (the
