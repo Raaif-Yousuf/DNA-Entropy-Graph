@@ -129,8 +129,10 @@ test_readers_parity.py` replays it against the Python readers; the C# `FastaLite
 wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
 test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
 may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
-those blocks are the list of known wording differences (none since #689: every GenBank case
-matches the worker word for word).
+those blocks are the list of known wording differences (none for GenBank since #689; the EMBL ones are refusals
+where the worker echoes a line of the file in its message, which the app never does, #846). The same file
+carries `embl_cases`, replayed against `read_embl` and `EmblLite` (`EmblLiteParityTests`): header `//`,
+unrecognised ID line layouts, where the file ends, and an ID line inside the header or the sequence.
 
 ## Fixtures
 
