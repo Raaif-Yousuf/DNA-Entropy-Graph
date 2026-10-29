@@ -26,7 +26,7 @@ public class RunStallCoordinatorTests
         // {0} stage, {1} minutes, {2} computer, {3} run: every template here prints all four so a test sees what each one was given.
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() + " {0}|{1}|{2}|{3}");
         _strings.GetString("RunNotice_Slow").Returns("RunNotice_Slow {0}|{1}");
-        _strings.GetString("RunNotice_Stalled").Returns("RunNotice_Stalled {0}|{1}");
+        _strings.GetString("RunNotice_Stalled").Returns("RunNotice_Stalled {0}");
         _strings.GetString("StallDialog_RunLabel").Returns("StallDialog_RunLabel {0}|{1}");
         _strings.GetString("StallDialog_RunLabelNoName").Returns("StallDialog_RunLabelNoName {0}");
         _messenger.Register<RunNoticeMessage>(this, (_, m) => _notices.Add(m));

@@ -296,6 +296,28 @@ laptop) - the honest state, not silently passed.
 for Python, GitHub Actions, and (added this session, now that `app/` exists per #61) C#,
 with an explicit `dotnet restore`/`build` step for the C# language rather than relying on
 `autobuild`'s heuristics against an unpackaged, central-package-managed WinUI 3 solution.
+The C# build is the App project plus `tools/DnaEntropyGraph.CloudCli` (#761, #653), not the
+solution: the App project references every `app/src` project and CloudCli (not referenced by App)
+is built by name, so the extractor sees all product code and no test project
+(`test_codeql_workflow.py` checks both sets). MEASURED 2026-10-28: test stubs `IStringResourceProvider.GetString(key) => key`
+flowed into product `string.Format(..., GetString(Key), args)` calls and raised
+`cs/invalid-string-formatting` against correct sites (alerts 1383, 1417, 1466, 1467). The product
+`ReswStringResourceProvider` has the same `return key` fallback (empty value, and its catch), so building
+product code only does not remove that flow source: MEASURED 2026-10-29: 5 open and 38 dismissed alerts of the
+rule, the 5 open ones all in product code. DECISION (agent-made, reversible): the rule is excluded in
+`codeql-config.yml` and `scripts/check_format_arity.py` replaces it.
+`scripts/check_format_arity.py` reads the real template and checks (scope: `app/src` and `app/tools`, never
+obj/bin): every `string.Format(..., GetString("Key" | Ns.Class.Const | cond ? K1 : K2), args)` (a conditional key is checked against every branch; a branch that is not a key stays dynamic), every `string.Format` with a literal
+template, every call of a detected wrapper helper `Name(string key, params object[] args)` (own file and `partial`
+siblings; conditional keys check each branch), that every placeholder template is referenced by a literal or a used
+const, and that no file ends inside a string or comment (LEX-DESYNC). Stays dynamic, with exact counts in
+`KNOWN_DYNAMIC`: variable, `switch` or ambiguous-const keys, array-typed sole arguments (a params spread),
+unparseable calls, and helper calls whose first argument is not a literal key. MEASURED 2026-10-29: 110 sites
+checked, 11 dynamic.
+Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
+`scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
+and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining
+manifest or caller supplied segments, so they are reviewed rather than excluded (evidence in `codeql-config.yml`).
 Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) weekly; the
 `docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
 update cadence (they already exist as of this session but the ecosystem entry itself is a
