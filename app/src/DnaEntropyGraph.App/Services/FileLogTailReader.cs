@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.App.Services;
@@ -29,7 +30,29 @@ public sealed class FileLogTailReader : ILogTailReader
 
     public IReadOnlyList<string> ReadLines(string jobId)
     {
+        if (!RunOutputRoot.IsPlainJobId(jobId))
+        {
+            return Array.Empty<string>();
+        }
+
         var path = Path.Combine(_rootPath, jobId, "logs", "worker.log");
+        // The job id is a run row's text: a rooted or climbing one must not point this read outside the runs folder.
+        // A name the file system cannot parse (a NUL, a stray colon) throws from GetFullPath: that is "no log" too.
+        bool inside;
+        try
+        {
+            inside = RunOutputRoot.IsStrictlyInside(path, _rootPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            inside = false;
+        }
+
+        if (!inside)
+        {
+            return Array.Empty<string>();
+        }
+
         return File.Exists(path) ? File.ReadAllLines(path) : Array.Empty<string>();
     }
 }

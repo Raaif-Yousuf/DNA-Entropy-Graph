@@ -3204,4 +3204,16 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="CloudPage_ProjectChanged" xml:space="preserve">
     <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
 </root>
