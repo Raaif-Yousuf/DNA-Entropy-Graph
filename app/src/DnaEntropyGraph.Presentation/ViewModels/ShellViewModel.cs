@@ -40,7 +40,7 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
-    // CurrentPageTitle, which NavigateTo notifies.
+    // CurrentPageTitle and SelectedNavKey, which OnNavigatorPageChanged and NavigateTo notify.
     private string _currentPageKey = InitialPageKeyValue;
 
     // The page that is really showing (issue #143), from the navigator: a nav click, Back and a deep link all end up here, unlike _currentPageKey.
@@ -103,12 +103,13 @@ public sealed partial class ShellViewModel : ObservableObject
         _session = session;
         Updates = updates;
         Tour = tour;
-        navigator.CurrentPageChanged += (_, _) => OnNavigatorPageChanged(navigator.CurrentPageKey);
         _build = build;
         _completion = completion;
         _dataRoot = dataRoot;
         _simulatedCloud = simulatedCloud;
         _navigator = navigator;
+        // Issues #499, #701, #807: the header and the selection follow the frame, whoever navigated (nav item, a page, Back, a deep link).
+        navigator.CurrentPageChanged += (_, _) => OnNavigatorPageChanged(navigator.CurrentPageKey);
         _gcpAccount = gcpAccount;
         _dispatcher = dispatcher;
         _strings = strings;
@@ -147,8 +148,34 @@ public sealed partial class ShellViewModel : ObservableObject
         "Cloud" => "PageTitle_Cloud",
         "Settings" => "PageTitle_Settings",
         "Wizard" => "PageTitle_Wizard",
+        "RunProgress" => "PageTitle_RunProgress",
+        "Viewer" => "PageTitle_Viewer",
+        "Results" => "PageTitle_Results",
         _ => null,
     };
+
+    /// <summary>
+    /// The nav item to show as selected for the page really showing: its own key for the four nav pages, null for any other page
+    /// (run progress, results, viewer, wizard), which shows its own header and leaves nothing selected, so a click on its parent item
+    /// still navigates (a NavigationView does not raise a selection change for an item that is already selected). Docs: ui_conventions.md.
+    /// </summary>
+    public string? SelectedNavKey => IsNavItemKey(_currentPageKey) ? _currentPageKey : null;
+
+    private static bool IsNavItemKey(string pageKey) => pageKey is "NewRun" or "Runs" or "Cloud" or "Settings";
+
+    private void OnNavigatorPageChanged(string? pageKey)
+    {
+        if (string.IsNullOrEmpty(pageKey))
+        {
+            return;
+        }
+
+        _currentPageKey = pageKey;
+        _helpPageKey = pageKey;
+        OnPropertyChanged(nameof(CurrentPageTitle));
+        OnPropertyChanged(nameof(SelectedNavKey));
+        OnPropertyChanged(nameof(HelpUri));
+    }
 
     /// <summary>The OS window title (taskbar, Alt-Tab). Reuses the plain "AppDisplayName" key because ShellTitle.Text is dotted and a code lookup of a dotted key misses.</summary>
     public string WindowTitle => HasProfileOverride
@@ -179,19 +206,33 @@ public sealed partial class ShellViewModel : ObservableObject
         : string.Empty;
 
     [RelayCommand]
-    private void NavigateTo(string pageKey)
+    private void NavigateTo(string? pageKey)
     {
+        // The window selects the nav item that matches the page the frame shows (SelectedNavKey); that echo, and a cleared selection
+        // (null), are not a navigation request.
+        if (string.IsNullOrEmpty(pageKey))
+        {
+            return;
+        }
+
+        // A click on the item already shown is still the user's choice (issue #244): it replaces a pending restore, even though nothing navigates.
         _userNavigated = true;
+        var pending = _pendingRestore;
+        _pendingRestore = null;
+        if (pageKey == _navigator.CurrentPageKey)
+        {
+            return;
+        }
+
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         _helpPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
+        OnPropertyChanged(nameof(SelectedNavKey));
         OnPropertyChanged(nameof(HelpUri));
 
         // Issue #244: the first time the remembered page's parent is shown at startup, open the remembered run on top of it. Once only,
         // and only if the user has not already chosen another page (that choice replaced the pending restore).
-        var pending = _pendingRestore;
-        _pendingRestore = null;
         if (pending is { SubPage: not null } && pending.NavKey == pageKey)
         {
             _navigator.NavigateTo(pending.SubPage, pending.Parameter);
@@ -264,17 +305,6 @@ public sealed partial class ShellViewModel : ObservableObject
 
         _pendingRestore = target;
         StartupNavKey = target?.NavKey ?? InitialPageKeyValue;
-    }
-
-    private void OnNavigatorPageChanged(string? pageKey)
-    {
-        if (pageKey is null)
-        {
-            return;
-        }
-
-        _helpPageKey = pageKey;
-        OnPropertyChanged(nameof(HelpUri));
     }
 
     /// <summary>Alt+Left (issue #110): back to the previous page; nothing when there is none.</summary>
