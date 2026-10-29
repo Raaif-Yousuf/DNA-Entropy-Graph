@@ -54,10 +54,15 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// <summary>Writes the heartbeat the run just saw to its row, at most once per <see cref="HeartbeatRecordInterval"/> (monotonic). A record, not a step: a failure never ends the run.</summary>
     private async Task<long?> RecordHeartbeatAsync(string jobId, DateTimeOffset? heartbeatAt, long? lastMark, CancellationToken cancellationToken)
     {
-        if (heartbeatAt is not { } at || recordHeartbeat is null || (lastMark is { } mark && settings.ElapsedSince(mark) < HeartbeatRecordInterval))
+        if (heartbeatAt is not { } reported || recordHeartbeat is null || (lastMark is { } mark && settings.ElapsedSince(mark) < HeartbeatRecordInterval))
         {
             return lastMark;
         }
+
+        // The worker's clock can run ahead of the app's. A heartbeat "from the future" would be stored, refuse every later real one (only newer replaces) and be booked as the VM's end:
+        // the row holds the earlier of the worker's time and the app's own now.
+        var now = settings.TimeProvider.GetUtcNow();
+        var at = reported < now ? reported : now;
 
         var written = settings.StartClock();
         try
@@ -380,7 +385,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
-                var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
+                var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart), settings.TimeProvider.GetUtcNow());
                 heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.NewHeartbeatAt, heartbeatMark, cancellationToken).ConfigureAwait(false);
                 if (watch.TakeSlowNotice() is { } slow)
                 {

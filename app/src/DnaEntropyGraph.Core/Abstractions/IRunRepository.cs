@@ -21,6 +21,8 @@ public interface IRunRepository
     /// </summary>
     async Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken)
     {
+        // Tie-break: Runs.Id is the table's PRIMARY KEY (Migrations/0001_initial.sql), so the SQLite override sees at most one row per job. This default
+        // (for a test double that may hold several) picks the latest CreatedUtc, the last on a tie: the same row the override would return.
         var all = await GetAllAsync(cancellationToken).ConfigureAwait(false);
         RunRecord? latest = null;
         foreach (var run in all)

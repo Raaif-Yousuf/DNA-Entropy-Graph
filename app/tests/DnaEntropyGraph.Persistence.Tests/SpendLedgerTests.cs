@@ -508,4 +508,20 @@ public class SpendLedgerTests
 
         SpendCapSettings.ReadCapUsd(settings).ShouldBeNull();
     }
+
+    [Fact]
+    public void A_row_that_finished_before_its_VM_was_ready_quotes_a_zero_span_not_a_negative_one()
+    {
+        var (ledger, _, _, paths) = Make();
+        using (paths)
+        {
+            var row = Finished("r1", hours: 1, phase: JobPhase.Failed) with { VmReadyAt = Now, FinishedAt = Now.AddMinutes(-5) };
+
+            var quote = ledger.Quote(row);
+
+            quote.ShouldNotBeNull();
+            quote.EndedUtc.ShouldBe(Now, "the end is never before the start");
+            quote.UsdEst.ShouldBe(0.0);
+        }
+    }
 }

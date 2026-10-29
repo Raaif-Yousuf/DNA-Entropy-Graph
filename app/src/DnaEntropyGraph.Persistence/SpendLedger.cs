@@ -66,7 +66,8 @@ public sealed class SpendLedger : ISpendCapGate
             return null;
         }
 
-        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished, UsdEst: usd);
+        // A span is never negative: a row whose end is before its start (a clock step, a bad stamp) books a zero span with its $0, so every reader of the entry agrees.
+        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : finished, UsdEst: usd);
     }
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>

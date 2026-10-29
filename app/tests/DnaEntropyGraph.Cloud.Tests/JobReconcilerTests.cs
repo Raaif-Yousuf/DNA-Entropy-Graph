@@ -292,7 +292,7 @@ public class JobReconcilerTests
     {
         // Issue #109: the one span rule. The VM was alive at its last heartbeat; the app was closed for 20 hours after that.
         var env = new Env();
-        var vmStart = DateTimeOffset.UtcNow.AddHours(-21);
+        var vmStart = Launch.AddHours(-21);
         await env.SeedAsync("job-sp", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = vmStart, LastHeartbeatAt = vmStart.AddMinutes(25) });
 
         var outcome = await OneAsync(env.Reconciler(), "job-sp");
