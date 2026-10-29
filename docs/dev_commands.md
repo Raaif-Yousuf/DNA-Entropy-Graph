@@ -168,6 +168,8 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
   uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
   returned only after the grandchild (a 120 s sleeper in the test) exited.
+  `premerge.py` turns SIGTERM and SIGHUP into the same interrupt path (each gate runs in its own session on POSIX), so an
+  aborted run kills every gate's tree. A gate's stdout and stderr stay separate pipes, joined stdout then stderr.
 - **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
   `app/tests/*/*.csproj` is discovered, not listed. An audit fails the run when a workflow runs a
   `scripts/*.py|ps1` that `premerge.py` does not (add a gate in `build_gates()` or an entry with a

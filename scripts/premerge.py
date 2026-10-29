@@ -71,6 +71,7 @@ import contextlib
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -439,14 +440,20 @@ def _pid_alive(pid: int) -> bool:
         proc = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, check=False, timeout=30)
         if proc.returncode != 0:
             raise RuntimeError(f"tasklist failed (exit {proc.returncode}); cannot tell whether pid {pid} is alive")
-        return re.search(rf"{pid}", proc.stdout.decode("utf-8", errors="replace")) is not None
+        return re.search(rf"\b{pid}\b", proc.stdout.decode("utf-8", errors="replace")) is not None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    # A killed process nobody reaps (a container without an init) stays a zombie and still answers kill(0).
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            state = handle.read().rpartition(")")[2].split()[0]
+        return state != "Z"
+    except (OSError, IndexError):
+        return True
 
 
 def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
@@ -459,13 +466,12 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
             done = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
             ok = done.returncode == 0
         else:
-            import signal
-
             os.killpg(proc.pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         ok = False
-    with contextlib.suppress(OSError):
-        proc.kill()
+    finally:
+        with contextlib.suppress(OSError):
+            proc.kill()
     return ok
 
 
@@ -488,25 +494,28 @@ def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]
         argv,
         cwd=cwd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         env=env,
         start_new_session=os.name != "nt",
     )
     try:
         try:
-            out, _ = proc.communicate(timeout=timeout)
-            return Captured(proc.returncode, out or b"")
+            out, err = proc.communicate(timeout=timeout)
+            return Captured(proc.returncode, (out or b"") + (err or b""))
         except subprocess.TimeoutExpired as exc:
-            partial = exc.output if isinstance(exc.output, bytes) else b""
+            partial = (exc.output if isinstance(exc.output, bytes) else b"") + (exc.stderr if isinstance(exc.stderr, bytes) else b"")
             child_exit = proc.poll()
             killed = _kill_tree(proc)
             try:
                 # communicate() keeps its buffer across calls, so this result is the whole output:
                 # never concatenate it with the partial.
-                full, _ = proc.communicate(timeout=KILL_GRACE)
+                full, full_err = proc.communicate(timeout=KILL_GRACE)
+                full = (full or b"") + (full_err or b"")
             except subprocess.TimeoutExpired:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5.0)  # reap the direct child so it is not left a zombie
                 return Captured(None, partial, child_exit, tree_may_survive=True, output_lost=True)
-            return Captured(None, full or b"", child_exit, tree_may_survive=not killed)
+            return Captured(None, full, child_exit, tree_may_survive=not killed)
     except BaseException:
         _kill_tree(proc)
         raise
@@ -522,6 +531,19 @@ def classify_pytest_timeout(timeout: float, output: str) -> str:
     failed = chars.count("F") + chars.count("E")
     note = "the suite did not finish" if failed == 0 else "the suite did not finish AND tests had already failed"
     return f"timed out after {timeout:.0f}s with {passed} passed and {failed} failed so far (NOT a pass; {note})"
+
+
+def _raise_keyboard_interrupt(_signum: int, _frame: object) -> None:
+    """SIGTERM/SIGHUP handler: become the KeyboardInterrupt path, which kills every running gate's tree
+    (a gate runs in its own session on POSIX, so the signal would otherwise orphan it)."""
+    raise KeyboardInterrupt
+
+
+def install_termination_handlers() -> None:
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is not None:
+            signal.signal(number, _raise_keyboard_interrupt)
 
 
 def _timeout_detail(gate: Gate, text: str, captured: Captured) -> str:
@@ -867,6 +889,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--log-dir", type=Path, default=None, help="also write each gate's full output and summary.txt here")
     ap.add_argument("--self-test", action="store_true", help="prove the runner reports PASS/FAIL/ERROR correctly")
     args = ap.parse_args(argv)
+    install_termination_handlers()
 
     if args.self_test:
         return 0 if self_test() else 1
