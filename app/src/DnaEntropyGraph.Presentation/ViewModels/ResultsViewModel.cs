@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -34,8 +35,11 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly IExternalViewerOpener _viewers;
     private readonly IEntropyOverviewSource? _overviewSource;
     private readonly IOverviewImageExporter? _imageExporter;
+    private readonly IGeneTableSource? _geneTables;
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
+    private RunRecord? _run;
+    private readonly ResultsExportRoot? _exportRoot;
     private int _loadGeneration;
 
     [ObservableProperty]
@@ -64,8 +68,12 @@ public sealed partial class ResultsViewModel : ObservableObject
         IStringResourceProvider strings,
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
-        IOverviewImageExporter? imageExporter = null)
+        IOverviewImageExporter? imageExporter = null,
+        IGeneTableSource? geneTables = null,
+        ResultsExportRoot? exportRoot = null)
     {
+        _geneTables = geneTables;
+        _exportRoot = exportRoot;
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -88,6 +96,18 @@ public sealed partial class ResultsViewModel : ObservableObject
     public string OverviewTitle => Overview?.Name ?? string.Empty;
 
     public ObservableCollection<ResultsStatsGroup> Groups { get; } = [];
+
+    /// <summary>Issue #552: one sortable table per <c>*.genes.tsv</c> in the run folder (only the readable ones).</summary>
+    public ObservableCollection<ResultsGeneTable> GeneTables { get; } = [];
+
+    public bool HasGeneTables => GeneTables.Count > 0;
+
+    // Why a gene table is missing while the rest of the page is fine: one reason, one action.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsGeneNoticeVisible))]
+    private string _geneNoticeText = string.Empty;
+
+    public bool IsGeneNoticeVisible => GeneNoticeText.Length > 0;
 
     public ObservableCollection<ResultsFileItem> Files { get; } = [];
 
@@ -125,6 +145,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
+            _run = run;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
@@ -141,6 +162,8 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Show(folder!, snapshot);
+
+            await ShowGeneTablesAsync(folder!, generation);
 
             // The strip fills in after the page: reading a big track is disk work and must not hold the stats back.
             if (_overviewSource is not null)
@@ -169,6 +192,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private void Reset()
     {
         _folder = null;
+        _run = null;
         _outputFiles = [];
         Title = string.Empty;
         Overview = null;
@@ -176,12 +200,51 @@ public sealed partial class ResultsViewModel : ObservableObject
         StatsNoticeText = string.Empty;
         ActionNoticeText = string.Empty;
         Groups.Clear();
+        GeneTables.Clear();
+        GeneNoticeText = string.Empty;
+        OnPropertyChanged(nameof(HasGeneTables));
         Files.Clear();
         OnPropertyChanged(nameof(HasFiles));
         OpenFolderCommand.NotifyCanExecuteChanged();
         OpenInViewerCommand.NotifyCanExecuteChanged();
         OpenInIgvCommand.NotifyCanExecuteChanged();
         OpenInGeneiousCommand.NotifyCanExecuteChanged();
+    }
+
+    // The tables are disk work (a big genome has thousands of rows): off the UI thread, and only the newest load may show them.
+    private async Task ShowGeneTablesAsync(string folder, int generation)
+    {
+        if (_geneTables is null)
+        {
+            return;
+        }
+
+        var tables = await Task.Run(() => _geneTables.Load(folder), CancellationToken.None);
+        if (generation != Volatile.Read(ref _loadGeneration))
+        {
+            return;
+        }
+
+        var several = tables.Count > 1;
+        var notices = new List<string>();
+        foreach (var table in tables.Where(t => t.Content is not null))
+        {
+            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Content!.Rows, _strings));
+            if (table.Content.SkippedRows > 0)
+            {
+                notices.Add(Format(ResultsCopy.GenesRowsSkipped, table.Content.SkippedRows, table.RelativePath));
+            }
+        }
+
+        // Every unreadable table is reported, with how many there are, so none goes missing without a word.
+        var unreadable = tables.Where(t => t.Content is null).Select(t => t.RelativePath).ToList();
+        if (unreadable.Count > 0)
+        {
+            notices.Add(Format(ResultsCopy.GenesUnreadable, unreadable.Count, string.Join(", ", unreadable)));
+        }
+
+        GeneNoticeText = string.Join(" ", notices);
+        OnPropertyChanged(nameof(HasGeneTables));
     }
 
     private void Show(string folder, RunOutputSnapshot snapshot)
@@ -331,7 +394,11 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private bool CanExportOverviewPng() => Overview is not null && _folder is not null && _imageExporter is not null;
 
-    /// <summary>Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer.</summary>
+    /// <summary>
+    /// Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer. A run imported
+    /// from the earlier version has a folder that is the user's own: its PNG goes to a new folder under the default output folder instead.
+    /// A file that already exists is never overwritten; the new one gets a number.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
     private async Task ExportOverviewPngAsync()
     {
@@ -340,9 +407,35 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        var path = Path.Combine(folder, SafeFileName(contig.Name) + ".entropy.overview.png");
-        var written = await Task.Run(() => exporter.Export(contig, path), CancellationToken.None);
-        if (written)
+        var run = _run;
+        string? path = null;
+        var written = false;
+        if (run is { Imported: true } && _exportRoot is null)
+        {
+            // No safe place to write: say so rather than fall back to the user's own folder.
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            return;
+        }
+
+        try
+        {
+            (path, written) = await Task.Run(
+                () =>
+                {
+                    var target = run is { Imported: true } && _exportRoot is not null
+                        ? RunOutputFolders.CreateUnique(_exportRoot.Parent(), (string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name) + " exports")
+                        : folder;
+                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy.overview", ".png");
+                    return (file, exporter.Export(contig, file));
+                },
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            written = false;
+        }
+
+        if (written && path is not null)
         {
             Report(_launcher.ShowInFolder(path), ResultsCopy.FileActionFailed);
         }

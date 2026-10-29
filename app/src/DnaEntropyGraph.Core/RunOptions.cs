@@ -159,6 +159,23 @@ public sealed record RunOptions
     /// <summary>The centred window, in bases, of the GC-percent track (<see cref="OutputFileKinds.Gc"/>). Manifest: <c>analysis.gcWindow</c>, sent only when the GC output is chosen. Odd, 1 to 100001; default 51, the worker's own default (#688).</summary>
     public int GcWindow { get; init; } = 51;
 
+    /// <summary>Region caller options (worker manifest analysis.regionThreshold, regionMinLength, regionMergeGap; issue #552). Sent only when the regions file is chosen. The defaults are the worker's own.</summary>
+    public double RegionThreshold { get; init; } = 0.5;
+
+    public int RegionMinLength { get; init; } = 20;
+
+    public int RegionMergeGap { get; init; } = 5;
+
+    /// <summary>Window sizes (odd numbers of bases) of the smoothed entropy tracks (analysis.smoothingWindows; issue #552). Sent only when the smoothed tracks are chosen.</summary>
+    public IReadOnlyList<int> SmoothingWindows
+    {
+        get => _smoothingWindows;
+        init => _smoothingWindows = value as ValueEqualList<int> ?? new ValueEqualList<int>(value);
+    }
+
+    // The record's generated equality compares this field (by items), so the list member takes part in ==, Equals and GetHashCode.
+    private readonly ValueEqualList<int> _smoothingWindows = new([51]);
+
     /// <summary>Tokens: <c>{file} {date:yyyy-MM-dd} {time:HHmm} {model} {n}</c>. A name colliding with an existing local folder gets <c>_2</c> appended by <c>RunNamer</c>.</summary>
     public string NameTemplate { get; init; } = "{file}";
 
