@@ -119,6 +119,7 @@ MIN_CHECKED = 20
 KNOWN_DYNAMIC: dict[str, int] = {
     "app/src/DnaEntropyGraph.App/Startup/StartupDataRoot.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/LeftRunningGuard.cs": 1,
+    "app/src/DnaEntropyGraph.Presentation/Services/RunCostText.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/RunStallCoordinator.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/CloudResourcesViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/HistoryViewModel.cs": 2,
