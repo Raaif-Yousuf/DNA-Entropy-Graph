@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Net;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -104,6 +106,10 @@ public static class RunErrorCodes
 
     /// <summary>The <c>CloudError.Code</c> a gateway with no real cloud behind it throws; the runner records it as <see cref="CloudNotConnected"/>.</summary>
     public const string NotConnectedGatewayCode = "CLOUD_NOT_CONNECTED";
+    /// <summary>The network's proxy refused the connection to Google or wants a sign-in (issue #239). Recorded on a Network-kind error; action: open Settings, Advanced, check the network proxy.</summary>
+    public const string ProxyBlocked = "proxy_blocked";
+    /// <summary>A program on the network replaced Google's certificate with one this PC does not trust (issue #239). Action: ask an administrator.</summary>
+    public const string NetworkCertificate = "network_certificate";
     /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
     public const string DeletedByCleanup = "cleanup_deleted";
 
@@ -120,6 +126,7 @@ public static class RunErrorCodes
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
         InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
+        ProxyBlocked, NetworkCertificate,
     ];
 
     /// <summary>The <c>CloudErrorKind</c> wire names from docs/cloud_design.md section 5.</summary>
@@ -164,6 +171,9 @@ public static class RunErrorCodes
             SetupErrorCodes.PermissionActAs => PermissionActAs,
             SetupErrorCodes.WorkerDefaultAccountMissing => WorkerDefaultAccountMissing,
             SetupErrorCodes.WorkerIdentityNotApplied => WorkerIdentityNotApplied,
+            ProxyFailure.RefusedCode => ProxyBlocked,
+            ProxyFailure.CertificateCode => NetworkCertificate,
+            _ when kind == CloudErrorKind.Network && ProxyFailure.IsProxyAuthStatus(error.HttpStatus) => ProxyBlocked,
             _ when kind == CloudErrorKind.Permission && CloudErrorClassifier.IsActAsDenial(error) => PermissionActAs,
             _ => For(kind),
         };
@@ -275,6 +285,8 @@ public static class RunErrorCodes
         "permission" => "RunError_permission",
         "org_policy" => "RunError_org_policy",
         "network" => "RunError_network",
+        ProxyBlocked => "RunError_proxy_blocked",
+        NetworkCertificate => "RunError_network_certificate",
         _ => "RunError_other",
     };
 }
