@@ -1,1 +1,0 @@
-- FakeGcp (test double) VM rows now change only by compare-and-swap (UpdateVm), including the Spot preempt poll, so a stop, start or poll can no longer resurrect a VM deleted meanwhile, refs #875
