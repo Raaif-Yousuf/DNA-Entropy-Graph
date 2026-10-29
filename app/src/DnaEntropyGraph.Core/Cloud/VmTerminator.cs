@@ -176,6 +176,55 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// then looks again and waits up to <see cref="CloudRunSettings.LifecycleTimeout"/> for none to remain. Returns null when the VMs are
     /// confirmed gone, else why not.
     /// </summary>
+    /// <summary>
+    /// Issue #92: deletes each queued (flex-start) request by its own name and zone and waits, up to <see cref="CloudRunSettings.LifecycleTimeout"/>, for it to read gone.
+    /// Defence in depth beside the label listing: THEORY (unverified, no live project) a pending request is a listable instance; if it is not, only this finds it.
+    /// Null when every one is gone (or none was given), else why not. A request already gone (404) is the state wanted.
+    /// </summary>
+    public async Task<string?> DeleteQueuedRequestsAsync(IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken)
+    {
+        string? error = null;
+        foreach (var (name, zone) in requests)
+        {
+            try
+            {
+                await calls.CallAsync(
+                    async token =>
+                    {
+                        try
+                        {
+                            await compute.DeleteVmAsync(name, zone, token).ConfigureAwait(false);
+                        }
+                        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+                        {
+                            // Already gone.
+                        }
+
+                        return true;
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                var clockStart = settings.StartClock();
+                while (await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false) is not null)
+                {
+                    if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
+                    {
+                        error ??= $"The waiting request '{name}' in zone '{zone}' was still there after Delete.";
+                        break;
+                    }
+
+                    await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted: {ex.Message}";
+            }
+        }
+
+        return error;
+    }
+
     public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken)
     {
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
