@@ -537,6 +537,16 @@ between two bases", and a position past 2**63-1 (`1..99999999999999999999`) as "
 real coordinate", instead of both being called "outside the sequence length". The whole-file
 `ValueError` shapes above are unchanged.
 
+**Issue #847: the app's local read follows the same rules.** `GenBankLite` and `EmblLite` (`ReadTableFeatures`)
+map a record's `gene` features (else its `CDS`), drop one whose location is unreadable or does not fit the
+sequence (only a single location ending in `>` may run past it), name each drop with the worker's notice (word for word for an ASCII id; the app shows a non-ASCII id escaped where the worker's `repr()` keeps it, MEASURED 2026-10-29), and
+let the CDS with the same gene id stand in, per id, unless a kept feature already has that id. A feature's id
+is the first value of `/gene`, else `/locus_tag`, `/product`, `/label`, else its key. A second `LOCUS` line
+before `ORIGIN` is header text (it neither starts a record nor changes the first line's name, length or
+topology). MEASURED 2026-10-29 on `read_genbank` and `read_embl`; pinned in `tests/contract-fixtures/
+readers_parity.json`. Not modelled by the app: the "compound (spliced) location" and "wraps the origin"
+notices for a feature that is kept.
+
 **Issue #694: a gene that crosses the origin is written as a join.** `begin..end` of such a feature
 is the outer span `1..L`; writing only that made the gene look like the whole molecule in SnapGene,
 Benchling and IGV. When the contig is circular (`cfg.topology.resolve(contig.circular)`, so

@@ -1,7 +1,10 @@
 namespace DnaEntropyGraph.Core.Inputs;
 
-/// <summary>One feature of a record's feature table: its key (<c>gene</c>, <c>CDS</c> ...) and its location text, lines joined, as the scanner hands it to the parser.</summary>
-internal sealed record GenBankTableFeature(string Key, string Location);
+/// <summary>
+/// One feature of a record's feature table: its key (<c>gene</c>, <c>CDS</c> ...), its location text, lines joined, as the scanner hands it to the parser, and its
+/// id as the worker's <c>_feature_id</c> picks it (the first value of <c>/gene</c>, else <c>/locus_tag</c>, <c>/product</c>, <c>/label</c>, else the key).
+/// </summary>
+internal sealed record GenBankTableFeature(string Key, string Location, string Id);
 
 /// <summary>
 /// What differs between the two scanners that share Biopython's <c>InsdcScanner.parse_features</c>: GenBank (<c>FEATURES</c>, columns of spaces)
@@ -176,12 +179,13 @@ internal static class GenBankFeatureTable
                 featureLines.Add(PythonText.Trim(next.Length > QualifierIndent ? next[QualifierIndent..] : string.Empty));
                 index++; // a blank line in the middle of a feature belongs to it
             }
-            features.Add(new GenBankTableFeature(Unfold(key), Unfold(ParseFeature(featureLines, recordNumber, format))));
+            var (location, id) = ParseFeature(featureLines, recordNumber, format, key);
+            features.Add(new GenBankTableFeature(Unfold(key), Unfold(location), Unfold(id)));
         }
     }
 
-    // Scanner.parse_feature: the location (possibly wrapped over several lines), then the qualifiers. Returns the location text.
-    private static string ParseFeature(List<string> lines, int recordNumber, FeatureTableFormat format)
+    // Scanner.parse_feature: the location (possibly wrapped over several lines), then the qualifiers. Returns the location text and the feature id.
+    private static (string Location, string Id) ParseFeature(List<string> lines, int recordNumber, FeatureTableFormat format, string featureKey)
     {
         var queue = new Queue<string>(lines.Where(l => l.Length > 0));
         string Next() => queue.Count > 0
@@ -201,6 +205,7 @@ internal static class GenBankFeatureTable
             }
         }
 
+        var qualifiers = new List<(string Key, string? Value)>(); // as Scanner.parse_feature builds them: raw values, quotes still on
         bool lastValueIsNull = false;
         var hasQualifier = false;
         var iteration = 0;
@@ -221,8 +226,10 @@ internal static class GenBankFeatureTable
                 {
                     lastValueIsNull = true; // a qualifier with no value, e.g. /pseudo
                     hasQualifier = true;
+                    qualifiers.Add((line[1..], null));
                     continue;
                 }
+                var qualifierKey = line[1..eq];
                 var value = line[(eq + 1)..];
                 if (value.StartsWith(' ') && PythonText.TrimStart(value).StartsWith('"'))
                 {
@@ -233,11 +240,17 @@ internal static class GenBankFeatureTable
                 if (value.Length > 0 && value != "\"" && value[0] == '"')
                 {
                     var last = value;
+                    var valueLines = new List<string> { value };
                     while (last[^1] != '"')
                     {
                         last = Next(); // a quoted value runs until a line ends with a quote
+                        valueLines.Add(last);
                     }
+
+                    value = string.Join('\n', valueLines);
                 }
+
+                qualifiers.Add((qualifierKey, value));
                 continue;
             }
             // A continuation line: it must extend an earlier qualifier that has a value.
@@ -245,9 +258,37 @@ internal static class GenBankFeatureTable
             {
                 throw Refuse(recordNumber, "a feature qualifier line is missing its leading slash (it should start with '/', for example /gene=\"name\")", format);
             }
+
+            qualifiers[^1] = (qualifiers[^1].Key, qualifiers[^1].Value + "\n" + line); // an unquoted continuation extends the last value
         }
 
-        return location;
+        return (location, FeatureId(qualifiers, featureKey));
+    }
+
+    // readers/genbank.py::_feature_id over _FeatureConsumer.feature_qualifier: the FIRST value stored under the first of these keys that has one
+    // (a valueless qualifier stores ""), quotes stripped when both ends have one, a doubled quote undone.
+    private static string FeatureId(List<(string Key, string? Value)> qualifiers, string featureKey)
+    {
+        foreach (var wanted in new[] { "gene", "locus_tag", "product", "label" })
+        {
+            foreach (var (key, value) in qualifiers)
+            {
+                if (key != wanted)
+                {
+                    continue;
+                }
+
+                if (value is null)
+                {
+                    return string.Empty;
+                }
+
+                var v = value.Length > 1 && value[0] == '"' && value[^1] == '"' ? value[1..^1] : value;
+                return v.Replace("\"\"", "\"", StringComparison.Ordinal);
+            }
+        }
+
+        return featureKey;
     }
 
     private static int Count(string s, char c) => s.Count(x => x == c);
