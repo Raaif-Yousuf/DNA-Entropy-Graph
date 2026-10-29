@@ -26,7 +26,8 @@ public sealed partial class ViewerOptionalTrack : ObservableObject
 
     public int Window { get; }
 
-    public string Format { get; }
+    // Plumbing for the igv.js track config (ViewerViewModel); the user never reads a file format, so it is not a display property.
+    internal string Format { get; }
 
     public string Url { get; }
 

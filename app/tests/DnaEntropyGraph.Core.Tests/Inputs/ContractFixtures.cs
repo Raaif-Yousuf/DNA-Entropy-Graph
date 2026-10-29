@@ -18,18 +18,20 @@ internal static class ContractFixtures
         return System.IO.Path.Combine([.. parts]);
     }
 
-    // Walks up from the test binary first, then from this source file. The second start matters
+    // Walks up from this source file first (the tree actually compiled, #874), then from the test binary. The fallback matters
     // because a build with a private --artifacts-path (what every parallel agent lane uses, and
     // what scripts/heavy.py adds) puts the binary under %TEMP%, which has no repo ancestor.
     // MEASURED 2026-10-02: with --artifacts-path under %TEMP% every ContractFixtures user threw
     // DirectoryNotFoundException.
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string? thisFile = null)
     {
-        var starts = new List<string> { AppContext.BaseDirectory };
+        var starts = new List<string>();
         if (!string.IsNullOrEmpty(thisFile))
         {
             starts.Add(System.IO.Path.GetDirectoryName(thisFile)!);
         }
+
+        starts.Add(AppContext.BaseDirectory);
         foreach (var start in starts)
         {
             var dir = new DirectoryInfo(start);

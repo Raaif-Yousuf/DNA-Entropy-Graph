@@ -35,11 +35,17 @@ public sealed class ResultsSurfacesWiringTests
             xaml.ShouldContain($"CommandParameter=\"{key}\"", customMessage: key);
         }
 
-        foreach (var uid in new[] { "Contig", "Gene", "Begin", "End", "Strand", "Length", "Mean", "Min", "Max", "Low" })
+        foreach (var column in new[] { "Contig", "Gene", "Begin", "End", "Strand", "Length", "Mean", "Min", "Max", "Low" })
         {
-            xaml.ShouldContain($"x:Uid=\"ResultsGeneHead{uid}\"");
-            resw.ShouldContain($"name=\"ResultsGeneHead{uid}.Content\"");
+            xaml.ShouldContain($"Content=\"{{x:Bind {column}Header}}\"");
         }
+
+        foreach (var key in DnaEntropyGraph.Presentation.ViewModels.ResultsCopy.GeneColumnKeys)
+        {
+            resw.ShouldContain($"name=\"{DnaEntropyGraph.Presentation.ViewModels.ResultsCopy.GeneColumnKey(key)}\"");
+        }
+
+        resw.ShouldNotContain("name=\"ResultsGeneHead", customMessage: "one set of column strings: the headings read Results_GeneColumn_*");
     }
 
     [Fact]

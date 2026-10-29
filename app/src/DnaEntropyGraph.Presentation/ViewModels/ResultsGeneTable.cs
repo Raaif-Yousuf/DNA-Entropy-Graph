@@ -48,10 +48,8 @@ public sealed partial class ResultsGeneTable : ObservableObject
     private readonly IReadOnlyList<GeneRecord> _records;
     private readonly IStringResourceProvider _strings;
 
-    [ObservableProperty]
+    // Private state: what the user sees of it is SortSummary and TruncatedNotice (both bound), re-raised in SortBy.
     private string _sortKey = string.Empty;
-
-    [ObservableProperty]
     private bool _sortDescending;
 
     public ResultsGeneTable(string title, IReadOnlyList<GeneRecord> records, IStringResourceProvider strings)
@@ -61,6 +59,27 @@ public sealed partial class ResultsGeneTable : ObservableObject
         _strings = strings;
         Fill(records);
     }
+
+    // The ten column headings, the same words the sort line uses (one set of strings).
+    public string ContigHeader => _strings.GetString(ResultsCopy.GeneColumnContig);
+
+    public string GeneHeader => _strings.GetString(ResultsCopy.GeneColumnGene);
+
+    public string BeginHeader => _strings.GetString(ResultsCopy.GeneColumnBegin);
+
+    public string EndHeader => _strings.GetString(ResultsCopy.GeneColumnEnd);
+
+    public string StrandHeader => _strings.GetString(ResultsCopy.GeneColumnStrand);
+
+    public string LengthHeader => _strings.GetString(ResultsCopy.GeneColumnLength);
+
+    public string MeanHeader => _strings.GetString(ResultsCopy.GeneColumnMean);
+
+    public string MinHeader => _strings.GetString(ResultsCopy.GeneColumnMin);
+
+    public string MaxHeader => _strings.GetString(ResultsCopy.GeneColumnMax);
+
+    public string LowHeader => _strings.GetString(ResultsCopy.GeneColumnLow);
 
     /// <summary>The file this table came from (shown only when the run has several).</summary>
     public string Title { get; }
@@ -79,12 +98,12 @@ public sealed partial class ResultsGeneTable : ObservableObject
             _strings.GetString(ResultsCopy.GenesTruncated),
             MaxRowsShown,
             _records.Count,
-            SortKey.Length == 0 ? _strings.GetString(ResultsCopy.GenesOrderFile) : string.Format(CultureInfo.CurrentCulture, _strings.GetString(ResultsCopy.GenesOrderSorted), _strings.GetString(ResultsCopy.GeneColumnKey(SortKey))));
+            _sortKey.Length == 0 ? _strings.GetString(ResultsCopy.GenesOrderFile) : string.Format(CultureInfo.CurrentCulture, _strings.GetString(ResultsCopy.GenesOrderSorted), _strings.GetString(ResultsCopy.GeneColumnKey(_sortKey))));
 
     /// <summary>Header text of the column the table is sorted by, with its direction, for the line above the table.</summary>
-    public string SortSummary => SortKey.Length == 0
+    public string SortSummary => _sortKey.Length == 0
         ? string.Empty
-        : string.Format(CultureInfo.CurrentCulture, _strings.GetString(SortDescending ? ResultsCopy.GenesSortedDescending : ResultsCopy.GenesSortedAscending), _strings.GetString(ResultsCopy.GeneColumnKey(SortKey)));
+        : string.Format(CultureInfo.CurrentCulture, _strings.GetString(_sortDescending ? ResultsCopy.GenesSortedDescending : ResultsCopy.GenesSortedAscending), _strings.GetString(ResultsCopy.GeneColumnKey(_sortKey)));
 
     [RelayCommand]
     private void SortBy(string? key)
@@ -94,14 +113,14 @@ public sealed partial class ResultsGeneTable : ObservableObject
             return;
         }
 
-        SortDescending = SortKey == key && !SortDescending;
-        SortKey = key;
+        _sortDescending = _sortKey == key && !_sortDescending;
+        _sortKey = key;
         OnPropertyChanged(nameof(SortSummary));
         OnPropertyChanged(nameof(TruncatedNotice));
 
         // OrderBy is stable, so equal values keep the file's order in both directions.
         var comparer = Comparer<GeneRecord>.Create(select);
-        Fill(SortDescending ? _records.OrderByDescending(g => g, comparer) : _records.OrderBy(g => g, comparer));
+        Fill(_sortDescending ? _records.OrderByDescending(g => g, comparer) : _records.OrderBy(g => g, comparer));
     }
 
     private void Fill(IEnumerable<GeneRecord> ordered)

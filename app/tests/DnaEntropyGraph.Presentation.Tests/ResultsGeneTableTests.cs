@@ -25,6 +25,18 @@ public sealed class ResultsGeneTableTests
     private static string[] Ids(ResultsGeneTable t) => [.. t.Rows.Select(r => r.GeneId)];
 
     [Fact]
+    public void Every_heading_text_comes_from_its_own_column_key_so_the_sort_line_and_the_heading_say_the_same_words()
+    {
+        var t = Table(Gene("a", 1));
+
+        string[] headings = [t.ContigHeader, t.GeneHeader, t.BeginHeader, t.EndHeader, t.StrandHeader, t.LengthHeader, t.MeanHeader, t.MinHeader, t.MaxHeader, t.LowHeader];
+
+        headings.ShouldBe([.. ResultsCopy.GeneColumnKeys.Select(ResultsCopy.GeneColumnKey)]);
+        ResultsCopy.GeneColumnKeys.Count.ShouldBe(10);
+        headings.Distinct().Count().ShouldBe(10);
+    }
+
+    [Fact]
     public void Rows_start_in_the_files_own_order()
         => Ids(Table(Gene("b", 1.5), Gene("a", 0.5), Gene("c", 1.0))).ShouldBe(["b", "a", "c"]);
 
@@ -72,7 +84,7 @@ public sealed class ResultsGeneTableTests
         t.SortByCommand.Execute("begin");
 
         Ids(t).ShouldBe(["a", "b"]);
-        t.SortDescending.ShouldBeFalse();
+        t.SortSummary.ShouldBe(ResultsCopy.GenesSortedAscending, "another column starts lowest first");
     }
 
     [Fact]

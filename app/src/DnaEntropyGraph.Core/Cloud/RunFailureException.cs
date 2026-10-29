@@ -6,6 +6,12 @@ internal sealed class RunFailureException(CloudErrorKind kind, string code, stri
     public CloudErrorKind Kind { get; } = kind;
 
     public string Code { get; } = code;
+
+    /// <summary>
+    /// Issue #91: the lost VM was a Spot VM that Google took back (a preemption), not a failure of the worker. Internal on purpose: it is not a run
+    /// code, because the runner answers it with one automatic on-demand retry and a run is never recorded under it.
+    /// </summary>
+    public bool SpotPreempted { get; init; }
 }
 
 /// <summary>What the runner's guard needs to know about the VM, written by the steps as they learn it.</summary>
@@ -30,6 +36,12 @@ internal sealed class RunProgress
     /// from here and never subtracts the platform's timestamps from the app's wall clock, which a skewed laptop clock would get wrong.
     /// </summary>
     public long? VmStartMark { get; set; }
+
+    /// <summary>
+    /// Issue #92 round 3 (F2 iii): true when the VM the run is on was found already there (adopted after the app closed), false when this run created or
+    /// started it. Only an adopted flex request may be a queued one the boot wait must not give up on; a request this run created and was granted is not.
+    /// </summary>
+    public bool VmAdopted { get; set; }
 
     /// <summary>The name of the VM the run is on when it is not the one computed from the job id: a reused VM keeps its old name (#94). Null until known.</summary>
     public string? VmName { get; set; }

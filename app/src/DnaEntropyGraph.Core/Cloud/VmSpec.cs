@@ -42,6 +42,35 @@ public sealed record VmSpec(
     /// </summary>
     public string? ServiceAccountEmail { get; init; }
 
+    /// <summary>
+    /// Issue #91: ask Compute Engine for a Spot VM (<c>scheduling.provisioningModel=SPOT</c>), a cheaper computer Google can take back.
+    /// It changes nothing about Hard Rule 10: a Spot VM still carries the six labels, a <c>maxRunDuration</c> and
+    /// <c>instanceTerminationAction=DELETE</c>. False (the default) is an on-demand VM; the runner's one automatic retry after a preemption is a spec with this off.
+    /// </summary>
+    public bool Spot { get; init; }
+
+    /// <summary>
+    /// Issue #92: wait for a GPU (<c>scheduling.provisioningModel=FLEX_START</c>, Compute Engine's Dynamic Workload Scheduler). The create is queued until
+    /// capacity is found, for at most <see cref="FlexStartWait"/>, instead of failing at once with a stockout. Never together with <see cref="Spot"/>.
+    /// A flex VM still carries the six labels, a <c>maxRunDuration</c> and <c>instanceTerminationAction=DELETE</c> (Hard Rule 10).
+    /// </summary>
+    public bool FlexStart { get; init; }
+
+    /// <summary>Issue #92: how long the queued request may wait for capacity (the instance <c>params.requestValidForDuration</c>). Required when <see cref="FlexStart"/> is on, null otherwise.</summary>
+    public TimeSpan? FlexStartWait { get; init; }
+
+    /// <summary>Issue #92: added to <see cref="FlexStartWait"/> to bound the create's own wait, so Compute Engine's answer when the request expires arrives before the app gives up. One value, read by the provisioner and by the gateway.</summary>
+    public TimeSpan FlexStartMargin { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>Issue #92: how long a queued create may take at most from the app's side: the wait plus <see cref="FlexStartMargin"/>.</summary>
+    public TimeSpan FlexStartCreateBound => (FlexStartWait ?? TimeSpan.Zero) + FlexStartMargin;
+
+    /// <summary>
+    /// The longest a FLEX_START VM may run, and the longest its request may wait. THEORY (unverified, no live project): Compute Engine's documented cap for a
+    /// flex-start VM is seven days; docs/ToTest.md carries the row that proves it against a real project.
+    /// </summary>
+    public static readonly TimeSpan FlexStartLimit = TimeSpan.FromDays(7);
+
     /// <summary>The <c>app</c> label's fixed value - every DNA Entropy Graph resource carries the same one.</summary>
     public const string AppLabelValue = "dna-entropy-graph";
 
@@ -122,6 +151,28 @@ public sealed record VmSpec(
             throw new InvalidOperationException("VmSpec is missing a positive maxRunDuration (Hard Rule 10).");
         }
 
+        if (FlexStart)
+        {
+            if (Spot)
+            {
+                throw new InvalidOperationException("VmSpec cannot ask for a Spot VM and a queued (flex-start) VM at once.");
+            }
+
+            if (FlexStartWait is not { } wait || wait <= TimeSpan.Zero || wait > FlexStartLimit)
+            {
+                throw new InvalidOperationException($"VmSpec's flex-start wait must be more than zero and at most {FlexStartLimit.TotalDays:0} days.");
+            }
+
+            if (MaxRunDuration > FlexStartLimit)
+            {
+                throw new InvalidOperationException($"VmSpec's maxRunDuration must be at most {FlexStartLimit.TotalDays:0} days for a flex-start VM.");
+            }
+        }
+        else if (FlexStartWait is not null)
+        {
+            throw new InvalidOperationException("VmSpec names a flex-start wait but does not ask for a flex-start VM.");
+        }
+
         if (Metadata is not null)
         {
             StartupMetadata.EnsureSize(Metadata);
@@ -196,6 +247,13 @@ public sealed record VmSpec(
 }
 
 /// <summary>
+/// Issue #91: which VM a name meant. A VM name is reused (the retry creates <c>deg-&lt;jobId&gt;</c> again in the same zone) and Compute keeps old operations, so
+/// "was this VM preempted" must be asked about ONE incarnation: its numeric instance id (unique per incarnation, and form-free), or failing that the moment it was created.
+/// Both null means nothing bounds the question, and the answer is then "not confirmed".
+/// </summary>
+public sealed record VmIncarnation(ulong? InstanceId, DateTimeOffset? CreatedAt);
+
+/// <summary>
 /// A VM as a gateway reports it. <paramref name="CreatedAt"/> is when Compute Engine created the instance (the
 /// <c>creationTimestamp</c> of the real instance resource, which a real gateway MUST fill): the VM's own
 /// <c>maxRunDuration</c> clock starts there, so the runner measures its result deadline from it. Null means the gateway
@@ -205,6 +263,7 @@ public sealed record VmSpec(
 /// null means unknown, which the idle-VM sweep treats as "not provably idle", never as "idle". <paramref name="MachineType"/> is the machine
 /// type's name (<c>g2-standard-8</c>) when the gateway read it; reuse (#94) needs it to match, and null never matches.
 /// <paramref name="StartedAt"/> is when the instance last started (the real instance's <c>lastStartTimestamp</c>); see <see cref="RunClockStart"/>.
+/// <paramref name="InstanceId"/> is the platform's numeric id of this incarnation of the instance (null when the gateway did not say).
 /// <paramref name="ServerNow"/> is the platform's own clock at the read (the HTTP <c>Date</c> header of the real gateway's answer; issue #691): the app's clock is wrong by an
 /// unknown skew, so a VM's age against its run limit is judged as <c>ServerNow - RunClockStart</c>, never as the laptop's now minus a platform timestamp. Null means unknown.
 /// </summary>
@@ -219,6 +278,7 @@ public sealed record VmDescriptor(
     string? MachineType = null,
     DateTimeOffset? StartedAt = null,
     DateTimeOffset? ServerNow = null,
+    ulong? InstanceId = null,
     TimeSpan? MaxRunDuration = null)
 {
     /// <summary>

@@ -448,24 +448,85 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             return;
         }
 
-        foreach (var gff in annotations)
+        // Issue #135, the conservative rules: a GFF3 goes to the FASTA with the same name (case does not matter), whether or not that FASTA
+        // passed its check (a same-name FASTA that failed is the name match: the GFF3 is not handed to a different file, the page says why);
+        // the only valid FASTA on the page is taken when no FASTA has that name at all. Anything unclear (two FASTA files with that name,
+        // wherever they were added, two GFF3 files for one FASTA, a FASTA that already has a GFF3) is left alone and the page says why: the
+        // result is always visible on the pill and undone with Remove GFF3. The same GFF3 path twice in one drop is one GFF3.
+        var plans = new List<(string Gff, InputPillItem Target, bool ByName)>();
+        foreach (var gff in annotations.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var candidates = Items.Where(item => item.Kind == InputKind.Fasta && item.IsValid).ToList();
+            var fastas = Items.Where(item => item.Kind == InputKind.Fasta).ToList();
             var stem = Path.GetFileNameWithoutExtension(gff);
-            bool SameStem(InputPillItem item) => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase);
-            var target = candidates.FirstOrDefault(item => added.Contains(item) && SameStem(item))
-                ?? candidates.FirstOrDefault(SameStem)
-                ?? (candidates.Count == 1 ? candidates[0] : null);
-            if (target is null)
+            var named = fastas.Where(item => string.Equals(Path.GetFileNameWithoutExtension(item.Path), stem, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (named.Count > 1)
+            {
+                messages.Add(Format("NewRunStatusAnnotationAmbiguousName", Path.GetFileName(gff)));
+                continue;
+            }
+
+            if (named.Count == 1)
+            {
+                if (!named[0].IsValid)
+                {
+                    messages.Add(Format("NewRunStatusAnnotationNamedInvalid", Path.GetFileName(gff), Path.GetFileName(named[0].Path)));
+                    continue;
+                }
+
+                plans.Add((gff, named[0], true));
+                continue;
+            }
+
+            var candidates = fastas.Where(item => item.IsValid).ToList();
+            if (candidates.Count == 1)
+            {
+                plans.Add((gff, candidates[0], false));
+            }
+            else
             {
                 messages.Add(_strings.GetString(candidates.Count == 0 ? "NewRunStatusAnnotationNoFasta" : "NewRunStatusAnnotationAmbiguous"));
+            }
+        }
+
+        foreach (var group in plans.GroupBy(p => p.Target))
+        {
+            var target = group.Key;
+            var byNameInGroup = group.Where(p => p.ByName).ToList();
+            if (byNameInGroup.Count > 0)
+            {
+                // The exact name match wins; a guess made only because there was one FASTA yields to it (and says so).
+                foreach (var guess in group.Where(p => !p.ByName))
+                {
+                    messages.Add(Format("NewRunStatusAnnotationFallbackRefused", Path.GetFileName(guess.Gff), Path.GetFileName(target.Path)));
+                }
+            }
+
+            var candidatesForTarget = byNameInGroup.Count > 0 ? byNameInGroup : group.ToList();
+            if (candidatesForTarget.Count > 1)
+            {
+                messages.Add(Format("NewRunStatusAnnotationTwoForOne", Path.GetFileName(target.Path)));
+                continue;
+            }
+
+            var (gff, _, byName) = candidatesForTarget.Single();
+            if (target.AnnotationPath is { } existing)
+            {
+                if (!string.Equals(existing, gff, StringComparison.OrdinalIgnoreCase))
+                {
+                    messages.Add(Format("NewRunStatusAnnotationAlreadyPaired", Path.GetFileName(target.Path), Path.GetFileName(existing), Path.GetFileName(gff)));
+                }
+
                 continue;
             }
 
             await AttachAnnotationAsync(target, gff, messages, cancellationToken);
+            if (!byName && target.AnnotationPath == gff)
+            {
+                // Pairing by position, not by name, is a guess the user should see (and can undo).
+                messages.Add(Format("NewRunStatusAnnotationPairedOnly", Path.GetFileName(gff), Path.GetFileName(target.Path)));
+            }
         }
     }
-
     /// <summary>Checks the GFF3 against the FASTA on this PC (Hard Rule 2) and, when it fits, shows it on the pill. A GFF3 that does not fit is not kept: the page says why.</summary>
     private async Task AttachAnnotationAsync(InputPillItem pill, string gffPath, List<string> messages, CancellationToken cancellationToken)
     {
@@ -631,6 +692,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private Task ReceiveNavigationParameterAsync(object? parameter)
     {
         _intake?.Attach(this);
+
+        // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
+        if (parameter is NavigationArrival arrival)
+        {
+            parameter = arrival.IsNewNavigation ? arrival.Parameter : null;
+        }
+
         return parameter is DroppedItems dropped ? AddDroppedAsync(dropped) : Task.CompletedTask;
     }
 
@@ -884,6 +952,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     {
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
+        var startedItem = SelectedItem!;
         var options = new RunOptions
         {
             ModelId = Gpu.ModelId,
@@ -930,6 +999,31 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             // Also when the navigation throws: the run is paid for, so its choice is still remembered.
             RememberOutputs(group, outputs);
+
+            // Issue #527: this ViewModel outlives the page, so a started run leaves a clean page for the next one.
+            await ResetForNextRunAsync(startedItem);
+        }
+    }
+
+    /// <summary>
+    /// Empties the page once a run has started (issue #527): the files, the paste box, the status line and the RNA choice. The preset,
+    /// the ticked outputs and the run target stay: they are the user's intent for runs in general (docs/ui_conventions.md section 9). Pasted copies of the files
+    /// that were not run are deleted like a Remove would; the copy behind the run that started stays, because a retry restages from
+    /// its recorded path. The user's own files are never touched (Hard Rule 14).
+    /// </summary>
+    private async Task ResetForNextRunAsync(InputPillItem startedItem)
+    {
+        var dropped = Items.ToList();
+        Items.Clear();
+        SelectedItem = null;
+        PasteText = string.Empty;
+        IsPasteOpen = false;
+        StatusMessage = string.Empty;
+        IsTreatingAsRna = false;
+        OnPropertyChanged(nameof(OfferTreatAsRna));
+        foreach (var item in dropped.Where(item => !ReferenceEquals(item, startedItem)))
+        {
+            await DeleteSavedPasteAsync(item);
         }
     }
 

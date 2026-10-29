@@ -233,6 +233,92 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task An_imported_run_offers_no_local_delete_and_says_why_and_the_command_does_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
+        var vm = await Loaded(imported, Row("own", outputDir: @"C:\out\own"));
+
+        Item(vm, "legacy-1").CanDeleteLocal.ShouldBeFalse();
+        Item(vm, "legacy-1").DeleteLocalHint.ShouldBe("imported-hint");
+        Item(vm, "own").CanDeleteLocal.ShouldBeTrue();
+        Item(vm, "own").DeleteLocalHint.ShouldBeNull();
+
+        await Item(vm, "legacy-1").DeleteLocalCommand.ExecuteAsync(null);
+        _local.DidNotReceive().DeleteOutputFolder(Arg.Is<RunRecord>(r => r.JobId == "legacy-1"));
+        await _dialogs.DidNotReceiveWithAnyArgs().ConfirmAsync(default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_prototype_import_row_has_no_cloud_badge_and_the_earlier_version_hint()
+    {
+        // Built exactly as PrototypeImport builds it: Target local, no installation id, no bucket.
+        var proto = new RunRecord("legacy-p", JobPhase.Completed, Now, "p", Target: DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, OutputDir: @"C:\Users\me\Downloads\proto", FinishedAt: Now, Imported: true);
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false); // as the real RunCloudResults answers for any Imported row
+        var vm = await Loaded(proto);
+
+        Item(vm, "legacy-p").IsImported.ShouldBeFalse();
+        Item(vm, "legacy-p").ImportedText.ShouldBeNull();
+        Item(vm, "legacy-p").HasImportedText.ShouldBeFalse();
+        Item(vm, "legacy-p").DeleteLocalHint.ShouldBe("imported-hint");
+        Item(vm, "legacy-p").CanDeleteLocal.ShouldBeFalse();
+        Item(vm, "legacy-p").DeleteCloudHint.ShouldBe(RunsCopy.DeleteCloudHintPrototype, "no cloud copy, and the named action (Open) exists; Run again is off for it");
+        Item(vm, "legacy-p").CanDeleteCloud.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_cloud_found_row_has_the_cloud_badge_and_not_the_earlier_version_hint()
+    {
+        // Built exactly as RunImporter builds it: cloud target, installation id, bucket, Imported.
+        var found = new RunRecord("20261014-aaaa", JobPhase.Completed, Now, "f", Bucket: "b", JobPrefix: "jobs/20261014-aaaa/", InstallationId: "inst-pc-a-long", Imported: true);
+        _strings.GetString(RunsCopy.DeleteLocalHintImported).Returns("imported-hint");
+        _strings.GetString(RunsCopy.ImportedBadge).Returns("badge {0}");
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false); // as the real RunCloudResults answers for any Imported row
+        var vm = await Loaded(found);
+
+        Item(vm, "20261014-aaaa").IsImported.ShouldBeTrue();
+        Item(vm, "20261014-aaaa").ImportedText.ShouldBe("badge inst-pc-");
+        Item(vm, "20261014-aaaa").DeleteLocalHint.ShouldBeNull();
+        Item(vm, "20261014-aaaa").DeleteCloudHint.ShouldBe(RunsCopy.DeleteCloudHintImported);
+    }
+
+    [Fact]
+    public async Task An_imported_run_offers_no_redownload_or_cloud_delete_and_run_again_says_it_has_no_options_and_starts_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(false);
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false);
+        var imported = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\proto") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
+        var vm = await Loaded(imported);
+
+        Item(vm, "legacy-1").CanRedownload.ShouldBeFalse();
+        Item(vm, "legacy-1").CanDeleteCloud.ShouldBeFalse();
+
+        await Item(vm, "legacy-1").RerunCommand.ExecuteAsync(null);
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoOptions_Title", "Runs_Rerun_NoOptions_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task An_imported_run_that_somehow_has_options_but_no_input_file_says_so_and_starts_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns((string?)null);
+        var options = DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" });
+        var imported = Row("legacy-2", outputDir: @"C:\Users\me\Downloads\proto", options: options) with { Imported = true };
+        var vm = await Loaded(imported);
+
+        await Item(vm, "legacy-2").RerunCommand.ExecuteAsync(null);
+
+        await _engine.DidNotReceiveWithAnyArgs().StartRunAsync(default!, TestContext.Current.CancellationToken);
+        _toasts.Received(1).ShowToast("Runs_Rerun_NoInput_Title", "Runs_Rerun_NoInput_Body", ToastSeverity.Warning);
+    }
+
+    [Fact]
     public async Task A_live_run_never_offers_local_deletion_and_the_command_does_nothing()
     {
         _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
@@ -880,5 +966,65 @@ public sealed class HistoryViewModelTests
 
         await Item(vm, "done").RedownloadCommand.ExecuteAsync(null);
         _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body", ToastSeverity.Warning);
+    }
+
+    // ---- Issue #92: the stockout card offers "wait for a graphics card" ----
+
+    private static readonly string StockoutCode = RunErrorCodes.For(CloudErrorKind.Stockout);
+
+    [Fact]
+    public async Task A_run_that_failed_for_want_of_a_graphics_card_offers_waiting_and_choosing_it_starts_the_same_run_with_WaitForGpu_on()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.gb", OutputFolder = @"D:\lab" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.gb");
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("waiting-job");
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        var item = Item(vm, "a");
+        item.HasWaitForGpu.ShouldBeTrue();
+        await item.WaitForGpuCommand!.ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(recorded with { InputPath = @"C:\app\runs\a\input\in.gb", WaitForGpu = true }, Arg.Any<CancellationToken>());
+        _navigator.Received(1).NavigateTo("RunProgress", "waiting-job");
+    }
+
+    [Theory]
+    [InlineData("quota")]
+    [InlineData("billing")]
+    [InlineData("vm_unhealthy")]
+    public async Task A_run_that_failed_for_any_other_reason_offers_no_waiting(string code)
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud" };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = code });
+
+        Item(vm, "a").HasWaitForGpu.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_run_that_already_waited_and_still_got_no_card_offers_no_second_wait_and_says_so()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", WaitForGpu = true };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        Item(vm, "a").HasWaitForGpu.ShouldBeFalse();
+        Item(vm, "a").ReasonText.ShouldBe("RunError_stockout_waited");
+    }
+
+    [Fact]
+    public async Task A_stockout_run_that_did_not_wait_keeps_the_ordinary_stockout_text()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud" };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        Item(vm, "a").ReasonText.ShouldBe("RunError_stockout");
+    }
+
+    [Fact]
+    public async Task A_completed_run_and_a_stockout_run_with_unreadable_options_offer_no_waiting()
+    {
+        var vm = await Loaded(Row("done", JobPhase.Completed), Row("bad", JobPhase.Failed, options: "garbage") with { ErrorCode = StockoutCode });
+
+        Item(vm, "done").HasWaitForGpu.ShouldBeFalse();
+        Item(vm, "bad").HasWaitForGpu.ShouldBeFalse();
     }
 }

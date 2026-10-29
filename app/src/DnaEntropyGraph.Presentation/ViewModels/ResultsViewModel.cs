@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -37,6 +38,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly IGeneTableSource? _geneTables;
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
+    private RunRecord? _run;
+    private readonly ResultsExportRoot? _exportRoot;
     private int _loadGeneration;
 
     [ObservableProperty]
@@ -66,9 +69,11 @@ public sealed partial class ResultsViewModel : ObservableObject
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
         IOverviewImageExporter? imageExporter = null,
-        IGeneTableSource? geneTables = null)
+        IGeneTableSource? geneTables = null,
+        ResultsExportRoot? exportRoot = null)
     {
         _geneTables = geneTables;
+        _exportRoot = exportRoot;
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -140,6 +145,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
+            _run = run;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
@@ -186,6 +192,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private void Reset()
     {
         _folder = null;
+        _run = null;
         _outputFiles = [];
         Title = string.Empty;
         Overview = null;
@@ -387,7 +394,11 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private bool CanExportOverviewPng() => Overview is not null && _folder is not null && _imageExporter is not null;
 
-    /// <summary>Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer.</summary>
+    /// <summary>
+    /// Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer. A run imported
+    /// from the earlier version has a folder that is the user's own: its PNG goes to a new folder under the default output folder instead.
+    /// A file that already exists is never overwritten; the new one gets a number.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
     private async Task ExportOverviewPngAsync()
     {
@@ -396,10 +407,36 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        var path = UnusedPath(folder, SafeFileName(contig.Name) + ".entropy", ".png");
         var labels = new OverviewImageLabels(Format(ResultsCopy.ExportPngTitle, Title, contig.Name), _strings.GetString(ResultsCopy.ExportPngXAxis), _strings.GetString(ResultsCopy.ExportPngYAxis));
-        var written = await Task.Run(() => exporter.Export(contig, labels, path), CancellationToken.None);
-        if (written)
+        var run = _run;
+        string? path = null;
+        var written = false;
+        if (run is { Imported: true } && _exportRoot is null)
+        {
+            // No safe place to write: say so rather than fall back to the user's own folder.
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            return;
+        }
+
+        try
+        {
+            (path, written) = await Task.Run(
+                () =>
+                {
+                    var target = run is { Imported: true } && _exportRoot is not null
+                        ? RunOutputFolders.CreateUnique(_exportRoot.Parent(), (string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name) + " exports")
+                        : folder;
+                    var file = UnusedPath(target, SafeFileName(contig.Name) + ".entropy", ".png");
+                    return (file, exporter.Export(contig, labels, file));
+                },
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            written = false;
+        }
+
+        if (written && path is not null)
         {
             Report(_launcher.ShowInFolder(path), ResultsCopy.FileActionFailed);
         }
