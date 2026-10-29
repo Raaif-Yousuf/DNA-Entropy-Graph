@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Diagnostics;
 
@@ -29,7 +30,7 @@ public static partial class DiagnosticsBundleBuilder
 
     private const int MaxSettingsBytes = 256_000;
 
-    private static readonly JsonSerializerOptions Indented = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions Indented = new(JsonSerializerDefaults.Web) { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private enum FileKind
     {
@@ -51,7 +52,7 @@ public static partial class DiagnosticsBundleBuilder
     private static partial Regex LogFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
-    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
+    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info, bool includeNotesAndTags = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(runs);
@@ -62,11 +63,16 @@ public static partial class DiagnosticsBundleBuilder
         // options, and every key and string inside the parts of status and result files that are not copied (contig and
         // record names), so a log line naming any of them is scrubbed too.
         var scrub = new HashSet<string>(info.SensitiveValues, StringComparer.OrdinalIgnoreCase);
+        var userText = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var ids = new JobIdWithholder(scrub);
         foreach (var run in runs)
         {
             ids.Map(run.JobId);
             AddRunNames(run, scrub);
+            if (!includeNotesAndTags)
+            {
+                AddUserText(run, userText);
+            }
         }
 
         var loaded = new List<Loaded>();
@@ -88,7 +94,7 @@ public static partial class DiagnosticsBundleBuilder
         }
 
         // Phase 2: redact and assemble.
-        var redactor = new DiagnosticsRedactor(info.UserProfilePath, scrub);
+        var redactor = new DiagnosticsRedactor(info.UserProfilePath, scrub, userText);
         var entries = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var settings = RedactSettings(source, redactor);
 
@@ -106,7 +112,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId))), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => includeNotesAndTags ? WithNotesAndTags(ToHistoryRow(run, ids.Map(run.JobId)), run, redactor, [.. scrub, info.UserProfilePath]) : ToHistoryRow(run, ids.Map(run.JobId))), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -114,6 +120,16 @@ public static partial class DiagnosticsBundleBuilder
         foreach (var file in loaded)
         {
             entries[EntryName(file, ids, logCounters)] = Copy(file, redactor, ids) ?? OmittedUnreadable;
+        }
+
+        // Fail closed on the user's own words: a copied file that still holds a note or tag as a whole token after redaction is
+        // replaced whole, never shipped and never a failed bundle.
+        foreach (var name in entries.Keys.Where(k => k.StartsWith("files/", StringComparison.Ordinal)).ToList())
+        {
+            if (redactor.ContainsUserText(entries[name]))
+            {
+                entries[name] = OmittedFile;
+            }
         }
 
         // The scan backstops the redactor on the user's own identifiers (the same list the redactor used, plus the profile
@@ -128,7 +144,9 @@ public static partial class DiagnosticsBundleBuilder
     }
 
     // Fixed words only: the leak scan blanks exactly this shape (and "<omitted: file too large>") before it checks identifiers.
-    private const string OmittedUnreadable = "<omitted: file is not valid json>";
+    private const string OmittedFile = DiagnosticsMarkers.OmittedFile;
+
+    private const string OmittedUnreadable = DiagnosticsMarkers.OmittedUnreadable;
 
     private static string EntryName(Loaded file, JobIdWithholder ids, Dictionary<string, int> logCounters)
     {
@@ -167,9 +185,35 @@ public static partial class DiagnosticsBundleBuilder
         _ => null,
     };
 
+    // Issue #141: a note and a tag are the user's own words. Unless the user ticked the box to share them they are kept out of the
+    // history row and redacted from the copied logs as whole tokens. They are NOT added to the identifier scrub list: that list is
+    // matched as substrings and re-checked by the leak scan, and a tag equal to a word the bundle itself writes ("completed",
+    // "error") made every bundle fail or mangled ordinary log words (cold review of #141, issue #782).
+    private static void AddUserText(RunRecord run, HashSet<string> userText)
+    {
+        // Redaction is per line, so a multi-line note is added line by line as well as whole. Each is also added in its JSON-escaped
+        // spelling, which is how a quote or a backslash of it reads inside a copied JSON file.
+        var texts = new List<string>(RunTags.Parse(run.TagsJson));
+        if (!string.IsNullOrWhiteSpace(run.Notes))
+        {
+            texts.Add(run.Notes.Trim());
+            texts.AddRange(run.Notes.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        foreach (var text in texts)
+        {
+            userText.Add(text);
+            var escaped = JsonEncodedText.Encode(text, System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
+            if (escaped != text)
+            {
+                userText.Add(escaped);
+            }
+        }
+    }
+
     private static void AddRunNames(RunRecord run, HashSet<string> scrub)
     {
-        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix, run.Notes })
+        foreach (var text in new[] { run.Name, run.OutputDir, run.ProjectId, run.Bucket, run.VmName, run.JobPrefix })
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -255,7 +299,7 @@ public static partial class DiagnosticsBundleBuilder
         var spec = SpecFor(file.Kind);
         if (file.Kind is FileKind.Status or FileKind.Result)
         {
-            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
+            return file.Truncated ? DiagnosticsMarkers.OmittedTooLarge : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
@@ -326,6 +370,27 @@ public static partial class DiagnosticsBundleBuilder
         installationId = run.InstallationId,
         imported = run.Imported,
     };
+
+    // Only when the user ticked "include my notes and tags" (issue #141): the row plus those two fields, nothing else added.
+    // The user chose to share the words, not a path, an address or a sequence pasted into them: each note and tag goes through the
+    // redactor like a log line, and one that still trips the leak scan is replaced by a fixed placeholder, so a note can never make
+    // the bundle fail (cold review of #141, issue #782).
+    private static object WithNotesAndTags(object row, RunRecord run, DiagnosticsRedactor redactor, IEnumerable<string> scrub)
+    {
+        var node = JsonSerializer.SerializeToNode(row)!.AsObject();
+        node["notes"] = string.IsNullOrWhiteSpace(run.Notes) ? null : Shareable(run.Notes, redactor, scrub);
+        node["tags"] = JsonSerializer.SerializeToNode(RunTags.Parse(run.TagsJson).Select(tag => Shareable(tag, redactor, scrub)).ToList());
+        return node;
+    }
+
+    private static string Shareable(string text, DiagnosticsRedactor redactor, IEnumerable<string> scrub)
+    {
+        var redacted = redactor.RedactText(text);
+        var probe = new Dictionary<string, string> { ["note"] = redacted };
+        return DiagnosticsLeakScan.Find(probe, scrub) is null ? redacted : OmittedNote;
+    }
+
+    private const string OmittedNote = DiagnosticsMarkers.OmittedNote;
 
     private static byte[] Zip(SortedDictionary<string, string> entries, DateTimeOffset createdUtc)
     {

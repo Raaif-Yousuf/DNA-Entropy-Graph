@@ -327,4 +327,42 @@ public sealed class LocalEngineInstallerTests : IDisposable
         result.ErrorCode.ShouldBe(LocalEngineErrorCodes.RemoveRefused);
         File.Exists(Path.Combine(dataRoot, "keep.txt")).ShouldBeTrue();
     }
+
+    [Fact]
+    public async Task Remove_refuses_when_the_app_data_folder_is_a_drive_root()
+    {
+        var driveRoot = Path.GetPathRoot(_root)!;
+        var installer = new LocalEngineInstaller(
+            AlwaysOk(),
+            new LocalEngineLayout(Path.Combine(_root, "data", "engine")),
+            _uv,
+            _lock,
+            _wheel,
+            driveRoot,
+            _ => Task.FromResult(Healthy));
+        Directory.CreateDirectory(Path.Combine(_root, "data", "engine"));
+
+        var result = await installer.RemoveAsync(CancellationToken.None);
+
+        result.ErrorCode.ShouldBe(LocalEngineErrorCodes.RemoveRefused);
+        Directory.Exists(Path.Combine(_root, "data", "engine")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Remove_accepts_an_app_data_folder_given_with_a_trailing_separator()
+    {
+        var dataRoot = Path.Combine(_root, "data") + Path.DirectorySeparatorChar;
+        Directory.CreateDirectory(Path.Combine(_root, "data", "engine"));
+        var installer = new LocalEngineInstaller(
+            AlwaysOk(),
+            new LocalEngineLayout(Path.Combine(_root, "data", "engine")),
+            _uv,
+            _lock,
+            _wheel,
+            dataRoot,
+            _ => Task.FromResult(Healthy));
+
+        (await installer.RemoveAsync(CancellationToken.None)).Succeeded.ShouldBeTrue();
+        Directory.Exists(Path.Combine(_root, "data", "engine")).ShouldBeFalse();
+    }
 }
