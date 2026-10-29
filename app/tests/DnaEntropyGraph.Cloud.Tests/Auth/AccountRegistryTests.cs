@@ -204,7 +204,6 @@ public class AccountRegistryTests : IDisposable
     }
 
     [Fact]
-    [Fact]
     public void A_load_that_is_still_waiting_for_the_lock_does_not_clear_the_unreadable_answer_a_save_relies_on()
     {
         Directory.CreateDirectory(_dir);
@@ -231,6 +230,8 @@ public class AccountRegistryTests : IDisposable
         // Real time, cannot fail correct code: a sample taken after the 150 ms wait ended still sees true (a timed-out load leaves the old answer), so load only reduces how many samples fall inside the wait.
         observed.ShouldAllBe(u => u, "the lock wait lasts 150 ms; the old answer stands until the new one is known");
     }
+
+    [Fact]
     public void An_update_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
     {
         Directory.CreateDirectory(_dir);
