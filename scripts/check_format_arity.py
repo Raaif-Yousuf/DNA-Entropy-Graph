@@ -507,6 +507,7 @@ def _get_string_conditional_keys(arg: str, consts: dict[str, set[str]]) -> list[
         return None
     return _literal_keys(inner.strip(), consts)
 
+
 def _literal_key(arg: str, consts: dict[str, set[str]]) -> str | None:
     """The resw key of a bare `"Key"` or `Ns.Class.Const` argument, else None (also None when ambiguous)."""
     lit = LITERAL_KEY.match(arg)
