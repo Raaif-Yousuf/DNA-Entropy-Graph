@@ -200,3 +200,6 @@ Same class in SettingsStore (#625): MEASURED 2026-10-03: the persistent-lock tes
 [`dev_commands.md`](dev_commands.md) (exact commands),
 [`hard_rules.md`](hard_rules.md) (rule 15: tests first),
 `.claude/skills/tests-first/SKILL.md`.
+
+SQLite pools are per database (#741): MEASURED 2026-10-29: `SqliteDatabase.Dispose` (and the quarantine step) called the process-wide `SqliteConnection.ClearAllPools()`, so one finished test's container closed the pooled handle another test was renting, and its `ConfigurePragmas` threw ObjectDisposedException from `SafeHandle.DangerousAddRef` (reproduced on demand by `SqliteDatabaseDisposeIsolationTests`; about 2 in 150 full Guards runs before the fix, 0 in 200 after). A database releases only its own pool; a test that seeds a file uses `Pooling=False` and never calls `ClearAllPools`.
+

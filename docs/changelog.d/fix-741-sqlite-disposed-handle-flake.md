@@ -1,0 +1,1 @@
+- Fix a flaky Guards test: disposing one SQLite database no longer closes the pooled connections of every other database in the process (#741).
