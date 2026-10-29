@@ -178,10 +178,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 try
                 {
                     await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
-                    var current = State;
-                    // An account that signs in again (its token expired) keeps the project it chose; a signed-out one was dropped with its record.
-                    var record = new AccountRecord(identity.Sub, string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email, NeedsSignIn: false, current.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
-                    await CommitAsync(new AccountsFile(identity.Sub, [.. current.Accounts.Where(a => a.Sub != identity.Sub), record])).ConfigureAwait(false);
+                    var email = string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email;
+                    await UpdateAsync(file =>
+                    {
+                        // An account that signs in again (its token expired) keeps the project it chose, as the file has it now (another copy may have chosen one since this copy loaded); a signed-out one was dropped with its record.
+                        var record = new AccountRecord(identity.Sub, email, NeedsSignIn: false, file.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
+                        return new AccountsFile(identity.Sub, [.. file.Accounts.Where(a => a.Sub != identity.Sub), record]);
+                    }).ConfigureAwait(false);
                 }
                 catch (TokenStorageException ex)
                 {
@@ -219,9 +222,14 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             // The list goes first, then the revoke (Google's flow also deletes the stored token when it revokes), then the local deletion,
             // which happens whatever Google said: the user asked to be signed out. If the list cannot be saved (a lock, a full disk) the
             // account stays listed, signed in, with its token and still valid at Google, rather than listed signed-in with no token.
-            var remaining = State.Accounts.Where(a => a.Sub != active.Sub).ToList();
-            var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
-            await CommitAsync(new AccountsFile(next?.Sub, remaining)).ConfigureAwait(false);
+            await UpdateAsync(file =>
+            {
+                var remaining = file.Accounts.Where(a => a.Sub != active.Sub).ToList();
+                // Another copy may have made a different account current since this one loaded: that choice stands. Only when the current one is going does the next take over.
+                var currentStays = file.ActiveSub is { } current && current != active.Sub && remaining.Any(a => a.Sub == current);
+                var next = remaining.FirstOrDefault(a => !a.NeedsSignIn) ?? remaining.FirstOrDefault();
+                return new AccountsFile(currentStays ? file.ActiveSub : next?.Sub, remaining);
+            }).ConfigureAwait(false);
             revoked = await RevokeAsync(active, cancellationToken).ConfigureAwait(false);
             await _store.DeleteAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
         }
@@ -255,7 +263,14 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
             }
 
-            await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }).ConfigureAwait(false);
+            await UpdateAsync(file =>
+            {
+                // The file lost this account (deleted by hand): put it back, then the token file decides whether it still counts as signed in.
+                var listed = file.Accounts.Any(a => a.Sub == active.Sub) ? file : Reconcile(file with { Accounts = [.. file.Accounts, active] });
+                return listed.Accounts.Any(a => a.Sub == active.Sub && !a.NeedsSignIn)
+                    ? listed with { Accounts = [.. listed.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }
+                    : throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account was signed out in another copy of the app");
+            }).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -282,7 +297,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
             }
 
-            await CommitAsync(current with { ActiveSub = sub }).ConfigureAwait(false);
+            await UpdateAsync(file => file.Accounts.Any(a => a.Sub == sub)
+                ? file with { ActiveSub = sub }
+                : throw new AccountAuthException(AuthErrorCodes.AccountNotFound)).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -465,17 +482,21 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     private async Task MarkExpiredAsync(AccountRecord account)
     {
         await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
-        var current = State;
-        await CommitAsync(current with { Accounts = [.. current.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
+        await UpdateAsync(file => file with { Accounts = [.. file.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
     }
 
-    /// <summary>The save runs on a pool thread: it can wait up to 10 s for another copy's lock, and the caller may be a dispatcher.</summary>
-    private async Task CommitAsync(AccountsFile file)
+    /// <summary>
+    /// Issue #620: every change to the account list goes through here and nowhere else. <paramref name="change"/> is applied to the file as it is under
+    /// the registry's lock, not to this copy's cached list (which another copy's change can have made stale), and only to the fields it means to change,
+    /// so two copies changing different things both persist; where both change one field of one account, the later writer wins that field.
+    /// The save runs on a pool thread: it can wait up to 10 s for another copy's lock, and the caller may be a dispatcher.
+    /// </summary>
+    private async Task UpdateAsync(Func<AccountsFile, AccountsFile> change)
     {
-        await Task.Run(() => _registry.Save(file)).ConfigureAwait(false);
+        var written = await Task.Run(() => _registry.Update(file => change(Reconcile(file)))).ConfigureAwait(false);
         lock (_loadLock)
         {
-            _state = file;
+            _state = written;
         }
     }
 

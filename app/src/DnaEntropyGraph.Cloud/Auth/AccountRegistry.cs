@@ -167,22 +167,71 @@ public sealed class AccountRegistry
                 throw new AccountsFileLockedException(new IOException("the accounts file exists but could not be read, so it is not replaced"));
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            DeleteOrphanTempFiles();
-            var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
-            try
-            {
-                File.WriteAllText(temp, JsonSerializer.Serialize(file, Json) + "\n", new UTF8Encoding(false));
-                File.Move(temp, _path, overwrite: true);
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
+            Write(file);
         }, _saveLockWait);
+
+    /// <summary>
+    /// Issue #620: the change to the list, applied to the file as it is NOW. Under the same lock as <see cref="Save"/> this reads the file
+    /// again, hands it to <paramref name="change"/>, and writes the answer atomically, so another copy's change made since this copy last
+    /// loaded is part of what <paramref name="change"/> sees and is kept (a plain load-modify-save would replace it with a stale list).
+    /// <paramref name="change"/> runs while the lock is held: keep it short (no waiting, no network). Whatever it throws leaves the file untouched.
+    /// Throws <see cref="AccountsFileLockedException"/> when the file exists but cannot be read (it is never replaced then), and a
+    /// <see cref="TokenStorageException"/> when it cannot be written. Returns the file that was written.
+    /// </summary>
+    public AccountsFile Update(Func<AccountsFile, AccountsFile> change)
+    {
+        AccountsFile? written = null;
+        LoadOutcome outcome = default;
+        try
+        {
+            WithLock(() =>
+            {
+                outcome = ReadLocked();
+                if (outcome.Unreadable)
+                {
+                    throw new AccountsFileLockedException(new IOException("the accounts file exists but could not be read, so it is not replaced"));
+                }
+
+                written = change(outcome.File);
+                Write(written);
+            }, _saveLockWait);
+        }
+        catch (AccountsFileLockedException)
+        {
+            if (outcome.Unreadable)
+            {
+                Unreadable = true;
+                QuarantineFailed = outcome.QuarantineFailed;
+            }
+
+            throw;
+        }
+
+        // Published only after the lock is released, like Load: the file was read this time, so it is readable.
+        QuarantinedTo = outcome.QuarantinedTo;
+        QuarantineFailed = false;
+        Unreadable = false;
+        return written!;
+    }
+
+    private void Write(AccountsFile file)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        DeleteOrphanTempFiles();
+        var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
+        try
+        {
+            File.WriteAllText(temp, JsonSerializer.Serialize(file, Json) + "\n", new UTF8Encoding(false));
+            File.Move(temp, _path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
+    }
 
     /// <summary>A save that died between writing its temp file and moving it leaves one behind. Under the lock nothing else is mid-save, but only old ones go: a copy that does not share the lock may be.</summary>
     private void DeleteOrphanTempFiles()
