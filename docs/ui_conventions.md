@@ -33,6 +33,17 @@ Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 is selected at startup (`NavigationView.Loaded`), so header, selection and frame agree; a
 destination with no page registered in `Startup/NavigationRoutes.cs` shows the one generic
 `PlaceholderPage` instead of an empty frame; the OS window title is `AppDisplayName`.
+Header and selection follow the frame, not the click (#499, #701, #807): the shell subscribes to
+`INavigator.CurrentPageChanged`, so a nav item, a page's own `NavigateTo`, Back and a deep link all
+update `CurrentPageTitle` and `SelectedNavKey`. The in-page headings of RunProgress (the stage title), Results (the run's name) and Viewer (an
+error title only) say something other than the page name, so the NavigationView header is kept above them (checked
+2026-10-16: no page repeats its own `PageTitle_<key>`). The rule for a page with no nav item (RunProgress,
+Results, Viewer, Wizard): it shows its own `PageTitle_<key>` header and NO item is selected (a
+NavigationView raises no selection change for an already-selected item, so keeping the parent
+selected would make the parent's nav item unclickable). `NavSelectionBinder` mirrors
+`SelectedNavKey` onto the NavigationView; `ShellViewModel.NavigateTo` ignores a null key and the
+page the frame already shows, so that mirror never pushes a duplicate page. `RecordingNavigator`
+must forward `CurrentPageKey` and `CurrentPageChanged`: DI hands the shell the decorator.
 Window placement: nothing is saved while the window is minimized or maximized, a saved
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).

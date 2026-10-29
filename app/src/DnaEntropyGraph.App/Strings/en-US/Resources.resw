@@ -2933,4 +2933,13 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
     <value>Wait for a graphics card</value>
   </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
 </root>
