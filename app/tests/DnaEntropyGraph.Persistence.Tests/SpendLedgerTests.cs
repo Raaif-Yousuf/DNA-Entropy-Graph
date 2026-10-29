@@ -517,11 +517,31 @@ public class SpendLedgerTests
         {
             var row = Finished("r1", hours: 1, phase: JobPhase.Failed) with { VmReadyAt = Now, FinishedAt = Now.AddMinutes(-5) };
 
-            var quote = ledger.Quote(row);
+            var listener = new CapturingTraceListener();
+            System.Diagnostics.Trace.Listeners.Add(listener);
+            try
+            {
+                var quote = ledger.Quote(row);
 
-            quote.ShouldNotBeNull();
-            quote.EndedUtc.ShouldBe(Now, "the end is never before the start");
-            quote.UsdEst.ShouldBe(0.0);
+                quote.ShouldNotBeNull();
+                quote.EndedUtc.ShouldBe(Now, "the end is never before the start");
+                quote.UsdEst.ShouldBe(0.0);
+            }
+            finally
+            {
+                System.Diagnostics.Trace.Listeners.Remove(listener);
+            }
+
+            listener.Lines.ShouldContain(l => l.Contains("vm-span-inverted job=r1"), "the inversion is traced by id and state only, never a message");
         }
+    }
+
+    private sealed class CapturingTraceListener : System.Diagnostics.TraceListener
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Lines { get; } = new();
+
+        public override void Write(string? message) => Lines.Enqueue(message ?? string.Empty);
+
+        public override void WriteLine(string? message) => Lines.Enqueue(message ?? string.Empty);
     }
 }
