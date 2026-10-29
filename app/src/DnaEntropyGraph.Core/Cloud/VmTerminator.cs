@@ -139,6 +139,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                         }
                         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                         {
+                            // Already gone (404): the wanted end state, nothing to report.
                         }
 
                         return true;
