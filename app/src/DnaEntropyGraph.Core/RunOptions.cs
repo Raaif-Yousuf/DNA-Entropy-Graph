@@ -183,6 +183,15 @@ public sealed record RunOptions
     /// </summary>
     public bool SpotVm { get; init; }
 
+    /// <summary>
+    /// Issue #92: wait for a graphics card (Compute Engine's flex-start). Off by default; the stockout card on the Runs page offers it, and Advanced options can
+    /// set it up front. The run is queued by Google until a card is free instead of failing at once.
+    /// </summary>
+    public bool WaitForGpu { get; init; }
+
+    /// <summary>Issue #92: how long a queued run waits for a card before it gives up, in minutes (default 2 hours). Only read when <see cref="WaitForGpu"/> is on.</summary>
+    public int WaitForGpuMinutes { get; init; } = 120;
+
     /// <summary>What the worker does to its own VM once every output is uploaded. Manifest: <c>lifecycle.afterTask</c>. Default Stop (Hard Rule 11).</summary>
     public AfterTaskAction AfterTask { get; init; } = AfterTaskAction.Stop;
 

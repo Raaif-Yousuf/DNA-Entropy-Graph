@@ -37,6 +37,14 @@ Window placement: nothing is saved while the window is minimized or maximized, a
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
 
+Session restore (#244): `RecordingNavigator` wraps the app's `INavigator`, so every navigation (nav rail or any ViewModel) saves
+`session.page` and `session.run` (`SessionStore`). Only pages reopenable from a key are saved: New run, Runs, Cloud, Settings, and
+Results or Run progress with their run id; the viewer and the wizard leave the last page alone. At startup `MainWindow.Loaded`
+awaits `ShellViewModel.PrepareSessionAsync`, selects `StartupNavKey` (the remembered nav page, or Runs for a remembered run), and
+the first `NavigateTo` of that item opens the run page on top, once. A remembered run that is gone opens New run; a Run progress
+page whose run completed while the app was closed opens Results. An Open with or notification launch is routed by
+`ActivationRouter` after the shell is ready, so it still wins. Both keys are `Excluded` in `SettingsCatalog` (not shared).
+
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
 - **Every user-visible string lives in `Strings/en-US/Resources.resw`**, referenced by
@@ -238,6 +246,20 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). The paste box (closed), the status line and Treat as RNA also reset. A start that fails keeps everything.
+What stays across runs, on purpose: the preset, the ticked output files and the run target (they are the user's
+intent for runs in general and match Settings); `PresetPickerTests` pins it. Not persisted across app restarts.
+Back to the page never re-delivers its Open-with files: the page forwards `NavigationArrival` (parameter plus
+`NavigationMode` as a number) and only a New navigation's parameter is acted on. `NewRunPage.OnNavigatedFrom`
+calls `Bindings.StopTracking()`, so the long-lived ViewModel (its `PropertyChanged` and `Items`) does not keep a
+left page alive; the page is not cached, a new instance is made on every visit. THEORY (unverified): the
+memory effect itself was not measured, only that the release is explicit.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,
@@ -290,6 +312,29 @@ Open folder, the status line and one line saying what is and is never included).
 panel and keeps this one. The run-error strings say "Choose Save diagnostics in Settings"; `Guards.Tests/SaveDiagnosticsWiringTests`
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
+
+### Share settings (issue #242)
+
+The last group on the page. **Export settings** and **Import settings** drive `SettingsTransferViewModel`; the import shows a
+preview (the plain name of each setting, its current value, its new value) and writes only on **Apply these changes**.
+What may travel is the allowlist `Core/SettingsPortability/SettingsCatalog`: every key is either `Exported` (with a validator, so
+an imported value is one the app itself would have written) or `Excluded` (with a reason). `Guards.Tests/SettingsKeyCatalogGuardTests`
+scans the source for settings keys and fails when one is in neither, so **a new setting must be added to the catalog in the
+same commit** (decide: share it, or say why not; a path, an id, a secret or a developer switch is always excluded). The file
+carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
+which every settings group already treats as "re-read the store".
+
+### Earlier version import (issue #243)
+
+`PrototypeImportViewModel` (one singleton, shared by the shell and the Settings "Earlier version" group). On the first launch of a
+profile `MainWindow.Loaded` calls `ShellViewModel.RunStartupOffersAsync` after `MarkReady`; it scans off the UI thread, sets
+`prototype_import_done` whatever it finds, and asks (a `ConfirmAsync` dialog) only when there are runs not already in history.
+The scan reads the places the prototype's own code used (MEASURED 2026-10-16 from `worker/legacy`: `%APPDATA%\dna-entropy\config.json`
+with `last_zone` and `ssh_key_file`, and `%USERPROFILE%\Downloads\<name>\<name>.entropy.bedgraph`, which is the profile folder, not the
+Windows known folder). It never writes there. An imported row is `Completed`, `Imported = true`, target `local`, with no bucket,
+prefix or VM, so every cloud action is off; its `OutputDir` is the folder it was found in. Ids are `legacy-` plus a hash of the
+folder, so a second import adds nothing. A folder holding `provenance.json` was written by this app and is skipped.
+`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog, in either call order (whichever of the two runs first starts the one offers task; the tour starts however it ended). A prototype row's Delete cloud copy tooltip is its own string (`Runs_DeleteCloud_Hint_Prototype`, pointing to Open).
 
 ## 11. The setup wizard (issue #99)
 

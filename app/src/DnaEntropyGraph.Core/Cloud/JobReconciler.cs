@@ -790,6 +790,12 @@ public sealed class JobReconciler
             [staged ?? new StagedInput(options.InputPath ?? string.Empty, Path.GetFileName(options.InputPath) is { Length: > 0 } name ? name : "input")],
             OutputParent(row, options));
 
+        // Issue #91: a run that was already preempted once is on its on-demand retry; a resume must not ask for Spot again.
+        if (row.PreemptionCount > 0)
+        {
+            request = request with { Spec = request.Spec with { Spot = false } };
+        }
+
         underway.Action = ReattachAction.Resumed;
         underway.Judged();
         var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
