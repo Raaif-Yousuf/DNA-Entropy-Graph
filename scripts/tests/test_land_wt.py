@@ -11,6 +11,7 @@ import contextlib
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -45,6 +46,14 @@ if sys.argv[2:4] == ["pr", "view"]:
         if seen <= int(failing.read_text()):
             sys.stderr.write("HTTP 502")
             sys.exit(1)
+    seq = Path(str(log) + ".headseq")  # the Nth `pr view` shows seq[N] (last repeats); "ORIGIN" means what origin holds now
+    if seq.exists():
+        items = json.loads(seq.read_text(encoding="utf-8"))
+        nth = sum(1 for ln in log.read_text(encoding="utf-8").splitlines() if json.loads(ln)[:2] == ["pr", "view"]) - 1
+        item = items[min(nth, len(items) - 1)]
+        if item != "ORIGIN":
+            print(json.dumps({"headRefOid": item}))
+            sys.exit(0)
     fixed = Path(str(log) + ".headoid")
     oid = fixed.read_text(encoding="utf-8").strip() if fixed.exists() else ""
     if not oid:
@@ -1781,8 +1790,10 @@ def _refusal(out: str) -> str:
 def test_after_a_rerun_a_second_still_red_check_is_named_not_just_codeql(world, capsys):
     # MEASURED 2026-10-29 (PR #924): the refusal named CodeQL while `build and test` was red as well.
     both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
-    settling = [_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]
-    rc, _ = _land_green(world, [both, settling, both], rerun=True)
+    # the re-run replaces the runs, so their links change (a read with the old links is stale: see the #927 stale-read tests)
+    settling = [_check("CodeQL", "fail", 55), _check("build and test", "pending", 66)]
+    again = [_check("CodeQL", "fail", 55), _check("build and test", "fail", 66)]
+    rc, _ = _land_green(world, [both, settling, again], rerun=True)
     out = capsys.readouterr().out
     assert rc == lw.EXIT_CHECKS_RED
     line = _refusal(out)
@@ -1792,9 +1803,10 @@ def test_after_a_rerun_a_second_still_red_check_is_named_not_just_codeql(world, 
 
 
 def test_after_a_rerun_the_refusal_waits_for_the_other_checks_to_settle(world):
-    settling = [_check("CodeQL", "fail", 5), _check("build and test", "pending", 6)]
     both = [_check("CodeQL", "fail", 5), _check("build and test", "fail", 6)]
-    rc, clock = _land_green(world, [both, settling, settling, both], rerun=True, poll=10.0)
+    settling = [_check("CodeQL", "fail", 55), _check("build and test", "pending", 66)]
+    again = [_check("CodeQL", "fail", 55), _check("build and test", "fail", 66)]
+    rc, clock = _land_green(world, [both, settling, settling, again], rerun=True, poll=10.0)
     assert rc == lw.EXIT_CHECKS_RED
     assert len(_calls(world, "checks")) == 4  # it kept polling while build and test was pending
     assert len(clock.sleeps) == 3
@@ -1802,11 +1814,13 @@ def test_after_a_rerun_the_refusal_waits_for_the_other_checks_to_settle(world):
 
 def test_only_codeql_red_is_said_in_one_literal_line(world, capsys):
     red = [_check("CodeQL", "fail", 5), _check("build and test", "pass", 6)]
-    rc, _ = _land_green(world, [red, red], rerun=True)
+    rc, _ = _land_green(world, [red, [_check("CodeQL", "fail", 55), _check("build and test", "pass", 66)]], rerun=True)
     out = capsys.readouterr().out
     assert rc == lw.EXIT_CHECKS_RED
     assert "ONLY-CODEQL" in out and "CODEQL-AND-OTHERS" not in out
     assert "build and test" not in _refusal(out)
+    # #927 review: the line is a snapshot, so it says how many other checks it saw green and when
+    assert re.search(r"ONLY-CODEQL \(1 other check\(s\) green at \d\d:\d\d:\d\d\)", out)
 
 
 def test_codeql_red_with_a_pending_check_is_not_only_codeql(world, capsys):
@@ -1856,9 +1870,17 @@ def _reland_setup(world: World, branch: str) -> tuple[str, str]:
     return sha, tip
 
 
+def _pr_row(oid: str, owner: str = "o", url: str = "https://github.com/o/r/pull/7") -> dict:
+    return {"url": url, "headRefOid": oid, "headRepositoryOwner": {"login": owner}}
+
+
+def _prlist(world: World, rows: list) -> None:
+    (world.root / "gh.log.prlist").write_text(json.dumps(rows), encoding="utf-8")
+
+
 def test_a_reland_over_our_own_earlier_push_uses_a_lease_and_reuses_the_open_pr(world, capsys, monkeypatch):
     lane, old = _reland_setup(world, "feat/945-x")
-    (world.root / "gh.log.prlist").write_text(json.dumps([{"url": "https://github.com/o/r/pull/7"}]), encoding="utf-8")
+    _prlist(world, [_pr_row(old)])
     pushes: list[tuple[str, ...]] = []
     real = lw.git
 
@@ -1914,3 +1936,93 @@ def test_a_remote_tip_moved_after_our_push_is_not_ours_and_is_never_overwritten(
     assert rc == lw.EXIT_FAILED
     assert _origin_sha(world, "feat/945-w") == human
     assert "--land-branch" in capsys.readouterr().out
+
+
+# --- cold-review fixes on #945 / #927 -----------------------------------------------------------------------
+
+
+def _reland_green(world, branch, lane, replies, *, timeout=100.0, poll=10.0, rerun=False):
+    """Land `lane` again with --merge-when-green on a fake clock; returns (rc, clock, gh calls made by THIS run)."""
+    (world.root / "gh.log.checks").write_text(json.dumps(replies), encoding="utf-8", newline="\n")
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    ctx = world.ctx()
+    clock = Clock()
+    ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
+    before = len(world.gh_calls())
+    rc = lw.land(ctx, branch, lane, "feat: t", body, merge_when_green=True, checks_timeout=timeout, checks_poll=poll, rerun_failed_once=rerun)
+    return rc, clock, world.gh_calls()[before:]
+
+
+def test_a_reused_pr_is_not_judged_on_checks_read_before_its_head_is_the_pushed_one(world):
+    # THEORY (unverified, cold review): right after the lease push `gh pr checks` can still return the OLD head's green checks.
+    lane, old = _reland_setup(world, "feat/945-v")
+    _prlist(world, [_pr_row(old)])
+    (world.root / "gh.log.headseq").write_text(json.dumps([old, old, "ORIGIN"]), encoding="utf-8")
+    rc, _, calls = _reland_green(world, "feat/945-v", lane, [[_check("build and test", "pass", 6)]])
+    assert rc == lw.EXIT_OK
+    seq = [c[:2] for c in calls if c[:2] in (["pr", "view"], ["pr", "checks"])]
+    assert seq.index(["pr", "checks"]) == 3  # three head reads (old, old, new) before the first checks read
+    merge = next(c for c in calls if c[:2] == ["pr", "merge"])
+    assert merge[merge.index("--match-head-commit") + 1] == _origin_sha(world, "feat/945-v")
+
+
+def test_a_reused_pr_whose_head_never_becomes_the_pushed_one_never_merges(world, capsys):
+    lane, old = _reland_setup(world, "feat/945-u")
+    _prlist(world, [_pr_row(old)])
+    (world.root / "gh.log.headseq").write_text(json.dumps([old]), encoding="utf-8")
+    rc, _, calls = _reland_green(world, "feat/945-u", lane, [[_check("build and test", "pass", 6)]], timeout=30.0)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert not [c for c in calls if c[:2] in (["pr", "checks"], ["pr", "merge"])]
+    assert "head" in _refusal(out) and old[:12] in _refusal(out) and out.isascii()
+
+
+def test_a_read_that_still_shows_the_pre_rerun_red_is_not_final(world):
+    # a gh that lags after `gh run rerun` returns the identical red; refusing on it is the #927 misreport again
+    red = [_check("CodeQL", "fail", 5), _check("build and test", "pass", 6)]
+    green = [_check("CodeQL", "pass", 55), _check("build and test", "pass", 66)]
+    rc, _ = _land_green(world, [red, red, red, green], rerun=True)
+    assert rc == lw.EXIT_OK
+    assert len(_calls(world, "checks")) == 4
+    assert len([c for c in world.gh_calls() if c[:2] == ["run", "rerun"]]) == 1
+
+
+def test_a_second_red_with_new_run_links_is_final_at_once(world):
+    red = [_check("CodeQL", "fail", 5), _check("build and test", "pass", 6)]
+    again = [_check("CodeQL", "fail", 55), _check("build and test", "pass", 66)]
+    rc, clock = _land_green(world, [red, again], rerun=True)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert len(_calls(world, "checks")) == 2 and len(clock.sleeps) == 1  # only the pause after the re-run
+
+
+def test_an_unchanged_red_is_waited_on_only_for_a_bounded_grace(world, capsys):
+    red = [_check("CodeQL", "fail", 5), _check("build and test", "pass", 6)]
+    rc, clock = _land_green(world, [red], rerun=True, timeout=3600.0, poll=10.0)
+    assert rc == lw.EXIT_CHECKS_RED and "still red after one re-run" in capsys.readouterr().out
+    assert clock.now <= lw.RERUN_STALE_GRACE_SECONDS + 30.0
+
+
+def test_a_listed_pr_from_another_owner_or_another_head_is_not_reused(world):
+    lane, old = _reland_setup(world, "feat/945-t")
+    _prlist(world, [_pr_row(old, owner="someone-else"), _pr_row("0" * 40)])
+    creates_before = len(_calls(world, "create"))
+    assert _land(world, "feat/945-t", lane) == lw.EXIT_OK
+    assert len(_calls(world, "create")) == creates_before + 1
+
+
+def test_a_push_that_fails_for_another_reason_never_takes_the_lease_path(world, capsys, monkeypatch):
+    lane, old = _reland_setup(world, "feat/945-s")
+    _hook(world.clone / ".git" / "hooks" / "pre-push", "exit 1")
+    seen: list[tuple[str, ...]] = []
+    real = lw.git
+
+    def spy(cwd, *args, **kw):
+        seen.append(args)
+        return real(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    assert _land(world, "feat/945-s", lane) == lw.EXIT_FAILED
+    assert not [a for a in seen if any("--force-with-lease" in x for x in a)]
+    assert not [a for a in seen if a[:1] == ("ls-remote",)]
+    assert _origin_sha(world, "feat/945-s") == old
