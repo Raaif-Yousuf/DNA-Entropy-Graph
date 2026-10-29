@@ -196,6 +196,8 @@ public class AccountsFileConcurrencyEdgeTests
         var service = await harness.SignedInAsync("1001", "first@example.test");
         var tokenPath = Path.Combine(harness.AuthDirectory, "1001.tok");
         FileStream? hold = null;
+        var raised = 0;
+        service.AccountChanged += (_, _) => raised++;
         service.AfterSignOutStampForTest = () =>
         {
             hold = new FileStream(tokenPath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -209,7 +211,57 @@ public class AccountsFileConcurrencyEdgeTests
             failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
         }
 
+        raised.ShouldBeGreaterThan(0, "the list changed, so the UI is told even though the token file could not be deleted");
         harness.Google.RevokedTokens.Count.ShouldBe(1, "the list change was written, so the revoke still ran");
         harness.NewService().IsSignedIn.ShouldBeFalse("the list no longer has the account");
+    }
+
+    [Fact]
+    public async Task A_sign_in_of_the_same_account_that_lands_while_a_sign_out_is_writing_ends_with_its_token_present_and_signed_in()
+    {
+        using var harness = new AuthHarness();
+        var copyA = await harness.SignedInAsync("1001", "first@example.test");
+        var copyB = harness.NewService();
+        copyB.IsSignedIn.ShouldBeTrue(); // loads its list now: a first load while the other copy holds the lock would be refused after 150 ms
+        Task? signIn = null;
+        using var authorized = new ManualResetEventSlim();
+        copyB.AfterSignInAuthorizedForTest = authorized.Set;
+        copyA.Registry.BeforeWriteForTest = () =>
+        {
+            copyA.Registry.BeforeWriteForTest = null;
+            harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
+            signIn = Task.Run(() => copyB.SignInAsync(CancellationToken.None));
+            // Waits for the sign-in's own signal, then a short real-time margin (never failing correct code) for a sign-in that stores its token outside the lock to do so
+            // between this sign-out's compare and its delete.
+            authorized.Wait(TimeSpan.FromSeconds(20)).ShouldBeTrue();
+            Thread.Sleep(300);
+        };
+
+        await copyA.SignOutAsync(CancellationToken.None);
+        await signIn!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the sign-in stores its token under the list lock, so the sign-out's delete cannot take it");
+        harness.NewService().IsSignedIn.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_dead_token_whose_file_cannot_be_deleted_still_reads_as_sign_in_expired_and_tells_the_ui()
+    {
+        using var harness = new AuthHarness();
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        var raised = 0;
+        service.AccountChanged += (_, _) => raised++;
+        var tokenPath = Path.Combine(harness.AuthDirectory, "1001.tok");
+        File.WriteAllBytes(tokenPath, [1, 2, 3]);
+
+        using (new FileStream(tokenPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.SigninExpired, "the user's next step is to sign in again, not to fix a folder");
+        }
+
+        raised.ShouldBeGreaterThan(0);
+        harness.NewService().IsSignedIn.ShouldBeFalse();
     }
 }

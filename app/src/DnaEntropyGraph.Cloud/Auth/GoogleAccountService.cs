@@ -62,6 +62,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     /// <summary>Tests only: runs between the token file's write-time stamp and the list update of an expiry mark, to land another copy's sign-in in that window.</summary>
     internal Func<Task>? AfterExpiryStampForTest { get; set; }
 
+    /// <summary>Tests only: runs when a sign-in has been authorised and validated, just before it takes the lock to save.</summary>
+    internal Action? AfterSignInAuthorizedForTest { get; set; }
+
     /// <summary>Tests only: runs between a sign-out's stamp (and token read) and its list change.</summary>
     internal Func<Task>? AfterSignOutStampForTest { get; set; }
 
@@ -231,15 +234,19 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.SigninFailed, "Google returned no refresh token");
             }
 
+            AfterSignInAuthorizedForTest?.Invoke();
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 try
                 {
-                    await _store.StoreAsync(identity.Sub, token).ConfigureAwait(false);
                     var email = string.IsNullOrWhiteSpace(identity.Email) ? identity.Sub : identity.Email;
                     await UpdateAsync(file =>
                     {
+                        // The token is stored here, under the registry lock, not before it: a sign-out's check-and-delete runs under the same lock, so it sees either the old token
+                        // (and this change lands after it) or this one (and its stamp no longer matches); an unlocked store between its check and its delete would be deleted.
+                        // StoreAsync completes synchronously; a failure surfaces as a TokenStorageException out of the update, handled below.
+                        _store.StoreAsync(identity.Sub, token).GetAwaiter().GetResult();
                         // An account that signs in again (its token expired) keeps the project it chose, as the file has it now (another copy may have chosen one since this copy loaded); a signed-out one was dropped with its record.
                         var record = new AccountRecord(identity.Sub, email, NeedsSignIn: false, file.Accounts.FirstOrDefault(a => a.Sub == identity.Sub)?.ProjectId);
                         return new AccountsFile(identity.Sub, [.. file.Accounts.Where(a => a.Sub != identity.Sub), record]);
@@ -273,6 +280,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     public async Task<bool> SignOutAsync(CancellationToken cancellationToken)
     {
         bool revoked;
+        var listChanged = false;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -316,10 +324,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 () => deleteFailure = unchanged ? TryDeleteTokenFile(active.Sub) : null).ConfigureAwait(false);
             if (!unchanged)
             {
+                // Known limit: this sign-out lost a race to a fresh sign-in of the same account (another copy); it answers true with no message, and the account stays.
                 revoked = true;
             }
             else
             {
+                listChanged = true;
                 if (AfterSignOutListUpdateForTest is { } updateHook)
                 {
                     await updateHook().ConfigureAwait(false);
@@ -339,9 +349,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         finally
         {
             _gate.Release();
+            if (listChanged)
+            {
+                // Also when the token file could not be deleted afterwards: the list changed, so the UI must not keep showing the old account.
+                RaiseChanged();
+            }
         }
 
-        RaiseChanged();
         return revoked;
     }
 
@@ -598,10 +612,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 return file with { Accounts = [.. file.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] };
             },
             () => deleteFailure = unchanged ? TryDeleteTokenFile(account.Sub) : null).ConfigureAwait(false);
-        if (deleteFailure is not null)
-        {
-            throw new TokenStorageException(deleteFailure);
-        }
+        // A token file that could not be deleted stays behind unlisted-as-signed-in (the account is marked needing sign-in, and signing in again replaces the file); the
+        // caller must still answer SIGNIN_EXPIRED, so this is not thrown. Nothing is logged: this class has no logger, and the failure class would carry no more than the code.
+        _ = deleteFailure;
     }
 
     /// <summary>
@@ -637,6 +650,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             return ex;
         }
     }
+
     /// <summary>
     /// Issue #620: every change to the account list goes through here and nowhere else. <paramref name="change"/> is applied to the file as it is under
     /// the registry's lock, not to this copy's cached list (which another copy's change can have made stale), and only to the fields it means to change,
