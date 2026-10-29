@@ -160,6 +160,19 @@
                 <Button x:Uid="NewRunRemoveGff3" Command="{x:Bind ViewModel.RemoveAnnotationCommand}" CommandParameter="{x:Bind ViewModel.SelectedItem, Mode=OneWay}" />
             </StackPanel>
 
+            <TextBox
+                x:Uid="NewRunNameTemplate"
+                Text="{x:Bind ViewModel.NameTemplate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock
+                x:Uid="NewRunNameHelp"
+                TextWrapping="Wrap"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ViewModel.HasRunNamePreview, Mode=OneWay}">
+                <TextBlock x:Uid="NewRunNamePreviewLabel" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.RunNamePreview, Mode=OneWay}" FontWeight="SemiBold" IsTextSelectionEnabled="True" />
+            </StackPanel>
+
             <TextBlock
                 x:Uid="NewRunRunsSelectedOnly"
                 Visibility="{x:Bind ViewModel.HasSeveralItems, Mode=OneWay}"

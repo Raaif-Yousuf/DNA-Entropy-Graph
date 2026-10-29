@@ -20,4 +20,7 @@ public sealed partial class CloudPage : Page
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e) => _ = ViewModel.RefreshCommand.ExecuteAsync(null);
+
+    /// <summary>The view model is transient but the account it listens to is a singleton: end the subscription when the page goes away (#828).</summary>
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => ViewModel.Detach();
 }

@@ -18,6 +18,72 @@ public sealed class RunOutputFoldersTests : IDisposable
     }
 
     [Fact]
+    public void UniqueFilePath_numbers_a_taken_name_in_brackets_and_counts_a_folder_of_that_name_as_taken()
+    {
+        Directory.CreateDirectory(_parent);
+        RunOutputFolders.UniqueFilePath(_parent, "chr1.entropy", ".png").ShouldBe(Path.Combine(_parent, "chr1.entropy.png"));
+
+        File.WriteAllText(Path.Combine(_parent, "chr1.entropy.png"), "x");
+        Directory.CreateDirectory(Path.Combine(_parent, "chr1.entropy (2).png"));
+
+        RunOutputFolders.UniqueFilePath(_parent, "chr1.entropy", ".png").ShouldBe(Path.Combine(_parent, "chr1.entropy (3).png"));
+    }
+
+    [Fact]
+    public void ExportsFolder_is_one_deterministic_safe_name_per_run_and_creates_nothing()
+    {
+        var first = RunOutputFolders.ExportsFolder(_parent, "my:run", "job-1");
+        var second = RunOutputFolders.ExportsFolder(_parent, "my:run", "job-1");
+
+        second.ShouldBe(first);
+        Path.GetDirectoryName(first).ShouldBe(_parent);
+        Path.GetFileName(first).ShouldStartWith("my_run exports ");
+        Path.GetFileName(first).ShouldNotContain(":");
+        Directory.Exists(_parent).ShouldBeFalse("naming a folder must not create it");
+    }
+
+    [Fact]
+    public void ExportsFolder_differs_for_two_runs_with_the_same_name_and_is_never_the_plain_name_a_user_may_own()
+    {
+        var a = RunOutputFolders.ExportsFolder(_parent, "SetTnpB", "job-a");
+        var b = RunOutputFolders.ExportsFolder(_parent, "SetTnpB", "job-b");
+
+        a.ShouldNotBe(b);
+        a.ShouldNotBe(Path.Combine(_parent, "SetTnpB exports"));
+    }
+
+    [Fact]
+    public void CreateFolderChain_returns_only_what_it_made_and_RemoveCreated_takes_exactly_those_away()
+    {
+        Directory.CreateDirectory(_parent);
+        var existing = Path.Combine(_parent, "already");
+        Directory.CreateDirectory(existing);
+
+        var none = RunOutputFolders.CreateFolderChain(existing);
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(existing, "a", "b"));
+
+        none.ShouldBeEmpty();
+        made.ShouldBe([Path.Combine(existing, "a"), Path.Combine(existing, "a", "b")]);
+        Directory.Exists(Path.Combine(existing, "a", "b")).ShouldBeTrue();
+
+        RunOutputFolders.RemoveCreated(made);
+
+        Directory.Exists(Path.Combine(existing, "a")).ShouldBeFalse();
+        Directory.Exists(existing).ShouldBeTrue("a folder that was already there is never removed");
+    }
+
+    [Fact]
+    public void RemoveCreated_leaves_a_folder_that_has_something_in_it()
+    {
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "x"));
+        File.WriteAllText(Path.Combine(_parent, "x", "keep.txt"), "k");
+
+        RunOutputFolders.RemoveCreated(made);
+
+        File.Exists(Path.Combine(_parent, "x", "keep.txt")).ShouldBeTrue();
+    }
+
+    [Fact]
     public void Creates_the_folder_named_after_the_input()
     {
         var folder = RunOutputFolders.CreateUnique(_parent, "SetTnpB");
@@ -125,5 +191,54 @@ public sealed class RunOutputFoldersTests : IDisposable
         parent.ShouldBe(@"D:\stick\outputs");
         asked.ShouldBeFalse();
         RunOutputFolders.DefaultParent(() => @"C:\Users\me\Downloads", portableOutputs: null).ShouldBe(@"C:\Users\me\Downloads");
+    }
+
+    // ---- Issue #514: the run folder is named from RunOptions.NameTemplate, by one function both runners and the page use ----
+
+    private static readonly DateTime Clock = new(2026, 10, 29, 14, 5, 0);
+
+    private static RunOptions Options(string template) => new() { ModelId = "evo2_7b", RunTarget = "Cloud", NameTemplate = template };
+
+    [Theory]
+    [InlineData("{file}", "SetTnpB")]
+    [InlineData("{file}_{model}", "SetTnpB_evo2_7b")]
+    [InlineData("{date}_{file}", "2026-10-29_SetTnpB")]
+    [InlineData("{file}-{time}-{n}", "SetTnpB-1405-1")]
+    public void The_run_folder_name_expands_the_template(string template, string expected)
+        => RunOutputFolders.RunFolderName(Options(template), new Core.Contract.StagedInput("x/SetTnpB.fasta", "SetTnpB.fasta"), Clock).ShouldBe(expected);
+
+    [Fact]
+    public void The_default_template_names_the_folder_exactly_as_the_file_stem_did_before()
+    {
+        var input = new Core.Contract.StagedInput("x/sample.v2.fa", "sample.v2.fa");
+
+        RunOutputFolders.RunFolderName(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }, input, Clock).ShouldBe(input.OutputStem);
+        input.OutputStem.ShouldBe("sample.v2");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_template_falls_back_to_the_file_name_not_run(string template)
+        => RunOutputFolders.RunFolderName(Options(template), new Core.Contract.StagedInput("x/SetTnpB.fasta", "SetTnpB.fasta"), Clock).ShouldBe("SetTnpB");
+
+    [Fact]
+    public void A_stem_over_100_characters_is_cut_to_100()
+    {
+        var name = RunOutputFolders.RunFolderName(Options("{file}"), new Core.Contract.StagedInput("x/long.fasta", new string('a', 150) + ".fasta"), Clock);
+
+        name.ShouldBe(new string('a', 100));
+    }
+
+    [Fact]
+    public void A_device_name_as_the_file_is_renamed_so_Windows_can_create_it()
+        => RunOutputFolders.RunFolderName(Options("{file}"), new Core.Contract.StagedInput("x/CON.fasta", "CON.fasta"), Clock).ShouldBe("run_CON");
+
+    [Fact]
+    public void An_accession_input_is_named_by_its_output_stem_not_cut_at_the_version_dot()
+    {
+        var input = Core.Contract.StagedInput.ForAccession("NC_045512.2", "100-500");
+
+        RunOutputFolders.RunFolderName(Options("{file}_{model}"), input, Clock).ShouldBe("NC_045512_2_100-500_evo2_7b");
     }
 }

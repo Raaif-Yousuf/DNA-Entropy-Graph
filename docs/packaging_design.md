@@ -119,7 +119,7 @@ badge (#638) are separate, and all three can show together.
   - Results: the default output folder is `<base>\outputs`, not the host PC's Downloads. Paths under `<base>` are stored in `app.db`
     relative (`portable:outputs\run`, `DataPathMapper`, used by `RunRepository` for `Runs.OutputDir`) and expanded on read, so a stick that gets another drive
     letter still opens its results; a folder the user chose outside `<base>` is stored as given. Only `Runs.OutputDir` is written by code today
-    (the `RunOutputs` and `RunInputs` tables are unused); a new path column must go through `DataPathMapper`.
+    (the `RunOutputs` and `RunInputs` tables are unused); a new path column must go through `DataPathMapper`. A stored remainder that is rooted or climbs out of the stick reads back as null (no output folder), never joined. The shared containment test for a path built from outside text is `RunOutputRoot.IsStrictlyInside`; it is lexical (it does not resolve junctions or symlinks) and handles drive roots like `D:\`. For anything that writes or deletes use `RunOutputRoot.IsSafelyInside`, which also refuses a drive root (`C:\`) as the root; a UNC share root stays a normal root. A job id used as a folder name must pass `RunOutputRoot.IsPlainJobId` (containment alone lets `x\..\y` name another job). CodeQL `cs/path-combine` triage, 2026-10-29: no other join needed it.
   - Database: `journal_mode=DELETE` instead of WAL in portable mode, and on any removable or network drive (`SqliteDatabase.ChooseJournalMode`), because WAL's
     shared-memory file is unreliable on shares and leaves `-wal` files when a stick is pulled.
   - Registry: Open with (file associations) is refused in portable mode (`FileAssociationRefusal.PortableMode`, Settings says why) so no entry points at
@@ -377,16 +377,30 @@ Nothing here has run on a real tag yet; `docs/ToTest.md` carries the row.
   in `app/releases` is never uploaded, but a `*.nupkg` glob would have attested it: `scripts/release_assets.py stage` reads
   `assets.win.json` instead (refusing a nupkg of another version, requiring the full nupkg and `Setup.exe`), and `check` verifies the
   published asset NAMES, anchored (the full nupkg of this version, not only a delta).
-- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release, and fails by design until #37 pins Dockerfile.cuda) (tested against fixture Dockerfiles): EVERY
+- **Containers (#255).** The `images` job runs `scripts/release_dockerfile_base_pinned.py` (named `release_*`, not `check_*`, so premerge and ci-docs do not run it on every PR: it gates a release) (tested against fixture Dockerfiles): EVERY
   `FROM` must be pinned by `@sha256` (a multi-stage file with one pinned stage fails; `FROM <earlier stage>` and `scratch` are
-  exempt). The job then builds with
-  `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then runs Trivy (Apache-2.0) on the pushed digest and fails on a
-  fixable HIGH or CRITICAL finding. The publish job needs it, and a digest that failed the scan is never written into
-  `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR. MEASURED 2026-09 (issue #255 thread):
+  exempt). Both Dockerfiles now carry a literal digest with the human-readable tag it was resolved from in a comment above the
+  `FROM` (the NGC base digest was read from the registry's manifest list on 2026-10-16, a manifest HEAD with no pull). To move a
+  base, resolve the new digest and change the tag comment and the digest together.
+  `Dockerfile.cpu` bootstraps `uv` and the build backend (setuptools, wheel) from `worker/build-requirements.txt` (exact versions, sha256, PyPI JSON URLs recorded in the file, `--require-hashes`; every transitive build dependency is pinned too, today `packaging` via `wheel`, because `--require-hashes` refuses any unpinned requirement, MEASURED 2026-10-28 on PR #900 CI. To bump: read `requires_dist` of each pinned tool at `https://pypi.org/pypi/<name>/<ver>/json`, pin each new dependency with its wheel hash, and re-run `pip download --require-hashes -r build-requirements.txt --only-binary=:all: --platform manylinux2014_x86_64 --python-version 3.12 --implementation cp -d <tmp>`; `worker/tests/test_dockerfiles.py` guards the `packaging` pin), installs from `uv.lock` with its hashes kept: `uv export --locked` (fails if `uv.lock` is stale) then
+  `pip install --require-hashes --no-deps`, so a file PyPI serves under a pinned version but with a different hash fails the
+  build, and installs the project with `--no-deps --no-build-isolation` so no unhashed build requirement is fetched. The `Dockerfile.cuda` NGC digest could not be checked against a real pull offline: the first release run is what verifies it (ToTest row).
+  **Summary: the CPU image is fully hash-locked; the CUDA image's base is pinned by digest but its Python dependencies are not yet locked** (`pip install \".[genes,evo]\"` and `pip install pytest`, built in pip's isolated environment, which fetches an unhashed setuptools and wheel): `uv.lock` cannot know which torch/evo2 the NGC base is compatible with. The lock is tracked in #921, deferred until #37's spike (open) has run on a GPU.
+  The job then builds with
+  `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true`, pushes, then scans the pushed digest with Trivy (Apache-2.0, CI only, never
+  shipped). Three steps, in this order: a SARIF report of every HIGH and CRITICAL finding (fixable or not, never fails),
+  uploaded to code scanning under category `trivy-<variant>` (THEORY (unverified): code scanning accepts SARIF from a tag ref; the first release must run `gh api 'repos/Raaif-Yousuf/DNA-Entropy-Graph/code-scanning/analyses?tool_name=Trivy'` and see both `trivy-cuda` and `trivy-cpu` categories); then the gate, which fails on a **fixable HIGH or CRITICAL** finding
+  (`ignore-unfixed`; an unfixed one is only in the report). The upload is `if: always()` and `continue-on-error`, so a code-scanning outage
+  never blocks a release, while the gate step itself is never non-fatal. The publish job needs the gate, and a digest that failed the scan
+  is never written into `worker-images.json`, so no released app can run it. The tag it pushed stays in GHCR.
+  Accepted CVEs live in `.trivyignore.yaml` (`id`, `statement`, `expired_at`). `scripts/check_trivy_allowlist.py` (a
+  `check_*` gate, so premerge runs it on every change, and the `images` job runs it before the build) fails on an entry that
+  expires today or earlier, one more than 90 days out, or one missing a field (it accepts Trivy's optional `paths` and `purls` lists and a trailing `# comment` on the id and date lines). The gate runs with `ignore-unfixed`, so an unfixed CVE never fails it and must not be allowlisted: allowlist only a **fixable** HIGH or CRITICAL finding you cannot take yet, with a reason and an expiry. An expired entry fails `check_trivy_allowlist.py` always, and fails the scan too when the CVE is fixable (Trivy stops honouring it). **The first release may go red on a fixable HIGH or CRITICAL finding in a pinned base** (the pins are deliberately old snapshots); the remedy is a base digest bump (preferred, change tag comment and digest together) or an expiring allowlist entry. The Trivy and upload-sarif actions are pinned by commit sha. MEASURED 2026-10-16 (trivy-action at the pinned sha, `entrypoint.sh` lines 22-73, https://raw.githubusercontent.com/aquasecurity/trivy-action/ed142fd0673e97e23eac54620cfb913e5ce36c25/entrypoint.sh): a single `*.yaml` `trivyignores` value is exported as `TRIVY_IGNOREFILE` and parsed by Trivy as YAML (so `expired_at` is honoured); only a list of plain files is concatenated, and mixing the two is an error. Both scan steps pass exactly `.trivyignore.yaml` (tested).
+  MEASURED 2026-09 (issue #255 thread):
   two clean `docker build`s of `Dockerfile.cpu` had identical installed package versions but different image digests, so
   "same tag gives the same digest" is NOT yet true; the timestamp rewrite is the next lever and is THEORY (unverified) until two
-  release builds are compared. `Dockerfile.cuda` still builds from an unpinned NGC tag (#37), so a release cannot be cut until
-  that base is pinned: the gate is working as intended, not a bug.
+  release builds are compared. Worker image digests are written into `worker-images.json` by `scripts/write_worker_images.py`
+  in the `app` job before `dotnet publish` (#480, already in place).
 - **Draft until complete.** `vpk upload github` (in the `upload` job) without `--publish` creates a draft. The `publish` job downloads it, adds the
   wheel, SBOMs, `image-digests.txt` and `SHA256SUMS`, asserts every expected asset name is present (exact, anchored), and only then runs
   `gh release edit --draft=false` (a tag containing `-` becomes a pre-release instead of the latest release).

@@ -1052,7 +1052,7 @@
     <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
   </data>
   <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
-    <value>Search by name, file or id</value>
+    <value>Search by name, file, note or tag</value>
   </data>
   <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
     <value>Search runs</value>
@@ -3023,5 +3023,80 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
     <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
+  </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
+  <data name="Results_NotesSaved" xml:space="preserve">
+    <value>Saved.</value>
+  </data>
+  <data name="Results_NotesSaveFailed" xml:space="preserve">
+    <value>Could not save your note. Press Save notes to try again; if it keeps failing, close any other window of this app and try once more.</value>
+  </data>
+  <data name="ResultsNotesHeading.Text" xml:space="preserve">
+    <value>Your notes</value>
+  </data>
+  <data name="ResultsNotesBox.Header" xml:space="preserve">
+    <value>Note</value>
+  </data>
+  <data name="ResultsNotesBox.PlaceholderText" xml:space="preserve">
+    <value>For example: the clone that failed sequencing</value>
+  </data>
+  <data name="ResultsTagsBox.Header" xml:space="preserve">
+    <value>Tags (separate with commas)</value>
+  </data>
+  <data name="ResultsTagsBox.PlaceholderText" xml:space="preserve">
+    <value>For example: clone7, redo</value>
+  </data>
+  <data name="ResultsSaveNotesButton.Content" xml:space="preserve">
+    <value>Save notes</value>
+  </data>
+  <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
+    <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
+  </data>
+  <data name="Results_NotesEditedDuringSave" xml:space="preserve">
+    <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>
+  </data>
+  <data name="Results_NotesRunGone" xml:space="preserve">
+    <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
+  </data>
+  <data name="Results_ExportPngFailedInExports" xml:space="preserve">
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPngNoFolder" xml:space="preserve">
+    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPng_Title" xml:space="preserve">
+    <value>Entropy of {0}, record {1}</value>
+  </data>
+  <data name="Results_ExportPng_XAxis" xml:space="preserve">
+    <value>Position (bases)</value>
+  </data>
+  <data name="Results_ExportPng_YAxis" xml:space="preserve">
+    <value>Entropy (bits, 0 to 2)</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
+    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
+    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
+    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
+  </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
 </root>
