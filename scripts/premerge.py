@@ -125,6 +125,9 @@ DEFAULT_TIMEOUT = 900.0
 # #959: scripts/tests runs under pytest-xdist. MEASURED 2026-10-29: serial it took 1600s under agent load (1874 passed, 19 skipped),
 # a long tail of ~0.8s subprocess/git tests, so workers (not a few slow tests) are the lever. Capped so it plays fair with heavy.py slots.
 SCRIPTS_TESTS_MAX_WORKERS = 8
+# #840: a test in scripts/tests that exceeds this is killed with every thread's traceback (pytest-timeout, MIT, thread method on Windows)
+# instead of stalling the gate until LONG_TIMEOUT. MEASURED 2026-10-29 under heavy load: the slowest legitimate test took 34 s, so 300 s is ~9x headroom.
+SCRIPTS_TEST_TIMEOUT = 300
 DEFAULT_BASE = "origin/main"
 
 SCRIPT_REF = re.compile(r"scripts/[A-Za-z0-9_./-]+\.(?:py|ps1)")
@@ -268,6 +271,8 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
                 "--with",
                 "pytest-xdist",
                 "--with",
+                "pytest-timeout",
+                "--with",
                 "pyyaml",
                 "python",
                 "-m",
@@ -276,6 +281,7 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
                 "-q",
                 "-n",
                 str(scripts_test_workers()),
+                f"--timeout={SCRIPTS_TEST_TIMEOUT}",
             ],
             root,
             tier="full",
