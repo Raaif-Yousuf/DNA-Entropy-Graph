@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -312,3 +313,60 @@ def test_scripts_are_ruff_formatted_now():
     """Vacuity guard: the tree the gate checks is clean today, via the same command."""
     proc = subprocess.run(["uvx", "ruff", "format", "--check", "scripts"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout[-800:]
+
+
+# --- a pytest gate that times out (issue #925) --------------------------------------------------
+
+_STUB_SLEEPS_AFTER_PROGRESS = "import sys, time\nsys.stdout.write('....F..  [ 50%]\\n')\nsys.stdout.flush()\ntime.sleep(60)\n"
+
+
+def test_classify_pytest_timeout_counts_progress_characters_and_names_failures():
+    detail = pm.classify_pytest_timeout(900.0, "...s..  [ 10%]\n..F.E.  [ 20%]\n")
+    assert detail == (
+        "timed out after 900s with 9 passed and 2 failed so far (NOT a pass; the suite did not finish AND tests had already failed)"
+    )
+
+
+def test_classify_pytest_timeout_with_no_output_says_zero_passed_and_zero_failed():
+    detail = pm.classify_pytest_timeout(5.0, "")
+    assert "timed out after 5s with 0 passed and 0 failed so far" in detail
+
+
+def test_a_timed_out_pytest_gate_is_error_with_partial_counts_never_pass_or_fail():
+    gate = pm.Gate("pt", [sys.executable, "-c", _STUB_SLEEPS_AFTER_PROGRESS], Path.cwd(), timeout=4.0, pytest=True)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR
+    assert "timed out after 4s with 6 passed and 1 failed so far" in result.detail
+    assert "....F.." in result.output
+
+
+def test_a_timed_out_non_pytest_gate_keeps_the_plain_message():
+    gate = pm.Gate("g", [sys.executable, "-c", "import time; time.sleep(60)"], Path.cwd(), timeout=2.0)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR and result.detail == "timed out after 2s"
+
+
+def test_a_timeout_kills_the_grandchild_too_and_returns_promptly(tmp_path):
+    # uv run -> python -> pytest: the grandchild holds the output pipe open, so killing only the
+    # direct child leaves the gate blocked until the grandchild exits.
+    marker = tmp_path / "grandchild.pid"
+    code = (
+        "import subprocess, sys, time\n"
+        f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open(r'{marker}', 'w').write(str(p.pid))\n"
+        "time.sleep(120)\n"
+    )
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=3.0)
+    started = time.monotonic()
+    result = pm.run_gate(gate)
+    assert time.monotonic() - started < 30
+    assert result.status == pm.ERROR
+    pid = int(marker.read_text())
+    assert not pm._pid_alive(pid)
+
+
+def test_the_real_scripts_tests_gate_has_a_timeout_that_fits_the_measured_suite_under_load():
+    # MEASURED 2026-10-29 (#925): 1843 passed in 1086s under load, which beat the old 900s.
+    gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
+    assert gates["scripts-tests"].timeout >= 1800.0
+    assert gates["scripts-tests"].timeout >= 1.5 * 1086.0

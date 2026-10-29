@@ -160,6 +160,14 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
   and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
   naming an unknown gate, is exit 2, never a green run.
+- **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
+  (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
+  old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT`. A timed-out pytest gate is
+  `ERROR` (never `PASS`, never `FAIL`) with its own text, `timed out after Ns with N passed and N failed so far (NOT a pass; ...)`,
+  counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. The timeout
+  kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
+  uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
+  returned only after the grandchild (a 120 s sleeper in the test) exited.
 - **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
   `app/tests/*/*.csproj` is discovered, not listed. An audit fails the run when a workflow runs a
   `scripts/*.py|ps1` that `premerge.py` does not (add a gate in `build_gates()` or an entry with a

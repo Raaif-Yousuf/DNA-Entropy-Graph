@@ -67,6 +67,7 @@ Console output is ASCII-only.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
@@ -115,6 +116,9 @@ EXEMPT_TEST_PROJECTS: dict[str, str] = {
 }
 
 # Gates that need more than the default timeout.
+# MEASURED 2026-10-29 (#925): `scripts/tests` under ~3-lane load ran `1843 passed, 15 skipped in 1086.03s`,
+# which the old 900s default turned into ERROR "timed out" on a green suite. 1800s is 1.66x that run, so
+# a load-slowed suite still finishes and a genuinely hung one is still caught inside half an hour.
 LONG_TIMEOUT = 1800.0
 DEFAULT_TIMEOUT = 900.0
 DEFAULT_BASE = "origin/main"
@@ -248,6 +252,7 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
             ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
             root,
             tier="full",
+            timeout=LONG_TIMEOUT,  # MEASURED 2026-10-29 (#925): see LONG_TIMEOUT; the 900s default killed a green 1086s run
             pytest=True,
             why="the guards' own tests; pyyaml is not in the worker venv",
         ),
@@ -427,6 +432,70 @@ def _dotnet_format_forgive(output: str, returncode: int, cwd: Path) -> str | Non
     return forgive_endofline(output, returncode, _autocrlf_is_true(cwd), _tree_has_stale_crlf(cwd))
 
 
+def _pid_alive(pid: int) -> bool:
+    """True while a process with this pid exists (used to prove a timeout left no orphan)."""
+    if os.name == "nt":
+        proc = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, check=False, timeout=30)
+        return str(pid) in proc.stdout.decode("utf-8", errors="replace")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the gate's whole process tree. `uv run ... pytest` is uv -> python -> workers; killing
+    only the direct child leaves a grandchild holding the output pipe, so the gate would block."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
+    else:
+        import signal
+
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]) -> tuple[int | None, bytes]:
+    """(returncode, stdout+stderr). returncode is None when the timeout hit; the output is then
+    whatever the tree had written before it was killed."""
+    proc = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, out or b""
+    except subprocess.TimeoutExpired as exc:
+        partial = exc.output if isinstance(exc.output, bytes) else b""
+        _kill_tree(proc)
+        try:
+            tail, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            tail = b""
+        return None, partial + (tail or b"")
+
+
+_PYTEST_PROGRESS_LINE = re.compile(r"^([.FEsxX]+)(?:\s+\[\s*\d+%\])?\s*$", re.MULTILINE)
+
+
+def classify_pytest_timeout(timeout: float, output: str) -> str:
+    """Detail for a pytest gate killed by its timeout, from the `-q` progress characters seen so far."""
+    chars = "".join(m.group(1) for m in _PYTEST_PROGRESS_LINE.finditer(output))
+    passed = chars.count(".")
+    failed = chars.count("F") + chars.count("E")
+    note = "the suite did not finish" if failed == 0 else "the suite did not finish AND tests had already failed"
+    return f"timed out after {timeout:.0f}s with {passed} passed and {failed} failed so far (NOT a pass; {note})"
+
+
 def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path | None = None) -> Result:
     started = time.monotonic()
     resolved = _resolve_exe(gate.argv[0])
@@ -439,37 +508,30 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
         return Result(gate, ERROR, 0.0, detail=f"cannot run: {gate.argv[0]} not found{hint}")
     child_env = dict(os.environ if env is None else env)
     child_env.setdefault("PYTHONUTF8", "1")
+    child_env.setdefault("PYTHONUNBUFFERED", "1")  # partial pytest progress must survive a kill
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     argv = [resolved, *gate.argv[1:]]
     if gate.pytest and basetemp_root is not None:
         argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:
-        proc = subprocess.run(
-            argv,
-            cwd=gate.cwd,
-            capture_output=True,
-            timeout=gate.timeout,
-            env=child_env,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        partial = (exc.stdout or b"") + (exc.stderr or b"")
-        text = partial.decode("utf-8", errors="replace") if isinstance(partial, bytes) else str(partial)
-        return Result(gate, ERROR, time.monotonic() - started, text, f"timed out after {gate.timeout:.0f}s")
+        returncode, raw = _run_capture(argv, gate.cwd, gate.timeout, child_env)
     except OSError as exc:
         return Result(gate, ERROR, time.monotonic() - started, detail=f"could not start: {exc}")
-    text = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+    text = raw.decode("utf-8", errors="replace")
     seconds = time.monotonic() - started
+    if returncode is None:
+        detail = classify_pytest_timeout(gate.timeout, text) if gate.pytest else f"timed out after {gate.timeout:.0f}s"
+        return Result(gate, ERROR, seconds, text, detail)
     if gate.pytest:
-        status, detail = classify_pytest(proc.returncode, text)
+        status, detail = classify_pytest(returncode, text)
         return Result(gate, status, seconds, text, detail)
-    if proc.returncode == 0:
+    if returncode == 0:
         return Result(gate, PASS, seconds, text)
     if gate.forgive is not None:
-        note = gate.forgive(text, proc.returncode, gate.cwd)
+        note = gate.forgive(text, returncode, gate.cwd)
         if note:
             return Result(gate, KNOWN, seconds, text, note)
-    return Result(gate, FAIL, seconds, text, f"exit code {proc.returncode}")
+    return Result(gate, FAIL, seconds, text, f"exit code {returncode}")
 
 
 def _ascii(text: str) -> str:
