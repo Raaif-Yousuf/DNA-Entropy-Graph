@@ -243,8 +243,12 @@ public class SettingsStoreHardeningTests
             // No wall-clock upper bound (#841): "within 2 s" failed correct code on a loaded machine. The throw itself is the evidence the wait is bounded: a
             // wait with no limit would hang here (and the hang dump would name it), a bounded one ends with the typed exception. The budget arithmetic is pinned
             // with a manual clock in A_locked_file_gives_up_within_the_budget_of_one_call.
+            // Real-time bound, justified (#841): the mutex wait is a real OS wait the Clock seam does not reach. 8 s is far above the product's budget (a few hundred ms, so a loaded
+            // machine cannot trip it) and under the 10 s an unbounded or mis-scaled wait would take, so only a real regression fails it.
+            var started = System.Diagnostics.Stopwatch.StartNew();
             Should.Throw<SettingsUnavailableException>(() => store.SetString("Theme", "Dark"));
             Should.Throw<SettingsUnavailableException>(() => InstallationId.GetOrCreate(store));
+            started.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(8), "both writes must give up within the store's budget");
         }
         finally
         {

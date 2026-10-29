@@ -70,7 +70,7 @@ public sealed class TcpIgvBatchClientTests
         // MEASURED 2026-10-03: Windows reports a refused loopback connect after about 2.07 s. The connect timeout runs on a clock nobody moves, so it can never beat the refusal.
         var client = Client(new VirtualTimeProvider(), TimeSpan.FromSeconds(2));
 
-        (await client.SendAsync(port, ["new"], TestContext.Current.CancellationToken)).ShouldBe(IgvBatchOutcome.NotListening);
+        (await client.SendAsync(port, ["new"], TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken)).ShouldBe(IgvBatchOutcome.NotListening);
     }
 
     [Fact]
@@ -133,10 +133,12 @@ public sealed class TcpIgvBatchClientTests
     {
         var ct = TestContext.Current.CancellationToken;
         var (listener, port) = Listen();
+        SemaphoreSlim? release = null;
         try
         {
             // genome and load answer only once the test lets them, after the clock has moved past the 250 ms wait for new and short of the long wait.
-            using var release = new SemaphoreSlim(0);
+            // Not disposed: the Serve callback can still be in Wait after an early failure, and disposing under it would throw in a discarded task. Released in the finally below instead.
+            release = new SemaphoreSlim(0);
             var server = Serve(listener, line =>
             {
                 if (!line.StartsWith("new", StringComparison.Ordinal))
@@ -163,6 +165,7 @@ public sealed class TcpIgvBatchClientTests
         }
         finally
         {
+            release?.Release(10);
             listener.Stop();
         }
     }

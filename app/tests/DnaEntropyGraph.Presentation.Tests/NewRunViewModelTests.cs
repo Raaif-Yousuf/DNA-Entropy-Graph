@@ -636,7 +636,10 @@ public sealed class NewRunViewModelTests : IDisposable
         // MEASURED 2026-10-29 (#841, 3 crashes in about 125 runs of this class): the page owns Items on one UI thread, but here the two drops run on thread-pool threads, so the first drop adding
         // second.fasta while the second drop was still in its duplicate check made `Items.Any` throw "Collection was modified" and take the test host down. The third pill is on the page before
         // anything is released, so the only thread that touches Items afterwards is the first drop's.
-        await WaitFor(() => _viewModel.Items.Count == 2);
+        // Items.Count == 2 only proves the third pill was added; the second drop still enumerates Items afterwards (duplicate check, RNA offer, output choices). Only the first file is gated, so
+        // the second drop can run to completion on its own; wait for that before the first drop is allowed to add second.fasta.
+        await secondDrop.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        _viewModel.Items.Count.ShouldBe(2);
         gated.Release();
         await firstDrop;
         await secondDrop;

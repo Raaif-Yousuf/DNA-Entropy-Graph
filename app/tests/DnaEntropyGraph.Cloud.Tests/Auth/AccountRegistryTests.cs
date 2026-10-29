@@ -293,6 +293,7 @@ public class AccountRegistryTests : IDisposable
         var loaded = registry.Load();
 
         pauses.Count.ShouldBe(1, "the first read failed on the held file and the product paused once before the retry");
+        pauses[0].ShouldBe(TimeSpan.FromMilliseconds(40), "the first retry waits 40 ms times attempt 1");
         loaded.ActiveSub.ShouldBe("1001");
         registry.Unreadable.ShouldBeFalse();
     }
