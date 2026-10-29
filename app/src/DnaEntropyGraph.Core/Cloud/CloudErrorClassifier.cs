@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Net;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -147,6 +149,12 @@ public static partial class CloudErrorClassifier
             || lower.Contains("constraints/", StringComparison.Ordinal))
         {
             return CloudErrorKind.OrgPolicy;
+        }
+
+        // Issue #239: a proxy asking for its own sign-in is never a Google answer; it is the network, and RunErrorCodes names the proxy.
+        if (ProxyFailure.IsProxyAuthStatus(status))
+        {
+            return CloudErrorKind.Network;
         }
 
         if (status == 409 || code.Contains("ALREADY_EXISTS", StringComparison.Ordinal))
