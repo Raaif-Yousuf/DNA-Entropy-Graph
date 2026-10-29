@@ -13,13 +13,17 @@ namespace DnaEntropyGraph.Core.Runs;
 /// </summary>
 public sealed class PartialCloudDeleteException : Exception
 {
-    public PartialCloudDeleteException(int? remaining, Exception? inner = null)
+    public PartialCloudDeleteException(int? remaining, bool sweepCompleted, Exception? inner = null)
         : base("The cloud copy was only partly deleted.", inner)
     {
         Remaining = remaining;
+        SweepCompleted = sweepCompleted;
     }
 
     public int? Remaining { get; }
+
+    /// <summary>True when the sweep itself finished without error and only the count read back afterwards failed or disagreed. Set where the exception is made, never inferred from <see cref="Exception.InnerException"/>.</summary>
+    public bool SweepCompleted { get; }
 }
 
 /// <summary>Why a delete was refused before any object was touched.</summary>
@@ -125,7 +129,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
             // The count after the sweep could not be read, and the sweep itself failed with a real, classified error: some objects may have gone before it
             // (the failure can come after any number of them). That is a possibly-partial delete that CARRIES the classified cause as its inner exception, so
             // the page can name the action for that cause without claiming that nothing was deleted (it does not know).
-            throw new PartialCloudDeleteException(null, failure.SourceException);
+            throw new PartialCloudDeleteException(null, sweepCompleted: false, failure.SourceException);
         }
 
         if (left == 0)
@@ -143,7 +147,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         }
 
         // Some went and some did not, or more objects than before are there now (something else wrote under the prefix meanwhile): partial, with the count.
-        throw new PartialCloudDeleteException(left, failure?.SourceException);
+        throw new PartialCloudDeleteException(left, sweepCompleted: failure is null, failure?.SourceException);
     }
 
     private async Task RequireOursAsync(string bucket, string jobPrefix, CancellationToken cancellationToken)

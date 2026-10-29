@@ -237,7 +237,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             {
                 throw new CloudOperationException(
                     new CloudError("LIST_PAGINATION_STUCK", null, "Cloud Storage returned the same page token twice, so the object list may be incomplete."),
-                    CloudErrorKind.Other);
+                    CloudErrorKind.Network);
             }
 
             pageToken = next;

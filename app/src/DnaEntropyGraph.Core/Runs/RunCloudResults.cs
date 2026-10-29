@@ -227,13 +227,13 @@ public sealed class RunCloudResults : IRunCloudResults
             // A raw transport exception (not classified by a gateway that did not see it) is a dropped connection.
             CloudErrorKind? cause = partial.InnerException switch
             {
-                CloudOperationException cloud => cloud.Kind,
+                CloudOperationException cloud => CauseOf(cloud),
                 IOException or HttpRequestException or System.Net.Sockets.SocketException => CloudErrorKind.Network,
                 _ => null,
             };
 
-            // No inner exception means the sweep itself finished without error (the count after it is what failed or disagrees): the page must not say it stopped.
-            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.InnerException is null);
+            // A completed sweep (the count after it is what failed or disagrees) is the exception's own flag: the page must not say it stopped.
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.SweepCompleted);
         }
         catch (CloudDeleteRefusedException refused)
         {
@@ -249,7 +249,7 @@ public sealed class RunCloudResults : IRunCloudResults
         catch (CloudOperationException cloud)
         {
             // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
-            return new CloudDeleteResult(CloudResultsStatus.Failed, null, cloud.Kind);
+            return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -259,6 +259,15 @@ public sealed class RunCloudResults : IRunCloudResults
         await _runs.UpsertAsync(run with { CloudResultsDeleted = true }, cancellationToken).ConfigureAwait(false);
         return CloudResultsStatus.Done;
     }
+
+    /// <summary>
+    /// The cause the delete copy is chosen by. A listing that repeated a page token (<c>LIST_PAGINATION_STUCK</c>) keeps the gateway's Network kind for everyone else (the reconciler
+    /// reads Network as "no answer"), but it is not a dropped connection, so the delete copy must not tell the user to check their internet: it reads as Other here.
+    /// </summary>
+    private static CloudErrorKind CauseOf(CloudOperationException cloud) => cloud.Error.Code == ListPaginationStuckCode ? CloudErrorKind.Other : cloud.Kind;
+
+    // The code the Google gateways give a listing that returned the same page token twice.
+    private const string ListPaginationStuckCode = "LIST_PAGINATION_STUCK";
 
     private CloudResultsStatus? Classify(RunRecord run)
     {

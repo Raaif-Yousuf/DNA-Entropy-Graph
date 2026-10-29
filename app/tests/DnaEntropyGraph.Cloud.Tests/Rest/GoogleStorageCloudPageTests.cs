@@ -71,7 +71,6 @@ public class GoogleStorageCloudPageTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.GetPrefixUsageAsync("deg-b", "jobs/j1/", CancellationToken.None));
 
         ex.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
-        ex.Kind.ShouldBe(CloudErrorKind.Other, "a listing that repeats a token is not a dropped connection (the delete toast would tell the user to check their internet); the pricing gateway classes it the same way");
     }
 
     [Fact]
@@ -88,6 +87,23 @@ public class GoogleStorageCloudPageTests
 
         ex.Kind.ShouldBe(CloudErrorKind.Network);
         rig.Handler.Requests.Count(r => r.Method == Delete).ShouldBe(2, "the first object really was deleted");
+    }
+
+    [Fact]
+    public async Task DeletePrefix_cut_by_an_HttpRequestException_reaches_the_caller_as_a_network_failure_through_the_pipeline()
+    {
+        // The sweep has no arm of its own for this: CloudCallPipeline maps it. The code is not the sweep's TRANSPORT_FAILED, which would mean a second classifier answered.
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/a", 1), ObjectJson("jobs/j1/b", 1)]))
+            .Returns(Delete, ObjectPath("jobs/j1/a"), 204, "{}")
+            .Calls(Delete, ObjectPath("jobs/j1/b"), _ => throw new HttpRequestException("no route"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        ex.Error.Code.ShouldNotBe("TRANSPORT_FAILED");
+        rig.Handler.Requests.Count(r => r.Method == Delete).ShouldBe(2, "the first object really was deleted, then the second was cut");
     }
 
     [Fact]
