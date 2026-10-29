@@ -57,6 +57,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+import check_totest_format as ctf  # noqa: E402
+
 REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
@@ -623,38 +629,53 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
-def normalize_totest(text: str, main_text: str) -> tuple[str, int, int]:
-    """After the union: close table rows missing their trailing `|`, then drop a row that repeats an earlier row's
-    duplicate key (check_totest_format's own: issue + "Do this"). The copy kept is main's: the union puts main's
-    lines after the lane's, so it is the LAST copy that main also carries; with none from main, the first.
-    Only `## Queue` table rows are touched. Returns (text, rows dropped, rows closed)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import check_totest_format as ctf
-
+def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str]]:
+    """After the union: close `## Queue` table rows missing their trailing `|`, then drop a row that duplicates a row
+    main carries. A row is dropped ONLY when its cells (stripped) equal the kept row's; the kept copy is main's (the
+    union puts main's lines after the lane's, so the LAST copy whose cells main also has). A row that shares the
+    duplicate key (check_totest_format's: issue + "Do this") but differs in any cell, or a duplicate main does not
+    carry, is left alone and reported, so premerge refuses it and the lane reconciles it instead of losing an edit.
+    Other lines are byte-identical. Returns (text, rows dropped, rows closed, one message per unresolved pair)."""
     lines = text.splitlines(keepends=True)
     closed = 0
-    rows = ctf.parse_rows(text)
-    for row in rows:
+    for row in ctf.parse_rows(text):
         body = lines[row.line_no - 1]
-        bare = body.rstrip("\r\n")
-        if not bare.rstrip().endswith("|"):
-            lines[row.line_no - 1] = bare.rstrip() + " |" + body[len(bare) :]
+        content = body.splitlines()[0] if body.splitlines() else body
+        if not content.rstrip().endswith("|"):
+            lines[row.line_no - 1] = content.rstrip() + " |" + body[len(content) :]
             closed += 1
-    closed_text = "".join(lines)
-    main_rows = {ln.strip() for ln in main_text.splitlines()} if main_text else set()
-    by_key: dict[tuple[str, str], list[int]] = {}
-    for row in ctf.parse_rows(closed_text):
+    main_cells = {row.cells for row in ctf.parse_rows(main_text)} if main_text else set()
+    by_key: dict[tuple[str, str], list[ctf.Row]] = {}
+    for row in ctf.parse_rows("".join(lines)):
         key = ctf.duplicate_key(row)
         if key is not None:
-            by_key.setdefault(key, []).append(row.line_no - 1)
+            by_key.setdefault(key, []).append(row)
     drop: set[int] = set()
-    for at in by_key.values():
-        if len(at) < 2:
+    problems: list[str] = []
+    for group in by_key.values():
+        if len(group) < 2:
             continue
-        keep = next((i for i in reversed(at) if lines[i].strip() in main_rows), at[0])  # the union puts main after the lane
-        drop.update(i for i in at if i != keep)
+        keep = next((r for r in reversed(group) if r.cells in main_cells), None)
+        if keep is None:
+            first = group[0]
+            problems.append(
+                f"{TOTEST} rows {first.cells[0]} at lines {', '.join(str(r.line_no) for r in group)} repeat the same issue and 'Do this' "
+                "and main does not carry them: reconcile the rows (keep one) before landing"
+            )
+            continue
+        for other in group:
+            if other is keep:
+                continue
+            if other.cells == keep.cells:
+                drop.add(other.line_no - 1)
+                continue
+            differing = [name for name, a, b in zip(ctf.COLUMNS, keep.cells, other.cells, strict=False) if a != b]
+            problems.append(
+                f"{TOTEST} row {keep.cells[0]} (line {other.line_no}) differs from main's copy (line {keep.line_no}) in: "
+                f"{', '.join(differing)}: reconcile the row (keep one) before landing"
+            )
     kept = "".join(ln for i, ln in enumerate(lines) if i not in drop)
-    return kept, len(drop), closed
+    return kept, len(drop), closed, problems
 
 
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
@@ -694,9 +715,11 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
             merged_bytes = ours.read_bytes()
         if name == TOTEST:
             try:
-                fixed, dropped, closed = normalize_totest(merged_bytes.decode("utf-8"), parts[2].decode("utf-8"))
+                fixed, dropped, closed, unresolved = normalize_totest(merged_bytes.decode("utf-8"), parts[2].decode("utf-8"))
             except UnicodeDecodeError:  # not text we can reason about: leave the union as git made it
-                fixed, dropped, closed = merged_bytes.decode("utf-8", errors="replace"), 0, 0
+                fixed, dropped, closed, unresolved = "", 0, 0, []
+            for message in unresolved:
+                ctx.say(f"WARNING: {message}")
             if dropped or closed:
                 merged_bytes = fixed.encode("utf-8")
                 ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")

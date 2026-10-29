@@ -311,13 +311,37 @@ def test_a_row_both_sides_carry_is_kept_once_and_mains_copy_wins(world):
     assert rows == [_tt(92, "do b").strip(), _tt(5, "do x").strip(), _tt(91).strip()], rows
 
 
-def test_a_near_duplicate_by_the_format_checks_own_key_is_dropped_too(world):
+def test_a_row_with_the_same_key_but_a_different_cell_is_kept_and_named_for_the_lane_to_reconcile(world, capsys):
     import check_totest_format as ctf
 
-    lane = _tt(91, "Do   A", sha="def5678", needs="cpu-vm") + _tt(92, "do b")
+    lane = _tt(91, "do a", sha="def5678") + _tt(92, "do b")
     lines = _land_totest(world, lane, _tt(5, "do x") + _tt(91, "do a"))
-    assert [ln for ln in lines if ln.startswith("| #91")] == [_tt(91, "do a").strip()]  # main's wording, not the lane's
-    assert ctf.find_duplicate_rows(ctf.parse_rows("\n".join(lines) + "\n")) == []
+    out = capsys.readouterr().out
+    assert _tt(91, "do a", sha="def5678").strip() in lines and _tt(91, "do a").strip() in lines  # the lane's edit survives
+    assert "#91" in out and "Closed by (commit sha)" in out and "reconcile" in out
+    assert len(ctf.find_duplicate_rows(ctf.parse_rows("\n".join(lines) + "\n"))) == 1  # premerge will refuse it
+
+
+def test_a_lane_only_duplicate_is_left_and_named_not_collapsed(world, capsys):
+    lines = _land_totest(world, _tt(93, "do c") + _tt(93, "do c"), _tt(5, "do x"))
+    out = capsys.readouterr().out
+    assert [ln for ln in lines if ln.startswith("| #93")] == [_tt(93, "do c").strip()] * 2
+    assert "#93" in out and "reconcile" in out
+
+
+def test_identical_copies_of_a_row_main_carries_collapse_to_mains_copy(world):
+    lines = _land_totest(world, _tt(91) + _tt(91) + _tt(92, "do b"), _tt(5, "do x") + _tt(91))
+    assert [ln for ln in lines if ln.startswith("| #91")] == [_tt(91).strip()]
+
+
+def test_mains_copy_wins_even_when_main_lacks_the_closing_pipe():
+    text = TT_HEAD + _tt(91, sha="def5678") + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
+    assert dropped == 0 and conflicts  # different sha cell: not identical, so nothing is dropped
+    text = TT_HEAD + _tt(91) + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
+    assert dropped == 1 and not conflicts
+    assert out == TT_HEAD + _tt(5, "do x") + _tt(91)
 
 
 def test_a_row_missing_its_closing_pipe_is_closed(world):
@@ -334,12 +358,20 @@ def test_a_genuinely_distinct_row_is_kept(world):
 
 
 def test_normalize_totest_touches_only_queue_table_rows():
-    text = "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(1, close=False) + "\nprose | with a pipe\n## Other\n| #1 | x | y\n"
-    out, dropped, closed = lw.normalize_totest(text, "")
-    assert (dropped, closed) == (1, 0)
-    assert out == "intro | not a row\n" + TT_HEAD + _tt(1) + "prose | with a pipe\n## Other\n| #1 | x | y\n"
-    out, dropped, closed = lw.normalize_totest(TT_HEAD + _tt(2, close=False).rstrip(" |") + "\r\n", "")
+    tail = "prose | with a pipe\n## Other\n| #1 | x | y\n"
+    text = "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(1) + _tt(2).rstrip(" |\n") + "\n" + tail
+    out, dropped, closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(1))
+    assert (dropped, closed, conflicts) == (1, 1, [])
+    assert out == "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(2) + tail  # lines outside the table are byte-identical
+    out, dropped, closed, _ = lw.normalize_totest(TT_HEAD + _tt(2).rstrip(" |\n") + "\r\n", "")
     assert (dropped, closed) == (0, 1) and out.endswith(" |\r\n")
+
+
+def test_a_row_ending_in_a_unicode_line_break_does_not_glue_the_next_line():
+    row = _tt(2).rstrip(" |\n")
+    text = TT_HEAD + row + "\x0c" + _tt(3)
+    out, _dropped, closed, _ = lw.normalize_totest(text, "")
+    assert closed == 1 and out == TT_HEAD + row + " |\x0c" + _tt(3)
 
 
 # --- the sha recorded for the merge hook is the one pushed (#904) ----------------------------------------
