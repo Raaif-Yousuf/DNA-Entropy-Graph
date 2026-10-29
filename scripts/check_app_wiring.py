@@ -176,6 +176,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 # Script-relative, never cwd-relative (MEASURED 2026-10-02: a worktree copy run from the
@@ -375,9 +376,25 @@ def _generated_command_name(method_name: str) -> str:
     return f"{base}Command"
 
 
+_WORD = re.compile(r"\w+")
+
+
+@lru_cache(maxsize=4096)
+def _tokens(text: str) -> frozenset[str]:
+    """Every maximal `\\w+` run in `text`, built once per distinct text (#844).
+
+    A `\\bname\\b` match needs each `\\w+` part of `name` to be a COMPLETE run in the text (an end
+    part is closed by `\\b`, an inner or non-word-adjacent part by the non-word character beside
+    it), so "every part is a token" is a necessary condition. It is used only to skip files; the
+    regex still decides every file that passes, so the answer is unchanged.
+    """
+    return frozenset(_WORD.findall(text))
+
+
 def _mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
+    parts = _WORD.findall(identifier)
     pattern = re.compile(rf"\b{re.escape(identifier)}\b")
-    return [p for p, t in texts.items() if pattern.search(t)]
+    return [p for p, t in texts.items() if (not parts or all(part in _tokens(t) for part in parts)) and pattern.search(t)]
 
 
 # Strings are matched first and kept, so `"http://x"` is not read as the start of a `//` comment.
@@ -387,6 +404,7 @@ _COMMENT_OR_STRING = re.compile(
 )
 
 
+@lru_cache(maxsize=4096)
 def _strip_comments(text: str) -> str:
     """Blank `//` and `/* */` comments (so a comment spelling `X.Member` is not a read); string literals stay."""
     return _COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
@@ -408,12 +426,16 @@ def _member_mentions(identifier: str, texts: dict[Path, str], owner: str | None 
     pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
     hits: list[Path] = []
     for path, text in texts.items():
-        for match in pattern.finditer(_strip_comments(text)):
+        stripped = _strip_comments(text)  # cached per file (#844)
+        # The pattern ends in `identifier\b` after a `.` or `(`, so the identifier is a whole token of any file that matches.
+        if identifier not in _tokens(stripped):
+            continue
+        for match in pattern.finditer(stripped):
             recv = match.group("recv")
             other_type = owner is not None and recv in class_names and recv != owner
             if owner is not None and recv and not other_type:
                 # An instance whose declaration (`RunOptions options`) is visible in this file: its type decides.
-                declared = re.search(rf"(?<![\w.])([A-Z]\w*)(?:<[^>;]*>)?\??\s+{re.escape(recv)}\b", _strip_comments(text))
+                declared = re.search(rf"(?<![\w.])([A-Z]\w*)(?:<[^>;]*>)?\??\s+{re.escape(recv)}\b", stripped)
                 other_type = bool(declared) and declared.group(1) in class_names and declared.group(1) != owner
             if match.group("access").startswith("nameof"):
                 other_type = False
@@ -707,13 +729,19 @@ def _registered_types(text: str) -> tuple[set[str], set[str]]:
 
 def _check_members(scan: Scan) -> list[Finding]:
     findings: list[Finding] = []
-    xaml_text = scan.xaml_text
+    xaml_tokens = _tokens(scan.xaml_text)
+    # Built once; the per-candidate `exclude` is applied below (the old code rebuilt both dicts per candidate).
+    production_all = {p: t for p, t in scan.cs_files.items() if not _is_test_path(p)}
+    test_all = {p: t for p, t in scan.cs_files.items() if _is_test_path(p)}
     class_names = frozenset(m.group(1) for text in scan.cs_files.values() for m in _CLASS_DECL.finditer(text))
 
     for path, text in scan.cs_files.items():
         if _is_test_path(path):
             continue
 
+        # `is not`, not `!=`: the keys are the very Path objects `scan.cs_files` holds, and Path equality is slow.
+        production_cs = {p: t for p, t in production_all.items() if p is not path}
+        test_cs = {p: t for p, t in test_all.items() if p is not path}
         candidates: list[tuple[str, str, str]] = []  # (identifier, kind, origin)
         for match in _OBSERVABLE_FIELD.finditer(text):
             name = _generated_property_name(match.group(1))
@@ -729,11 +757,11 @@ def _check_members(scan: Scan) -> list[Finding]:
             candidates.append((name, "COMMAND", f"{owner}.{name}"))
 
         for identifier, kind, symbol in candidates:
-            if re.search(rf"\b{re.escape(identifier)}\b", xaml_text):
+            if identifier in xaml_tokens:  # identifiers are `\w+`, so a whole-word match is a token (#844)
                 continue
             member_owner = symbol.split(".")[0]
-            prod = _member_mentions(identifier, scan.production_cs(exclude=path), member_owner, class_names)
-            tests = _member_mentions(identifier, scan.test_cs(exclude=path), member_owner, class_names)
+            prod = _member_mentions(identifier, production_cs, member_owner, class_names)
+            tests = _member_mentions(identifier, test_cs, member_owner, class_names)
             noun = "command" if kind == "COMMAND" else "observable property"
             a_noun = "A command" if kind == "COMMAND" else "An observable property"
             generator = "[RelayCommand]" if kind == "COMMAND" else "[ObservableProperty]"
