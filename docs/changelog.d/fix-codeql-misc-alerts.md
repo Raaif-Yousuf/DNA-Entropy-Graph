@@ -1,0 +1,1 @@
+- Add one-line "why this is empty" comments to deliberately empty catch blocks and one empty loop body flagged by CodeQL (no behaviour change); the other misc CodeQL alerts were triaged as false positives.

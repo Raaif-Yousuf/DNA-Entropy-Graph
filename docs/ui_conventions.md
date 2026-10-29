@@ -9,7 +9,9 @@ against. The copy rules in section 2 are mechanically guarded by `Guards.Tests`
 `StringResourceKeyGuardTests`, `CodeBehindBranchingGuardTests`). Screen-by-screen detail
 beyond what is summarized here lives in
 [Appendix A, section 2](superpowers/specs/2026-09-18-appendix-a-app-design.md#2-screen-by-screen-ux);
-the viewer page is described in `docs/viewer.md` (issue #312).
+the viewer page is described in `docs/viewer.md` (issue #312). The Results page also lists the gene
+tables (`*.genes.tsv`, issue #552: one `ResultsGeneTable` per file, sorted on the numbers not the shown text, first 500 rows drawn; the ten headings are bound properties reading `Results_GeneColumn_*`, the same strings the sort line uses, so no heading has a second copy in the .resw), and
+the Viewer page lists the run's smoothed entropy tracks as switches that add and remove a track through the bridge.
 
 ---
 
@@ -394,6 +396,10 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 ## 15. The slow-run notice and the stall question (issue #675)
 
 `RunStallCoordinator` (Presentation/Services) is the runner's `OnNotice` and `OnStall` in production (ServiceRegistration). A slow-stage notice is a `RunNoticeMessage` that `RunProgressViewModel` shows as a warning InfoBar for its own run only (cleared when the runner says the stall cleared and when the run ends). The stall question is `IChoiceDialogService.ChooseAsync` (a three-button `ContentDialog` on the main window's `XamlRoot`, implemented by `DialogService`): Stop, Delete, Keep waiting, with Keep waiting as the close button and default. A dialog that cannot be shown (no window yet) or that the runner withdrew answers Keep waiting, never a deletion; the runner's own answer timeout and run time limit still end a run nobody answers.
+
+## 16. Settings > Advanced > Network proxy (issue #239)
+
+A collapsed Expander next to the developer one, because the right answer for most labs is to leave it alone. A ComboBox (Windows settings, a proxy I type, no proxy) decides which of the address, user name and password boxes is live; one **Apply** button saves, so a half-typed address is never in use and a password is never saved per keystroke. The password box is emptied after Apply and a line says one is saved; leaving it empty keeps the saved one. Errors name their fix in the line below the button (`ProxyAddressInvalid`, `ProxyPasswordNeeded`, `AdvancedNotSaved`). `IsEnabled` is per control, not on the StackPanel (a StackPanel has no `IsEnabled`; the XAML compiler fails with no message).
 
 ## Related
 

@@ -35,7 +35,7 @@ def detect_kind(path: str | None) -> str:
             if is_snapgene(fh.read(13)):
                 return SNAPGENE
     except OSError:
-        pass
+        pass  # unreadable here: fall through to the extension, the later open reports the real error
     if ext in _GENBANK_EXT:
         return GENBANK
     if ext in _EMBL_EXT:
