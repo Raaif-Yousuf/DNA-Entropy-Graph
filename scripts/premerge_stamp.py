@@ -133,9 +133,11 @@ def _unlock(fd: int) -> None:
 
 @contextlib.contextmanager
 def _landed_lock(path: Path):
-    """An OS-level lock on `landed-prs.lock` next to the records, retried until _LOCK_WAIT_SECONDS. The file
+    """An OS-level lock on `landed-prs.oslock` next to the records, retried until _LOCK_WAIT_SECONDS. The file
     is never deleted (deleting a lock file is what makes lock files racy); an unlocked leftover is not held."""
-    lock = path.with_name("landed-prs.lock")
+    # A NEW file name: an older checkout's land_wt.py still O_EXCL-creates and may stale-take-over
+    # `landed-prs.lock`, and the two schemes must never rename or block each other's file.
+    lock = path.with_name("landed-prs.oslock")
     fd = os.open(lock, os.O_CREAT | os.O_RDWR)
     try:
         deadline = time.monotonic() + _LOCK_WAIT_SECONDS

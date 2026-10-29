@@ -41,8 +41,10 @@ Seven hooks live here, all registered as `PreToolUse` hooks in `.claude/settings
   backslash then newline) are joined first. A target or pin that is a variable or subexpression (`$pr`, `$(...)`,
   `(...)`) cannot be resolved by a hook, so it is denied with a "use literal values" message; commands inside such
   groups are still scanned. The bypass variable only counts when unquoted. The record needs a full 40-hex head sha
-  (`record_landed` refuses anything else), is written under an OS-level file lock (`landed-prs.lock`, never broken, freed by the OS when its
-  owner dies; a waiter times out loudly), a read error is retried then raised (never read as empty), and it is
+  (`record_landed` refuses anything else), is written under an OS-level file lock (`landed-prs.oslock`, never broken, freed by the OS when its
+  owner dies; a waiter times out loudly; it is a different file from the retired `landed-prs.lock`, so during the
+  transition a writer from an older checkout and a new one do NOT exclude each other: run every landing from one
+  up-to-date checkout), a read error is retried then raised (never read as empty), and it is
   published with a retried `os.replace`; `land_wt.py` turns any failure there into a WARNING.
   Known bypasses, by design (the hook is a speed bump for an agent that forgot, not a security boundary):
   a command built at run time (`$cmd = "gh pr create"; iex $cmd`, `sh -c "gh pr create"`, `python -c ...`), an

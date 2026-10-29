@@ -256,7 +256,7 @@ def test_record_landed_prunes_expired_merges_and_leaves_no_temp_or_lock(repo):
     stamp.record_landed(repo, "3", SHA)
     data = json.loads(stamp.landed_path(repo).read_text(encoding="utf-8"))
     assert sorted(data) == ["2", "3"]
-    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".lock") == ["landed-prs.json"]
+    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".oslock") == ["landed-prs.json"]
 
 
 def test_concurrent_record_landed_loses_nothing(repo):
@@ -269,15 +269,6 @@ def test_concurrent_record_landed_loses_nothing(repo):
         th.join()
     data = json.loads(stamp.landed_path(repo).read_text(encoding="utf-8"))
     assert sorted(data, key=int) == [str(n) for n in range(1, 13)]
-
-
-def test_a_stale_lock_does_not_wedge_record_landed(repo):
-    lock = stamp.landed_path(repo).with_name("landed-prs.lock")
-    lock.write_text("x", encoding="utf-8")
-    old = time.time() - 300
-    os.utime(lock, (old, old))
-    stamp.record_landed(repo, "9", SHA)
-    assert stamp.landed_head(repo, "9") == SHA
 
 
 def test_powershell_env_bypass_allows_and_is_logged(repo):
@@ -370,7 +361,7 @@ def test_os_replace_that_never_succeeds_raises_and_leaves_no_temp(repo, monkeypa
     monkeypatch.setattr(stamp.time, "sleep", lambda _s: None)
     with pytest.raises(PermissionError):
         stamp.record_landed(repo, "4", SHA)
-    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".lock") == []
+    assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".oslock") == []
 
 
 def test_unreadable_landed_file_is_no_record_not_a_crash(repo, monkeypatch):
@@ -410,9 +401,8 @@ def _records_after_threads(repo, count):
     return errors, json.loads(_landed(repo).read_text(encoding="utf-8"))
 
 
-def test_a_holder_slower_than_the_old_stale_age_still_loses_nothing(repo, monkeypatch):
+def test_a_stalled_live_holder_keeps_its_lock_and_nothing_is_lost(repo, monkeypatch):
     """A writer stalled inside the critical section (a loaded machine) must not have its lock broken."""
-    monkeypatch.setattr(stamp, "_LOCK_STALE_SECONDS", 0.15, raising=False)
     monkeypatch.setattr(stamp, "_LOCK_WAIT_SECONDS", 30.0)
     real = stamp._read_landed
 
@@ -480,8 +470,48 @@ def test_separate_processes_lose_nothing(repo):
     assert sorted(data, key=int) == [str(n) for n in range(1, 9)]
 
 
-def test_an_unlocked_leftover_lock_file_wedges_nothing_but_a_held_lock_blocks(repo, monkeypatch):
-    lock = _landed(repo).with_name("landed-prs.lock")
+def test_the_byte_range_lock_never_touches_the_old_schemes_lock_file(repo):
+    """An older checkout's land_wt.py still O_EXCL-creates (and may stale-take-over) `landed-prs.lock`;
+    the new lock must live in a different file so the two schemes never rename or block each other."""
+    old = _landed(repo).with_name("landed-prs.lock")
+    old.write_text("old-scheme-holder", encoding="utf-8")
+    stamp.record_landed(repo, "9", SHA)
+    assert old.read_text(encoding="utf-8") == "old-scheme-holder"
+    assert _landed(repo).with_name("landed-prs.oslock").exists()
+
+
+_STALLING_WRITER = (
+    "import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path; import premerge_stamp as s; "
+    "real = s._read_landed\n"
+    "def slow(path):\n"
+    "    records = real(path)\n"
+    "    Path(sys.argv[5]).write_text('held', encoding='utf-8')\n"
+    "    time.sleep(1.5)\n"
+    "    return records\n"
+    "s._read_landed = slow\n"
+    "s.record_landed(Path(sys.argv[2]), sys.argv[3], sys.argv[4])\n"
+)
+
+
+def test_a_process_stalled_inside_the_critical_section_blocks_a_second_process(repo, tmp_path):
+    ready = tmp_path / "a-holds-the-lock"
+    plain = (
+        "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; import premerge_stamp as s; "
+        "s.record_landed(Path(sys.argv[2]), sys.argv[3], sys.argv[4])"
+    )
+    a = subprocess.Popen([sys.executable, "-c", _STALLING_WRITER, str(SCRIPTS_DIR), str(repo), "1", SHA, str(ready)], stderr=subprocess.PIPE)
+    deadline = time.monotonic() + 60
+    while not ready.exists():
+        assert time.monotonic() < deadline and a.poll() is None, "A never reached its critical section"
+        time.sleep(0.02)
+    b = subprocess.Popen([sys.executable, "-c", plain, str(SCRIPTS_DIR), str(repo), "2", SHA], stderr=subprocess.PIPE)
+    for p in (a, b):
+        assert p.wait(timeout=120) == 0, (p.stderr.read() if p.stderr else b"").decode()
+    assert sorted(json.loads(_landed(repo).read_text(encoding="utf-8")), key=int) == ["1", "2"]
+
+
+def test_an_unlocked_leftover_oslock_file_wedges_nothing_but_a_held_lock_blocks(repo, monkeypatch):
+    lock = _landed(repo).with_name("landed-prs.oslock")
     lock.write_text("dead-owner", encoding="utf-8")
     stamp.record_landed(repo, "9", SHA)  # an unlocked leftover file is not a held lock
     assert stamp.landed_head(repo, "9") == SHA
