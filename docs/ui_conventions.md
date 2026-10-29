@@ -322,6 +322,18 @@ same commit** (decide: share it, or say why not; a path, an id, a secret or a de
 carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
 which every settings group already treats as "re-read the store".
 
+### Earlier version import (issue #243)
+
+`PrototypeImportViewModel` (one singleton, shared by the shell and the Settings "Earlier version" group). On the first launch of a
+profile `MainWindow.Loaded` calls `ShellViewModel.RunStartupOffersAsync` after `MarkReady`; it scans off the UI thread, sets
+`prototype_import_done` whatever it finds, and asks (a `ConfirmAsync` dialog) only when there are runs not already in history.
+The scan reads the places the prototype's own code used (MEASURED 2026-10-16 from `worker/legacy`: `%APPDATA%\dna-entropy\config.json`
+with `last_zone` and `ssh_key_file`, and `%USERPROFILE%\Downloads\<name>\<name>.entropy.bedgraph`, which is the profile folder, not the
+Windows known folder). It never writes there. An imported row is `Completed`, `Imported = true`, target `local`, with no bucket,
+prefix or VM, so every cloud action is off; its `OutputDir` is the folder it was found in. Ids are `legacy-` plus a hash of the
+folder, so a second import adds nothing. A folder holding `provenance.json` was written by this app and is skipped.
+`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog, in either call order (whichever of the two runs first starts the one offers task; the tour starts however it ended). A prototype row's Delete cloud copy tooltip is its own string (`Runs_DeleteCloud_Hint_Prototype`, pointing to Open).
+
 ## 11. The setup wizard (issue #99)
 
 One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
