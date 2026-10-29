@@ -49,8 +49,18 @@ When something you did finishes or cannot finish (a delete, a download, a new th
 Two computers signed into the same Google account do not automatically see each other's
 run history, since each computer only remembers its own runs. If you need to see runs
 made from another computer, use **Find runs from other computers** on the Runs page: it
-looks through your cloud storage for any runs it can find and adds them to your list as
-read-only entries.
+looks through the results storage of the Google Cloud project you chose for finished runs this
+computer does not know, and adds them to your list. A line under the progress text says how many
+it added, or what to do if it could not look.
+
+An added run says on its row which computer made it. It is read-only here: you can open it
+after **Download again** has fetched its files, and you can **Remove from list**, but you cannot
+run it again or delete its cloud copy from this computer (do that from the computer that made
+it). A run already in your list is never added twice, and a run that is still going, or whose
+files were already deleted from the cloud, is not listed.
+If you **Remove from list** an added run, it stays off the list on later searches. To bring removed
+runs back, use **Reset all settings** in Settings, then search again. A result file the app cannot
+read, or one over 1 MiB, is skipped without stopping the search.
 
 ## Related
 
@@ -64,3 +74,7 @@ runs pile up.
 - **Delete cloud copy** is greyed out when it cannot work, and hovering over it says why: the run is still going (wait for it to finish), or the run has no cloud copy left (choose Run again if you need the results). For now the button cannot delete a cloud copy at all, because that arrives in a later version; the copy is removed on its own when its storage time ends, or you can delete the run's folder in your Google Cloud storage from the Google Cloud console.
 - **Run again** is greyed out while the run is still going.
 - **Delete files on this PC** deletes file by file and never follows a shortcut (junction or symbolic link) inside the folder: the link itself is removed, and whatever it points to is left alone. If the run's folder itself, or a folder above it, is such a shortcut, nothing is deleted and the app says so: open the folder in File Explorer and delete it there if you want it gone. If some files cannot be deleted, the app says how many were deleted and how many were not. A file open in another program, and a file Windows will not let you change, each get their own message; close the program or fix the permission, then choose it again.
+
+## Where the app opens
+
+The app opens on the page you were on when you closed it. If you were looking at a run's progress or results, it opens that run (under Runs, so Back goes to the list). If that run finished while the app was closed, it opens on its results. If the run was deleted, or you were on a page the app cannot reopen (the viewer or the setup wizard), it opens on New run. Opening a file with the app, or clicking a finished-run notification, always takes you there instead.

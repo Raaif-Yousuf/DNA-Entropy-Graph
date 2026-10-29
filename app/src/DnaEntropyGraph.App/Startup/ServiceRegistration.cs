@@ -65,7 +65,10 @@ public static class ServiceRegistration
         // Issue #825: one messenger per container, never the process-wide static, so two containers (tests run in parallel) never hear each other.
         services.AddSingleton<IMessenger>(_ => new WeakReferenceMessenger());
         services.AddSingleton<NavigationService>();
-        services.AddSingleton<INavigator>(sp => sp.GetRequiredService<NavigationService>());
+        // Issue #244: every navigation also records the page (and run) for session restore; the shell reads it back at startup.
+        services.AddSingleton<SessionStore>();
+        services.AddSingleton<SessionRestorer>();
+        services.AddSingleton<INavigator>(sp => new RecordingNavigator(sp.GetRequiredService<NavigationService>(), sp.GetRequiredService<SessionStore>()));
         // Issue #585: the shell message bar is the toast service; one instance behind both types.
         services.AddSingleton<InAppMessageCenter>();
         services.AddSingleton<IToastService>(sp => sp.GetRequiredService<InAppMessageCenter>());
@@ -215,6 +218,9 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
+        // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).
+        services.AddSingleton<ImportedRunDismissals>(sp => new ImportedRunDismissals(sp.GetRequiredService<ISettingsStore>()));
+        services.AddSingleton<IRunImporter>(sp => new RunImporter(sp.GetRequiredService<IStorageGateway>(), sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<ImportedRunDismissals>()));
         services.AddSingleton<IRunCloudResults>(sp => new RunCloudResults(
             sp.GetRequiredService<IStorageGateway>(),
             sp.GetRequiredService<IJobObjectDeleter>(),
@@ -381,7 +387,8 @@ public static class ServiceRegistration
         // Issue #87: the New run page's linked model and graphics card pickers, over the one shipped catalog.
         services.AddSingleton<GpuCatalog>(_ => GpuCatalog.Shipped);
         services.AddTransient<GpuPlanViewModel>();
-        services.AddTransient<NewRunViewModel>();
+        // Issue #527: one instance for the app, so the files on the New run page survive a trip to another page and back; it empties itself when a run starts.
+        services.AddSingleton<NewRunViewModel>();
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
         // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.
@@ -416,6 +423,9 @@ public static class ServiceRegistration
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
+        // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
+        services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
+        services.AddTransient<SettingsTransferViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {

@@ -91,7 +91,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 return insert.ExecuteAsync(token);
             },
             cancellationToken).ConfigureAwait(false);
-        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        // Issue #92: a queued (flex-start) insert stays pending until capacity is found, so its poll is bounded by the wait it asked for plus a margin.
+        await AwaitOperationAsync(spec.ProjectId, zone, operation, goneIsDone: false, cancellationToken, deadline: spec.FlexStart ? spec.FlexStartCreateBound : null).ConfigureAwait(false);
 
         // A 404 here means the outcome is unknown, not that nothing was made (the operation said DONE): Network class, so it is
         // retryable, and a retry lands on 409 alreadyExists if the VM exists. The runner lists by label before trying another zone.
@@ -431,6 +432,73 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => GetAsync(RequireProject(), vmName, zone, cancellationToken);
 
+    /// <summary>
+    /// Issue #91: <c>zoneOperations.list</c> filtered on the operation TYPE only, then matched on the client to this VM's incarnation: by the instance's numeric id
+    /// (<c>targetId</c>, unique per incarnation and form-free) when the run saw the VM alive, else by the target's name and an operation no older than the VM's creation.
+    /// With neither an id nor a creation time nothing bounds the question and the answer is false. No server filter names the target, so a difference in how Compute spells
+    /// the target link can never hide a real preemption. THEORY (unverified, no live project): that a preempted instance records an operation of type
+    /// <c>compute.instances.preempted</c> with <c>targetId</c> set to the instance id, and that the type filter syntax matches (ToTest row #91).
+    /// </summary>
+    public async Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(incarnation);
+        if (incarnation.InstanceId is null && incarnation.CreatedAt is null)
+        {
+            return false;
+        }
+
+        var project = RequireProject();
+        var targetSuffix = $"/zones/{zone}/instances/{vmName}";
+        string? pageToken = null;
+        for (var page = 0; page < 5; page++)
+        {
+            var requestedToken = pageToken;
+            var operations = await CallAsync(
+                "compute.zoneOperations.list",
+                token =>
+                {
+                    var request = _service.ZoneOperations.List(project, zone);
+                    request.Filter = $"operationType = \"{PreemptedOperationType}\"";
+                    request.PageToken = requestedToken;
+                    return request.ExecuteAsync(token);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (operations.Items?.Any(o => IsPreemptionOfIncarnation(o, targetSuffix, incarnation)) == true)
+            {
+                return true;
+            }
+
+            pageToken = string.IsNullOrEmpty(operations.NextPageToken) ? null : operations.NextPageToken;
+            if (pageToken is null)
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsPreemptionOfIncarnation(ComputeData.Operation operation, string targetSuffix, VmIncarnation incarnation)
+    {
+        if (!string.Equals(operation.OperationType, PreemptedOperationType, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (incarnation.InstanceId is { } id)
+        {
+            return operation.TargetId == id;
+        }
+
+        return operation.TargetLink?.EndsWith(targetSuffix, StringComparison.Ordinal) == true
+            && ParseTime(operation.InsertTime) is { } inserted
+            && incarnation.CreatedAt is { } created
+            && inserted >= created;
+    }
+
+    private const string PreemptedOperationType = "compute.instances.preempted";
+
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
         => EndVmAsync(vmName, zone, delete: false, onAccepted: null, cancellationToken);
 
@@ -577,7 +645,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>Polls the zone operation until <c>DONE</c> and throws its error. <paramref name="goneIsDone"/>: a stop or delete whose operation says the VM is not found has nothing left to do.</summary>
-    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false)
+    private async Task AwaitOperationAsync(string project, string zone, ComputeData.Operation operation, bool goneIsDone, CancellationToken cancellationToken, bool regional = false, TimeSpan? deadline = null)
     {
         if (!IsDone(operation))
         {
@@ -591,7 +659,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                         : await CallAsync("compute.zoneOperations.get", pollToken => _service.ZoneOperations.Get(project, zone, name).ExecuteAsync(pollToken), token).ConfigureAwait(false);
                     return new OperationPoll<bool>(IsDone(latest), true, null);
                 },
-                _options.OperationDeadline,
+                deadline ?? _options.OperationDeadline,
                 cancellationToken,
                 _options.Delay,
                 _options.TimeProvider).ConfigureAwait(false);
@@ -665,6 +733,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ParseTime(instance.LastStopTimestamp),
             ZoneName(instance.MachineType),
             ParseTime(instance.LastStartTimestamp),
+            InstanceId: instance.Id,
             MaxRunDuration: instance.Scheduling?.MaxRunDuration?.Seconds is { } seconds and > 0 ? TimeSpan.FromSeconds(seconds) : null);
 
     /// <summary>The zone name from a zone URL (<c>.../zones/us-central1-a</c>) or an aggregated-list key (<c>zones/us-central1-a</c>).</summary>
@@ -673,6 +742,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
     private static DateTimeOffset? ParseTime(string? value)
         => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed) ? parsed : null;
+}
+
+/// <summary>
+/// Issue #92: the instance resource plus the <c>params</c> field. MEASURED 2026-10-16: <c>Google.Apis.Compute.v1</c> 1.77.0.4282 declares
+/// <c>InstanceParams</c> (with <c>RequestValidForDuration</c>, "relative deadline for waiting for capacity") but its <c>Instance</c> class has no <c>Params</c>
+/// property, so the field is added here and serialized by name. THEORY (unverified, no live project): the v1 insert accepts <c>params.requestValidForDuration</c>.
+/// </summary>
+internal sealed class ComputeInstanceBody : ComputeData.Instance
+{
+    [Newtonsoft.Json.JsonProperty("params", NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+    public ComputeData.InstanceParams? Params { get; set; }
 }
 
 /// <summary>
@@ -715,17 +795,25 @@ internal static class ComputeVmShape
         InstanceTerminationAction = spec.TerminationAction,
         OnHostMaintenance = "TERMINATE",
         AutomaticRestart = false,
+        // Issue #91. Null for an on-demand VM (Compute's default, STANDARD). THEORY (unverified, no live project): SPOT is accepted together with
+        // maxRunDuration and instanceTerminationAction=DELETE on a GPU VM with onHostMaintenance=TERMINATE; docs/ToTest.md carries the row.
+        ProvisioningModel = spec.FlexStart ? "FLEX_START" : spec.Spot ? "SPOT" : null,
     };
 
-    public static ComputeData.Instance Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
+    public static ComputeInstanceBody Build(VmSpec spec, string zone, IReadOnlyDictionary<string, string> labels, string serviceAccountEmail)
     {
-        return new ComputeData.Instance
+        return new ComputeInstanceBody
         {
             Name = spec.VmName,
             MachineType = $"zones/{zone}/machineTypes/{spec.MachineType}",
             Labels = labels.ToDictionary(p => p.Key, p => p.Value),
             Metadata = new ComputeData.Metadata { Items = MetadataItems(spec) },
             Scheduling = Scheduling(spec),
+            // Issue #92: the relative deadline for waiting for capacity (Compute's own doc for this field: "Relevant only for Instances.Insert API").
+            // THEORY (unverified, no live project): FLEX_START with this field, maxRunDuration, DELETE and onHostMaintenance=TERMINATE is accepted for a GPU VM; docs/ToTest.md carries the row.
+            Params = spec.FlexStart && spec.FlexStartWait is { } wait
+                ? new ComputeData.InstanceParams { RequestValidForDuration = new ComputeData.Duration { Seconds = (long)Math.Ceiling(wait.TotalSeconds) } }
+                : null,
             Disks =
             [
                 new ComputeData.AttachedDisk

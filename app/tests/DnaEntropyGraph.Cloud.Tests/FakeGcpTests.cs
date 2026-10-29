@@ -84,7 +84,7 @@ public class FakeGcpTests
         }
 
         unmarked.ShouldBeEmpty();
-        marked.ShouldBe(2); // WithAlreadyExists and CreateVmAsync insert a new row
+        marked.ShouldBe(3); // WithAlreadyExists, the queued create and the granted create insert a new row
         updateVmCalls.ShouldBeGreaterThan(5); // vacuity: the helper is really used
     }
 

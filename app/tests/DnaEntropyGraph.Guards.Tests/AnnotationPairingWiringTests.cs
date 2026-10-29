@@ -43,7 +43,7 @@ public sealed class AnnotationPairingWiringTests
             resw[key].ShouldNotContain("—");
         }
 
-        foreach (var key in new[] { "NewRunStatusAnnotationUnavailable", "NewRunStatusAnnotationNoFasta", "NewRunStatusAnnotationAmbiguous", "NewRunPillAnnotationLine" })
+        foreach (var key in new[] { "NewRunStatusAnnotationUnavailable", "NewRunStatusAnnotationNoFasta", "NewRunStatusAnnotationAmbiguous", "NewRunPillAnnotationLine", "NewRunStatusAnnotationAmbiguousName", "NewRunStatusAnnotationTwoForOne", "NewRunStatusAnnotationAlreadyPaired", "NewRunStatusAnnotationPairedOnly", "NewRunStatusAnnotationNamedInvalid", "NewRunStatusAnnotationFallbackRefused" })
         {
             resw.ShouldContainKey(key);
             resw[key].ShouldNotContain("—");
