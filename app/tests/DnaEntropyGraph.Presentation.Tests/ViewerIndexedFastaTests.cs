@@ -126,6 +126,17 @@ public sealed class ViewerIndexedFastaTests : IDisposable
 
     private static string FindViewerAsset(string name)
     {
+        // #874: this source file's own tree first (what was compiled), the output directory walk only as a fallback.
+        // An empty directory (a Windows CallerFilePath read on another OS) would become a CWD-relative path, so skip it.
+        var here = Path.GetDirectoryName(ThisFile());
+        var fromSource = string.IsNullOrEmpty(here)
+            ? null
+            : Path.GetFullPath(Path.Combine(here, "..", "..", "src", "DnaEntropyGraph.App", "Assets", "viewer", name));
+        if (fromSource is not null && File.Exists(fromSource))
+        {
+            return fromSource;
+        }
+
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
@@ -138,9 +149,7 @@ public sealed class ViewerIndexedFastaTests : IDisposable
             dir = dir.Parent;
         }
 
-        // --artifacts-path under a lane folder: fall back to this source file's own location.
-        var here = Path.GetDirectoryName(ThisFile())!;
-        return Path.GetFullPath(Path.Combine(here, "..", "..", "src", "DnaEntropyGraph.App", "Assets", "viewer", name));
+        return fromSource ?? Path.Combine(AppContext.BaseDirectory, "src", "DnaEntropyGraph.App", "Assets", "viewer", name);
     }
 
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;

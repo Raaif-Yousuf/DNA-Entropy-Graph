@@ -434,6 +434,9 @@ public static class ServiceRegistration
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
+        // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
+        services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
+        services.AddTransient<SettingsTransferViewModel>();
 
         if (cloud == CloudBackend.Developer)
         {

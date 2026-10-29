@@ -1006,4 +1006,64 @@ public sealed class HistoryViewModelTests
         await Item(vm, "done").RedownloadCommand.ExecuteAsync(null);
         _toasts.Received(1).ShowToast("Runs_Redownload_Partial_Title", "Runs_Redownload_Partial_Body", ToastSeverity.Warning);
     }
+
+    // ---- Issue #92: the stockout card offers "wait for a graphics card" ----
+
+    private static readonly string StockoutCode = RunErrorCodes.For(CloudErrorKind.Stockout);
+
+    [Fact]
+    public async Task A_run_that_failed_for_want_of_a_graphics_card_offers_waiting_and_choosing_it_starts_the_same_run_with_WaitForGpu_on()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\gone\in.gb", OutputFolder = @"D:\lab" };
+        _local.FindRerunInput(Arg.Any<RunRecord>(), Arg.Any<RunOptions>()).Returns(@"C:\app\runs\a\input\in.gb");
+        _engine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns("waiting-job");
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        var item = Item(vm, "a");
+        item.HasWaitForGpu.ShouldBeTrue();
+        await item.WaitForGpuCommand!.ExecuteAsync(null);
+
+        await _engine.Received(1).StartRunAsync(recorded with { InputPath = @"C:\app\runs\a\input\in.gb", WaitForGpu = true }, Arg.Any<CancellationToken>());
+        _navigator.Received(1).NavigateTo("RunProgress", "waiting-job");
+    }
+
+    [Theory]
+    [InlineData("quota")]
+    [InlineData("billing")]
+    [InlineData("vm_unhealthy")]
+    public async Task A_run_that_failed_for_any_other_reason_offers_no_waiting(string code)
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud" };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = code });
+
+        Item(vm, "a").HasWaitForGpu.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_run_that_already_waited_and_still_got_no_card_offers_no_second_wait_and_says_so()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", WaitForGpu = true };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        Item(vm, "a").HasWaitForGpu.ShouldBeFalse();
+        Item(vm, "a").ReasonText.ShouldBe("RunError_stockout_waited");
+    }
+
+    [Fact]
+    public async Task A_stockout_run_that_did_not_wait_keeps_the_ordinary_stockout_text()
+    {
+        var recorded = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud" };
+        var vm = await Loaded(Row("a", JobPhase.Failed, options: RunOptionsJson.Serialize(recorded)) with { ErrorCode = StockoutCode });
+
+        Item(vm, "a").ReasonText.ShouldBe("RunError_stockout");
+    }
+
+    [Fact]
+    public async Task A_completed_run_and_a_stockout_run_with_unreadable_options_offer_no_waiting()
+    {
+        var vm = await Loaded(Row("done", JobPhase.Completed), Row("bad", JobPhase.Failed, options: "garbage") with { ErrorCode = StockoutCode });
+
+        Item(vm, "done").HasWaitForGpu.ShouldBeFalse();
+        Item(vm, "bad").HasWaitForGpu.ShouldBeFalse();
+    }
 }

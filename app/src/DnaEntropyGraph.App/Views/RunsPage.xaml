@@ -93,6 +93,9 @@
                                                 <TextBlock Text="{x:Bind PresetText}" Visibility="{x:Bind HasPreset}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <Button x:Uid="RunsCopyOwnerRequestButton" Command="{x:Bind CopyOwnerRequestCommand}" Visibility="{x:Bind HasOwnerRequest}" HorizontalAlignment="Left" />
                                                 <Button x:Uid="RunsOpenStoragePageButton" Command="{x:Bind OpenStoragePageCommand}" Visibility="{x:Bind ShowStoragePage}" HorizontalAlignment="Left" />
+                                                <!-- Issue #92: offered by a run that failed for want of a graphics card. -->
+                                                <TextBlock x:Uid="RunsWaitForGpuHint" Visibility="{x:Bind HasWaitForGpu}" TextWrapping="Wrap" />
+                                                <Button x:Uid="RunsWaitForGpuButton" Command="{x:Bind WaitForGpuCommand}" Visibility="{x:Bind HasWaitForGpu}" HorizontalAlignment="Left" />
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
                                                     <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />
