@@ -64,6 +64,13 @@ if sys.argv[2:4] == ["pr", "checks"]:
         sys.exit(reply["exit"])
     print(reply if isinstance(reply, str) else json.dumps(reply))
     sys.exit(1 if isinstance(reply, str) else 0)
+if sys.argv[2:3] == ["api"]:
+    reply = json.loads(Path(str(log) + ".alerts").read_text(encoding="utf-8"))
+    if isinstance(reply, dict):  # {"exit": N, "stderr": "..."}
+        sys.stderr.write(reply.get("stderr", ""))
+        sys.exit(reply["exit"])
+    print(json.dumps(reply))
+    sys.exit(0)
 if sys.argv[2:4] == ["run", "rerun"]:
     rc_file = Path(str(log) + ".rerunrc")
     sys.exit(int(rc_file.read_text()) if rc_file.exists() else 0)
@@ -1558,3 +1565,61 @@ def test_a_failing_record_landed_only_warns_and_the_landing_still_succeeds(world
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
     assert "WARNING: could not record the landed PR" in capsys.readouterr().out
+
+
+def _alert(rule: str, path: str) -> dict:
+    return {"rule": {"id": rule}, "most_recent_instance": {"location": {"path": path}}}
+
+
+def _land_codeql(world: World, alerts, check: str = "CodeQL") -> tuple[int, str]:
+    (world.root / "gh.log.alerts").write_text(json.dumps(alerts), encoding="utf-8", newline="\n")
+    rc, _ = _land_green(world, [[_check(check, "fail")]])
+    return rc, ""
+
+
+def test_a_failed_codeql_check_prints_a_per_rule_and_per_directory_breakdown(world, capsys):
+    alerts = [
+        _alert("py/path-injection", "scripts/a.py"),
+        _alert("py/path-injection", "scripts/b.py"),
+        _alert("py/path-injection", "worker/src/c.py"),
+        _alert("cs/log-forging", "app/src/X.cs"),
+    ]
+    rc, _ = _land_codeql(world, alerts)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 4 open alert(s) on PR 7: py/path-injection 3 (scripts 2, worker 1), cs/log-forging 1 (app 1)" in out
+    assert "not all under a test path" in out
+    assert out.isascii()
+    api = [c for c in world.gh_calls() if c[0] == "api"]
+    assert len(api) == 1 and "refs/pull/7/merge" in api[0][1] and "--paginate" in api[0]
+    assert "o/r" in api[0][1]
+    assert _calls(world, "merge") == []
+
+
+def test_every_alert_under_a_test_path_is_flagged_as_such(world, capsys):
+    rc, _ = _land_codeql(world, [_alert("py/x", "scripts/tests/t.py"), _alert("cs/y", "app/tests/Z.cs"), _alert("py/x", "worker/tests/q.py")])
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "every alert is under a test path" in out
+
+
+def test_an_analyze_check_name_also_triggers_the_triage(world, capsys):
+    _land_codeql(world, [_alert("py/x", "scripts/a.py")], check="analyze (python)")
+    assert "CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)" in capsys.readouterr().out
+
+
+def test_a_gh_failure_listing_alerts_is_one_line_and_changes_nothing(world, capsys):
+    rc, _ = _land_codeql(world, {"exit": 1, "stderr": "HTTP 403"})
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "- could not list CodeQL alerts: " in out and "403" in out
+    assert _calls(world, "merge") == []
+
+
+def test_a_non_codeql_failed_check_makes_no_alert_call_and_prints_nothing_extra(world, capsys):
+    (world.root / "gh.log.alerts").write_text("[]", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("scripts tests", "fail")]])
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert [c for c in world.gh_calls() if c[0] == "api"] == []
+    assert "CodeQL" not in out and "alerts" not in out

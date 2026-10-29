@@ -876,6 +876,70 @@ def _read_pr_head(ctx: Ctx, pr: str) -> str:
     return ""
 
 
+TEST_PATH_PREFIXES = ("app/tests/", "worker/tests/", "scripts/tests/")
+
+
+def _is_codeql(check: dict[str, str]) -> bool:
+    name = str(check.get("name", "")).strip().lower()
+    return name == "codeql" or name.startswith("analyze ")
+
+
+def _alert_pages(raw: str) -> list[dict[str, Any]]:
+    """`gh api --paginate` prints one JSON array per page back to back; decode them all."""
+    dec, pos, out = json.JSONDecoder(), 0, []
+    raw = raw.strip()
+    while pos < len(raw):
+        page, pos = dec.raw_decode(raw, pos)
+        while pos < len(raw) and raw[pos].isspace():
+            pos += 1
+        out.extend(a for a in page if isinstance(a, dict)) if isinstance(page, list) else None
+    return out
+
+
+def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
+    """Read-only triage (#920): summarise the PR's open code-scanning alerts after a red CodeQL check. Never dismisses
+    anything, never changes the exit code; any failure is one `- could not list` line."""
+    number = pr.rstrip("/").rsplit("/", 1)[-1]
+    m = re.match(r"https?://[^/]+/([^/]+/[^/]+)/pull/\d+", pr)
+    slug = m.group(1) if m else "{owner}/{repo}"
+    api = f"repos/{slug}/code-scanning/alerts?ref=refs/pull/{number}/merge&state=open&per_page=100"
+    try:
+        proc = run_bounded([*ctx.gh, "api", api, "--paginate"], timeout=ctx.gh_timeout)
+        if proc.returncode != 0:
+            raise ValueError(f"rc={proc.returncode}: {(_text(proc.stderr) or _text(proc.stdout))[:200] or '(no output)'}")
+        alerts = _alert_pages(_text(proc.stdout))
+    except subprocess.TimeoutExpired:
+        ctx.say(f"- could not list CodeQL alerts: gh timed out after {int(ctx.gh_timeout)} s")
+        return
+    except (OSError, ValueError) as err:
+        ctx.say(f"- could not list CodeQL alerts: {' '.join(str(err).split())}")
+        return
+    rules: dict[str, list[str]] = {}
+    paths: list[str] = []
+    for a in alerts:
+        rule = a.get("rule")
+        rid = str(rule.get("id", "?")) if isinstance(rule, dict) else "?"
+        inst = a.get("most_recent_instance")
+        loc = inst.get("location") if isinstance(inst, dict) else None
+        path = str(loc.get("path", "")) if isinstance(loc, dict) else ""
+        rules.setdefault(rid, []).append(path)
+        paths.append(path)
+    parts = []
+    for rid, plist in sorted(rules.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        dirs: dict[str, int] = {}
+        for p in plist:
+            top = p.split("/", 1)[0] if "/" in p else (p or "?")
+            dirs[top] = dirs.get(top, 0) + 1
+        dtxt = ", ".join(f"{d} {n}" for d, n in sorted(dirs.items(), key=lambda kv: (-kv[1], kv[0])))
+        parts.append(f"{rid} {len(plist)} ({dtxt})")
+    ctx.say(f"CodeQL: {len(alerts)} open alert(s) on PR {number}: " + ", ".join(parts))
+    if alerts:
+        if all(p.startswith(TEST_PATH_PREFIXES) for p in paths):
+            ctx.say("- every alert is under a test path (app/tests/, worker/tests/, scripts/tests/)")
+        else:
+            ctx.say("- not all under a test path (app/tests/, worker/tests/, scripts/tests/)")
+
+
 def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
     """Wait for every check on `pr`, then merge. Never merges unless at least one check exists and ALL are green.
 
@@ -906,6 +970,8 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             elif red:
                 again = " (still red after one re-run)" if rerun_spent else ""
                 ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
+                if any(_is_codeql(c) for c in red):
+                    _report_codeql_alerts(ctx, pr)
                 return EXIT_CHECKS_RED
             if not waiting and not red:
                 break
