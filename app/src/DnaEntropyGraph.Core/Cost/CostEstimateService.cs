@@ -18,7 +18,11 @@ public interface ICostEstimateService
 /// <summary>Joins the shipped price list, this PC's run history and <see cref="CostEstimator"/>.</summary>
 public sealed class CostEstimateService : ICostEstimateService, IDisposable
 {
-    /// <summary>Cancelled when the service is disposed (the container does so at exit), so a background price read is owned by something and never outlives the app's shutdown.</summary>
+    /// <summary>
+    /// Cancelled when the service is disposed, so a background price read is owned by something. MEASURED 2026-10-29 (grep of app/src): nothing disposes the DI container
+    /// in the shipped app today (App.xaml.cs builds the provider and never disposes it), so in the app this is NOT what ends the read: at exit the process ends it.
+    /// That is safe because the cache write is tmp-then-move (<see cref="FilePricingCacheStore"/>), so a read cut mid-way leaves the old cache whole. Dispose is kept for tests and for an owner that disposes later.
+    /// </summary>
     private readonly CancellationTokenSource _lifetime = new();
 
     public event Action? PricesChanged;
@@ -120,6 +124,20 @@ public sealed class CostEstimateService : ICostEstimateService, IDisposable
         });
     }
 
-    /// <summary>The prices a source serves right now, as the text a changed price changes; null when it serves none.</summary>
-    private string? Fingerprint() => _source.Load().Table?.ToJson();
+    /// <summary>
+    /// The prices a source serves right now (every machine row and the disk price), as the text a changed price changes; null when it serves none.
+    /// Deliberately not the table's JSON: that carries the as-of date and source note, which change on a new day with the very same prices.
+    /// </summary>
+    private string? Fingerprint()
+    {
+        if (_source.Load().Table is not { } table)
+        {
+            return null;
+        }
+
+        var rows = table.Machines
+            .OrderBy(m => m.MachineType, StringComparer.Ordinal)
+            .Select(m => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{m.MachineType}|{m.Accelerator}|{m.OnDemandUsdPerHour:R}|{m.SpotUsdPerHour:R}"));
+        return string.Join(';', rows) + string.Create(System.Globalization.CultureInfo.InvariantCulture, $";disk={table.DiskUsdPerGbMonth:R}");
+    }
 }
