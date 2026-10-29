@@ -174,8 +174,10 @@ jobs:
           output: trivy-${{ matrix.variant }}.sarif
           trivyignores: .trivyignore.yaml
 
-      # A code-scanning outage must never block a release, and the gate below must still run: always() so a failed report
-      # step does not skip it, continue-on-error so a failed upload does not fail the job. (The gate is the only blocker.)
+      # A code-scanning outage must never block a release: continue-on-error so a failed upload does not fail the job. The
+      # always() on THIS step makes it run (and so upload whatever was written) even if the report step failed; the gate below
+      # has no always() and runs only if the report step succeeded. (The gate is the only blocker.) THEORY (unverified): code
+      # scanning accepts SARIF from a tag ref; the first release must check it (docs/ToTest.md, #255 row).
       - name: upload the Trivy report to code scanning
         if: always()
         continue-on-error: true

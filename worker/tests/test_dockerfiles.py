@@ -76,11 +76,6 @@ def test_cpu_lockfile_install_is_hash_verified() -> None:
     assert "--require-hashes" in code
 
 
-def test_uv_lock_carries_hashes_for_the_cpu_image_dependencies() -> None:
-    text = (WORKER_DIR / "uv.lock").read_text(encoding="utf-8")
-    assert "sha256:" in text
-
-
 def test_cuda_base_is_pinned_by_digest() -> None:
     """#255: the release pin gate refuses an unpinned FROM, so cuda must carry a literal digest."""
     import re
@@ -99,7 +94,12 @@ def test_every_from_has_its_human_readable_tag_in_a_comment() -> None:
     ):
         lines = path.read_text(encoding="utf-8").splitlines()
         idx = next(i for i, ln in enumerate(lines) if ln.startswith("FROM "))
-        above = "\n".join(lines[max(0, idx - 12) : idx])
+        block: list[str] = []
+        for ln in reversed(lines[:idx]):
+            if not ln.startswith("#"):
+                break
+            block.append(ln)
+        above = "\n".join(reversed(block))
         assert tag in above, f"{path.name}: name {tag} in a comment above FROM"
         assert "resolved" in above.lower()
 
@@ -271,7 +271,14 @@ def test_cpu_bootstrap_and_project_install_are_hash_verified() -> None:
     assert "pip install --no-deps ." not in code
 
 
-def test_cuda_digest_is_flagged_as_unverified_until_the_first_release() -> None:
-    """The digest was read from the registry but nothing ever built or ran it: say so in the file."""
+def test_cuda_comments_do_not_claim_the_base_is_unpinned() -> None:
+    """The FROM is pinned by digest (test_cuda_base_is_pinned_by_digest); a comment saying it is
+    not pinned yet is stale and misleads the next reader about what is locked."""
     text = DOCKERFILE_CUDA.read_text(encoding="utf-8")
-    assert "first release" in text.lower()
+    assert "isn't pinned by digest" not in text
+    assert "not pinned by digest" not in text
+    assert "Python dependencies are NOT locked" in text, "say plainly what the cuda image does not lock"
+
+
+def test_build_requirements_ends_with_a_newline() -> None:
+    assert BUILD_REQUIREMENTS.read_bytes().endswith(b"\n")

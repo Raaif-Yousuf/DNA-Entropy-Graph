@@ -5,7 +5,9 @@
 # --no-build-isolation .` never fetches an unhashed build requirement.
 #
 # Hashes MEASURED 2026-10-16 from PyPI's JSON API:
-#   https://pypi.org/pypi/uv/0.12.13/json            (Linux x86_64 and aarch64 manylinux wheels, glibc python:3.12-slim)
+#   https://pypi.org/pypi/uv/0.12.13/json            (three Linux wheels for the glibc python:3.12-slim base: 5312891... is
+#                                                     manylinux_2_17 x86_64; 891aff3... is manylinux_2_17 aarch64 (also tagged musllinux);
+#                                                     b9c703a... is manylinux_2_28 aarch64. pip takes whichever matches the build host)
 #   https://pypi.org/pypi/setuptools/84.0.0/json     (py3-none-any wheel)
 #   https://pypi.org/pypi/wheel/0.48.0/json          (py3-none-any wheel)
 #   https://pypi.org/pypi/packaging/26.3/json        (py3-none-any wheel; the same version and hash uv.lock pins)

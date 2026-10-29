@@ -102,3 +102,66 @@ def test_main_fails_on_a_missing_file(mod, tmp_path):
 
 def test_the_committed_allowlist_is_valid_today(mod):
     assert mod.problems((REPO / ".trivyignore.yaml").read_text(encoding="utf-8"), dt.date.today()) == []
+
+
+def test_paths_and_purls_lists_are_accepted(mod):
+    """Trivy's own ignore-file format allows `paths` and `purls` (lists) on an entry."""
+    text = (
+        "vulnerabilities:\n"
+        "  - id: CVE-2026-1111\n"
+        "    paths:\n"
+        '      - "usr/lib/python3.12/site-packages/foo"\n'
+        "    purls:\n"
+        "      - pkg:pypi/foo@1.0\n"
+        "    statement: fixable but blocked, issue #5\n"
+        "    expired_at: 2026-12-01\n"
+        "  - id: CVE-2026-2222\n"
+        "    paths:\n"
+        "    - bar\n"
+        "    statement: why\n"
+        "    expired_at: 2026-12-02\n"
+    )
+    assert mod.problems(text, TODAY) == []
+
+
+def test_a_list_item_does_not_swallow_the_next_entry_and_is_still_validated(mod):
+    text = (
+        "vulnerabilities:\n"
+        "  - id: CVE-2026-1111\n"
+        "    paths:\n"
+        "      - foo\n"
+        "    statement: why\n"
+        "    expired_at: 2026-10-01\n"
+        "  - id: CVE-2026-2222\n"
+        "    statement: why\n"
+    )
+    out = mod.problems(text, TODAY)
+    assert any("CVE-2026-1111" in p and "expired" in p for p in out)
+    assert any("CVE-2026-2222" in p and "expired_at" in p for p in out)
+
+
+def test_a_trailing_comment_on_the_date_and_id_lines_is_ignored(mod):
+    text = (
+        "vulnerabilities:\n"
+        "  - id: CVE-2026-1111  # openssl\n"
+        "    statement: bumps in #123\n"
+        "    expired_at: 2026-12-01  # re-check after the base bump\n"
+    )
+    assert mod.problems(text, TODAY) == []
+
+
+def test_a_trailing_comment_does_not_hide_an_expired_date(mod):
+    out = mod.problems("vulnerabilities:\n" + _entry(exp="2026-10-01  # old"), TODAY)
+    assert any("expired" in p for p in out)
+
+
+def test_an_unknown_field_still_fails(mod):
+    text = "vulnerabilities:\n" + _entry() + "    severity: HIGH\n"
+    assert any("severity" in p for p in mod.problems(text, TODAY))
+
+
+def test_the_template_example_only_allowlists_a_fixable_finding():
+    """ignore-unfixed is on in the gate: allowlisting an unfixed CVE is pointless, so the template must not say so."""
+    text = (REPO / ".trivyignore.yaml").read_text(encoding="utf-8")
+    assert "no fixed version upstream" not in text
+    assert "fixable" in text.lower()
