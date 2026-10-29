@@ -18,6 +18,45 @@ public static class ResultsCopy
     // Issue #118: the entropy overview strip.
     public const string ExportPngFailed = "Results_ExportPngFailed";
 
+    // Issue #552: the gene table.
+    public const string GenesTruncated = "Results_GenesTruncated";
+    public const string GenesUnreadable = "Results_GenesUnreadable";
+    public const string GenesRowsSkipped = "Results_GenesRowsSkipped";
+    public const string GenesOrderFile = "Results_GenesOrderFile";
+    public const string GenesOrderSorted = "Results_GenesOrderSorted";
+    public const string GenesSortedAscending = "Results_GenesSortedAscending";
+    public const string GenesSortedDescending = "Results_GenesSortedDescending";
+
+    /// <summary>The sort keys of <see cref="ResultsGeneTable"/>, in column order.</summary>
+    public static IReadOnlyList<string> GeneColumnKeys { get; } = ["contig", "gene", "begin", "end", "strand", "length", "mean", "min", "max", "low"];
+
+    public const string GeneColumnContig = "Results_GeneColumn_contig";
+    public const string GeneColumnGene = "Results_GeneColumn_gene";
+    public const string GeneColumnBegin = "Results_GeneColumn_begin";
+    public const string GeneColumnEnd = "Results_GeneColumn_end";
+    public const string GeneColumnStrand = "Results_GeneColumn_strand";
+    public const string GeneColumnLength = "Results_GeneColumn_length";
+    public const string GeneColumnMean = "Results_GeneColumn_mean";
+    public const string GeneColumnMin = "Results_GeneColumn_min";
+    public const string GeneColumnMax = "Results_GeneColumn_max";
+    public const string GeneColumnLow = "Results_GeneColumn_low";
+
+    /// <summary>The header text key of a gene table column (literal keys, so each one is an explicit lookup).</summary>
+    public static string GeneColumnKey(string sortKey) => sortKey switch
+    {
+        "contig" => GeneColumnContig,
+        "gene" => GeneColumnGene,
+        "begin" => GeneColumnBegin,
+        "end" => GeneColumnEnd,
+        "strand" => GeneColumnStrand,
+        "length" => GeneColumnLength,
+        "mean" => GeneColumnMean,
+        "min" => GeneColumnMin,
+        "max" => GeneColumnMax,
+        "low" => GeneColumnLow,
+        _ => throw new ArgumentOutOfRangeException(nameof(sortKey), sortKey, "Not a gene table column."),
+    };
+
     // Issue #586: Open in IGV and Open in Geneious.
     public const string IgvNoFiles = "Results_IgvNoFiles";
     public const string IgvNotFound = "Results_IgvNotFound";
@@ -72,9 +111,11 @@ public static class ResultsCopy
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
+        GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
+        .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
+    public static IReadOnlyList<string> FormatKeys { get; } = [GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes];
 }
 
