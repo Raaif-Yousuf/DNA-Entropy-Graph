@@ -101,15 +101,87 @@ public sealed class DiagnosticsNotesTagsTests
         }
     }
 
-    [Fact]
-    public void A_tag_is_scrubbed_from_logs_as_a_whole_word_only_never_inside_a_longer_word()
+    // DECISION (agent-made, reversible): a tag or note word that is log vocabulary (a level, a status or phase word, a JSON key the
+    // bundle keeps, a marker word) is not scrubbed from logs. The app never writes a note or tag into a log (Hard Rule on logging), so
+    // such a word in a log is the log's own vocabulary; scrubbing it blanked every "info"/"error" and tripped the whole-file backstop.
+    [Theory]
+    [InlineData("info")]
+    [InlineData("error")]
+    [InlineData("failed")]
+    [InlineData("Completed")]
+    public void A_tag_that_is_log_vocabulary_does_not_blank_ordinary_log_words(string tag)
     {
-        var run = new RunRecord(JobId, JobPhase.Completed, new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero), TagsJson: "[\"info\"]");
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: $"[\"{tag}\"]");
 
-        var log = BuildFor(run, "information was read; info here\n", include: false).Single(e => e.Key.EndsWith(".log")).Value;
+        var log = BuildFor(run, "info: job failed with error; completed\n", include: false).Single(e => e.Key.EndsWith(".log")).Value;
 
-        log.ShouldContain("information was read");
-        log.ShouldNotContain("info here");
+        log.ShouldContain("info: job failed with error; completed");
+        log.ShouldNotContain("<redacted>");
+    }
+
+    [Fact]
+    public void A_distinctive_tag_is_scrubbed_from_logs_as_a_whole_word_only_never_inside_a_longer_word()
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"clone7\"]");
+
+        var log = BuildFor(run, "clone77 was read; clone7 here\n", include: false).Single(e => e.Key.EndsWith(".log")).Value;
+
+        log.ShouldContain("clone77 was read");
+        log.ShouldNotContain("clone7 here");
+    }
+
+    // MEASURED 2026-10-28 (cold review of #141): TagsJson=["level"] plus a progress.jsonl line with "level":"info" turned the file into
+    // "<omitted: file withheld>", because the backstop re-matched the tag against keys and markers the redactor deliberately keeps.
+    [Theory]
+    [InlineData("level")]
+    [InlineData("phase")]
+    [InlineData("stage")]
+    [InlineData("code")]
+    [InlineData("status")]
+    [InlineData("percent")]
+    [InlineData("user")]
+    [InlineData("path")]
+    [InlineData("email")]
+    [InlineData("file")]
+    [InlineData("redacted")]
+    [InlineData("token")]
+    [InlineData("sequence")]
+    [InlineData("omitted")]
+    public void A_tag_equal_to_a_kept_key_or_a_marker_word_never_withholds_the_run_files(string tag)
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: $"[\"{tag}\"]");
+        var files = new Dictionary<string, string>
+        {
+            [$"runs/{JobId}/progress.jsonl"] = "{\"seq\":1,\"stage\":\"predict\",\"level\":\"info\",\"percent\":5}\n",
+            [$"runs/{JobId}/status.json"] = "{\"stage\":\"predict\",\"percent\":5}",
+            [$"runs/{JobId}/result.json"] = "{\"status\":\"ok\"}",
+            [$"runs/{JobId}/logs/app.log"] = $"read C:\\Lab\\x.fasta for jane@example.org and {tag}\n",
+        };
+
+        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info);
+        using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
+        var entries = archive.Entries.ToDictionary(e => e.FullName, e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd());
+
+        var copied = entries.Where(e => e.Key.StartsWith("files/", StringComparison.Ordinal)).ToList();
+        copied.Count.ShouldBe(4);
+        copied.ShouldNotContain(e => e.Value.Contains("<omitted: file withheld>", StringComparison.Ordinal), tag);
+        entries.Single(e => e.Key.EndsWith("progress.jsonl")).Value.ShouldContain("\"level\":\"info\"");
+        entries.Single(e => e.Key.EndsWith("status.json")).Value.ShouldContain("predict");
+        entries.Single(e => e.Key.EndsWith("result.json")).Value.ShouldContain("\"status\"");
+    }
+
+    [Fact]
+    public void A_distinctive_tag_still_in_a_copied_file_after_redaction_withholds_that_file_whole()
+    {
+        // The backstop must still fire for a real leak: a distinctive tag inside a kept JSON value that the redactor let through.
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"clone7\"]");
+        var files = new Dictionary<string, string> { [$"runs/{JobId}/status.json"] = "{\"stage\":\"clone7\"}" };
+
+        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info);
+        using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
+        var text = archive.Entries.Where(e => e.FullName.StartsWith("files/", StringComparison.Ordinal)).Select(e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd()).Single();
+
+        text.ShouldNotContain("clone7", Case.Insensitive);
     }
 
     [Fact]

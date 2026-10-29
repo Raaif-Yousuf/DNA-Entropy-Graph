@@ -171,8 +171,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             // bound to an already-cancelled token never starts the delegate, and the exporter's cleanup of the picker's empty
             // file would be skipped. The exporter observes the token itself and throws OperationCanceledException.
             var includeNotes = IncludeNotesAndTags;
-            IncludeNotesAndTags = false;
             await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken, includeNotes), CancellationToken.None);
+            // Cleared only once a file was really written: a cancelled picker, a failed write or a refused bundle leaves the choice as it was.
+            IncludeNotesAndTags = false;
             _lastDiagnosticsPath = path;
             OpenDiagnosticsFolderCommand.NotifyCanExecuteChanged();
             Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path), ToastSeverity.Success);

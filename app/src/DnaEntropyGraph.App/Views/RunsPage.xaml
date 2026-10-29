@@ -101,7 +101,7 @@
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate x:DataType="x:String">
                                                             <Border
-                                                                x:Uid="RunsTagChip"
+                                                                AutomationProperties.Name="{x:Bind}"
                                                                 Padding="8,2"
                                                                 CornerRadius="10"
                                                                 Background="{ThemeResource ControlFillColorSecondaryBrush}">

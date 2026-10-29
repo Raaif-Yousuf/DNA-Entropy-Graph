@@ -175,6 +175,47 @@ public sealed class RunNotesTagsViewModelTests
     }
 
     [Fact]
+    public async Task Keystrokes_typed_while_the_save_is_in_flight_are_never_overwritten_by_the_tidied_value()
+    {
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = "  first  ";
+        vm.TagsText = " a ;A";
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.NotesText = "  first and more";
+        vm.TagsText = " a ;A, b";
+        gate.SetResult(true);
+        await saving;
+
+        vm.NotesText.ShouldBe("  first and more");
+        vm.TagsText.ShouldBe(" a ;A, b");
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
+    }
+
+    [Fact]
+    public async Task A_box_left_untouched_during_the_save_is_still_tidied()
+    {
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = "  hello  ";
+        vm.TagsText = " x ;X, y ";
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        gate.SetResult(true);
+        await saving;
+
+        vm.NotesText.ShouldBe("hello");
+        vm.TagsText.ShouldBe("x, y");
+    }
+
+    [Fact]
     public async Task Runs_rows_show_tag_chips_and_the_note_and_the_search_matches_tags_notes_and_names_ignoring_case()
     {
         _rows = [Row("a", "Failed SEQUENCING", """["clone7"]""", name: "alpha"), Row("b", null, """["Control"]""", name: "beta"), Row("c", name: "gamma")];

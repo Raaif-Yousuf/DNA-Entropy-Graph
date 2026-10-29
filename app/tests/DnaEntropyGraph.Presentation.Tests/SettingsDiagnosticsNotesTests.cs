@@ -53,4 +53,65 @@ public sealed class SettingsDiagnosticsNotesTests
 
         _viewModel.IncludeNotesAndTags.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task The_box_stays_ticked_while_the_file_is_still_being_written()
+    {
+        var gate = new TaskCompletionSource();
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(_ => gate.Task);
+        _viewModel.IncludeNotesAndTags = true;
+
+        var saving = _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+        gate.SetResult();
+        await saving;
+        _viewModel.IncludeNotesAndTags.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_cancelled_picker_keeps_the_box_ticked()
+    {
+        _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((string?)null);
+        _viewModel.IncludeNotesAndTags = true;
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+        await _exporter.DidNotReceive().ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>());
+    }
+
+    [Fact]
+    public async Task A_cancelled_write_keeps_the_box_ticked()
+    {
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(Task.FromCanceled(new CancellationToken(true)));
+        _viewModel.IncludeNotesAndTags = true;
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_write_failure_keeps_the_box_ticked()
+    {
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(Task.FromException(new IOException("disk full")));
+        _viewModel.IncludeNotesAndTags = true;
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_refused_bundle_keeps_the_box_ticked()
+    {
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(Task.FromException(new DiagnosticsLeakException(new LeakFinding("x", LeakRules.Identifier))));
+        _viewModel.IncludeNotesAndTags = true;
+
+        await _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+    }
 }

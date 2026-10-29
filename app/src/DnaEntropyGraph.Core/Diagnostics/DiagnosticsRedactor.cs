@@ -26,6 +26,16 @@ internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys, Func<s
     /// <summary><c>error</c> in <c>status.json</c> and <c>result.json</c>: the code must be one the worker's registry defines (#613).</summary>
     private static KeySpec ErrorSpec { get; } = Of(("code", OneOf(RunErrorCodes.WorkerErrorCodes)), ("retriable", null));
 
+    /// <summary>Adds every key of this spec and of its children to <paramref name="sink"/>.</summary>
+    public void CollectKeys(ISet<string> sink)
+    {
+        foreach (var (key, child) in Keys)
+        {
+            sink.Add(key);
+            child?.CollectKeys(sink);
+        }
+    }
+
     public static KeySpec Of(params (string Key, KeySpec? Child)[] entries) =>
         new(entries.ToDictionary(e => e.Key, e => e.Child, StringComparer.Ordinal));
 
@@ -124,13 +134,46 @@ internal sealed partial class DiagnosticsRedactor
     }
 
     /// <summary>True when the text still holds one of the user's own words (see the <c>userText</c> argument) as a whole token.</summary>
-    public bool ContainsUserText(string text) => _userText?.IsMatch(text) == true;
+    public bool ContainsUserText(string text) => _userText?.IsMatch(MarkerWord().Replace(text, " ")) == true;
+
+    // The fixed markers this redactor and the bundle builder write. They carry no user text, so the backstop must not read their
+    // words ("user", "path", "redacted") as the user's own.
+    [GeneratedRegex(@"<(?:redacted|user|path|token|email|sequence|file)>|<omitted: [a-z ]{3,40}>|<unparseable line omitted>")]
+    private static partial Regex MarkerWord();
+
+    // DECISION (agent-made, reversible): words that are the bundle's own vocabulary are never scrubbed as "user text". The app never
+    // writes a note or tag into a log, so such a word in a log is the log's own: scrubbing a tag "info" blanked every log level and a
+    // tag "level" or "status" made the backstop withhold progress.jsonl, status.json and result.json (cold review of #141).
+    // Distinctive text (a digit, a punctuation mark, an uncommon word) and every multi-word note is still scrubbed.
+    private static readonly HashSet<string> LogVocabulary = BuildLogVocabulary();
+
+    private static HashSet<string> BuildLogVocabulary()
+    {
+        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "debug", "trace", "info", "information", "warn", "warning", "error", "errors", "fatal", "critical", "failed", "failure", "fail",
+            "ok", "done", "completed", "complete", "success", "succeeded", "running", "started", "stopped", "cancelled", "canceled",
+            "pending", "queued", "none", "null", "true", "false", "unknown", "message", "detail", "details", "job", "run", "runs",
+            "redacted", "user", "path", "token", "email", "sequence", "file", "omitted", "withheld",
+        };
+        foreach (var phase in Enum.GetNames<JobPhase>())
+        {
+            words.Add(phase);
+        }
+
+        foreach (var spec in new[] { KeySpec.Status, KeySpec.Progress, KeySpec.Result })
+        {
+            spec.CollectKeys(words);
+        }
+
+        return words;
+    }
 
     private static Regex? WholeTokenRegex(IEnumerable<string>? values)
     {
         var usable = (values ?? [])
             .Select(v => v?.Trim() ?? string.Empty)
-            .Where(v => v.Length >= 2 && !v.All(char.IsDigit) && v.Any(char.IsLetterOrDigit))
+            .Where(v => v.Length >= 2 && !v.All(char.IsDigit) && v.Any(char.IsLetterOrDigit) && !LogVocabulary.Contains(v))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(v => v.Length)
             .Select(Regex.Escape)

@@ -412,6 +412,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         var generation = Volatile.Read(ref _loadGeneration);
+        var capturedNotesText = NotesText;
+        var capturedTagsText = TagsText;
         var notes = string.IsNullOrWhiteSpace(NotesText) ? null : RunTags.ClampNotes(NotesText.Trim());
         var tags = RunTags.ParseInput(TagsText);
         bool found;
@@ -441,8 +443,18 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
-        NotesText = notes ?? string.Empty;
-        TagsText = RunTags.Format(tags);
+        // Tidy a box only when it still holds what was saved: anything typed while the write ran is the user's, not ours to replace.
+        if (string.Equals(NotesText, capturedNotesText, StringComparison.Ordinal))
+        {
+            NotesText = notes ?? string.Empty;
+        }
+
+        if (string.Equals(TagsText, capturedTagsText, StringComparison.Ordinal))
+        {
+            TagsText = RunTags.Format(tags);
+        }
+
+
         AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaved);
     }
 
