@@ -139,6 +139,40 @@ public class GooglePricingCatalogGatewayTests
         ex.Kind.ShouldBe(CloudErrorKind.Network);
     }
 
+    [Fact]
+    public async Task Many_failed_catalog_reads_never_open_the_breaker_that_guards_creating_and_polling_a_run()
+    {
+        // Issue #214 review M4: the price list is optional; its failures must not make a run's own calls fail fast.
+        var rig = new GoogleGatewayHarness(retries: 0);
+        for (var i = 0; i < 40; i++)
+        {
+            rig.Handler.Returns(HttpMethod.Get, Skus, 500, Error(500));
+        }
+
+        for (var i = 0; i < 40; i++)
+        {
+            await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.PricingCatalog.ListComputeSkusAsync(CancellationToken.None));
+        }
+
+        rig.Pipeline.IsOffline.ShouldBeFalse();
+        (await rig.Pipeline.ExecuteAsync("Test.Poll", _ => Task.FromResult(7), CancellationToken.None)).ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task A_page_token_seen_earlier_in_the_walk_fails_the_read_as_a_stuck_listing_not_a_network_timeout()
+    {
+        // Issue #214 review L7: A -> B -> A loops forever (or until the read timeout, reported as a network problem).
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler.Returns(HttpMethod.Get, Skus, 200, Page(Sku("A1", "d", "CPU", "OnDemand", "\"us-central1\"", Rate(0, "0", 1)), "A"));
+        rig.Handler.Returns(HttpMethod.Get, Skus, 200, Page(Sku("A2", "d", "CPU", "OnDemand", "\"us-central1\"", Rate(0, "0", 1)), "B"));
+        rig.Handler.Returns(HttpMethod.Get, Skus, 200, Page(Sku("A3", "d", "CPU", "OnDemand", "\"us-central1\"", Rate(0, "0", 1)), "A"));
+        rig.Handler.Returns(HttpMethod.Get, Skus, 200, Page(Sku("A4", "d", "CPU", "OnDemand", "\"us-central1\"", Rate(0, "0", 1))));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.PricingCatalog.ListComputeSkusAsync(CancellationToken.None));
+
+        ex.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
+    }
+
     private static string Info(string effective, string units, int nanos)
         => "{\"effectiveTime\":\"" + effective + "\",\"pricingExpression\":{\"usageUnit\":\"h\",\"tieredRates\":[" + Rate(0, units, nanos) + "]}}";
 
