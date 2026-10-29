@@ -169,10 +169,12 @@ public sealed class AccountRegistry
     /// <paramref name="change"/> runs while the lock is held: keep it short (no waiting, no network). Whatever it throws leaves the file untouched.
     /// <paramref name="onQuarantined"/> is told, under the lock and before <paramref name="change"/> runs, where a damaged file was set aside by this
     /// very read (it is never told of one set aside earlier); it must not take a lock a <see cref="Load"/> caller holds.
+    /// <paramref name="afterWrite"/> runs under the same lock once the file is written (and never when it was not): work that must be atomic with the list change, such as
+    /// deleting a token file only if it is still the one <paramref name="change"/> compared. It must not throw what it cannot leave behind: the list is already changed.
     /// Throws <see cref="AccountsFileFolderException"/> when the file is damaged and cannot be set aside (the folder is the problem), <see cref="AccountsFileLockedException"/> when the file exists but cannot be read (it is never replaced then), and a
     /// <see cref="TokenStorageException"/> when it cannot be written. Returns the file that was written.
     /// </summary>
-    public AccountsFile Update(Func<AccountsFile, AccountsFile> change, Action<string>? onQuarantined = null)
+    public AccountsFile Update(Func<AccountsFile, AccountsFile> change, Action<string>? onQuarantined = null, Action? afterWrite = null)
     {
         AccountsFile? written = null;
         WithLock(() =>
@@ -195,6 +197,7 @@ public sealed class AccountRegistry
 
             written = change(outcome.File);
             Write(written);
+            afterWrite?.Invoke();
         }, _saveLockWait);
         return written!;
     }

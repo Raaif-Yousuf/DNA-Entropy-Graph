@@ -208,29 +208,31 @@ public class AccountRegistryTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
-        var registry = new AccountRegistry(_dir);
+        using var reachedLock = new ManualResetEventSlim();
+        var registry = new AccountRegistry(_dir, name =>
+        {
+            reachedLock.Set(); // the load is now past its own bookkeeping and about to wait for the mutex
+            return new Mutex(false, name);
+        });
         using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             registry.Load();
         }
 
         registry.Unreadable.ShouldBeTrue();
+        reachedLock.Reset();
         using var holder = new MutexHolder(_dir);
-        var observed = new List<bool>();
         var loader = new Thread(() => registry.Load());
         loader.Start();
-        for (var i = 0; i < 5; i++)
-        {
-            Thread.Sleep(20);
-            observed.Add(registry.Unreadable);
-        }
 
+        // Gated on the load's own signal, not on elapsed time: a load that reset the answer before waiting has done so by now, and one that waits leaves it true
+        // whether this sample falls inside the 150 ms wait or after it (a timed-out load is Unreadable again).
+        reachedLock.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var observed = registry.Unreadable;
         loader.Join();
 
-        // Real time, cannot fail correct code: a sample taken after the 150 ms wait ended still sees true (a timed-out load leaves the old answer), so load only reduces how many samples fall inside the wait.
-        observed.ShouldAllBe(u => u, "the lock wait lasts 150 ms; the old answer stands until the new one is known");
+        observed.ShouldBeTrue("the old answer stands until the new one is known");
     }
-
     [Fact]
     public void An_update_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
     {

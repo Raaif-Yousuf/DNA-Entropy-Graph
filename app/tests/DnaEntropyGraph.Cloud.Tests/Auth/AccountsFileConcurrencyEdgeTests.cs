@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Core.Cloud;
 using Shouldly;
 using Xunit;
@@ -24,7 +25,7 @@ public class AccountsFileConcurrencyEdgeTests
 
         var signOut = copyA.SignOutAsync(CancellationToken.None);
         await harness.Google.RevokeStarted.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the sign-out is mid-revoke: its token file is not deleted yet");
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeFalse("the token goes with the list change, under the lock, before the revoke");
 
         var failure = await Should.ThrowAsync<AccountAuthException>(() => copyB.SelectProjectAsync("deg-proj-one", CancellationToken.None));
 
@@ -99,7 +100,6 @@ public class AccountsFileConcurrencyEdgeTests
         File.WriteAllBytes(Path.Combine(harness.AuthDirectory, "1001.tok"), [1, 2, 3]); // A will find its token dead
         copyA.AfterExpiryStampForTest = async () =>
         {
-            await Task.Delay(50);
             harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
             await copyB.SignInAsync(CancellationToken.None); // lands after A's stamp, before A's update
         };
@@ -121,12 +121,12 @@ public class AccountsFileConcurrencyEdgeTests
 
         var signOut = copyA.SignOutAsync(CancellationToken.None);
         await harness.Google.RevokeStarted.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
         harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
         await copyB.SignInAsync(CancellationToken.None);
         harness.Google.RevokeGate.SetResult();
         await signOut;
 
+        harness.Google.RevokedTokens.Count.ShouldBe(1);
         File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the sign-out deletes only the token it found, not the one signed in meanwhile");
         harness.NewService().IsSignedIn.ShouldBeTrue();
     }
@@ -145,5 +145,71 @@ public class AccountsFileConcurrencyEdgeTests
             failure.Code.ShouldBe(AuthErrorCodes.StorageFailed, "Try again would never fix a folder that will not let the file move");
             service.IsSignedIn.ShouldBeFalse("the cached list was dropped: the file is damaged, not the list we hold");
         }
+    }
+
+    private static async Task<string> RefreshTokenOnDiskAsync(AuthHarness harness, string sub)
+        => (await new DpapiTokenStore(harness.AuthDirectory, new XorProtector()).GetAsync<Google.Apis.Auth.OAuth2.Responses.TokenResponse>(sub))!.RefreshToken;
+
+    [Fact]
+    public async Task A_sign_in_of_the_same_account_between_a_sign_outs_stamp_and_its_list_change_is_not_signed_out()
+    {
+        using var harness = new AuthHarness();
+        var copyA = await harness.SignedInAsync("1001", "first@example.test");
+        var copyB = harness.NewService();
+        copyA.AfterSignOutStampForTest = async () =>
+        {
+            harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
+            await copyB.SignInAsync(CancellationToken.None);
+        };
+
+        await copyA.SignOutAsync(CancellationToken.None);
+
+        harness.Google.RevokedTokens.ShouldBeEmpty("the token the sign-out found is gone: nothing of the fresh sign-in is revoked");
+        File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue();
+        harness.NewService().IsSignedIn.ShouldBeTrue("the account the other copy just signed in stays listed");
+    }
+
+    [Fact]
+    public async Task A_sign_out_revokes_the_token_it_found_not_one_signed_in_after_the_list_change()
+    {
+        using var harness = new AuthHarness();
+        var copyA = await harness.SignedInAsync("1001", "first@example.test");
+        var copyB = harness.NewService();
+        var old = await RefreshTokenOnDiskAsync(harness, "1001");
+        copyA.AfterSignOutListUpdateForTest = async () =>
+        {
+            harness.Google.NextIdentity = new FakeIdentity("1001", "first@example.test");
+            await copyB.SignInAsync(CancellationToken.None);
+        };
+
+        await copyA.SignOutAsync(CancellationToken.None);
+
+        harness.Google.RevokedTokens.ShouldBe([old]);
+        (await RefreshTokenOnDiskAsync(harness, "1001")).ShouldNotBe(old);
+        harness.NewService().IsSignedIn.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_sign_out_whose_token_file_cannot_be_deleted_still_lists_the_account_out_and_revokes_then_says_storage()
+    {
+        using var harness = new AuthHarness();
+        var service = await harness.SignedInAsync("1001", "first@example.test");
+        var tokenPath = Path.Combine(harness.AuthDirectory, "1001.tok");
+        FileStream? hold = null;
+        service.AfterSignOutStampForTest = () =>
+        {
+            hold = new FileStream(tokenPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return Task.CompletedTask;
+        };
+
+        using (hold)
+        {
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.SignOutAsync(CancellationToken.None));
+
+            failure.Code.ShouldBe(AuthErrorCodes.StorageFailed);
+        }
+
+        harness.Google.RevokedTokens.Count.ShouldBe(1, "the list change was written, so the revoke still ran");
+        harness.NewService().IsSignedIn.ShouldBeFalse("the list no longer has the account");
     }
 }
