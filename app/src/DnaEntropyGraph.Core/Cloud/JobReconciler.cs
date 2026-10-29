@@ -433,9 +433,11 @@ public sealed class JobReconciler
 
         if (CancelOwnsTheVm(row))
         {
-            // Issue #938: a cancel deletes the run's VM. One found under a cancelled run's job id (a create Compute accepted after the app stopped looking, or after the app was closed
+            // Issue #938: a cancel deletes the VM the run CREATED. One found under a cancelled run's job id (a create Compute accepted after the app stopped looking, or after the app was closed
             // mid-cancel) is that cancel's to delete, whatever its lifecycle label says: nothing is left worth stopping or keeping.
-            return VmWant.Delete;
+            // Round 3 H1: a VM that does not carry the run's own name was created by ANOTHER run and only relabelled to this one by a reuse that landed after the cancel. It is stopped,
+            // never deleted (its owner's keep-alive promise stands), and its labels are left.
+            return vm.Name == VmTerminator.OwnVmName(row.JobId) ? VmWant.Delete : vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;
         }
 
         var lifecycle = vm.Labels is not null && vm.Labels.TryGetValue("lifecycle", out var label)

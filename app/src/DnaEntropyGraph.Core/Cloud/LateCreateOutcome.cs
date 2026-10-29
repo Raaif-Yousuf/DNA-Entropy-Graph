@@ -15,6 +15,9 @@ public enum LateCreateState
     /// <summary>The VM landed and could not be confirmed deleted within the lifecycle timeout; <see cref="LateCreateOutcome.ErrorClass"/> says what failed. The VM's own maxRunDuration is the backstop.</summary>
     DeleteFailed,
 
+    /// <summary>No look ever saw a VM, and the looks and the delete by name kept failing: the app cannot say whether the create made one. <see cref="LateCreateOutcome.ErrorClass"/> says what failed.</summary>
+    CouldNotConfirm,
+
     /// <summary>The create had not landed when the reap window ran out; the VM's own maxRunDuration is the backstop.</summary>
     GaveUp,
 

@@ -5,7 +5,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// cancel and the late clean-up look up BY NAME, whatever became of the create task: the real gateway honours cancellation, so a cancelled create ends Canceled within
 /// milliseconds although Compute may already have accepted the insert and made the VM. The task is kept only to tell a rejected create (no VM) from one whose outcome is unknown.
 /// </summary>
-internal sealed class SentCreate(string jobId, string name, string zone, long generation, Func<bool> isSuperseded)
+internal sealed class SentCreate(string jobId, string name, string zone, long generation, string installationId)
 {
     private int _claimed;
 
@@ -15,20 +15,29 @@ internal sealed class SentCreate(string jobId, string name, string zone, long ge
 
     public string Zone { get; } = zone;
 
-    /// <summary>The job's attempt this create belongs to (<see cref="VmProvisioner"/> counts one per <c>ProvisionAsync</c>).</summary>
+    /// <summary>The installation the create was sent for: a VM under the same name that carries another installation's label is not this create's (Hard Rule 9).</summary>
+    public string InstallationId { get; } = installationId;
+
+    /// <summary>The job's attempt this create belongs to (<see cref="AttemptLedger"/> counts one per <c>ProvisionAsync</c>).</summary>
     public long Generation { get; } = generation;
 
     /// <summary>The create call's task, set once the gateway returned it. Null while the gateway has not yet returned (the request may be on the wire).</summary>
     public Task? Create { get; set; }
 
-    /// <summary>Set once a look by name saw the VM this create names (it exists or existed): nothing further can appear from this create.</summary>
+    /// <summary>Set once a look by name saw the VM this create names (it exists or existed), or a delete was sent for it: nothing further can appear from this create.</summary>
     public volatile bool Landed;
 
     /// <summary>
-    /// True once a LATER attempt of the same job has itself created, adopted or reused a VM under this name in this zone: that VM is the newer attempt's, and this create's clean-up
-    /// leaves it alone. A VM under the same name in ANOTHER zone is not covered (the newer attempt did not claim it), so it is still cleaned up.
+    /// Set once a look by name that STARTED after the create answered found no VM: the create's VM is gone (it deleted itself, or was deleted). An answer alone is not enough, because a VM
+    /// the create made after the cancel's last look has never been looked at (round 3 M1).
     /// </summary>
-    public bool IsSuperseded => isSuperseded();
+    public volatile bool Settled;
+
+    /// <summary>Guarded by <see cref="AttemptLedger"/>'s lock: a delete of this create's VM was begun, so the job's later attempts wait for it (see <see cref="AttemptLedger.TryBeginDelete"/>).</summary>
+    internal bool DeleteBegun;
+
+    /// <summary>Guarded by <see cref="AttemptLedger"/>'s lock: the delete this create began has ended.</summary>
+    internal bool DeleteEnded;
 
     /// <summary>True once a cancel owns the clean-up of this create: the terminal-state forget no longer drops it.</summary>
     public bool Claimed => Volatile.Read(ref _claimed) == 1;
@@ -36,29 +45,15 @@ internal sealed class SentCreate(string jobId, string name, string zone, long ge
     /// <summary>Takes ownership of the clean-up. True for exactly one caller.</summary>
     public bool TryClaim() => Interlocked.CompareExchange(ref _claimed, 1, 0) == 0;
 
+    /// <summary>The create has ended with an answer: it names a VM (which may exist, may be gone, may have been made after the last look).</summary>
+    public bool Answered => Create is { IsCompletedSuccessfully: true };
+
     /// <summary>
-    /// The create has ended with an answer that says no VM can come of it: it answered a VM, or Compute refused it (billing, API, quota, permission, org policy, already exists). A cancelled or
-    /// timed-out create, a network failure, a stockout (the ladder's own comment: a create can fail after the server accepted it) and one still in flight are NOT definitive.
+    /// Compute refused the create (billing, API, quota, stockout, permission, org policy, already exists): no VM of this create exists. A cancelled or timed-out create and a
+    /// network or unclassified failure are NOT refused (the server may have accepted the insert), and neither is one still in flight.
     /// </summary>
-    public bool Definitive
+    public bool Refused => Create is { IsFaulted: true } task && task.Exception?.GetBaseException() is CloudOperationException
     {
-        get
-        {
-            var task = Create;
-            if (task is null || !task.IsCompleted)
-            {
-                return false;
-            }
-
-            if (task.IsCompletedSuccessfully)
-            {
-                return true;
-            }
-
-            return task.Exception?.GetBaseException() is CloudOperationException
-            {
-                Kind: CloudErrorKind.Billing or CloudErrorKind.ApiDisabled or CloudErrorKind.Quota or CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.AlreadyExists,
-            };
-        }
-    }
+        Kind: CloudErrorKind.Billing or CloudErrorKind.ApiDisabled or CloudErrorKind.Quota or CloudErrorKind.Stockout or CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.AlreadyExists,
+    };
 }

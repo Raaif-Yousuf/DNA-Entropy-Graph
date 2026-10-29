@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Contract;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -103,65 +104,94 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         }
 
         // Hard Rule 11: a cancel ends in exactly one recorded terminal state. Failed names the VM to delete by hand.
-        await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
+        try
+        {
+            await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Whatever happened above, the creates this cancel claimed are either finished with or put under watch: never dropped.
+            StartWatch(jobId, sent);
+        }
+    }
 
-        // A create whose outcome is unknown (still in flight, or ended Canceled or by a network failure: Compute may have accepted it) stays under watch, by name, after the outcome is
-        // recorded. One that a look saw, or that Compute refused, is finished with.
+    /// <summary>
+    /// A create whose outcome is unknown (still in flight, or ended Canceled or by a network failure: Compute may have accepted it) stays under watch, by name, after the outcome is recorded: ONE loop
+    /// for all of them. One that a look saw, one a look after its answer found gone, and one Compute refused are finished with: "answered a VM" alone is not (the VM may have been made after the
+    /// cancel's last look).
+    /// </summary>
+    private void StartWatch(string jobId, IReadOnlyList<SentCreate> sent)
+    {
+        var watched = new List<SentCreate>();
         foreach (var create in sent)
         {
-            if (create.Landed || create.Definitive)
+            if (create.Landed || create.Settled || create.Refused)
             {
                 provisioner.ReleaseSent(create);
-                continue;
             }
-
-            var reap = Task.Run(() => ReapLateCreateAsync(create));
-            _reaps[reap] = 0;
-            _ = reap.ContinueWith(
-                finished =>
-                {
-                    _reaps.TryRemove(finished, out _);
-                    provisioner.ReleaseSent(create);
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            else
+            {
+                watched.Add(create);
+            }
         }
+
+        if (watched.Count == 0)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _watchesStarted);
+        var reap = Task.Run(() => WatchLateCreatesAsync(jobId, watched));
+        _reaps[reap] = 0;
+        _ = reap.ContinueWith(
+            finished =>
+            {
+                _reaps.TryRemove(finished, out _);
+                foreach (var create in watched)
+                {
+                    provisioner.ReleaseSent(create);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reaps = new();
 
+    private int _watchesStarted;
+
     /// <summary>Tests: completes when every late clean-up started so far has ended (a signal, so a test needs no sleep to know a reaper that would have deleted something had its chance).</summary>
     internal Task WhenReapsEndedAsync() => Task.WhenAll(_reaps.Keys);
 
+    /// <summary>Tests: how many late-create watch loops were started (one per cancel that had a create of unknown outcome).</summary>
+    internal int WatchesStarted => Volatile.Read(ref _watchesStarted);
+
     /// <summary>
-    /// Issue #938: watches one create the cancel could not settle, deletes the VM it makes (by name, whatever became of the task), tells the listener how that ended (ids and classes only), and says in
-    /// the run's row what became of the VM, but only while the row is still the one this attempt's cancel recorded. Never throws.
+    /// Issue #938: watches the creates the cancel could not settle (one loop), deletes the VMs they make (by name, whatever became of the tasks), says in the run's row what became of them in ONE sentence,
+    /// but only while the row is still the one this attempt's cancel recorded, and tells the listener how each ended (ids and classes only). Never throws.
     /// </summary>
-    private async Task ReapLateCreateAsync(SentCreate create)
+    private async Task WatchLateCreatesAsync(string jobId, IReadOnlyList<SentCreate> watched)
     {
-        var outcome = await terminator.ReapLateCreateAsync(create).ConfigureAwait(false);
+        IReadOnlyList<LateCreateOutcome> outcomes;
         try
         {
-            var detail = outcome.State switch
+            outcomes = await terminator.ReapLateCreatesAsync(watched).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        try
+        {
+            // Only a row this cancel recorded, and only while no newer attempt of the job has started: a later attempt's own cancel_failed is not this one's to annotate.
+            var current = provisioner.CurrentGeneration(jobId) == watched.Max(c => c.Generation);
+            if (current)
             {
-                LateCreateState.Deleted => "The create request that was still in flight landed later, and the VM it made was deleted.",
-                LateCreateState.NothingToDelete => "The create request that was still in flight landed later, and no VM of this run was left to delete.",
-                LateCreateState.CreateFailed => "The create request that was still in flight ended without a VM, and none appeared when the app looked for it by name.",
-                LateCreateState.DeleteFailed => "The create request that was still in flight landed later, and its VM could not be deleted. Delete it from the Cloud page.",
-                LateCreateState.Superseded => null,
-                _ => "The create request that was still in flight had not landed after the app stopped watching for it. If a VM appears, delete it from the Cloud page.",
-            };
-            if (detail is not null)
-            {
-                // Only a row this cancel recorded, and only while no newer attempt of the job has started: a later attempt's own cancel_failed is not this one's to annotate.
-                var current = provisioner.CurrentGeneration(create.JobId) == create.Generation;
-                var worthSaying = outcome.State is LateCreateState.Deleted or LateCreateState.DeleteFailed or LateCreateState.GaveUp;
                 await rows.UpdateRowAsync(
-                    create.JobId,
-                    row => current && ((row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed) || (row.Phase == JobPhase.Cancelled && worthSaying))
-                        ? row with { ErrorDetail = $"{row.ErrorDetail} {detail}".Trim() }
-                        : row,
+                    jobId,
+                    row => SentenceFor(outcomes, row) is { } sentence ? row with { ErrorDetail = $"{row.ErrorDetail} {sentence}".Trim() } : row,
                     CancellationToken.None).ConfigureAwait(false);
             }
         }
@@ -170,14 +200,59 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // The row is a courtesy; the clean-up already happened.
         }
 
-        try
+        foreach (var outcome in outcomes)
         {
-            settings.OnLateCreate?.Invoke(outcome);
+            try
+            {
+                settings.OnLateCreate?.Invoke(outcome);
+            }
+            catch (Exception)
+            {
+                // A listener that throws must not matter to the clean-up.
+            }
         }
-        catch (Exception)
+    }
+
+    /// <summary>
+    /// The one sentence a cancel's row gets about the creates it watched, worded for the row's state. A Cancelled row says only what the user needs (a VM deleted, or one to delete by hand); a
+    /// cancel_failed row also says it stays failed, so the sentence never reads as an all-clear. Null when there is nothing to add.
+    /// </summary>
+    internal static string? SentenceFor(IReadOnlyList<LateCreateOutcome> outcomes, RunRecord row)
+    {
+        var failedRow = row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed;
+        if (!failedRow && row.Phase != JobPhase.Cancelled)
         {
-            // A listener that throws must not matter to the clean-up.
+            return null;
         }
+
+        const string StillFailed = " This cancel is still recorded as failed because of the problem above: check the Cloud page.";
+        bool Any(LateCreateState state) => outcomes.Any(o => o.State == state);
+        if (Any(LateCreateState.DeleteFailed))
+        {
+            return "A create request that was still in flight landed later, and its VM could not be deleted. Delete it from the Cloud page.";
+        }
+
+        if (Any(LateCreateState.CouldNotConfirm))
+        {
+            return "The app could not tell whether a create request that was still in flight made a VM. Check the Cloud page and delete any VM left for this run.";
+        }
+
+        if (Any(LateCreateState.GaveUp))
+        {
+            return "A create request that was still in flight had not landed after the app stopped watching for it. If a VM appears, delete it from the Cloud page.";
+        }
+
+        if (Any(LateCreateState.Deleted))
+        {
+            return "A create request that was still in flight landed later, and the VM it made was deleted." + (failedRow ? StillFailed : string.Empty);
+        }
+
+        if (failedRow && Any(LateCreateState.CreateFailed))
+        {
+            return "A create request that was still in flight ended without a VM, and none appeared when the app looked for it by name." + StillFailed;
+        }
+
+        return null;
     }
 
     private async Task<string?> DeleteAllAsync(string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)

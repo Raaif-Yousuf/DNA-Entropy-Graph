@@ -19,18 +19,15 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// </summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<SentCreate, byte> _sent = new();
 
-    /// <summary>The job's current attempt number: one per <see cref="ProvisionAsync"/> (a Spot attempt 2, a resume, a run again after a cancel).</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _generations = new(StringComparer.Ordinal);
-
-    /// <summary>The newest attempt that created, adopted or reused a VM under a name in a zone. A create's clean-up leaves a VM a NEWER attempt owns.</summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), long> _nameOwner = new();
+    /// <summary>Which attempt of a job owns which VM (shared with the late clean-up, which decides its deletes under the ledger's lock).</summary>
+    private AttemptLedger Ledger => terminator.Ledger;
 
     /// <summary>The job's current attempt number (0 before the first); a late clean-up writes to the run's row only while it is still the attempt it belongs to.</summary>
-    public long CurrentGeneration(string jobId) => _generations.TryGetValue(jobId, out var generation) ? generation : 0;
+    public long CurrentGeneration(string jobId) => Ledger.Current(jobId);
 
-    private long BeginAttempt(string jobId)
+    private async Task<long> BeginAttemptAsync(string jobId, CancellationToken cancellationToken)
     {
-        var generation = _generations.AddOrUpdate(jobId, 1, (_, old) => old + 1);
+        var generation = await Ledger.BeginAttemptAsync(jobId, cancellationToken).ConfigureAwait(false);
         // The earlier attempts' creates nobody claimed are not this attempt's to clean up; a cancel that did claim them owns them.
         foreach (var earlier in _sent.Keys.Where(e => e.JobId == jobId && !e.Claimed))
         {
@@ -40,15 +37,10 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         return generation;
     }
 
-    private void NoteOwned(string name, string zone, long generation)
-        => _nameOwner.AddOrUpdate((name, zone), generation, (_, old) => Math.Max(old, generation));
-
-    /// <summary>Records, BEFORE the gateway is called, that this attempt is about to ask Compute for <paramref name="name"/> in <paramref name="zone"/>.</summary>
-    private SentCreate NoteSent(string jobId, string name, string zone)
+    /// <summary>Records, BEFORE the gateway is called, that this attempt is about to ask Compute for <paramref name="name"/> in <paramref name="zone"/>. It owns nothing yet: ownership moves only when the create answers.</summary>
+    private SentCreate NoteSent(string jobId, string name, string zone, string installationId)
     {
-        var generation = CurrentGeneration(jobId);
-        NoteOwned(name, zone, generation);
-        var sent = new SentCreate(jobId, name, zone, generation, () => _nameOwner.TryGetValue((name, zone), out var owner) && owner > generation);
+        var sent = new SentCreate(jobId, name, zone, CurrentGeneration(jobId), installationId);
         _sent[sent] = 0;
         return sent;
     }
@@ -61,10 +53,26 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         => _sent.Keys.Where(e => e.JobId == jobId && e.TryClaim()).ToList();
 
     /// <summary>Forgets a create the clean-up is finished with.</summary>
-    public void ReleaseSent(SentCreate sent) => _sent.TryRemove(sent, out _);
+    public void ReleaseSent(SentCreate sent)
+    {
+        _sent.TryRemove(sent, out _);
+        PruneIfIdle(sent.JobId);
+    }
+
+    /// <summary>Drops the job's attempt bookkeeping once no create of it is held (a watch or a cancel still needs the attempt numbers while one is).</summary>
+    private void PruneIfIdle(string jobId)
+    {
+        if (!_sent.Keys.Any(e => e.JobId == jobId))
+        {
+            Ledger.Prune(jobId);
+        }
+    }
 
     /// <summary>Tests: how many sent creates are still remembered (none may outlive the run that ended terminal, and a cancel's claimed ones are not dropped by it).</summary>
     internal int SentCount => _sent.Count;
+
+    /// <summary>Tests: how many per-job attempt numbers and name owners are still remembered.</summary>
+    internal int LedgerCount => Ledger.Count;
 
     /// <summary>True when a create (not a reuse) of the job is still in flight.</summary>
     public bool HasInflightCreate(string jobId) => _inflightCreates.Any(kv => kv.Value.JobId == jobId && !kv.Value.Reuse);
@@ -122,8 +130,27 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     /// </summary>
     public async Task<ProvisionResult> ProvisionAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
     {
-        // A new attempt of the job (Spot attempt 2, a resume) starts with no creates of an earlier one: those are cleared up by their own cancel or settle (#938).
-        var generation = BeginAttempt(request.JobId);
+        // A new attempt of the job (Spot attempt 2, a resume) starts with no creates of an earlier one: those are cleared up by their own cancel or settle (#938). It is PENDING until it returns, so a late
+        // clean-up of an earlier attempt never deletes a VM this one may be listing, and it owns a VM only once it HAS it.
+        var generation = await BeginAttemptAsync(request.JobId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var result = await ProvisionCoreAsync(request, completeSpec, progress, cancellationToken).ConfigureAwait(false);
+            if (result.Success)
+            {
+                Ledger.NoteOwned(request.JobId, result.VmName ?? request.Spec.VmName, result.Zone!, generation);
+            }
+
+            return result;
+        }
+        finally
+        {
+            Ledger.EndAttempt(request.JobId, generation);
+        }
+    }
+
+    private async Task<ProvisionResult> ProvisionCoreAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, CancellationToken cancellationToken)
+    {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
         progress.VmAdopted = false;
         if (existing.Count > 0)
@@ -140,7 +167,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             progress.VmName = kept.Name;
             progress.VmAdopted = true;
-            NoteOwned(kept.Name, kept.Zone, generation);
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -205,7 +231,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                             // token (the same instant, so the poller's would win and hide the abandoned create).
                             progress.VmStartMark = settings.StartClock();
                             // Recorded BEFORE the gateway is called (#938): the cancel looks this name up whatever becomes of the task.
-                            var sent = NoteSent(request.JobId, spec.VmName, zone);
+                            var sent = NoteSent(request.JobId, spec.VmName, zone, spec.InstallationId);
                             try
                             {
                                 createTask = TrackInflightCreate(request.JobId, () => compute.CreateVmAsync(spec, zone, cancellationToken));
@@ -400,6 +426,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         {
             _sent.TryRemove(unclaimed, out _);
         }
+
+        PruneIfIdle(jobId);
     }
 
     /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
@@ -813,7 +841,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
-            NoteOwned(started.Name, started.Zone, CurrentGeneration(request.JobId));
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
@@ -823,7 +850,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
             {
                 progress.VmName = adopted.Name;
-                NoteOwned(adopted.Name, adopted.Zone, CurrentGeneration(request.JobId));
                 return ProvisionResult.Ok(adopted.Zone, adopted.Name);
             }
 
@@ -866,7 +892,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // WaitAsync disposes its timer when the creates finish first (a bare Task.Delay would hold one for the whole settle window).
             await all.WaitAsync(settings.CreateSettleTimeout, settings.TimeProvider).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException) when (!all.IsCompleted)
         {
             return false;
         }

@@ -230,6 +230,26 @@ public class JobReconcilerLifecycleTests
     }
 
     [Theory]
+    [InlineData(AfterTaskAction.Stop, JobPhase.Cancelled, null)]
+    [InlineData(AfterTaskAction.Stop, JobPhase.Failed, RunErrorCodes.CancelFailed)]
+    public async Task A_keep_alive_VM_a_cancelled_runs_reuse_relabelled_to_it_is_stopped_never_deleted(AfterTaskAction after, JobPhase phase, string? code)
+    {
+        // Round 3 H1: a reuse in flight at the cancel lands later and leaves ANOTHER run's VM ("deg-job-donor") labelled with the cancelled run's job id.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor");
+        var request = await rig.Env.SeedAsync("job-borrower", phase, vm: false, after: after, tweak: row => row with { ErrorCode = code, FinishedAt = Launch.AddMinutes(-10) });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor", Zone, CancellationToken.None);
+
+        var outcomes = await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        var vm = await rig.Gcp.GetVmAsync("deg-job-donor", Zone, CancellationToken.None);
+        vm.ShouldNotBeNull("the launch deleted a keep-alive VM that another run created and the cancelled run only borrowed");
+        vm.Status.ShouldBe("STOPPED", "a borrowed VM the cancel never stopped is stopped, not left billing");
+        outcomes.ShouldNotContain(o => o.Action == LifecycleAction.VmDeleted && o.JobId == "job-borrower");
+    }
+
+    [Theory]
     [InlineData(RunErrorCodes.StoppedByCleanup)]
     [InlineData(RunErrorCodes.DeletedByCleanup)]
     public async Task A_run_the_user_ended_with_Stop_or_Delete_from_the_exit_window_keeps_its_stopped_VM_as_the_user_chose(string code)

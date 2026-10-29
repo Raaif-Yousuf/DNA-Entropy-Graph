@@ -476,6 +476,346 @@ public class LateCreateAfterCancelTests
         rig.LastRow("job-lg").ErrorDetail.ShouldNotBeNull().ShouldStartWith("1 VM(s)", Case.Sensitive);
     }
 
+    // ---- round 3 ----
+
+    /// <summary>A create Compute answered with this error: no VM can come of it unless the kind says otherwise.</summary>
+    private static CloudOperationException Refused(CloudErrorKind kind = CloudErrorKind.Quota, string message = "refused")
+        => new(new CloudError(null, 403, message), kind);
+
+    [Fact]
+    public async Task H1_a_cancel_stops_but_never_deletes_a_VM_a_reuse_relabelled_to_this_job()
+    {
+        var gcp = new FakeGcp();
+        var oldSpec = Spec("job-old2");
+        await gcp.CreateVmAsync(oldSpec, ZoneA, CancellationToken.None);
+        await gcp.StopVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None);
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-h1r");
+        await gcp.ReuseVmAsync(Spec("job-h1r"), "deg-job-old2", ZoneA, CancellationToken.None); // the reuse landed before the cancel: the old VM now carries job-id=job-h1r
+
+        await rig.Canceller.CancelAsync("job-h1r", CancellationToken.None);
+
+        var vm = await gcp.GetVmAsync("deg-job-old2", ZoneA, CancellationToken.None);
+        vm.ShouldNotBeNull("the cancel deleted a VM another run created and this run only borrowed");
+        vm.Status.ShouldBe("STOPPED", "a borrowed VM is stopped, not left billing");
+        gcp.DeleteAttempts.ShouldBeEmpty();
+        rig.LastRow("job-h1r").Phase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task M1_a_create_that_answers_after_the_cancels_last_look_is_still_watched_and_deleted()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp);
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m1x");
+        await GiveUpOnABlockedCreateAsync(rig, "job-m1x");
+        var fired = false;
+        var findsBefore = compute.FindCalls;
+        compute.AfterGetVm = async _ =>
+        {
+            if (compute.FindCalls >= findsBefore + 2 && !fired) // the cancel's own read-back listing has been taken: this is its last look
+            {
+                fired = true;
+                gcp.ReleaseCreate(); // the create answers AFTER the last look the cancel will take
+                await compute.Creates[0];
+            }
+        };
+
+        await rig.Canceller.CancelAsync("job-m1x", CancellationToken.None);
+
+        fired.ShouldBeTrue("the test never reached the cancel's last look");
+        (await rig.NextOutcomeAsync()).State.ShouldBe(LateCreateState.Deleted);
+        (await gcp.GetVmAsync("deg-job-m1x", ZoneA, CancellationToken.None)).ShouldBeNull("the cancel released a create it had never seen land");
+    }
+
+    [Fact]
+    public async Task M2_a_later_attempt_whose_create_fails_does_not_take_ownership_and_the_earlier_late_VM_is_deleted()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp) { CreateOverride = (n, _, _) => n >= 2 ? Task.FromException<VmDescriptor>(Refused()) : null };
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m2x");
+        await GiveUpOnABlockedCreateAsync(rig, "job-m2x");
+        await rig.Canceller.CancelAsync("job-m2x", CancellationToken.None);
+        var spec = Spec("job-m2x");
+
+        var second = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2x", spec, zones: [ZoneA]), spec, new RunProgress(), CancellationToken.None);
+        second.Success.ShouldBeFalse("the newer attempt's create was refused: it has no VM");
+        gcp.ReleaseCreate();
+
+        (await rig.NextOutcomeAsync()).State.ShouldBe(LateCreateState.Deleted);
+        (await gcp.GetVmAsync("deg-job-m2x", ZoneA, CancellationToken.None)).ShouldBeNull("a create that was merely SENT took the earlier VM's ownership: it billed until maxRunDuration");
+    }
+
+    [Fact]
+    public async Task M3_the_watch_does_not_delete_a_VM_a_newer_attempt_has_listed_and_is_about_to_adopt()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp);
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m3");
+        await GiveUpOnABlockedCreateAsync(rig, "job-m3");
+        await rig.Canceller.CancelAsync("job-m3", CancellationToken.None);
+        var findsBefore = compute.FindCalls;
+        var landed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        compute.BeforeFind = n => n > findsBefore ? landed.Task : Task.CompletedTask;
+        compute.AfterFind = async n =>
+        {
+            if (n > findsBefore)
+            {
+                listed.TrySetResult(); // the newer attempt holds a listing that names the late VM, and has not yet noted ownership
+                await resume.Task;
+            }
+        };
+        var spec = Spec("job-m3");
+        var attempt = rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m3", spec, zones: [ZoneA]), spec, new RunProgress(), CancellationToken.None);
+
+        gcp.ReleaseCreate();
+        await compute.Creates[0]; // the late VM exists now
+        landed.SetResult();
+        await listed.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var looks = compute.GetVmCalls;
+        await WaitForAsync(() => compute.GetVmCalls >= looks + 5); // the watch has had several chances to delete it while the listing is held
+        resume.SetResult();
+        var result = await attempt.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.Success.ShouldBeTrue();
+        (await rig.NextOutcomeAsync()).State.ShouldBe(LateCreateState.Superseded);
+        gcp.DeleteAttempts.ShouldBeEmpty("the watch deleted the VM the newer attempt had listed and adopted");
+        (await gcp.GetVmAsync("deg-job-m3", ZoneA, CancellationToken.None)).ShouldNotBeNull();
+    }
+
+    /// <summary>A two-zone ladder whose first create is answered <paramref name="firstKind"/> and whose second is in flight (and ignores the cancel); the run is cancelled.</summary>
+    private static async Task CancelATwoZoneLadderAsync(Rig rig, HookedCompute compute, string jobId)
+    {
+        _ = compute;
+        var spec = Spec(jobId);
+        using var cts = new CancellationTokenSource();
+        var ladder = rig.Provisioner.ProvisionAsync(TestInputs.Request(jobId, spec, zones: [ZoneA, ZoneB]), spec, new RunProgress(), cts.Token);
+        await rig.Gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => ladder);
+        await rig.Canceller.CancelAsync(jobId, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task M4_an_N_zone_ladder_writes_one_sentence_into_the_row_and_it_does_not_read_as_an_all_clear()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp) { CreateOverride = (n, _, _) => n == 1 ? Task.FromException<VmDescriptor>(Refused(CloudErrorKind.Other)) : null };
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m4");
+        await CancelATwoZoneLadderAsync(rig, compute, "job-m4");
+        rig.LastRow("job-m4").Phase.ShouldBe(JobPhase.Failed);
+
+        gcp.ReleaseCreate();
+        await rig.NextOutcomeAsync();
+        await rig.NextOutcomeAsync();
+        await rig.Canceller.WhenReapsEndedAsync();
+
+        var detail = rig.LastRow("job-m4").ErrorDetail.ShouldNotBeNull();
+        (detail.Split("create request that was still in flight").Length - 1).ShouldBe(1, $"one sentence per cancel, not one per sent create: {detail}");
+        detail.ShouldContain("still recorded as failed", Case.Sensitive, "a Failed row must not read as an all-clear");
+        rig.LastRow("job-m4").Phase.ShouldBe(JobPhase.Failed);
+    }
+
+    [Fact]
+    public async Task M5_creates_that_Compute_refused_are_not_watched_and_the_rest_share_one_loop_per_cancel()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp) { CreateOverride = (n, _, _) => n == 1 ? Task.FromException<VmDescriptor>(Refused(CloudErrorKind.Stockout)) : null };
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m5");
+        await CancelATwoZoneLadderAsync(rig, compute, "job-m5");
+
+        gcp.ReleaseCreate();
+        (await rig.NextOutcomeAsync()).State.ShouldBe(LateCreateState.Deleted);
+        await rig.Canceller.WhenReapsEndedAsync();
+
+        rig.Outcomes.Reader.TryRead(out var extra).ShouldBeFalse($"the stockout create was watched too: {extra}");
+        rig.Canceller.WatchesStarted.ShouldBe(1, "one polling loop per cancel, not one task per sent create");
+    }
+
+    [Fact]
+    public async Task M5b_two_creates_of_unknown_outcome_are_polled_by_one_loop()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp) { CreateOverride = (n, _, _) => n == 1 ? Task.FromException<VmDescriptor>(Refused(CloudErrorKind.Other)) : null };
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-m5b");
+        await CancelATwoZoneLadderAsync(rig, compute, "job-m5b");
+        gcp.ReleaseCreate();
+        await rig.NextOutcomeAsync();
+        await rig.NextOutcomeAsync();
+        await rig.Canceller.WhenReapsEndedAsync();
+
+        rig.Canceller.WatchesStarted.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task L2_a_look_that_fails_and_a_delete_that_fails_say_the_app_could_not_confirm_not_that_a_VM_could_not_be_deleted()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true).WithDeleteFailure("deg-job-l2x", CloudErrorKind.Permission);
+        var rig = new Rig(gcp);
+        rig.Settings.LifecycleTimeout = TimeSpan.FromMilliseconds(50);
+        await rig.SeedRowAsync("job-l2x");
+        await GiveUpOnABlockedCreateAsync(rig, "job-l2x");
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 100000);
+        await rig.Canceller.CancelAsync("job-l2x", CancellationToken.None);
+
+        var outcome = await rig.NextOutcomeAsync();
+
+        gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
+        outcome.State.ShouldBe(LateCreateState.CouldNotConfirm, "no look ever saw a VM: 'could not be deleted' says one existed");
+        outcome.ErrorClass.ShouldBe("permission");
+        (rig.LastRow("job-l2x").ErrorDetail ?? string.Empty).ShouldNotContain("could not be deleted", Case.Sensitive);
+        gcp.ReleaseCreate();
+    }
+
+    [Fact]
+    public async Task L4_a_VM_under_the_same_name_that_belongs_to_another_installation_is_never_deleted()
+    {
+        var gcp = new FakeGcp();
+        var compute = new HookedCompute(gcp) { CreateOverride = (_, _, _) => Task.FromException<VmDescriptor>(Refused(CloudErrorKind.Other)) };
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-l4");
+        var spec = Spec("job-l4");
+        (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-l4", spec, zones: [ZoneA]), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeFalse();
+        await gcp.CreateVmAsync(spec with { InstallationId = "install-2" }, ZoneA, CancellationToken.None); // another installation's VM that carries this job id and name
+        gcp.LabelListingBlind = true;
+
+        await rig.Canceller.CancelAsync("job-l4", CancellationToken.None);
+        await rig.Canceller.WhenReapsEndedAsync();
+
+        (await gcp.GetVmAsync("deg-job-l4", ZoneA, CancellationToken.None)).ShouldNotBeNull("Hard Rule 9: a VM of another installation was deleted by name");
+        gcp.DeleteAttempts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task L5_the_attempt_bookkeeping_of_a_job_is_dropped_when_its_run_and_its_watch_have_ended()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var rig = new Rig(gcp);
+        await rig.SeedRowAsync("job-l5x");
+        await GiveUpOnABlockedCreateAsync(rig, "job-l5x");
+        rig.Provisioner.LedgerCount.ShouldBeGreaterThan(0);
+        await rig.Canceller.CancelAsync("job-l5x", CancellationToken.None);
+        rig.Provisioner.LedgerCount.ShouldBeGreaterThan(0, "the watch still needs the attempt number");
+        gcp.ReleaseCreate();
+        await rig.NextOutcomeAsync();
+        await rig.Canceller.WhenReapsEndedAsync();
+
+        await WaitForAsync(() => rig.Provisioner.LedgerCount == 0);
+    }
+
+    [Fact]
+    public async Task L6_a_failed_label_listing_puts_its_error_class_and_an_action_in_the_row_never_the_message()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var compute = new HookedCompute(gcp);
+        var rig = new Rig(gcp, compute);
+        await rig.SeedRowAsync("job-l6x");
+        await GiveUpOnABlockedCreateAsync(rig, "job-l6x");
+        var findsBefore = compute.FindCalls;
+        compute.FindOverride = n => n == findsBefore + 1 ? throw Refused(CloudErrorKind.Permission, "SECRET-FILE-NAME.gb") : null;
+
+        await rig.Canceller.CancelAsync("job-l6x", CancellationToken.None);
+
+        var detail = rig.LastRow("job-l6x").ErrorDetail.ShouldNotBeNull();
+        detail.ShouldNotContain("SECRET-FILE-NAME", Case.Sensitive);
+        detail.ShouldContain("permission", Case.Insensitive);
+        detail.ShouldContain("Cloud page", Case.Sensitive);
+        gcp.ReleaseCreate();
+    }
+
+    private sealed class HookedCompute(FakeGcp inner) : IComputeGateway
+    {
+        private int _find;
+        private int _get;
+        private int _create;
+
+        public int FindCalls => Volatile.Read(ref _find);
+
+        public int GetVmCalls => Volatile.Read(ref _get);
+
+        public List<Task<VmDescriptor>> Creates { get; } = [];
+
+        /// <summary>Called with the 1-based create number; a non-null task is used INSTEAD of the real gateway.</summary>
+        public Func<int, VmSpec, string, Task<VmDescriptor>?>? CreateOverride { get; set; }
+
+        public Func<int, Task>? BeforeFind { get; set; }
+
+        public Func<int, Task>? AfterFind { get; set; }
+
+        /// <summary>Called with the 1-based Find number; may throw to fail it.</summary>
+        public Func<int, object?>? FindOverride { get; set; }
+
+        public Func<int, Task>? AfterGetVm { get; set; }
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
+        {
+            var n = Interlocked.Increment(ref _create);
+            var task = CreateOverride?.Invoke(n, spec, zone) ?? inner.CreateVmAsync(spec, zone, cancellationToken);
+            lock (Creates)
+            {
+                Creates.Add(task);
+            }
+
+            return task;
+        }
+
+        public async Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            var n = Interlocked.Increment(ref _get);
+            var vm = await inner.GetVmAsync(vmName, zone, cancellationToken);
+            if (AfterGetVm is { } after)
+            {
+                await after(n);
+            }
+
+            return vm;
+        }
+
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        {
+            var n = Interlocked.Increment(ref _find);
+            _ = FindOverride?.Invoke(n);
+            if (BeforeFind is { } before)
+            {
+                await before(n);
+            }
+
+            var found = await inner.FindByJobIdAsync(jobId, cancellationToken);
+            if (AfterFind is { } after)
+            {
+                await after(n);
+            }
+
+            return found;
+        }
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
+        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+
+        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+    }
+
     private static async Task WaitForAsync(Func<bool> condition)
     {
         var until = DateTime.UtcNow + TimeSpan.FromSeconds(20);

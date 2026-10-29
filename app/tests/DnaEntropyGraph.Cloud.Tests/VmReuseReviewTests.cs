@@ -210,8 +210,10 @@ public class VmReuseReviewTests
         await cancel.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
+        // #938 round 3 H1 (replaces "owned.ShouldBeEmpty"): the reused VM is another run's keep-alive VM that the reuse only relabelled. A cancel STOPS it (it must not bill) and never deletes it.
         var owned = await gcp.FindByJobIdAsync("job-new", CancellationToken.None);
-        owned.ShouldBeEmpty("the reuse landed after the cancel looked: a VM of the cancelled job was left (billing, or a disk)");
+        owned.ShouldAllBe(v => VmFacts.IsStopped(v), "the reuse landed after the cancel looked: a VM of the cancelled job was left running (billing)");
+        gcp.DeleteAttempts.ShouldBeEmpty("the cancel deleted a VM another run created");
         var last = repo.AllRecordedInOrder.Last(r => r.JobId == "job-new");
         last.Phase.ShouldBe(JobPhase.Cancelled, "the cancel won the race with the run's next phase step (#687): Cancelled, not an illegal-transition Failed");
     }
@@ -246,7 +248,9 @@ public class VmReuseReviewTests
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         await cancel!.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
-        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldBeEmpty("the cancel looked before the reuse was tracked: a VM of the cancelled job was left billing");
+        // #938 round 3 H1 (replaces "ShouldBeEmpty"): the reused VM is another run's; a cancel stops it and never deletes it.
+        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldAllBe(v => VmFacts.IsStopped(v), "the cancel looked before the reuse was tracked: a VM of the cancelled job was left billing");
+        gcp.DeleteAttempts.ShouldBeEmpty("the cancel deleted a VM another run created");
         repo.AllRecordedInOrder.Last(r => r.JobId == "job-new").Phase.ShouldBe(JobPhase.Cancelled);
     }
 
