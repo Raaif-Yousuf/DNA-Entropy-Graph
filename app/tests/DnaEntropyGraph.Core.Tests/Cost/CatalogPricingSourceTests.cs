@@ -243,6 +243,52 @@ public sealed class CatalogPricingSourceTests
         source.Current.Reason.ShouldBe(PricingFallbackReason.None);
     }
 
+    [Theory]
+    [InlineData(AuthErrorCodes.SigninExpired, PricingFallbackReason.SignedOut, 2)]
+    [InlineData(AuthErrorCodes.AccountNotFound, PricingFallbackReason.SignedOut, 2)]
+    [InlineData(AuthErrorCodes.NetworkUnavailable, PricingFallbackReason.Network, 1)]
+    [InlineData(AuthErrorCodes.StorageFailed, PricingFallbackReason.Other, 1)]
+    [InlineData(AuthErrorCodes.OAuthClientMissing, PricingFallbackReason.Other, 1)]
+    public async Task An_auth_failure_is_signed_out_only_when_there_is_no_sign_in_and_only_that_one_skips_the_back_off(string code, PricingFallbackReason reason, int expectedCalls)
+    {
+        // Issue #214 review L6: counted by gateway calls over two back-to-back refreshes.
+        GatewayFails(new AccountAuthException(code, "scripted"));
+        var source = Source();
+
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+        await source.RefreshIfStaleAsync(CancellationToken.None);
+
+        source.Current.Reason.ShouldBe(reason);
+        await _gateway.Received(expectedCalls).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_cache_dated_a_day_ahead_is_fresh_and_one_dated_further_ahead_is_not_trusted()
+    {
+        // Issue #214 review L9: a cache is not "stale" because of a clock a little ahead; a far-future one never refreshes if trusted.
+        await Source().RefreshIfStaleAsync(CancellationToken.None);
+        _gateway.ClearReceivedCalls();
+
+        _clock.Advance(TimeSpan.FromDays(-1));
+        var oneAhead = Source();
+        oneAhead.Current.Origin.ShouldBe(PricingOrigin.Cache);
+        await oneAhead.RefreshIfStaleAsync(CancellationToken.None);
+        await _gateway.DidNotReceive().ListComputeSkusAsync(Arg.Any<CancellationToken>());
+
+        _clock.Advance(TimeSpan.FromDays(-5));
+        var farAhead = Source();
+        farAhead.Current.Origin.ShouldBe(PricingOrigin.Shipped);
+        await farAhead.RefreshIfStaleAsync(CancellationToken.None);
+        await _gateway.Received(1).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void The_default_read_budget_fits_a_paged_read_where_each_page_may_take_the_pipelines_30_second_attempt()
+    {
+        // Issue #214 review M1: 10 s for the whole read could never finish one slow page, let alone several.
+        CatalogPricingSource.ReadTimeout.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromSeconds(60));
+    }
+
     [Fact]
     public async Task A_cache_written_beside_an_older_shipped_list_is_not_used_after_the_app_is_updated()
     {
