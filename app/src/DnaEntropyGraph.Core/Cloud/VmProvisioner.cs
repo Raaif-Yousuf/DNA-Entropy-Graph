@@ -12,36 +12,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
-    /// <summary>
-    /// Issue #109 (M2): when a tracked create or reuse for a job LANDED, whoever was waiting on it. A run abandoned mid-create (a cancel) never reaches the stamp
-    /// that copies <see cref="RunProgress.VmCreatedAt"/> to the row, so the canceller reads the start from here instead.
-    /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _landedAt = new();
-
-    /// <summary>
-    /// Issue #109 (round 3): bumped when a job's run ends terminal (<see cref="ForgetPendingRequests"/>). A create captures the value when it starts and records its landing only
-    /// if the value is unchanged, so a create that lands AFTER the run it belonged to ended leaves no entry for anything to adopt.
-    /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _runEpoch = new();
-
-    /// <summary>Tests: how many landed-create entries are still held (none may outlive a run that ended terminal).</summary>
-    internal int LandedCount => _landedAt.Count;
-
-    /// <summary>
-    /// Issue #109 (M2): the start of the VM billing for a run that is being cancelled, taken once. The moment a create or reuse landed when one did; when a create is
-    /// still in flight and unsettled (<paramref name="settled"/> false) the cancel time is the start only when the cancel's own delete found a VM
-    /// (<paramref name="vmFoundByCancel"/>), because an unsettled create may yet FAIL and book a span for a VM that never existed; null otherwise.
-    /// </summary>
-    public DateTimeOffset? TakeVmStartForCancel(string jobId, bool settled, bool vmFoundByCancel)
-    {
-        if (_landedAt.TryRemove(jobId, out var landed))
-        {
-            return landed;
-        }
-
-        return !settled && vmFoundByCancel ? settings.TimeProvider.GetUtcNow() : null;
-    }
-
     /// <summary>The GPU machine families (G2 = L4, A2 = A100, A3 = H100); anything else is a CPU smoke VM.</summary>
     public static bool ExpectsGpu(string machineType)
         => machineType.StartsWith("g2-", StringComparison.Ordinal)
@@ -111,10 +81,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             progress.VmName = kept.Name;
             progress.VmAdopted = true;
-            // Issue #109 (L1): an adopted VM has been billing since the platform started it, not since this run found it; a run whose first stamp failed
-            // before the app closed has no other record. (A platform clock a little ahead of ours only makes a span of zero: the ledger floors it.)
-            progress.VmCreatedAt ??= kept.RunClockStart;
-            progress.VmEndedAt ??= VmFacts.StoppedSpanEnd(kept);
+            // Issue #109: an adopted VM has been billing since the platform started it, not since this run found it (VmSpan).
+            progress.Observe(kept);
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -234,7 +202,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 if (createTask!.IsCompletedSuccessfully)
                 {
                     // The abandoned create did land (and was deleted above): that VM billed from about now back to its landing, so the run books it.
-                    progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
+                    progress.Observe(createTask.Result);
                 }
 
                 if (settleNote is not null)
@@ -248,8 +216,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             if (outcome.Success)
             {
-                // Issue #109: the create was answered, so the VM exists and bills from here; stamped now, not when provisioning returns.
-                progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
+                // Issue #109: the create was answered, so the VM exists and bills from its own start; recorded now, not when provisioning returns.
+                progress.Observe(outcome.Value!);
                 return ZoneAttempt.Win(zone);
             }
 
@@ -364,8 +332,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     public void ForgetPendingRequests(string jobId)
     {
         TakePendingRequests(jobId);
-        _runEpoch.AddOrUpdate(jobId, 1, (_, epoch) => epoch + 1);
-        _landedAt.TryRemove(jobId, out _);
     }
 
     /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
@@ -779,7 +745,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
-            progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
+            progress.Observe(started);
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
@@ -789,7 +755,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
             {
                 progress.VmName = adopted.Name;
-                progress.VmCreatedAt ??= settings.TimeProvider.GetUtcNow();
+                progress.Observe(adopted);
                 return ProvisionResult.Ok(adopted.Zone, adopted.Name);
             }
 
@@ -853,7 +819,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private Task<T> TrackInflightCreate<T>(string jobId, Func<Task<T>> start)
     {
         var placeholder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var epoch = _runEpoch.GetValueOrDefault(jobId);
         _inflightCreates[placeholder.Task] = jobId;
         Task<T> task;
         try
@@ -870,15 +835,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             t =>
             {
                 _ = t.Exception;
-                if (t.IsCompletedSuccessfully && _runEpoch.GetValueOrDefault(jobId) == epoch)
-                {
-                    _landedAt.TryAdd(jobId, settings.TimeProvider.GetUtcNow());
-                    if (_runEpoch.GetValueOrDefault(jobId) != epoch)
-                    {
-                        _landedAt.TryRemove(jobId, out _); // the run ended between the check and the add
-                    }
-                }
-
                 _inflightCreates.TryRemove(placeholder.Task, out _);
                 placeholder.TrySetResult();
             },

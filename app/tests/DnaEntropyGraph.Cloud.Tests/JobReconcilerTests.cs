@@ -287,6 +287,19 @@ public class JobReconcilerTests
         env.Gcp.CreateAttempts.ShouldBe(0, "a lost VM is not silently replaced: the user chooses to run again");
     }
 
+    [Fact]
+    public async Task A_run_whose_VM_is_gone_books_until_the_last_sign_of_life_not_until_the_app_came_back()
+    {
+        // Issue #109: the one span rule. The VM was alive at its last heartbeat; the app was closed for 20 hours after that.
+        var env = new Env();
+        var vmStart = DateTimeOffset.UtcNow.AddHours(-21);
+        await env.SeedAsync("job-sp", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = vmStart, LastHeartbeatAt = vmStart.AddMinutes(25) });
+
+        var outcome = await OneAsync(env.Reconciler(), "job-sp");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
+        env.Row("job-sp").FinishedAt.ShouldBe(vmStart.AddMinutes(25));
+    }
     // Issue #679 (b), reviewed: a gone VM is run_time_limit only on the worker's OWN evidence of how long the VM lived (status.json startedAt to
     // updatedAt, one clock), never on the row's start time, which counts the hours the app was closed after the VM had already died.
     private static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
