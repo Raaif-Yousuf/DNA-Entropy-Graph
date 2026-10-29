@@ -18,6 +18,7 @@ public static class ResultsCopy
     // Issue #118: the entropy overview strip.
     public const string ExportPngFailed = "Results_ExportPngFailed";
     public const string ExportPngNoFolder = "Results_ExportPngNoFolder";
+    public const string ExportPngFailedInExports = "Results_ExportPngFailedInExports";
     public const string ExportPngTitle = "Results_ExportPng_Title";
     public const string ExportPngXAxis = "Results_ExportPng_XAxis";
     public const string ExportPngYAxis = "Results_ExportPng_YAxis";
@@ -110,7 +111,7 @@ public static class ResultsCopy
     /// <summary>Every key above, for the guard that proves each one exists in the .resw.</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
     [
-        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed, ExportPngNoFolder,
+        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed, ExportPngNoFolder, ExportPngFailedInExports,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
         GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,

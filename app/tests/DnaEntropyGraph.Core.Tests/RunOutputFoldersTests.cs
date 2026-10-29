@@ -32,14 +32,55 @@ public sealed class RunOutputFoldersTests : IDisposable
     [Fact]
     public void ExportsFolder_is_one_deterministic_safe_name_per_run_and_creates_nothing()
     {
-        var first = RunOutputFolders.ExportsFolder(_parent, "my:run");
-        var second = RunOutputFolders.ExportsFolder(_parent, "my:run");
+        var first = RunOutputFolders.ExportsFolder(_parent, "my:run", "job-1");
+        var second = RunOutputFolders.ExportsFolder(_parent, "my:run", "job-1");
 
         second.ShouldBe(first);
         Path.GetDirectoryName(first).ShouldBe(_parent);
-        Path.GetFileName(first).ShouldEndWith(" exports");
+        Path.GetFileName(first).ShouldStartWith("my_run exports ");
         Path.GetFileName(first).ShouldNotContain(":");
         Directory.Exists(_parent).ShouldBeFalse("naming a folder must not create it");
+    }
+
+    [Fact]
+    public void ExportsFolder_differs_for_two_runs_with_the_same_name_and_is_never_the_plain_name_a_user_may_own()
+    {
+        var a = RunOutputFolders.ExportsFolder(_parent, "SetTnpB", "job-a");
+        var b = RunOutputFolders.ExportsFolder(_parent, "SetTnpB", "job-b");
+
+        a.ShouldNotBe(b);
+        a.ShouldNotBe(Path.Combine(_parent, "SetTnpB exports"));
+    }
+
+    [Fact]
+    public void CreateFolderChain_returns_only_what_it_made_and_RemoveCreated_takes_exactly_those_away()
+    {
+        Directory.CreateDirectory(_parent);
+        var existing = Path.Combine(_parent, "already");
+        Directory.CreateDirectory(existing);
+
+        var none = RunOutputFolders.CreateFolderChain(existing);
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(existing, "a", "b"));
+
+        none.ShouldBeEmpty();
+        made.ShouldBe([Path.Combine(existing, "a"), Path.Combine(existing, "a", "b")]);
+        Directory.Exists(Path.Combine(existing, "a", "b")).ShouldBeTrue();
+
+        RunOutputFolders.RemoveCreated(made);
+
+        Directory.Exists(Path.Combine(existing, "a")).ShouldBeFalse();
+        Directory.Exists(existing).ShouldBeTrue("a folder that was already there is never removed");
+    }
+
+    [Fact]
+    public void RemoveCreated_leaves_a_folder_that_has_something_in_it()
+    {
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "x"));
+        File.WriteAllText(Path.Combine(_parent, "x", "keep.txt"), "k");
+
+        RunOutputFolders.RemoveCreated(made);
+
+        File.Exists(Path.Combine(_parent, "x", "keep.txt")).ShouldBeTrue();
     }
 
     [Fact]

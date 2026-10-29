@@ -80,6 +80,51 @@ public sealed class OverviewPngExporterTests : IDisposable
     }
 
     [Fact]
+    public void A_save_that_fails_after_creating_the_file_leaves_no_partial_picture_and_the_made_folder_can_go()
+    {
+        var made = Path.Combine(_dir, "made-for-export");
+        Directory.CreateDirectory(made);
+        var path = Path.Combine(made, "chr1.entropy.png");
+        var exporter = new OverviewPngExporter((_, p, _, _) =>
+        {
+            File.WriteAllBytes(p, [0x89, 0x50]);
+            throw new IOException("disk full");
+        });
+
+        exporter.Export(Contig(null), Labels, path).ShouldBeFalse();
+
+        File.Exists(path).ShouldBeFalse("a half-written picture must not stay behind");
+        Directory.Delete(made);
+    }
+
+    [Fact]
+    public void A_failed_save_never_deletes_a_file_that_was_already_there()
+    {
+        var path = Path.Combine(_dir, "old.png");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        var exporter = new OverviewPngExporter((_, _, _, _) => throw new IOException("locked"));
+
+        exporter.Export(Contig(null), Labels, path).ShouldBeFalse();
+
+        File.ReadAllBytes(path).ShouldBe([1, 2, 3]);
+    }
+
+    [Fact]
+    public void An_unexpected_exception_also_cleans_up_and_still_reaches_the_caller()
+    {
+        var path = Path.Combine(_dir, "odd.png");
+        var exporter = new OverviewPngExporter((_, p, _, _) =>
+        {
+            File.WriteAllBytes(p, [9]);
+            throw new InvalidOperationException("x");
+        });
+
+        Should.Throw<InvalidOperationException>(() => exporter.Export(Contig(null), Labels, path));
+
+        File.Exists(path).ShouldBeFalse();
+    }
+
+    [Fact]
     public void A_folder_that_does_not_exist_is_false_not_an_exception()
         => new OverviewPngExporter().Export(Contig(null), Labels, Path.Combine(_dir, "missing", "a.png")).ShouldBeFalse();
 }

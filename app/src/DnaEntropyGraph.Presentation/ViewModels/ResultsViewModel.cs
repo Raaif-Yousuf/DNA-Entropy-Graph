@@ -428,13 +428,23 @@ public sealed partial class ResultsViewModel : ObservableObject
                 () =>
                 {
                     var target = ownFolder && _exportRoot is not null && run is not null
-                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name)
+                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
                         : folder;
                     var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
 
-                    // One exports folder per run, made only now that there is something to write, and taken away again if nothing was.
-                    var made = !Directory.Exists(target);
-                    Directory.CreateDirectory(target);
+                    // A run's own folder must still be there (one the user deleted or moved is not brought back with a lone picture in it);
+                    // only the exports folder of an earlier-version run is made here, with whatever parents it lacks, and all of it is
+                    // taken away again if nothing was written.
+                    IReadOnlyList<string> made = [];
+                    if (ownFolder)
+                    {
+                        made = RunOutputFolders.CreateFolderChain(target);
+                    }
+                    else if (!Directory.Exists(target))
+                    {
+                        return (file, false);
+                    }
+
                     var ok = false;
                     try
                     {
@@ -442,16 +452,9 @@ public sealed partial class ResultsViewModel : ObservableObject
                     }
                     finally
                     {
-                        if (!ok && made)
+                        if (!ok)
                         {
-                            try
-                            {
-                                Directory.Delete(target);
-                            }
-                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                            {
-                                // Not empty or not ours to remove: leave it.
-                            }
+                            RunOutputFolders.RemoveCreated(made);
                         }
                     }
 
@@ -459,9 +462,11 @@ public sealed partial class ResultsViewModel : ObservableObject
                 },
                 CancellationToken.None);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
+            // Only the class name is traced: a message can carry a path or a file name (Hard Rule 14, no names in logs).
+            System.Diagnostics.Trace.TraceWarning("Save picture failed: " + ex.GetType().Name);
             written = false;
         }
 
@@ -471,7 +476,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
         else
         {
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // Name the place that matters: the exports folder for an earlier-version run, the run's own results folder otherwise.
+            ActionNoticeText = _strings.GetString(ownFolder ? ResultsCopy.ExportPngFailedInExports : ResultsCopy.ExportPngFailed);
         }
     }
 

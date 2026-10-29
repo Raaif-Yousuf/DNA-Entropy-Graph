@@ -204,8 +204,91 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
-        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailed);
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports, "the exports folder is the place to check, not the results folder");
         (Directory.Exists(exports) ? Directory.EnumerateFileSystemEntries(exports) : []).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failed_export_removes_every_folder_it_made_including_a_missing_exports_root()
+    {
+        var own = Path.Combine(_dir, "proto5");
+        Directory.CreateDirectory(own);
+        var root = Path.Combine(_dir, "deep", "exports5");
+        var failing = Substitute.For<IOverviewImageExporter>();
+        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
+        var vm = await ResultsFor(Row("legacy-5", own) with { Imported = true, Target = "local" }, root, failing);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(Path.Combine(_dir, "deep")).ShouldBeFalse("the missing parents made for the export are taken away again");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_results_folder_the_user_deleted_is_not_recreated_and_the_export_fails_with_the_results_folder_notice(bool cloudDownload)
+    {
+        var own = Path.Combine(_dir, cloudDownload ? "gone-cloud" : "gone");
+        Directory.CreateDirectory(own);
+        var run = cloudDownload ? Row("gone-1", own) with { Imported = true, Target = "cloud" } : Row("gone-1", own);
+        var exporter = WritingExporter();
+        var vm = await ResultsFor(run, Path.Combine(_dir, "unused-root"), exporter);
+        Directory.Delete(own);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailed);
+        Directory.Exists(own).ShouldBeFalse("a folder the user deleted or moved must not come back with a lone picture in it");
+        exporter.DidNotReceiveWithAnyArgs().Export(default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task The_swallowed_exporter_exception_leaves_a_trace_with_its_class_name_and_no_path()
+    {
+        var listener = new RecordingListener();
+        System.Diagnostics.Trace.Listeners.Add(listener);
+        try
+        {
+            var failing = Substitute.For<IOverviewImageExporter>();
+            failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns<bool>(_ => throw new InvalidOperationException("C:\\secret\\place\\file.png"));
+            var (vm, _) = await Results(Overview("chr1"), failing);
+
+            await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        }
+        finally
+        {
+            System.Diagnostics.Trace.Listeners.Remove(listener);
+        }
+
+        listener.Text.ShouldContain("InvalidOperationException");
+        listener.Text.ShouldNotContain("secret");
+        listener.Text.ShouldNotContain("file.png");
+    }
+
+    private sealed class RecordingListener : System.Diagnostics.TraceListener
+    {
+        private readonly System.Text.StringBuilder _text = new();
+
+        public string Text
+        {
+            get
+            {
+                lock (_text)
+                {
+                    return _text.ToString();
+                }
+            }
+        }
+
+        public override void Write(string? message)
+        {
+            lock (_text)
+            {
+                _text.Append(message);
+            }
+        }
+
+        public override void WriteLine(string? message) => Write(message + "\n");
     }
 
     [Theory]
