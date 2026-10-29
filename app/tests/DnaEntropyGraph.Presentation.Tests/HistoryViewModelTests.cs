@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
@@ -75,6 +76,65 @@ public sealed class HistoryViewModelTests
         Item(vm, "paid").HasCost.ShouldBeTrue();
         Item(vm, "unbooked").HasCost.ShouldBeFalse();
         Item(vm, "pc").CostText.ShouldBe("none");
+    }
+
+    private sealed class InlineDispatcher : IDispatcher
+    {
+        public void Enqueue(Action action) => action();
+    }
+
+    [Fact]
+    public async Task A_run_that_ends_while_the_page_is_open_gets_its_cost_on_the_row_without_leaving_the_page()
+    {
+        _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
+        CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
+        _rows = [Row("live", JobPhase.Running)];
+        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: new InlineDispatcher());
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Item(vm, "live").HasCost.ShouldBeFalse();
+
+        _rows = [Row("live") with { EstimatedCostUsd = 0.5 }];
+        messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Completed));
+        for (var i = 0; i < 200 && !Item(vm, "live").HasCost; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Item(vm, "live").CostText.ShouldBe("about $0.50");
+    }
+
+    [Fact]
+    public async Task A_phase_change_that_is_not_an_end_does_not_reload_the_list()
+    {
+        CommunityToolkit.Mvvm.Messaging.IMessenger messenger = new CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger();
+        _rows = [Row("live", JobPhase.Running)];
+        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), messenger: messenger, dispatcher: new InlineDispatcher());
+        await vm.RefreshCommand.ExecuteAsync(null);
+        var loads = _repository.ReceivedCalls().Count();
+
+        messenger.Send(new DnaEntropyGraph.Presentation.Messaging.RunPhaseChangedMessage("live", JobPhase.Running));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _repository.ReceivedCalls().Count().ShouldBe(loads, "only an ended run changes what a row shows");
+    }
+
+    [Fact]
+    public async Task A_Spot_run_on_a_machine_with_no_Spot_price_shows_the_on_demand_wording_on_its_row()
+    {
+        _strings.GetString(ResultsCopy.CostShort).Returns("about ${0}");
+        _strings.GetString(ResultsCopy.CostShortSpot).Returns("about spot ${0}");
+        _rows = [Row("spot") with { EstimatedCostUsd = 1.0, IsSpot = true, MachineType = "g2-standard-8" }];
+        var noSpot = DnaEntropyGraph.Core.Cost.PricingTable.Parse("""
+            {"schema":1,"asOf":"2026-10-01","currency":"USD","region":"us-central1","source":"test","disk":{"usdPerGbMonth":0.073},
+             "machines":{"g2-standard-8":{"accelerator":"L4","onDemandUsdPerHour":1.0}}}
+            """);
+        var pricing = Substitute.For<DnaEntropyGraph.Core.Cost.IPricingSource>();
+        pricing.Load().Returns(noSpot);
+        var vm = new HistoryViewModel(_repository, _remover, _navigator, _cloud, _local, _engine, _dialogs, _toasts, _strings, _launcher, _account, new UtcClock(), pricing: pricing);
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        Item(vm, "spot").CostText.ShouldBe("about $1.00");
     }
 
     private async Task<HistoryViewModel> Loaded(params RunRecord[] rows)

@@ -491,7 +491,7 @@ exercise.
  7-day stopped-VM sweep (spec D10) exists as the backstop against a forgotten Stop, not
  just the after-task setting itself: see `docs/user_guide/06-costs-and-cleanup.md` for
  the user-facing version of this same number.
-- **Per-run cost (issues #100, #557, shipped):** one figure per run, `RunRecord.EstimatedCostUsd`, booked by `SpendLedger` (via `LedgerRecordingRunRepository`) when the row first reaches an ended phase: VM seconds from `VmReadyAt` to `FinishedAt` at the machine's list rate (Spot rate when `IsSpot`) plus the disk share, with `VmSeconds` beside it. It is the same number as the ledger row. `Presentation/Services/RunCostText` only formats that column for the Results header and the Runs row (never recomputes, so the three cannot disagree). A local run shows "no cloud cost"; a cloud run with no booked figure shows nothing, never `0.00`. `RunRecord.ActualCostUsd` is **reserved and always null**: it would hold a billing-export figure, and there is no billing-export access. Nothing writes it or displays it; the diagnostics bundle echoes it only so a future writer needs no format change. Decision (agent-made, reversible): kept the column rather than a migration to drop it.
+- **Per-run cost (issues #100, #557, shipped):** one figure per run, `RunRecord.EstimatedCostUsd`, booked by `SpendLedger` (via `LedgerRecordingRunRepository`) when the row first reaches an ended phase: VM seconds from `VmReadyAt` to `FinishedAt` at the machine's list rate (Spot rate when `IsSpot`) plus the disk share, with `VmSeconds` beside it. It is the same number as the ledger row. `Presentation/Services/RunCostText` only formats that column for the Results header and the Runs row (never recomputes, so the three cannot disagree). The "Spot" wording follows the rate the ledger actually charged: `SpendLedger.UsdFor` falls back to the on-demand rate when the machine has no Spot price, so `RunCostText` takes the same question (`SpotPriceLookup` over the price list) and a Spot run on such a machine reads as an ordinary estimate. A carried figure is trusted only while its own `VmSeconds` agree with the row's span (otherwise it is priced again), the stored row's figure is kept over an upsert that carries a different one (the ledger is first-write-wins, so the row is too), the stored-figure look is one per-job read (`IRunRepository.GetByJobIdAsync`), and the Runs page reloads when a run ends while it is open (`HistoryViewModel` listens for `RunPhaseChangedMessage`), so the cost appears on the row without leaving the page. A local run shows "no cloud cost"; a cloud run with no booked figure shows nothing, never `0.00`. `RunRecord.ActualCostUsd` is **reserved and always null**: it would hold a billing-export figure, and there is no billing-export access. Nothing writes it or displays it; the diagnostics bundle echoes it only so a future writer needs no format change. Decision (agent-made, reversible): kept the column rather than a migration to drop it.
 - A **live ticker** per running job: `(now - lastStartTimestamp) * hourlyRate / 3600 +
  disk`, labelled "estimate" everywhere it appears, because there is no billing-export
  access - every number in this app is a modeled estimate, never a real invoice figure.
@@ -578,6 +578,20 @@ exercise.
  any bucket object or VM, and refuses with `spend_cap` (action: Open Settings). The card re-asks
  whenever the page is shown and with no file chosen. The
  stopped-VM idle sweep (the third checkbox of the issue) is the reconciler's (#530).
+ Round 5 review fixes: `LedgerRecordingRunRepository` declares `TryUpsertIfPhaseAsync` itself (the
+ interface default is a plain upsert, so a decorator that left it out silently dropped the #113
+ phase guard; a reflection test and a test through the real container pin it), booking only when
+ the inner repository accepted the write. The cap card and the Run button ignore the cap for a
+ This PC run (the engine never applies it to one; Auto is left as asked). A cancel while the create
+ is in flight stamps `VmReadyAt` from the moment the create landed (`VmProvisioner.TakeVmStartForCancel`),
+ or from the cancel time when the create is still unsettled, so the VM that billed until the delete
+ is booked. An adopted VM books from its own platform start (`RunClockStart`), not from the moment
+ the run found it. A flex-start ("wait for a graphics card") run still in Provisioning is a queued
+ request: it is left out of the in-progress figure that the hard stop reads. THEORY (unverified, no
+ live project; ToTest #92): the flex create operation completes at the grant, not at queueing; if it
+ completes at queueing, queued time would be booked from `VmReadyAt` at the run's end (the estimate
+ display stays conservative). The Settings cap box commits on LostFocus (stated in the XAML), so
+ typing 1 on the way to 10 never saves cap 1.
 
 ## 11. The job runner and operation polling (issues #58, #256)
 

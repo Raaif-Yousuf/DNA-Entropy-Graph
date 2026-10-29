@@ -440,6 +440,13 @@ public sealed class CloudJobRunner
 
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
                 progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                if (owned.Count > 0 && owned[0].RunClockStart is { } platformStart)
+                {
+                    // Issue #109 (L1): the VM's own start, so a first stamp that failed does not become "now".
+                    progress.VmCreatedAt ??= platformStart;
+                    await StampVmCreatedAsync(request.JobId, progress).ConfigureAwait(false);
+                }
+
                 await RecordVmNameAsync(request.JobId, progress.VmName, cancellationToken).ConfigureAwait(false);
                 return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }

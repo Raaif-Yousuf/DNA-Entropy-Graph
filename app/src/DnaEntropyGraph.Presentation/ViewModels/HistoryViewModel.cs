@@ -2,9 +2,11 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -51,6 +53,8 @@ public sealed partial class HistoryViewModel : ObservableObject
     [ObservableProperty]
     private string _emptyText = string.Empty;
 
+    private readonly Func<string?, bool>? _hasSpotPrice;
+
     public HistoryViewModel(
         IRunRepository runRepository,
         IRunHistoryRemover remover,
@@ -66,8 +70,25 @@ public sealed partial class HistoryViewModel : ObservableObject
         TimeProvider time,
         IEntropyOverviewSource? overview = null,
         IRunImporter? importer = null,
-        ImportedRunDismissals? dismissals = null)
+        ImportedRunDismissals? dismissals = null,
+        IPricingSource? pricing = null,
+        IMessenger? messenger = null,
+        IDispatcher? dispatcher = null)
     {
+        _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
+        if (messenger is not null && dispatcher is not null)
+        {
+            // A run that ends while this page is open gets its booked cost (and final phase) on its row: the row is built once per load, so the load is
+            // taken again when a run ends. Only an end changes what a row shows; the work happens on the UI thread the list belongs to.
+            messenger.Register<HistoryViewModel, Messaging.RunPhaseChangedMessage>(this, (recipient, message) =>
+            {
+                if (IsFinished(message.Phase))
+                {
+                    dispatcher.Enqueue(() => _ = recipient.RefreshCommand.ExecuteAsync(null));
+                }
+            });
+        }
+
         _dismissals = dismissals;
         _overview = overview;
         _importer = importer;
@@ -308,7 +329,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
-            CostText = RunCostText.Short(run, _strings),
+            CostText = RunCostText.Short(run, _strings, _hasSpotPrice),
             IsImported = run.Imported,
             ImportedText = run.Imported ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),

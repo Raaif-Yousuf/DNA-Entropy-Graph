@@ -16,6 +16,14 @@ public interface IRunRepository
     Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// One job's row (the latest by <see cref="RunRecord.CreatedUtc"/> when a double holds several), or null. A per-job read for a writer on a hot path
+    /// (the spend ledger's decorator reads it on every terminal write): the default reads the table and picks, the SQLite one asks for the one row.
+    /// A decorator over this interface MUST forward it (a reflection test in Persistence.Tests names every member).
+    /// </summary>
+    async Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        => (await GetAllAsync(cancellationToken).ConfigureAwait(false)).Where(r => r.JobId == jobId).OrderBy(r => r.CreatedUtc).LastOrDefault();
+
+    /// <summary>
     /// Inserts a new row, or replaces every column of an existing one keyed
     /// by <see cref="RunRecord.JobId"/> - never a partial update, so a
     /// caller always upserts the full record it has. <see cref="RunRecord.CreatedUtc"/>

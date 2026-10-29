@@ -123,7 +123,7 @@
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock x:Uid="SettingsSpendExplainer" TextWrapping="Wrap" />
-                        <TextBox x:Uid="SpendCapBox" Width="200" HorizontalAlignment="Left" Text="{x:Bind SpendCap.CapText, Mode=TwoWay}" />
+                        <TextBox x:Uid="SpendCapBox" Width="200" HorizontalAlignment="Left" Text="{x:Bind SpendCap.CapText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
                         <CheckBox x:Uid="SpendHardStopBox" IsChecked="{x:Bind SpendCap.IsHardStop, Mode=TwoWay}" />
                         <TextBlock Text="{x:Bind SpendCap.MonthToDateText, Mode=OneWay}" TextWrapping="Wrap" />
                         <TextBlock Text="{x:Bind SpendCap.Status, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />

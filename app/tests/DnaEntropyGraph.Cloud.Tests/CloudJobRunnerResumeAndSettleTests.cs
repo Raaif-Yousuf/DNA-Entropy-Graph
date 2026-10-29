@@ -212,6 +212,44 @@ public class CloudJobRunnerResumeAndSettleTests
         (await gcp.FindByJobIdAsync("job-s2", CancellationToken.None)).ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task A_cancel_while_the_create_is_in_flight_records_when_the_VM_that_landed_started_so_the_ledger_books_it()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        using var cts = new CancellationTokenSource();
+        var run = runner.RunAsync(TestInputs.Request("job-s5", Spec("job-s5")), cts.Token);
+        await gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => run);
+
+        var cancel = runner.CancelAsync("job-s5", CancellationToken.None);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        gcp.ReleaseCreate();
+        await cancel.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var row = LastRow(repo, "job-s5");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.VmReadyAt.ShouldNotBeNull("the create landed and billed until the cancel deleted it; without a start the ledger books nothing");
+        row.VmReadyAt!.Value.ShouldBeLessThanOrEqualTo(row.FinishedAt!.Value);
+    }
+
+    [Fact]
+    public async Task A_cancel_of_a_run_that_never_created_a_VM_records_no_start()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        await repo.UpsertAsync(new RunRecord("job-s6", JobPhase.Uploading, DateTimeOffset.UtcNow, Target: "cloud"), CancellationToken.None);
+
+        await runner.CancelAsync("job-s6", CancellationToken.None);
+
+        var row = LastRow(repo, "job-s6");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.VmReadyAt.ShouldBeNull();
+    }
+
     // ---- 3: stop is not the end for a VM that never booted (covered in CloudJobRunnerHardeningTests) ----
 
     // ---- 4 and 5: an unconfirmed VM end leads the user to the Cloud page ----

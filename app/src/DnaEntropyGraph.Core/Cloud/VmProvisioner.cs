@@ -12,6 +12,27 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, string> _inflightCreates = new();
 
+    /// <summary>
+    /// Issue #109 (M2): when a tracked create or reuse for a job LANDED, whoever was waiting on it. A run abandoned mid-create (a cancel) never reaches the stamp
+    /// that copies <see cref="RunProgress.VmCreatedAt"/> to the row, so the canceller reads the start from here instead.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _landedAt = new();
+
+    /// <summary>
+    /// Issue #109 (M2): the start of the VM billing for a run that is being cancelled, taken once. The moment a create or reuse landed when one did; when a create is
+    /// still in flight and unsettled (<paramref name="settled"/> false) the VM may yet land and bill, so the cancel request time is the conservative start; null when
+    /// no create was ever tracked for the job.
+    /// </summary>
+    public DateTimeOffset? TakeVmStartForCancel(string jobId, bool settled)
+    {
+        if (_landedAt.TryRemove(jobId, out var landed))
+        {
+            return landed;
+        }
+
+        return settled ? null : settings.TimeProvider.GetUtcNow();
+    }
+
     /// <summary>The GPU machine families (G2 = L4, A2 = A100, A3 = H100); anything else is a CPU smoke VM.</summary>
     public static bool ExpectsGpu(string machineType)
         => machineType.StartsWith("g2-", StringComparison.Ordinal)
@@ -81,6 +102,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             progress.VmName = kept.Name;
             progress.VmAdopted = true;
+            // Issue #109 (L1): an adopted VM has been billing since the platform started it, not since this run found it; a run whose first stamp failed
+            // before the app closed has no other record. (A platform clock a little ahead of ours only makes a span of zero: the ledger floors it.)
+            progress.VmCreatedAt ??= kept.RunClockStart;
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -327,7 +351,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     }
 
     /// <summary>Round 2 (L2): forgets the queued requests of a job whose run ended terminal; a cancel takes them with <see cref="TakePendingRequests"/> instead.</summary>
-    public void ForgetPendingRequests(string jobId) => TakePendingRequests(jobId);
+    public void ForgetPendingRequests(string jobId)
+    {
+        TakePendingRequests(jobId);
+        _landedAt.TryRemove(jobId, out _);
+    }
 
     /// <summary>Issue #92: flex requests queued by this instance whose create has not answered, by VM name and zone, with the job they belong to.</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Name, string Zone), string> _pendingFlex = new();
@@ -830,6 +858,11 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             t =>
             {
                 _ = t.Exception;
+                if (t.IsCompletedSuccessfully)
+                {
+                    _landedAt.TryAdd(jobId, settings.TimeProvider.GetUtcNow());
+                }
+
                 _inflightCreates.TryRemove(placeholder.Task, out _);
                 placeholder.TrySetResult();
             },

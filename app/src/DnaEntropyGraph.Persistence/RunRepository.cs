@@ -23,6 +23,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         FROM Runs;
         """;
 
+    private static readonly string SelectOneSql = SelectAllSql.Replace("FROM Runs;", "FROM Runs WHERE Id = @Id;", StringComparison.Ordinal);
+
     // Notes and TagsJson (issue #141's future columns) are deliberately
     // excluded from ON CONFLICT ... DO UPDATE SET, exactly like CreatedAt:
     // JobEngine will call UpsertAsync on every phase transition with
@@ -82,6 +84,13 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         var command = new CommandDefinition(SelectAllSql, cancellationToken: cancellationToken);
         var rows = await connection.QueryAsync<RunRow>(command).ConfigureAwait(false);
         return rows.Select(ToRecord).ToList();
+    }
+
+    public async Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var row = await connection.QuerySingleOrDefaultAsync<RunRow>(new CommandDefinition(SelectOneSql, new { Id = jobId }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return row is null ? null : ToRecord(row);
     }
 
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)

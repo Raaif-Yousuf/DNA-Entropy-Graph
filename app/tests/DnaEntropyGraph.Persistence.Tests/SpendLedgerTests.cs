@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cost;
+using DnaEntropyGraph.Core.Runs;
 using Shouldly;
 using Xunit;
 
@@ -42,7 +43,21 @@ public class SpendLedgerTests
         /// <summary>When above zero, that many upserts throw before one succeeds.</summary>
         public int FailNext { get; set; }
 
-        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<RunRecord>>(Rows.ToList());
+        public int GetAllCalls { get; private set; }
+
+        public int GetByJobIdCalls { get; private set; }
+
+        public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
+        {
+            GetAllCalls++;
+            return Task.FromResult<IReadOnlyList<RunRecord>>(Rows.ToList());
+        }
+
+        public Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        {
+            GetByJobIdCalls++;
+            return Task.FromResult(Rows.Where(r => r.JobId == jobId).OrderBy(r => r.CreatedUtc).LastOrDefault());
+        }
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
         {
@@ -254,6 +269,25 @@ public class SpendLedgerTests
     }
 
     [Fact]
+    public async Task A_flex_run_still_waiting_for_its_graphics_card_is_not_counted_toward_the_hard_stop_but_a_granted_one_is()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, _, _, paths) = Make(runs);
+        using (paths)
+        {
+            var flex = RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true });
+            var plain = RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" });
+            runs.Rows.Add(new RunRecord("queued", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-2), OptionsJson: flex));
+            runs.Rows.Add(new RunRecord("granted", JobPhase.Running, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-1), OptionsJson: flex));
+            runs.Rows.Add(new RunRecord("booting", JobPhase.Provisioning, Now.AddHours(-3), Target: "cloud", MachineType: "g2-standard-8", VmReadyAt: Now.AddHours(-1), OptionsJson: plain));
+
+            var summary = await ledger.MonthToDateAsync(CancellationToken.None);
+
+            summary.InProgressUsd.ShouldBe(2 * 1.015, 1e-9, "granted flex (1 h) plus the ordinary run still provisioning (1 h); the queued flex request adds nothing");
+        }
+    }
+
+    [Fact]
     public async Task A_run_in_progress_is_only_counted_from_the_start_of_the_month()
     {
         var runs = new MemoryRuns();
@@ -421,6 +455,122 @@ public class SpendLedgerTests
             var stored = runs.Rows.Single();
             stored.EstimatedCostUsd.ShouldNotBeNull().ShouldBe(1.015, 1e-9);
             stored.VmSeconds.ShouldBe(3600);
+        }
+    }
+
+    [Fact]
+    public async Task A_terminal_upsert_reads_the_one_job_not_the_whole_table()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, _, _, paths) = Make();
+        using (paths)
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                runs.Rows.Add(Finished("other" + i, 1));
+            }
+
+            var decorated = new LedgerRecordingRunRepository(runs, ledger);
+            runs.Rows.Add(Finished("r9", 1) with { Phase = JobPhase.Running, FinishedAt = null });
+            var before = runs.GetAllCalls;
+
+            await decorated.UpsertAsync(Finished("r9", 1), CancellationToken.None);
+
+            runs.GetAllCalls.ShouldBe(before, "the stored-figure look is per job");
+            runs.GetByJobIdCalls.ShouldBe(1);
+        }
+    }
+
+    [Fact]
+    public async Task An_upsert_carrying_a_different_figure_keeps_the_booked_one_on_the_row_so_row_and_ledger_agree()
+    {
+        var runs = new MemoryRuns();
+        var (ledger, repo, _, paths) = Make();
+        using (paths)
+        {
+            var decorated = new LedgerRecordingRunRepository(runs, ledger);
+            await decorated.UpsertAsync(Finished("r7", 1), CancellationToken.None);
+            var booked = runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull();
+
+            await decorated.UpsertAsync(Finished("r7", 1) with { EstimatedCostUsd = 99, VmSeconds = 7 }, CancellationToken.None);
+
+            runs.Rows.Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(booked, 1e-12, "the ledger is first-write-wins, so the row is too");
+            runs.Rows.Single().VmSeconds.ShouldBe(3600);
+            (await repo.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull().ShouldBe(booked, 1e-12);
+        }
+    }
+
+    [Fact]
+    public void A_carried_figure_whose_VM_seconds_disagree_with_the_rows_span_is_priced_again()
+    {
+        var (ledger, _, _, paths) = Make();
+        using (paths)
+        {
+            var stale = Finished("re-end", 2) with { EstimatedCostUsd = 0.5, VmSeconds = 1800 };
+            ledger.Quote(stale).ShouldNotBeNull().UsdEst.ShouldNotBeNull().ShouldBe(2 * 1.015, 1e-9, "a span of two hours is not the half hour the stale figure was booked for");
+
+            var honest = Finished("same-span", 2) with { EstimatedCostUsd = 0.5, VmSeconds = 7200 };
+            ledger.Quote(honest).ShouldNotBeNull().UsdEst.ShouldNotBeNull().ShouldBe(0.5, 1e-12, "a figure that matches its own span stays first-write-wins");
+        }
+    }
+
+    [Fact]
+    public async Task The_real_repository_reads_one_job_by_id()
+    {
+        using var paths = new TempPaths();
+        var real = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        await real.UpsertAsync(Finished("a", 1), CancellationToken.None);
+        await real.UpsertAsync(Finished("b", 2), CancellationToken.None);
+
+        (await real.GetByJobIdAsync("b", CancellationToken.None)).ShouldNotBeNull().JobId.ShouldBe("b");
+        (await real.GetByJobIdAsync("missing", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_decorator_keeps_the_phase_guard_a_Cancelled_row_is_not_overwritten_by_a_stale_Completed()
+    {
+        var (ledger, repo, _, paths) = Make();
+        using (paths)
+        {
+            var real = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+            IRunRepository decorated = new LedgerRecordingRunRepository(real, ledger);
+            await real.UpsertAsync(Finished("r1", 1, phase: JobPhase.Cancelled), CancellationToken.None);
+
+            var written = await decorated.TryUpsertIfPhaseAsync(Finished("r1", 1, phase: JobPhase.Completed), JobPhase.Running, CancellationToken.None);
+
+            written.ShouldBeFalse();
+            (await real.GetAllAsync(CancellationToken.None)).Single().Phase.ShouldBe(JobPhase.Cancelled);
+            (await repo.GetAllAsync(CancellationToken.None)).ShouldBeEmpty("the refused Completed books nothing");
+        }
+    }
+
+    [Fact]
+    public async Task The_decorator_books_a_conditional_write_that_succeeds_and_books_nothing_for_one_that_is_refused()
+    {
+        var (ledger, repo, _, paths) = Make();
+        using (paths)
+        {
+            var real = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+            IRunRepository decorated = new LedgerRecordingRunRepository(real, ledger);
+            await real.UpsertAsync(new RunRecord("r2", JobPhase.Running, Now.AddHours(-2), Target: "cloud", VmReadyAt: Now.AddHours(-1), MachineType: "g2-standard-8"), CancellationToken.None);
+
+            (await decorated.TryUpsertIfPhaseAsync(Finished("r2", 1), JobPhase.Validating, CancellationToken.None)).ShouldBeFalse();
+            (await repo.GetAllAsync(CancellationToken.None)).ShouldBeEmpty("a refused write books nothing");
+
+            (await decorated.TryUpsertIfPhaseAsync(Finished("r2", 1), JobPhase.Running, CancellationToken.None)).ShouldBeTrue();
+            (await repo.GetAllAsync(CancellationToken.None)).Count.ShouldBe(1);
+            (await real.GetAllAsync(CancellationToken.None)).Single().EstimatedCostUsd.ShouldNotBeNull().ShouldBe(1.015, 1e-9);
+        }
+    }
+
+    [Fact]
+    public void The_decorator_declares_every_IRunRepository_member_itself_so_none_falls_back_to_an_interface_default()
+    {
+        var map = typeof(LedgerRecordingRunRepository).GetInterfaceMap(typeof(IRunRepository));
+        map.InterfaceMethods.Length.ShouldBeGreaterThanOrEqualTo(3, "vacuity: the scan must see GetAll, Upsert and TryUpsertIfPhase");
+        for (var i = 0; i < map.InterfaceMethods.Length; i++)
+        {
+            map.TargetMethods[i].DeclaringType.ShouldBe(typeof(LedgerRecordingRunRepository), $"{map.InterfaceMethods[i].Name} is inherited from the interface default, so the decorator silently drops its behaviour (#113 phase guard)");
         }
     }
 

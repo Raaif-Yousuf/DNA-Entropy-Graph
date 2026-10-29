@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -61,6 +62,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsActionNoticeVisible))]
     private string _actionNoticeText = string.Empty;
 
+    private readonly Func<string?, bool>? _hasSpotPrice;
+
     public ResultsViewModel(
         IRunRepository runRepository,
         IRunOutputReader outputReader,
@@ -69,8 +72,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IStringResourceProvider strings,
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
-        IOverviewImageExporter? imageExporter = null)
+        IOverviewImageExporter? imageExporter = null,
+        IPricingSource? pricing = null)
     {
+        _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -132,7 +137,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
-            CostText = RunCostText.Header(run, _strings) ?? string.Empty;
+            CostText = RunCostText.Header(run, _strings, _hasSpotPrice) ?? string.Empty;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.

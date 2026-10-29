@@ -34,6 +34,19 @@ public sealed class RunCostTextTests
         => new("r", JobPhase.Completed, Now, Target: target, EstimatedCostUsd: usd, IsSpot: spot);
 
     [Fact]
+    public void The_Spot_label_follows_the_rate_the_ledger_used_not_only_the_flag_on_the_row()
+    {
+        var row = Row(1.0, spot: true) with { MachineType = "a3-highgpu-2g" };
+
+        RunCostText.Header(row, _strings, machine => false).ShouldBe("est $1.00", "no Spot price for the machine: the ledger charged the on-demand rate, so the line must not say Spot");
+        RunCostText.Short(row, _strings, machine => false).ShouldBe("about $1.00");
+        RunCostText.Header(row, _strings, machine => machine == "a3-highgpu-2g").ShouldBe("est spot $1.00");
+        RunCostText.Short(row, _strings, machine => machine == "a3-highgpu-2g").ShouldBe("about spot $1.00");
+        RunCostText.Header(Row(1.0, spot: false), _strings, machine => true).ShouldBe("est $1.00", "an on-demand run is never labelled Spot");
+        RunCostText.Header(row, _strings).ShouldBe("est spot $1.00", "no lookup given: the flag on the row is all there is");
+    }
+
+    [Fact]
     public void A_booked_figure_is_shown_to_the_cent()
     {
         RunCostText.Header(Row(0.4249), _strings).ShouldBe("est $0.42");

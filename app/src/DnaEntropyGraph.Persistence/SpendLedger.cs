@@ -72,8 +72,24 @@ public sealed class SpendLedger : ISpendCapGate
         return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished, UsdEst: usd);
     }
 
-    /// <summary>The figure an ended row already carries (first write wins: a later pricing change or a stale copy never re-quotes it), or null.</summary>
-    private static double? BookedUsd(RunRecord run) => run.EstimatedCostUsd is { } usd && double.IsFinite(usd) && usd >= 0 ? usd : null;
+    /// <summary>
+    /// The figure an ended row already carries (first write wins: a later pricing change or a stale copy never re-quotes it), or null. A figure whose
+    /// own VM seconds disagree with the row's span (a stale copy carried onto a row whose start or end has since moved) is not trusted and is priced again.
+    /// </summary>
+    private static double? BookedUsd(RunRecord run)
+    {
+        if (run.EstimatedCostUsd is not { } usd || !double.IsFinite(usd) || usd < 0)
+        {
+            return null;
+        }
+
+        if (run.VmSeconds is { } seconds && run.VmReadyAt is { } start && run.FinishedAt is { } end && Math.Abs((end - start).TotalSeconds - seconds) > 1)
+        {
+            return null;
+        }
+
+        return usd;
+    }
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
@@ -156,6 +172,15 @@ public sealed class SpendLedger : ISpendCapGate
                 continue;
             }
 
+            // A flex-start (wait for a card) run still in Provisioning is a request in Google's queue, not a VM that bills: the run only leaves
+            // Provisioning once its create has been answered with a granted VM. THEORY (unverified, no live project; ToTest #92): the create
+            // operation completes at the grant, not at queueing. Until that is measured the queued time is kept out of the HARD STOP figure (it can
+            // only under-count a VM that was in fact already billing; the run's own row, booked at its end, still carries the whole span).
+            if (run.Phase == JobPhase.Provisioning && RunOptionsJson.TryDeserialize(run.OptionsJson)?.WaitForGpu == true)
+            {
+                continue;
+            }
+
             var from = vmStart > monthStart ? vmStart : monthStart;
             if (now > from && UsdFor(run, from, now) is { } usd)
             {
@@ -214,23 +239,54 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 {
     public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken) => inner.GetAllAsync(cancellationToken);
 
+    public Task<RunRecord?> GetByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.GetByJobIdAsync(jobId, cancellationToken);
+
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
-        // First write wins, same as the ledger: a row already stored with its booked cost keeps it, so the run pages and the
-        // month total can never disagree after a price list change or an upsert from an older copy of the row.
-        if (run.EstimatedCostUsd is null && JobStateMachine.IsTerminal(run.Phase)
-            && (await inner.GetAllAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(r => r.JobId == run.JobId) is { EstimatedCostUsd: { } kept } stored)
+        var (stamped, quote) = await PrepareAsync(run, cancellationToken).ConfigureAwait(false);
+        await inner.UpsertAsync(stamped, cancellationToken).ConfigureAwait(false);
+        await BookAsync(stamped, quote).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Declared here on purpose: <see cref="IRunRepository.TryUpsertIfPhaseAsync"/> has a NON-conditional default body, so a decorator that left it out would
+    /// inherit a plain upsert and silently drop the #113 phase guard (a Cancelled row overwritten with Completed). The inner repository decides; a ledger row is
+    /// booked only when the write was accepted.
+    /// </summary>
+    public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
+    {
+        var (stamped, quote) = await PrepareAsync(run, cancellationToken).ConfigureAwait(false);
+        if (!await inner.TryUpsertIfPhaseAsync(stamped, expectedPhase, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        await BookAsync(stamped, quote).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// What the row to store carries, and the ledger row it stands for. First write wins, same as the ledger: a job whose stored row already carries its
+    /// booked cost keeps that figure and VM seconds whatever the incoming copy says (an older copy, a price list change, a different figure), so the run
+    /// pages and the month total can never disagree. Read per job (<see cref="IRunRepository.GetByJobIdAsync"/>), never the whole table.
+    /// </summary>
+    private async Task<(RunRecord Run, CostLedgerEntry? Quote)> PrepareAsync(RunRecord run, CancellationToken cancellationToken)
+    {
+        if (JobStateMachine.IsTerminal(run.Phase)
+            && await inner.GetByJobIdAsync(run.JobId, cancellationToken).ConfigureAwait(false) is { EstimatedCostUsd: { } kept } stored)
         {
             run = run with { EstimatedCostUsd = kept, VmSeconds = stored.VmSeconds };
+            return (run, ledger.Quote(run));
         }
 
         var quote = ledger.Quote(run);
-        if (quote is not null)
-        {
-            run = run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) };
-        }
+        return quote is null
+            ? (run, null)
+            : (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
+    }
 
-        await inner.UpsertAsync(run, cancellationToken).ConfigureAwait(false);
+    private async Task BookAsync(RunRecord stored, CostLedgerEntry? quote)
+    {
         if (quote is null)
         {
             return;
@@ -238,7 +294,7 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
         try
         {
-            await ledger.RecordRunAsync(run, CancellationToken.None).ConfigureAwait(false);
+            await ledger.RecordRunAsync(stored, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
