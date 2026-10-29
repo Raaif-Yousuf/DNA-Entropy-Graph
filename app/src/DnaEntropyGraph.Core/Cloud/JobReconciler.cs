@@ -780,6 +780,14 @@ public sealed class JobReconciler
             return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputMissing, "No copy of the paired GFF3 remains under app data and the original is gone.", cancellationToken).ConfigureAwait(false);
         }
 
+        // Hard Rule 2, as JobEngine does for a new run: the pair is checked before anything is created. The original GFF3 may have been edited since the run started
+        // (the app's copy is gone), so nobody pays for a VM to learn it no longer fits the FASTA. Once a VM may exist it already holds the uploaded pair.
+        if (annotation is not null && !vmMayExist && AnnotationPairValidator.Check(staged!.LocalPath, annotation.LocalPath, options.Topology).Problem is { } pairProblem)
+        {
+            // The code only: the problem's own text can hold a sequence name from the user's file.
+            return await FailAsync(row, underway, ReattachAction.FailedUnrecoverable, RunErrorCodes.InputInvalid, "Annotation " + pairProblem.Code, cancellationToken).ConfigureAwait(false);
+        }
+
         var appVersion = row.AppVersion ?? "0.0.0";
         var image = _images.Resolve(appVersion, VmProvisioner.ExpectsGpu(CloudJobRequestFactory.MachineTypeFor(options.GpuTier)));
         if (imageRequired && (image.Status != WorkerImageStatus.Available || image.Reference is null))

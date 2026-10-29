@@ -140,7 +140,7 @@ public class JobReconcilerTests
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
         /// <summary>A killed app's leftovers for an NCBI accession run (issue #684): a row at <paramref name="phase"/> whose options name the accession, no copy of any input, no VM.</summary>
-        public async Task SeedAccessionAsync(string jobId, JobPhase phase, string accession, string? range = null, bool uploaded = false)
+        public async Task SeedAccessionAsync(string jobId, JobPhase phase, string accession, string? range = null, bool uploaded = false, string? annotationPath = null)
         {
             var options = new RunOptions
             {
@@ -148,6 +148,7 @@ public class JobReconcilerTests
                 RunTarget = "Cloud",
                 Accession = accession,
                 AccessionRange = range,
+                AnnotationPath = annotationPath,
                 OutputFolder = TestInputs.OutputParent(jobId),
             };
             var vmName = "deg-" + jobId;
@@ -189,16 +190,17 @@ public class JobReconcilerTests
             int keepAliveMinutes = 30,
             bool paired = false,
             bool keepAnnotationOriginal = true,
-            bool keepAnnotationCopy = true)
+            bool keepAnnotationCopy = true,
+            string annotationContent = TestInputs.PairedGff3)
         {
-            var original = TestInputs.Stage(jobId);
+            var original = paired ? TestInputs.Stage(jobId, "seq.fasta", TestInputs.PairedFasta) : TestInputs.Stage(jobId);
             var copy = await Inputs.StageAsync(jobId, original.LocalPath, CancellationToken.None);
             string? annotationOriginal = null;
             StagedInput? annotationCopy = null;
             if (paired)
             {
                 // Issue #720: a run paired with a GFF3 (#686) kept the app's own copy under runs/<job>/annotation.
-                annotationOriginal = TestInputs.Stage(jobId, "genes.gff3").LocalPath;
+                annotationOriginal = TestInputs.Stage(jobId, "genes.gff3", annotationContent).LocalPath;
                 annotationCopy = await Inputs.StageAnnotationAsync(jobId, annotationOriginal, CancellationToken.None);
                 if (!keepAnnotationOriginal)
                 {
@@ -487,7 +489,7 @@ public class JobReconcilerTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_paired_run_killed_before_a_VM_existed_re_uploads_its_GFF3_and_the_manifest_names_it(bool originalStillThere)
+    public async Task A_paired_run_killed_before_a_VM_existed_re_uploads_its_GFF3_from_the_apps_copy_whether_or_not_the_original_remains_and_the_manifest_names_it(bool originalStillThere)
     {
         var env = new Env();
         await env.SeedAsync("job-g", JobPhase.Validating, uploaded: false, keepOriginal: false, paired: true, keepAnnotationOriginal: originalStillThere);
@@ -523,6 +525,34 @@ public class JobReconcilerTests
         outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
         env.Row("job-m").ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
         env.Gcp.CreateAttempts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_paired_run_whose_original_GFF3_changed_to_one_that_no_longer_fits_its_FASTA_fails_as_invalid_and_creates_nothing()
+    {
+        var env = new Env();
+        await env.SeedAsync("job-x", JobPhase.Validating, uploaded: false, keepOriginal: false, paired: true, keepAnnotationCopy: false, annotationContent: TestInputs.MismatchedGff3);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-x");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
+        env.Row("job-x").ErrorCode.ShouldBe(RunErrorCodes.InputInvalid);
+        env.Gcp.CreateAttempts.ShouldBe(0);
+        env.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldNotContain(k => k.EndsWith(".gff3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_accession_run_with_a_stale_AnnotationPath_uploads_no_annotation_and_its_manifest_has_none()
+    {
+        var env = new Env();
+        var gff = TestInputs.Stage("job-ag", "genes.gff3", TestInputs.PairedGff3).LocalPath;
+        await env.SeedAccessionAsync("job-ag", JobPhase.Validating, "NC_045512.2", annotationPath: gff);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-ag");
+
+        outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
+        env.Gcp.ObjectKeys(FakeGcp.BucketName(Project)).ShouldNotContain(k => k.EndsWith(".gff3", StringComparison.Ordinal));
+        FirstManifestInput(env, "job-ag").TryGetProperty("annotation", out _).ShouldBeFalse();
     }
 
     [Fact]
