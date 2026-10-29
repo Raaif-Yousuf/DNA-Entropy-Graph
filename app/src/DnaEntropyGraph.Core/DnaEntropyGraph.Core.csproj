@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="DnaEntropyGraph.Cloud.Tests" />
+    <InternalsVisibleTo Include="DnaEntropyGraph.Core.Tests" />
   </ItemGroup>
 
 </Project>

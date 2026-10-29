@@ -26,6 +26,16 @@ internal sealed class KeySpec(IReadOnlyDictionary<string, KeySpec?> keys, Func<s
     /// <summary><c>error</c> in <c>status.json</c> and <c>result.json</c>: the code must be one the worker's registry defines (#613).</summary>
     private static KeySpec ErrorSpec { get; } = Of(("code", OneOf(RunErrorCodes.WorkerErrorCodes)), ("retriable", null));
 
+    /// <summary>Adds every key of this spec and of its children to <paramref name="sink"/>.</summary>
+    public void CollectKeys(ISet<string> sink)
+    {
+        foreach (var (key, child) in Keys)
+        {
+            sink.Add(key);
+            child?.CollectKeys(sink);
+        }
+    }
+
     public static KeySpec Of(params (string Key, KeySpec? Child)[] entries) =>
         new(entries.ToDictionary(e => e.Key, e => e.Child, StringComparer.Ordinal));
 
@@ -107,10 +117,118 @@ internal sealed partial class DiagnosticsRedactor
     private readonly string _profilePath;
     private readonly IReadOnlyList<SensitiveValue> _sensitive;
 
-    public DiagnosticsRedactor(string userProfilePath, IEnumerable<string> sensitiveValues)
+    private readonly Regex? _userText;
+
+    /// <param name="userProfilePath">The Windows profile folder, redacted as a user placeholder.</param>
+    /// <param name="sensitiveValues">Identifiers (names, projects, paths): matched as substrings, like the leak scan.</param>
+    /// <param name="userText">
+    /// The user's own free text (a run's tags and notes, issue #141). Matched as WHOLE tokens only, case-insensitively, in one
+    /// pass, and never checked by the leak scan: a tag such as "completed" or "error" is an ordinary word the bundle itself
+    /// writes, so a substring match would mangle fixed vocabulary and a scan would refuse every bundle.
+    /// </param>
+    public DiagnosticsRedactor(string userProfilePath, IEnumerable<string> sensitiveValues, IEnumerable<string>? userText = null)
     {
         _profilePath = userProfilePath.TrimEnd('\\', '/');
         _sensitive = SensitiveValue.Normalize(sensitiveValues);
+        var all = (userText ?? []).ToList();
+        _userText = WholeTokenRegex(all);
+        // DECISION (agent-made, reversible): the whole-file backstop ignores user text that parses as a number (invariant culture). A number
+        // leaf is copied as a number (kept data such as percent or windowsDone), so a tag "1.0" or "42.5" would withhold a whole status file
+        // whenever the same number appeared in it. The primary scrub (above) still removes such text from every log line.
+        _backstop = WholeTokenRegex(all.Where(v => !IsNumberShaped(v)));
+    }
+
+    private readonly Regex? _backstop;
+
+    private static bool IsNumberShaped(string? value)
+        // "NaN" and "Infinity" parse as doubles but are words, not numbers a JSON leaf can hold: only a digit-led, signed or dotted text counts.
+        => value?.Trim() is { Length: > 0 } text
+            && (char.IsAsciiDigit(text[0]) || text[0] is '-' or '+' or '.')
+            && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
+
+    /// <summary>
+    /// True when the text still holds one of the user's own words (see the <c>userText</c> argument) as a whole token. A word that parses
+    /// as a number is not counted: the copied number leaves legitimately hold numbers (see the constructor).
+    /// </summary>
+    public bool ContainsUserText(string text) => _backstop?.IsMatch(MarkerWord().Replace(text, " ")) == true;
+
+    // The fixed markers this redactor and the bundle builder write. They carry no user text, so the backstop must not read their
+    // words ("user", "path", "redacted") as the user's own.
+    [GeneratedRegex(DiagnosticsMarkers.Pattern)]
+    private static partial Regex MarkerWord();
+
+    // DECISION (agent-made, reversible): words that are the bundle's own vocabulary are never scrubbed as "user text". The app never
+    // writes a note or tag into a log, so such a word in a log is the log's own: scrubbing a tag "info" blanked every log level and a
+    // tag "level" or "status" made the backstop withhold progress.jsonl, status.json and result.json (cold review of #141).
+    // Distinctive text (a digit, a punctuation mark, an uncommon word) and every multi-word note is still scrubbed.
+    private static readonly HashSet<string> LogVocabulary = BuildLogVocabulary();
+
+    private static HashSet<string> BuildLogVocabulary()
+    {
+        var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "debug", "trace", "info", "information", "notice", "warn", "warning", "error", "errors", "fatal", "critical", "failed", "failure", "fail",
+            "ok", "done", "completed", "complete", "success", "succeeded", "running", "started", "stopped", "cancelled", "canceled",
+            "pending", "queued", "none", "null", "true", "false", "unknown", "message", "detail", "details", "job", "run", "runs",
+            "omitted", "withheld", "gpu", "cpu", "spot", "nvidia", "tesla",
+        };
+        foreach (var marker in DiagnosticsMarkers.Words)
+        {
+            words.Add(marker);
+        }
+
+        foreach (var phase in Enum.GetNames<JobPhase>())
+        {
+            words.Add(phase);
+        }
+
+        // The values the bundle keeps in its allowlisted leaves, from the code's own lists (never a second hand-kept copy).
+        words.UnionWith(WorkerStages.All);
+        words.UnionWith(RunErrorCodes.All);
+        words.UnionWith(RunErrorCodes.WorkerErrorCodes);
+        foreach (var kind in Enum.GetNames<CloudErrorKind>())
+        {
+            words.Add(kind);
+            words.Add(string.Concat(kind.Select((c, i) => i > 0 && char.IsUpper(c) ? "_" + char.ToLowerInvariant(c) : char.ToLowerInvariant(c).ToString())));
+        }
+
+        foreach (var model in GpuCatalog.Shipped.Models)
+        {
+            words.Add(model.Id);
+        }
+
+        foreach (var gpu in GpuCatalog.Shipped.Gpus)
+        {
+            words.Add(gpu.MachineType);
+            words.Add(gpu.Accelerator);
+            words.Add(gpu.Tier.ToString());
+            words.UnionWith(gpu.Accelerator.Split('-'));
+            words.UnionWith(gpu.Tier.ToString().Split('_'));
+        }
+
+        foreach (var spec in new[] { KeySpec.Status, KeySpec.Progress, KeySpec.Result })
+        {
+            spec.CollectKeys(words);
+        }
+
+        return words;
+    }
+
+    /// <summary>True when <paramref name="word"/> is one of the bundle's own words, which are never scrubbed as user text.</summary>
+    internal static bool IsLogVocabulary(string word) => LogVocabulary.Contains(word);
+
+    private static Regex? WholeTokenRegex(IEnumerable<string>? values)
+    {
+        var usable = (values ?? [])
+            .Select(v => v?.Trim() ?? string.Empty)
+            .Where(v => v.Length >= 2 && !v.All(char.IsDigit) && v.Any(char.IsLetterOrDigit) && !LogVocabulary.Contains(v))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(v => v.Length)
+            .Select(Regex.Escape)
+            .ToList();
+        return usable.Count == 0
+            ? null
+            : new Regex(@"(?<![\p{L}\p{N}])(?:" + string.Join('|', usable) + @")(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     /// <summary>Text redaction for a whole log or file. Output uses LF line endings.</summary>
@@ -157,6 +275,11 @@ internal sealed partial class DiagnosticsRedactor
         foreach (var value in _sensitive)
         {
             line = value.Replace(line, RedactedValue);
+        }
+
+        if (_userText is not null)
+        {
+            line = _userText.Replace(line, RedactedValue);
         }
 
         line = Email().Replace(line, "<email>");
@@ -476,7 +599,7 @@ public static partial class DiagnosticsLeakScan
 
     // The fixed words the redactor and builder write in place of removed text; they carry no user data, so they are blanked
     // before the identifier check (a user named "user" must not make every bundle fail on "<user>").
-    [GeneratedRegex(@"<(?:redacted|user|path|token|email|sequence|file)>|<omitted: [a-z ]{3,40}>|<unparseable line omitted>")]
+    [GeneratedRegex(DiagnosticsMarkers.Pattern)]
     private static partial Regex Placeholder();
 
     /// <summary>Support addresses that may appear in a bundle. None yet; an address added here needs a test.</summary>
