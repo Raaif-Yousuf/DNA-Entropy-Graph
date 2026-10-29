@@ -136,6 +136,16 @@ public sealed partial class RunListItem : ObservableObject
 
     public bool HasPreset => PresetText is not null;
 
+    /// <summary>The run's tags (issue #141), shown as chips; empty for a run with none.</summary>
+    public IReadOnlyList<string> Tags { get; init; } = [];
+
+    public bool HasTags => Tags.Count > 0;
+
+    /// <summary>The run's note (issue #141); null when there is none.</summary>
+    public string? NotesText { get; init; }
+
+    public bool HasNotes => NotesText is not null;
+
     public IAsyncRelayCommand OpenCommand { get; }
 
     public IAsyncRelayCommand RerunCommand { get; }

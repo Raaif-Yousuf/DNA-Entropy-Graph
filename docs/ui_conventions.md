@@ -295,9 +295,10 @@ memory effect itself was not measured, only that the release is explicit.
   is invoked again, which stopped the queued checks of an earlier drop.
 - `scripts/check_app_wiring.py` does not resolve `{x:Bind}` inside a typed `DataTemplate` against the page
   ViewModel (the XAML compiler checks it against the `x:DataType`); a plain `{Binding}` there is still checked.
-- **Run name** (`RunNamer`, `NameTemplate`, `RunNamePreview`) is built and tested but **not on the page**: the
-  runner names the result folder from the input file (MEASURED 2026-10-03, `CloudJobRunner.cs:1286`, #514), so
-  a name box would promise something false. The XAML to restore is on #514.
+- **Run name** (#514): the box binds `NameTemplate` (sent in `RunOptions.NameTemplate`) and the line under it shows
+  `RunNamePreview`. The preview, `RunTransfer` (cloud) and `LocalJobRunner` (This PC) all name the folder with the one
+  function `RunOutputFolders.RunFolderName` (over `RunNamer`), so the page cannot promise a name the runner will not
+  use; `RunOutputFolders.CreateUnique` adds `_2` against the real disk. The template is not remembered between launches.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
 - **Model and graphics card pickers (issue #87).** The "Model and graphics card (GPU)" expander is `GpuPlanViewModel`

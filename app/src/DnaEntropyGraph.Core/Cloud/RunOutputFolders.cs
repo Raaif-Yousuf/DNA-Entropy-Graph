@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Contract;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -6,6 +8,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class RunOutputFolders
 {
+    private const string DefaultTemplate = "{file}";
+
     /// <summary>
     /// The default output folder when the user chose none: the Downloads known folder as reported by
     /// <paramref name="downloadsKnownFolder"/> (a redirected or OneDrive Downloads included), or
@@ -37,6 +41,24 @@ public static class RunOutputFolders
     }
 
     /// <summary>
+    /// The folder name a run gets (issue #514): <see cref="RunOptions.NameTemplate"/> expanded by <see cref="RunNamer"/> for this input, model and
+    /// time. The cloud runner, the This PC runner and the New run page's preview all call this one function, so what the page shows is what
+    /// the runner creates. A name already taken is not handled here: <see cref="CreateUnique"/> adds <c>_2</c> against the real disk.
+    /// </summary>
+    public static string RunFolderName(RunOptions options, StagedInput input, DateTime now)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(input);
+
+        // An accession has no file name, and its output stem holds no dot, so the stem is what {file} must see; a file goes in by its
+        // name so RunNamer drops the extension exactly as StagedInput.OutputStem does.
+        var file = input.IsAccession ? input.OutputStem : input.FileName;
+        // A blank template is the default, not "run": a user who clears the box gets the file's name, as before the box existed.
+        var template = string.IsNullOrWhiteSpace(options.NameTemplate) ? DefaultTemplate : options.NameTemplate;
+        return RunNamer.Resolve(template, file, options.ModelId, now, 1, []);
+    }
+
+    /// <summary>
     /// Creates and returns <c>parent\name</c>, or <c>parent\name_2</c>, <c>_3</c> and so on when
     /// that exists. <paramref name="name"/> is made safe as a single folder name first.
     /// </summary>
@@ -55,14 +77,59 @@ public static class RunOutputFolders
     }
 
     /// <summary>
-    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName_2.ext</c>, <c>_3</c> and so on when that exists: a file the
-    /// user may care about is never silently overwritten (Hard Rule 14).
+    /// The one folder for the exports (pictures) of a run whose own folder belongs to the user: <c>parent\name exports</c>, the same path every time
+    /// for the same run. Only names it; the caller creates it when it has something to write.
+    /// </summary>
+    public static string ExportsFolder(string parent, string name, string jobId)
+    {
+        // A short code from the job id keeps two runs of the same name apart, and keeps the app out of a plain "<name> exports" folder the
+        // user may have made themselves.
+        var code = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(jobId)))[..6].ToLowerInvariant();
+        return Path.Combine(parent, Sanitize($"{name} exports {code}"));
+    }
+
+    /// <summary>
+    /// Creates <paramref name="folder"/> and any missing parents and returns exactly the folders it made, outermost first (empty when it was
+    /// already there), so a caller that then has nothing to write can <see cref="RemoveCreated"/> them and leave no trace.
+    /// </summary>
+    public static IReadOnlyList<string> CreateFolderChain(string folder)
+    {
+        var missing = new List<string>();
+        for (var dir = Path.GetFullPath(folder); !string.IsNullOrEmpty(dir) && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir) ?? string.Empty)
+        {
+            missing.Add(dir);
+        }
+
+        missing.Reverse();
+        Directory.CreateDirectory(folder);
+        return missing;
+    }
+
+    /// <summary>Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive.</summary>
+    public static void RemoveCreated(IReadOnlyList<string> created)
+    {
+        for (var i = created.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                Directory.Delete(created[i]);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName (2).ext</c>, <c>(3)</c> and so on when anything (a file or a
+    /// folder) already has that name: a file the user may care about is never silently overwritten (Hard Rule 14).
     /// </summary>
     public static string UniqueFilePath(string folder, string baseName, string extension)
     {
         for (var n = 1; ; n++)
         {
-            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName}_{n}{extension}");
+            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName} ({n}){extension}");
             if (!Path.Exists(candidate))
             {
                 return candidate;

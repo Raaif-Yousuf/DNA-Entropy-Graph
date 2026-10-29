@@ -289,7 +289,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
+        return RunOutputRoot.IsSafelyInside(folder, root) ? folder : null;
     }
 
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>

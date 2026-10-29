@@ -117,6 +117,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         }
 
         var zones = new List<string>();
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -142,13 +143,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 }
             }
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                return zones;
-            }
-
-            pageToken = next;
+            // A repeated token fails the walk: a partial zone list would read as "no capacity there", and the ladder would skip a zone that has it.
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 
@@ -343,6 +339,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         var filter = $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.installation-id = \"{installationId}\")";
         var found = new List<DiskDescriptor>();
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -387,15 +384,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 }
             }
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                throw new CloudOperationException(
-                    new CloudError(CloudErrorCodes.ListPaginationStuck, null, "Compute Engine returned the same page token twice, so the disk list may be incomplete."),
-                    CloudErrorKind.Network);
-            }
-
-            pageToken = next;
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 
@@ -449,6 +438,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         var project = RequireProject();
         var targetSuffix = $"/zones/{zone}/instances/{vmName}";
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         for (var page = 0; page < 5; page++)
         {
@@ -469,7 +459,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 return true;
             }
 
-            pageToken = string.IsNullOrEmpty(operations.NextPageToken) ? null : operations.NextPageToken;
+            pageToken = paging.Advance(operations.NextPageToken);
             if (pageToken is null)
             {
                 return false;
@@ -553,6 +543,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             ? $"labels.app = \"{VmSpec.AppLabelValue}\""
             : $"(labels.app = \"{VmSpec.AppLabelValue}\") AND (labels.{labelKey} = \"{labelValue}\")";
         var found = new List<VmDescriptor>();
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -595,15 +586,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 }
             }
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                throw new CloudOperationException(
-                    new CloudError(CloudErrorCodes.ListPaginationStuck, null, "Compute Engine returned the same page token twice, so the VM list may be incomplete."),
-                    CloudErrorKind.Network);
-            }
-
-            pageToken = next;
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 
