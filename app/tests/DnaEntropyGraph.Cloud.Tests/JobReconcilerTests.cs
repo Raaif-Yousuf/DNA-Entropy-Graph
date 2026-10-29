@@ -202,15 +202,6 @@ public class JobReconcilerTests
                 // Issue #720: a run paired with a GFF3 (#686) kept the app's own copy under runs/<job>/annotation.
                 annotationOriginal = TestInputs.Stage(jobId, "genes.gff3", annotationContent).LocalPath;
                 annotationCopy = await Inputs.StageAnnotationAsync(jobId, annotationOriginal, CancellationToken.None);
-                if (!keepAnnotationOriginal)
-                {
-                    File.Delete(annotationOriginal);
-                }
-
-                if (!keepAnnotationCopy)
-                {
-                    Directory.Delete(Path.Combine(AppData, "runs", jobId, "annotation"), recursive: true);
-                }
             }
             if (!keepOriginal)
             {
@@ -232,6 +223,17 @@ public class JobReconcilerTests
             if (uploaded)
             {
                 await Runner.UploadInputsAsync(request, CancellationToken.None);
+            }
+
+            // After the upload, so a run whose VM already holds the pair can also have lost its local GFF3 (issue #720).
+            if (paired && !keepAnnotationOriginal)
+            {
+                File.Delete(annotationOriginal!);
+            }
+
+            if (paired && !keepAnnotationCopy)
+            {
+                Directory.Delete(Path.Combine(AppData, "runs", jobId, "annotation"), recursive: true);
             }
 
             if (vm)
@@ -525,6 +527,32 @@ public class JobReconcilerTests
         outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
         env.Row("job-m").ErrorCode.ShouldBe(RunErrorCodes.InputMissing);
         env.Gcp.CreateAttempts.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData(JobPhase.Running, "gone")]
+    [InlineData(JobPhase.Running, "changed")]
+    [InlineData(JobPhase.Provisioning, "gone")]
+    [InlineData(JobPhase.Provisioning, "changed")]
+    public async Task A_paired_run_whose_VM_already_exists_is_resumed_even_when_its_GFF3_is_gone_or_changed(JobPhase phase, string state)
+    {
+        // The VM already holds the uploaded pair: neither the missing-annotation failure nor the pair re-check applies once a VM may exist.
+        var env = new Env();
+        await env.SeedAsync(
+            "job-w",
+            phase,
+            uploaded: true,
+            vm: true,
+            paired: true,
+            keepAnnotationOriginal: false,
+            keepAnnotationCopy: state == "changed",
+            annotationContent: state == "changed" ? TestInputs.MismatchedGff3 : TestInputs.PairedGff3);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-w");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed);
+        env.Row("job-w").ErrorCode.ShouldNotBe(RunErrorCodes.InputMissing);
+        env.Row("job-w").ErrorCode.ShouldNotBe(RunErrorCodes.InputInvalid);
     }
 
     [Fact]

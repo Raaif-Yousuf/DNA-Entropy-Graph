@@ -1,2 +1,3 @@
 - A reattached run that was paired with a GFF3 keeps the pairing: the reconciler re-uploads the annotation after the FASTA (the app's copy, else the original) and the rebuilt manifest names it, and a paired run whose GFF3 is gone everywhere fails as a missing input instead of running with the worker's own genes (#720).
 - A reattached paired run checks the FASTA and GFF3 pair again before creating anything: a GFF3 changed since the run began fails as an invalid input with nothing created, and the reconciler tests now use a real FASTA and GFF3 pair (#720).
+- A paired run whose VM already exists is resumed even when its GFF3 is gone or changed; both new checks apply only before a VM can exist (#720).
