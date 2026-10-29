@@ -66,7 +66,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // --- Per-attempt scripted failures (worth continuing past) ---
     private readonly Dictionary<string, int> _stockoutRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _quotaExceededRemainingByZone = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<(string Name, string Zone)> _alreadyExistingVmKeys = new();
+    private readonly ConcurrentDictionary<(string Name, string Zone), byte> _alreadyExistingVmKeys = new();
     private int _networkFailuresRemaining;
 
     // --- Transient / auth failures (issue #258): consumed by the next calls to ANY gateway method ---
@@ -97,16 +97,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private bool _nextDeleteRacesAWorkerDelete;
     private int _stoppingPolls;
     private string _stoppedStatus = "STOPPED";
-    private readonly ConcurrentDictionary<(string Name, string Zone), int> _stoppingPollsLeft = new();
+    // #918: the per-VM state below is keyed by the VM incarnation (InstanceId), never by name: a VM made again under the name starts with none of its predecessor's.
+    private readonly ConcurrentDictionary<ulong, int> _stoppingPollsLeft = new();
     private int _hangsRemaining;
-    private bool _internalStop;
     private bool _hangsIgnoreCancellation;
     private int _getVmFailuresRemaining;
     private CloudError? _getVmError;
     private int _bootPolls;
-    private readonly ConcurrentDictionary<(string Name, string Zone), int> _bootPollsLeft = new();
+    private readonly ConcurrentDictionary<ulong, int> _bootPollsLeft = new();
     private bool _enforceMaxRunDuration;
-    private readonly ConcurrentDictionary<(string Name, string Zone), TimeSpan> _maxRunByVm = new();
+    private readonly ConcurrentDictionary<ulong, TimeSpan> _maxRunByVm = new();
     private bool _partialFilesOnFailedInputs;
     private TimeSpan _createDelay = TimeSpan.Zero;
     private long _firstDeleteDelayTicks;
@@ -119,9 +119,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private bool _notConnected;
 
     // --- Quota table (IQuotaGateway) ---
-    private readonly Dictionary<(string Region, string Accelerator), int> _regionalQuota = new();
+    private readonly ConcurrentDictionary<(string Region, string Accelerator), int> _regionalQuota = new();
     private int? _allRegionsGpuCap;
-    private readonly Dictionary<(string Region, string Accelerator), int> _regionalUsed = new();
+    private readonly ConcurrentDictionary<(string Region, string Accelerator), int> _regionalUsed = new();
     private CloudErrorKind? _quotaReadFailure;
     private const int DefaultRegionalQuota = 1;
 
@@ -335,7 +335,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // vm-row-create: inserts a NEW row (the #875 guard allows a bare assignment only here)
         _vms[key] = new VmDescriptor(vmName, zone, status, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
         ResetVmDeleted(vmName);
-        _alreadyExistingVmKeys.Add(key);
+        _alreadyExistingVmKeys[key] = 0;
         return this;
     }
 
@@ -503,10 +503,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // The platform limits a VM that is running. THEORY (unverified, ToTest #94): its clock restarts at each start (lastStartTimestamp),
             // not at creation. The other reading is available through WithRunClockFromCreation so the app is tested safe under either.
             var basis = _runClockFromCreation ? vm.CreatedAt : vm.RunClockStart;
-            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && basis is { } clockStart && _maxRunByVm.TryGetValue(key, out var limit) && now >= clockStart + limit)
+            if (vm.Status is not ("STOPPED" or "TERMINATED" or "STOPPING") && basis is { } clockStart && _maxRunByVm.TryGetValue(IncarnationOf(vm), out var limit) && now >= clockStart + limit)
             {
                 // Only the row inspected: a row that changed or was made again meanwhile is not expired by this look.
-                _vms.TryRemove(new KeyValuePair<(string Name, string Zone), VmDescriptor>(key, vm));
+                if (_vms.TryRemove(new KeyValuePair<(string Name, string Zone), VmDescriptor>(key, vm)))
+                {
+                    ForgetIncarnation(vm);
+                }
             }
         }
     }
@@ -1048,7 +1051,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         var key = (spec.VmName, zone);
 
-        if (_alreadyExistingVmKeys.Contains(key))
+        if (_alreadyExistingVmKeys.ContainsKey(key))
         {
             throw Build(
                 CloudErrorKind.AlreadyExists,
@@ -1163,8 +1166,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     {
         // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
         var now = _timeProvider.GetUtcNow();
-        // vm-row-create: inserts a NEW (queued) row (the #875 guard allows a bare assignment only here)
-        _vms[key] = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        // Check and insert are ONE step (#918): a request of the same VM that landed since the exists check wins, and this one is its replay.
+        if (!TryInsertVm(key, new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId))))
+        {
+            return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
+        }
+
         _queuedKeys[key] = 0;
         var server = QueuedOnServerAsync(spec, zone, key);
         _ = server.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
@@ -1213,25 +1220,38 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             undoWorker = RunWorkerUndoably(spec, zone, vm.InstanceId);
         }
 
-        BeforeGrantWrite?.Invoke();
-        if (queued is null)
+        try
         {
-            // vm-row-create: inserts a NEW row (the #875 guard allows a bare assignment only here)
-            _vms[key] = vm;
+            BeforeGrantWrite?.Invoke();
+            if (queued is null)
+            {
+                // Check and insert are ONE step (#918): another create of the same VM that landed since the exists check wins, and this one is its replay.
+                if (!TryInsertVm(key, vm))
+                {
+                    undoWorker?.Invoke();
+                    return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
+                }
+            }
+            else if (!ReferenceEquals(UpdateVm(key, v => v.InstanceId == queued.InstanceId ? vm : v), vm))
+            {
+                // Deleted (or made again by someone else) while the grant was being made: the request is gone, and so is the worker that was to serve it.
+                undoWorker?.Invoke();
+                throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
+            }
         }
-        else if (!ReferenceEquals(UpdateVm(key, v => v.InstanceId == queued.InstanceId ? vm : v), vm))
+        catch (Exception ex) when (ex is not CloudOperationException)
         {
-            // Deleted (or made again by someone else) while the grant was being made: the request is gone, and so is the worker that was to serve it.
+            // A hook or a swap that threw between the worker's return and the row landing (#918): the worker never served a VM, so its files and deferred end go back.
             undoWorker?.Invoke();
-            throw Build(CloudErrorKind.Other, "FLEX_START_REQUEST_CANCELLED", null, $"The request for '{spec.VmName}' was cancelled.");
+            throw;
         }
 
         ResetVmDeleted(spec.VmName);
-        _labelFingerprints[key] = NextFingerprint();
-        _maxRunByVm[key] = spec.MaxRunDuration;
+        _labelFingerprints[IncarnationOf(vm)] = NextFingerprint();
+        _maxRunByVm[IncarnationOf(vm)] = spec.MaxRunDuration;
         if (_bootPolls > 0)
         {
-            _bootPollsLeft[key] = _bootPolls;
+            _bootPollsLeft[IncarnationOf(vm)] = _bootPolls;
         }
 
         // Scheduled before this VM existed, or on the queued row it replaces: it is for this VM. A compare-and-swap, so a plan another actor re-scheduled meanwhile is kept.
@@ -1316,12 +1336,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>The <c>maxRunDuration</c> the VM was last given (create, or a reuse's scheduling write), or null when there is no such VM.</summary>
-    public TimeSpan? MaxRunDurationOf(string vmName, string zone) => _maxRunByVm.TryGetValue((vmName, zone), out var limit) ? limit : null;
+    public TimeSpan? MaxRunDurationOf(string vmName, string zone) => _vms.TryGetValue((vmName, zone), out var vm) && _maxRunByVm.TryGetValue(IncarnationOf(vm), out var limit) ? limit : null;
+
+    /// <summary>Test seam (#918): the labelFingerprint of the VM now under this name (0 when there is none, or it has none).</summary>
+    internal long LabelFingerprintOf(string vmName, string zone) => _vms.TryGetValue((vmName, zone), out var vm) ? _labelFingerprints.GetValueOrDefault(IncarnationOf(vm)) : 0;
+
+    /// <summary>The key of a VM's per-incarnation state (#918). Every row this fake makes carries an InstanceId; 0 is only a fallback for a hand-built row.</summary>
+    private static ulong IncarnationOf(VmDescriptor vm) => vm.InstanceId ?? 0;
 
     // The real labelFingerprint is fresh when an instance is created, moves on EVERY labels write (this app's claim, or anyone
     // else's), and a deleted-and-recreated instance never shares one with its predecessor. A global counter gives the same three
     // properties; an entry is dropped with its VM.
-    private readonly ConcurrentDictionary<(string Name, string Zone), long> _labelFingerprints = new();
+    private readonly ConcurrentDictionary<ulong, long> _labelFingerprints = new();
     private readonly object _claimLock = new();
     private long _fingerprintClock;
 
@@ -1350,9 +1376,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             if (_vms.TryGetValue(key, out var vm))
             {
                 // The merge is computed from the labels as they are when the swap applies, never from the snapshot above.
-                if (UpdateVm(key, row => row with { Labels = MergeLabels(row.Labels, labels) }) is not null)
+                if (UpdateVm(key, row => row with { Labels = MergeLabels(row.Labels, labels) }) is { } relabelled)
                 {
-                    _labelFingerprints[key] = NextFingerprint();
+                    _labelFingerprints[IncarnationOf(relabelled)] = NextFingerprint();
                 }
             }
         }
@@ -1384,7 +1410,8 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
         }
 
-        var readFingerprint = _labelFingerprints.GetValueOrDefault(key);
+        var readIncarnation = IncarnationOf(vm);
+        var readFingerprint = _labelFingerprints.GetValueOrDefault(readIncarnation);
         if (_reuseBarrier is { } barrier)
         {
             await barrier(spec).ConfigureAwait(false);
@@ -1398,14 +1425,21 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
             }
 
-            if (_labelFingerprints.GetValueOrDefault(key) != readFingerprint)
+            // A VM made again under the name is another incarnation with a fingerprint of its own: the claim on the one that was read is lost either way.
+            if (IncarnationOf(vm) != readIncarnation || _labelFingerprints.GetValueOrDefault(IncarnationOf(vm)) != readFingerprint)
             {
                 throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
             }
 
-            vm = UpdateVm(key, v => v with { Labels = reuse.ToLabels() }) ?? throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
-            _labelFingerprints[key] = NextFingerprint();
-            _maxRunByVm[key] = reuse.MaxRunDuration;
+            var claimed = vm;
+            vm = UpdateVm(key, v => v.InstanceId == claimed.InstanceId ? v with { Labels = reuse.ToLabels() } : v);
+            if (vm is null || vm.InstanceId != claimed.InstanceId)
+            {
+                throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+            }
+
+            _labelFingerprints[IncarnationOf(vm)] = NextFingerprint();
+            _maxRunByVm[IncarnationOf(vm)] = reuse.MaxRunDuration;
         }
 
         if (_reuseStartFailure is { } kind)
@@ -1421,9 +1455,20 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         ThrowIfProjectWide(spec.ProjectId);
         // The worker's files first, then the VM reads RUNNING (#784); bound to this incarnation. A worker that fails leaves the VM stopped (RunWorkerUndoably).
         var undoWorker = RunWorkerUndoably(reuse, zone, vm.InstanceId);
-        BeforeStartWrite?.Invoke();
-        // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
-        var started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
+        VmDescriptor? started;
+        try
+        {
+            BeforeStartWrite?.Invoke();
+            // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
+            started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
+        }
+        catch
+        {
+            // A hook or a swap that threw between the worker's return and the start landing (#918): the start never happened, so the worker's files and deferred end go back.
+            undoWorker();
+            throw;
+        }
+
         if (started is null || started.InstanceId != vm.InstanceId)
         {
             undoWorker(); // the start never happened: its worker never existed
@@ -1466,31 +1511,34 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         VmDescriptor? vm = found;
-        if (vm.Status == "PROVISIONING" && _bootPollsLeft.TryGetValue(key, out var bootLeft))
+        // The boot and stopping countdowns belong to the incarnation that was read (#918): the write is bound to it, so a VM made again under the name is never finished by the old one's poll.
+        if (vm.Status == "PROVISIONING" && _bootPollsLeft.TryGetValue(IncarnationOf(vm), out var bootLeft))
         {
+            var booting = vm;
             if (bootLeft <= 0)
             {
-                _bootPollsLeft.TryRemove(key, out _);
+                _bootPollsLeft.TryRemove(IncarnationOf(booting), out _);
                 BeforePollWrite?.Invoke();
-                vm = UpdateVm(key, v => v.Status == "PROVISIONING" ? v with { Status = "RUNNING" } : v);
+                vm = UpdateVm(key, v => v.InstanceId == booting.InstanceId && v.Status == "PROVISIONING" ? v with { Status = "RUNNING" } : v);
             }
             else
             {
-                _bootPollsLeft[key] = bootLeft - 1;
+                _bootPollsLeft[IncarnationOf(booting)] = bootLeft - 1;
             }
         }
 
-        if (vm is { Status: "STOPPING" } && _stoppingPollsLeft.TryGetValue(key, out var left))
+        if (vm is { Status: "STOPPING" } && _stoppingPollsLeft.TryGetValue(IncarnationOf(vm), out var left))
         {
+            var stopping = vm;
             if (left <= 0)
             {
-                _stoppingPollsLeft.TryRemove(key, out _);
+                _stoppingPollsLeft.TryRemove(IncarnationOf(stopping), out _);
                 BeforePollWrite?.Invoke();
-                vm = UpdateVm(key, v => v.Status == "STOPPING" ? v with { Status = _stoppedStatus } : v);
+                vm = UpdateVm(key, v => v.InstanceId == stopping.InstanceId && v.Status == "STOPPING" ? v with { Status = _stoppedStatus } : v);
             }
             else
             {
-                _stoppingPollsLeft[key] = left - 1;
+                _stoppingPollsLeft[IncarnationOf(stopping)] = left - 1;
             }
         }
 
@@ -1568,18 +1616,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.CompletedTask;
     }
 
+    // An internal stop (a worker stopping its own VM) says so on ITS call (#918): a shared flag let one in-flight internal stop excuse an unrelated outside stop.
     private void StopInternal(string vmName, string zone, ulong? onlyIncarnation = null)
-    {
-        _internalStop = true;
-        try
-        {
-            StopCore(vmName, zone, onlyIncarnation);
-        }
-        finally
-        {
-            _internalStop = false;
-        }
-    }
+        => StopCore(vmName, zone, onlyIncarnation, internalStop: true);
 
     /// <summary>Test seam (#875): runs between a reuse's claim (or a plain start's read) and its start, so a test can interleave a delete there deterministically.</summary>
     internal Action? BeforeStartWrite { get; set; }
@@ -1608,6 +1647,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return null;
     }
 
+    /// <summary>The ONLY way to add a row a create made (#918): it lands only when no row holds the name, so the exists check and the insert are one atomic step. A guard test forbids every other write of a new row but a marked setup one.</summary>
+    private bool TryInsertVm((string Name, string Zone) key, VmDescriptor row) => _vms.TryAdd(key, row);
+
     /// <summary>Test seam (#875): runs inside <see cref="GetVmAsync"/> right before a poll writes the row (boot, stopping or preempt), so a test can interleave a delete there deterministically.</summary>
     internal Action? BeforePollWrite { get; set; }
 
@@ -1635,7 +1677,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             || (now is { Status: "TERMINATED", StatusReason: "preempted" } && !preemptedAtRead)
             || (read.Status == "STOPPING" && now.Status == _stoppedStatus);
 
-    private void StopCore(string vmName, string zone, ulong? onlyIncarnation = null)
+    private void StopCore(string vmName, string zone, ulong? onlyIncarnation = null, bool internalStop = false)
     {
         var key = (vmName, zone);
         if (!_vms.TryGetValue(key, out var vm) || (onlyIncarnation is not null && vm.InstanceId != onlyIncarnation))
@@ -1643,7 +1685,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             return;
         }
 
-        if (_stopRejectedUnlessRunning && vm.Status != "RUNNING" && !_internalStop)
+        if (_stopRejectedUnlessRunning && vm.Status != "RUNNING" && !internalStop)
         {
             throw Build(CloudErrorKind.Other, "FAILED_PRECONDITION", 400, $"The instance '{vmName}' is not running, so it cannot be stopped.");
         }
@@ -1659,7 +1701,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // Only a row THIS stop moved to STOPPING starts a countdown; a STOPPING row the stop left alone (another incarnation's) keeps its own.
             if (stopping is { Status: "STOPPING" } && ReferenceEquals(stopping, written))
             {
-                _stoppingPollsLeft[key] = _stoppingPolls;
+                _stoppingPollsLeft[IncarnationOf(stopping)] = _stoppingPolls;
             }
         }
         else
@@ -1692,7 +1734,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             SignalVmDeleted(vmName);
         }
 
-        _labelFingerprints.TryRemove((vmName, zone), out _);
+        if (existed)
+        {
+            ForgetIncarnation(removed!);
+        }
+
         if (existed && _nextDeleteRacesAWorkerDelete)
         {
             _nextDeleteRacesAWorkerDelete = false;
@@ -1777,7 +1823,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             .Where(v => v.Labels is not null
                 && v.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && v.Labels.TryGetValue("installation-id", out var owner) && owner == installationId)
-            .Select(v => _maxRunByVm.TryGetValue((v.Name, v.Zone), out var limit) ? v with { MaxRunDuration = limit } : v)
+            .Select(v => _maxRunByVm.TryGetValue(IncarnationOf(v), out var limit) ? v with { MaxRunDuration = limit } : v)
             .ToList();
         return Task.FromResult(matches);
     }
@@ -1935,23 +1981,30 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // Every write the worker makes goes through here, so a caller that must take the worker back undoes exactly these entries (their prior values) and nothing another actor wrote.
         void Put<T>(ConcurrentDictionary<(string Bucket, string Key), T> map, (string Bucket, string Key) k, T value)
         {
-            if (journal is not null)
+            if (journal is null)
             {
-                var had = map.TryGetValue(k, out var prior);
-                journal.Add(() =>
-                {
-                    if (had)
-                    {
-                        map[k] = prior!;
-                    }
-                    else
-                    {
-                        map.TryRemove(k, out _);
-                    }
-                });
+                map[k] = value;
+                return;
             }
 
-            map[k] = value;
+            // The prior value is read and replaced in ONE compare-and-swap (#918), so the journal records exactly the value this write replaced; the undo puts it back only while
+            // this write is still what is there, and never replaces a key another actor (a heartbeat, a cancel marker) wrote since.
+            while (true)
+            {
+                if (map.TryGetValue(k, out var prior))
+                {
+                    if (map.TryUpdate(k, value, prior))
+                    {
+                        journal.Add(() => map.TryUpdate(k, prior, value));
+                        return;
+                    }
+                }
+                else if (map.TryAdd(k, value))
+                {
+                    journal.Add(() => map.TryRemove(new KeyValuePair<(string Bucket, string Key), T>(k, value)));
+                    return;
+                }
+            }
         }
 
         var workerMode = modeOverride ?? _workerMode;
@@ -2127,6 +2180,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         return Undo;
     }
+    /// <summary>The per-incarnation state of a VM that is gone (#918): it is that incarnation's alone, so a VM made again under the name keeps its own.</summary>
+    private void ForgetIncarnation(VmDescriptor gone)
+    {
+        var id = IncarnationOf(gone);
+        _labelFingerprints.TryRemove(id, out _);
+        _maxRunByVm.TryRemove(id, out _);
+        _bootPollsLeft.TryRemove(id, out _);
+        _stoppingPollsLeft.TryRemove(id, out _);
+    }
+
     /// <summary>A worker deletes its own VM: only the incarnation it ran on (when known), so a later VM made under the same name survives.</summary>
     private void RemoveIncarnation((string Name, string Zone) key, ulong? instanceId)
     {
@@ -2135,6 +2198,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         {
             if (_vms.TryRemove(new KeyValuePair<(string Name, string Zone), VmDescriptor>(key, row)))
             {
+                ForgetIncarnation(row);
                 return;
             }
         }
