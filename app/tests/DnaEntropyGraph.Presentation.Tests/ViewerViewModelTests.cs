@@ -49,6 +49,118 @@ public sealed class ViewerViewModelTests : IDisposable
 
     private static string Cmd(string json) => JsonDocument.Parse(json).RootElement.GetProperty("cmd").GetString()!;
 
+    private void SmoothedRun()
+    {
+        GoodRun();
+        File.WriteAllText(Path.Combine(_dir, "s.entropy.smooth51.bedgraph"), "s 0 1 2\n");
+    }
+
+    private ViewerViewModel ReadyWithSmoothed()
+    {
+        SmoothedRun();
+        var vm = Make();
+        vm.OpenRun(_dir);
+        vm.OnViewerMessage(ReadyMsg);
+        vm.OnViewerMessage(LoadedMsg);
+        _sent.Clear();
+        return vm;
+    }
+
+    [Fact]
+    public void Smoothed_tracks_are_listed_off_and_cannot_be_toggled_before_the_page_has_drawn()
+    {
+        SmoothedRun();
+        var vm = Make();
+        vm.OpenRun(_dir);
+
+        vm.HasSmoothedTracks.ShouldBeTrue();
+        vm.SmoothedTracks.Single().IsOn.ShouldBeFalse();
+        vm.AreSmoothedTracksEnabled.ShouldBeFalse();
+        vm.SmoothedTracks.Single().IsOn = true;
+        _sent.Select(Cmd).ShouldNotContain("track");
+    }
+
+    [Fact]
+    public void Switching_a_smoothed_track_on_adds_it_to_the_page_as_a_0_to_2_bit_track_and_off_removes_it()
+    {
+        var vm = ReadyWithSmoothed();
+        vm.AreSmoothedTracksEnabled.ShouldBeTrue();
+
+        vm.SmoothedTracks.Single().IsOn = true;
+
+        var add = JsonDocument.Parse(_sent.Single(m => Cmd(m) == "track")).RootElement;
+        add.GetProperty("op").GetString().ShouldBe("add");
+        var config = add.GetProperty("config");
+        config.GetProperty("url").GetString().ShouldBe(ViewerUrls.RunBaseUrl + "s.entropy.smooth51.bedgraph");
+        config.GetProperty("type").GetString().ShouldBe("wig");
+        config.GetProperty("min").GetInt32().ShouldBe(0);
+        config.GetProperty("max").GetInt32().ShouldBe(2);
+        config.GetProperty("autoscale").GetBoolean().ShouldBeFalse();
+        config.GetProperty("name").GetString().ShouldBe("[Viewer_SmoothedTrackName]");
+
+        _sent.Clear();
+        vm.SmoothedTracks.Single().IsOn = false;
+
+        var remove = JsonDocument.Parse(_sent.Single(m => Cmd(m) == "track")).RootElement;
+        remove.GetProperty("op").GetString().ShouldBe("remove");
+        remove.GetProperty("name").GetString().ShouldBe(config.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void A_track_the_page_could_not_load_turns_its_switch_back_off_and_names_one_action()
+    {
+        var vm = ReadyWithSmoothed();
+        _strings.GetString("Viewer_TrackFailed").Returns("failed {0}");
+        var track = vm.SmoothedTracks.Single();
+        track.IsOn = true;
+        _sent.Clear();
+
+        vm.OnViewerMessage("{\"evt\":\"trackFailed\",\"name\":\"" + track.Name + "\",\"message\":\"404\"}");
+
+        track.IsOn.ShouldBeFalse();
+        _sent.Select(Cmd).ShouldNotContain("track", "switching it off after a failed load must not ask the page to remove a track it never drew");
+        vm.IsTrackNoticeVisible.ShouldBeTrue();
+        vm.TrackNoticeText.ShouldBe("failed " + track.Window);
+
+        track.IsOn = true;
+        vm.IsTrackNoticeVisible.ShouldBeFalse("trying again clears the old message");
+    }
+
+    [Fact]
+    public void A_track_failure_for_a_name_the_model_does_not_know_changes_nothing()
+    {
+        var vm = ReadyWithSmoothed();
+        vm.SmoothedTracks.Single().IsOn = true;
+
+        vm.OnViewerMessage("{\"evt\":\"trackFailed\",\"name\":\"other\"}");
+
+        vm.SmoothedTracks.Single().IsOn.ShouldBeTrue();
+        vm.IsTrackNoticeVisible.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_redrawn_page_starts_with_every_smoothed_track_off_without_sending_anything()
+    {
+        var vm = ReadyWithSmoothed();
+        vm.SmoothedTracks.Single().IsOn = true;
+        _sent.Clear();
+
+        vm.OnViewerMessage(ReadyMsg);
+        vm.OnViewerMessage(LoadedMsg);
+
+        vm.SmoothedTracks.Single().IsOn.ShouldBeFalse();
+        _sent.Select(Cmd).ShouldNotContain("track");
+    }
+
+    [Fact]
+    public void A_run_without_smoothed_files_offers_no_toggles()
+    {
+        GoodRun();
+        var vm = Make();
+        vm.OpenRun(_dir);
+
+        vm.HasSmoothedTracks.ShouldBeFalse();
+    }
     [Fact]
     public void Null_probe_version_means_RuntimeMissing_and_nothing_is_mapped()
     {
