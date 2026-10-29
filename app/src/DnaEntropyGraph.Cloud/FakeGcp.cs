@@ -2056,7 +2056,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         var bucket = BucketName(spec.ProjectId);
         var prefix = $"jobs/{spec.JobId}/";
-        if (!_objects.TryGetValue((bucket, prefix + "manifest.json"), out var manifestBytes))
+        if (!_objects.TryGetValue((bucket, prefix + ResultsBucket.ManifestObject), out var manifestBytes))
         {
             return;
         }
