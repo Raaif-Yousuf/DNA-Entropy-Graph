@@ -248,6 +248,21 @@ def test_build_requirements_pin_uv_and_the_build_backend_with_hashes() -> None:
         assert re.search(r"--hash=sha256:[0-9a-f]{64}", e), f"{e.split()[0]} has no hash"
 
 
+def test_build_requirements_pin_every_transitive_build_dependency() -> None:
+    """MEASURED 2026-10-28 (PR #900 CI, "CPU container smoke"): `pip install --require-hashes`
+    failed with "packaging>=24.0 from wheel==0.48.0" because the transitive dependency was not
+    pinned. In --require-hashes mode pip refuses any unpinned requirement, so every transitive
+    dependency of uv, setuptools and wheel must be listed with == and a sha256."""
+    import re
+
+    text = re.sub(r"(?m)^#.*$", "", BUILD_REQUIREMENTS.read_text(encoding="utf-8"))
+    entries = [e for e in re.split(r"(?m)^(?=[A-Za-z])", text) if e.strip()]
+    by_name = {e.split("==", 1)[0]: e for e in entries}
+    assert "packaging" in by_name, "wheel requires packaging>=24.0 and --require-hashes needs it pinned"
+    assert re.match(r"packaging==\d", by_name["packaging"])
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}", by_name["packaging"])
+
+
 def test_cpu_bootstrap_and_project_install_are_hash_verified() -> None:
     code = _code_only(DOCKERFILE_CPU)
     assert "pip install --require-hashes -r build-requirements.txt" in code
