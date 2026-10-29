@@ -62,8 +62,8 @@ public sealed class PrototypeImportTests : IDisposable
     [Fact]
     public void The_prototype_locations_are_the_ones_its_code_used()
     {
-        PrototypeLocations.ConfigPath(@"C:\Users\x\AppData\Roaming").ShouldBe(Path.Combine(@"C:\Users\x\AppData\Roaming", "dna-entropy", "config.json"));
-        PrototypeLocations.Downloads(@"C:\Users\x").ShouldBe(Path.Combine(@"C:\Users\x", "Downloads"));
+        PrototypeLocations.ConfigPath(@"D:\profiles\x\AppData\Roaming").ShouldBe(Path.Combine(@"D:\profiles\x\AppData\Roaming", "dna-entropy", "config.json"));
+        PrototypeLocations.Downloads(@"D:\profiles\x").ShouldBe(Path.Combine(@"D:\profiles\x", "Downloads"));
     }
 
     [Fact]
@@ -103,12 +103,12 @@ public sealed class PrototypeImportTests : IDisposable
     [Fact]
     public void Scan_reads_the_last_zone_and_the_ssh_key_note_from_config_json()
     {
-        Config("""{"last_zone":"us-central1-a","ssh_key_file":"C:\\Users\\x\\.ssh\\google_compute_engine"}""");
+        Config("""{"last_zone":"us-central1-a","ssh_key_file":"D:\\profiles\\x\\.ssh\\google_compute_engine"}""");
 
         var scan = PrototypeScanner.Scan(_config, _downloads);
 
         scan.LastZone.ShouldBe("us-central1-a");
-        scan.SshKeyFile.ShouldBe(@"C:\Users\x\.ssh\google_compute_engine");
+        scan.SshKeyFile.ShouldBe(@"D:\profiles\x\.ssh\google_compute_engine");
         scan.Found.ShouldBeTrue();
     }
 
