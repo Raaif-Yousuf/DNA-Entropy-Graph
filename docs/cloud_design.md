@@ -1544,7 +1544,7 @@ implementation, and the card (#219, not built) binds the same view model (`Budge
   Every HTTP call goes through the pipeline; the create is never replayed (`replayable: false`), and `UpsertAsync` lists
   first, so a budget whose create response was lost is patched, not doubled. Never wrapped in a `Resilient*` decorator.
 - **Discovery (Hard Rule 9).** Budgets carry no labels, so this installation's budget is the one whose display name is
-  `DNA Entropy Graph <installation-id>` on the account (`BudgetNaming`). Two users on one billing account get two budgets and
+  `DNA Entropy Graph <first 8 characters of the installation id> <project id>` on the account (`BudgetNaming.DisplayName`; at most 57 of Google's 60 characters). Two users on one billing account get two budgets, one project of one user gets one, and
   each sees only its own. A budget of another name is never touched.
 - **Shape.** One project in `budgetFilter.projects` (the project NUMBER, read from Resource Manager), `amount.specifiedAmount`
   with no currency (the account's own is used), threshold rules 0.5, 0.9 and 1.0 on `CURRENT_SPEND`, and NO
@@ -1556,6 +1556,10 @@ implementation, and the card (#219, not built) binds the same view model (`Budge
   Manager or Administrator); a project owner often lacks it. The view model turns `CloudErrorKind.Permission` into one sentence,
   a link to the account's console budgets page and a copyable request for the billing administrator; `Billing` (no account)
   links to the billing home. No new `SetupErrorCodes`: the group maps kinds itself, so the three-way code guard is untouched.
+  Three refinements (review): a refusal to switch the Budget API on is a right on the PROJECT, so `BudgetService` rethrows it as `Permission` with
+  `BudgetErrorCodes.ApiEnablePermission` and the group says to ask a project owner (link to the API's page, no billing-administrator request); a
+  refused Remove says so and links the budgets page (no create request); and a budget that follows last period's spend (`BudgetInfo.AmountKnown`
+  false) is shown without an amount.
 - **Already exists.** Google allows two budgets with one display name, so there is no 409 to handle; idempotence is the
   find-then-patch above.
 - **THEORY (unverified, no live billing account):** that an unset currency and an absent `notificationsRule` behave as documented,
