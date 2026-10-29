@@ -2103,7 +2103,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
   </data>
   <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
-    <value>Some files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
+    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
   </data>
   <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
     <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>

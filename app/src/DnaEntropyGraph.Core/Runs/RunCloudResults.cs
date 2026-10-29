@@ -45,7 +45,7 @@ public enum CloudResultsStatus
 /// <summary>
 /// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
 /// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one, or of a
-/// <see cref="CloudResultsStatus.PartiallyDeleted"/> whose count could not be read (some files may have been deleted: the cause picks the action).
+/// <see cref="CloudResultsStatus.PartiallyDeleted"/> whatever its count (a known count with a refused permission needs that cause's action; an unknown one may have lost some files too).
 /// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
 /// </summary>
 public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null)
@@ -222,7 +222,15 @@ public sealed class RunCloudResults : IRunCloudResults
         {
             // Some objects are gone and some are not: the row is NOT marked deleted, so Delete cloud copy stays offered and the next press finishes it.
             // With no count, the classified cause that stopped the sweep rides along so the page names its action (an unreadable count is not proof that nothing went).
-            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, partial.Remaining is null ? (partial.InnerException as CloudOperationException)?.Kind : null);
+            // The cause rides along whether or not the count is known: a known count with a refused permission needs that cause's action, not "choose it again".
+            // A raw transport exception (not classified by a gateway that did not see it) is a dropped connection.
+            CloudErrorKind? cause = partial.InnerException switch
+            {
+                CloudOperationException cloud => cloud.Kind,
+                IOException or HttpRequestException => CloudErrorKind.Network,
+                _ => null,
+            };
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause);
         }
         catch (CloudDeleteRefusedException refused)
         {

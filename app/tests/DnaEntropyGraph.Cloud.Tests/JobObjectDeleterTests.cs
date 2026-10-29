@@ -85,6 +85,48 @@ public sealed class JobObjectDeleterTests
         results.CanDelete(Run()).ShouldBeTrue();
     }
 
+    [Theory]
+    [InlineData(CloudErrorKind.Permission)]
+    [InlineData(CloudErrorKind.OrgPolicy)]
+    [InlineData(CloudErrorKind.Billing)]
+    [InlineData(CloudErrorKind.ApiDisabled)]
+    public async Task A_partial_delete_with_a_known_count_carries_the_classified_cause(CloudErrorKind kind)
+    {
+        Seed(JobId, 4);
+        _gcp.WithPrefixDeleteFailingAfter(1, kind);
+        var results = Results(out _);
+
+        var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 4, kind));
+    }
+
+    [Fact]
+    public async Task A_sweep_cut_by_an_IOException_after_real_deletions_with_an_unreadable_read_back_is_a_network_cause_not_an_unknown_one()
+    {
+        // Issue #262 review round 4 (M): a raw transport exception is no CloudOperationException, so the page had no cause and said files remain although the count is unknown.
+        Seed(JobId, 4);
+        var storage = NSubstitute.Substitute.For<IStorageGateway>();
+        var counts = 0;
+        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
+            ? _gcp.GetPrefixUsageAsync(Bucket, Prefix, call.Arg<CancellationToken>())
+            : Task.FromException<PrefixUsage>(new IOException("read-back failed")));
+        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
+        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns<Task<int>>(async _ =>
+        {
+            await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file0.bin", CancellationToken.None);
+            await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file1.bin", CancellationToken.None);
+            throw new IOException("connection reset");
+        });
+        var runs = new InMemoryRunRepository();
+        var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), runs, () => Path.GetTempPath(), TimeProvider.System);
+
+        var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
+
+        _gcp.ObjectKeys(Bucket).Count.ShouldBe(3, "two objects really were deleted before the cut");
+        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, CloudErrorKind.Network));
+    }
+
     [Fact]
     public async Task A_sweep_that_did_not_fail_but_whose_read_back_does_is_still_a_partial_delete_of_unknown_size()
     {
@@ -354,7 +396,8 @@ public sealed class JobObjectDeleterTests
 
         var outcome = await results.DeleteAsync(Run(), TestContext.Current.CancellationToken);
 
-        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 4));
+        // Issue #262 review round 4: the cause rides along even when the count is known, so the page can name its action.
+        outcome.ShouldBe(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 4, CloudErrorKind.Network));
         runs.AllRecordedInOrder.ShouldBeEmpty();
         results.CanDelete(Run()).ShouldBeTrue();
     }

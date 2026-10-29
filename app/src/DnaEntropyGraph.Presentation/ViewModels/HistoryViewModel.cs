@@ -534,6 +534,13 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.DeleteCloudPartialMaybe(cause);
             }
 
+            // A known count, but a cause that pressing the button again cannot fix (a refused permission, a blocking organization rule, billing off, a service off):
+            // that cause's own action comes first, or the user is told to repeat what will fail the same way.
+            if (result.ErrorKind is CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.Billing or CloudErrorKind.ApiDisabled)
+            {
+                return RunsCopy.DeleteCloudPartialMaybe(result.ErrorKind.Value);
+            }
+
             // Partway through: say how many are left (or that it could not be counted) and that the same button finishes it.
             if (result.ObjectsLeft is { } left)
             {

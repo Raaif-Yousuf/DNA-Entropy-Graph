@@ -127,7 +127,7 @@ public static class RunsCopy
     };
 
     /// <summary>A cloud delete that stopped partway and could not read how many objects remain (so no count is promised).</summary>
-    public static readonly RunsMessage DeleteCloudPartialUnknown = Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
+    public static readonly RunsMessage DeleteCloudPartialUnknown = Pair("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
 
     public static RunsMessage DeleteLocal(LocalDeleteStatus status) => status switch
     {

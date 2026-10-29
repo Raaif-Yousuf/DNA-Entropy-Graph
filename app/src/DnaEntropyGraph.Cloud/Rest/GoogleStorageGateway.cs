@@ -167,27 +167,36 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         var deleted = 0;
         var manifestKey = prefix + ResultsBucket.ManifestObject;
         var manifestListed = false;
-        await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
+        try
         {
-            foreach (var item in page.Items ?? [])
+            await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
             {
-                if (item.Name == manifestKey)
+                foreach (var item in page.Items ?? [])
                 {
-                    // The listing is lexicographic, so the manifest would be deleted before output/, result.json and status.json. It is what proves
-                    // a folder is ours (JobObjectDeleter), so it goes last: a sweep that dies keeps the proof for the retry.
-                    manifestListed = true;
-                    continue;
-                }
+                    if (item.Name == manifestKey)
+                    {
+                        // The listing is lexicographic, so the manifest would be deleted before output/, result.json and status.json. It is what proves
+                        // a folder is ours (JobObjectDeleter), so it goes last: a sweep that dies keeps the proof for the retry.
+                        manifestListed = true;
+                        continue;
+                    }
 
-                await DeleteObjectAsync(bucket, item.Name, cancellationToken).ConfigureAwait(false);
+                    await DeleteObjectAsync(bucket, item.Name, cancellationToken).ConfigureAwait(false);
+                    deleted++;
+                }
+            }
+
+            if (manifestListed)
+            {
+                await DeleteObjectAsync(bucket, manifestKey, cancellationToken).ConfigureAwait(false);
                 deleted++;
             }
         }
-
-        if (manifestListed)
+        catch (Exception ex) when (ex is IOException or HttpRequestException or System.Net.Sockets.SocketException)
         {
-            await DeleteObjectAsync(bucket, manifestKey, cancellationToken).ConfigureAwait(false);
-            deleted++;
+            // A raw transport failure (a connection reset mid-sweep) is a dropped connection, classified like every other call's (CloudCallPipeline does the same for an
+            // HttpRequestException), so the delete page can name an action for it. Only the sweep's own requests run in here, so an IOException is never a local file.
+            throw new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "The connection dropped during the delete (" + ex.GetType().Name + ")."), CloudErrorKind.Network);
         }
 
         return deleted;
@@ -228,7 +237,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             {
                 throw new CloudOperationException(
                     new CloudError("LIST_PAGINATION_STUCK", null, "Cloud Storage returned the same page token twice, so the object list may be incomplete."),
-                    CloudErrorKind.Network);
+                    CloudErrorKind.Other);
             }
 
             pageToken = next;

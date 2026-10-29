@@ -718,7 +718,39 @@ public sealed class HistoryViewModelTests
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
+        // The count is unknown, so the title must not assert "partly deleted" either: it is the "may be" one.
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_PartialMaybe_Body_Permission")]
+    [InlineData(CloudErrorKind.OrgPolicy, "Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_PartialMaybe_Body_Billing")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_PartialMaybe_Body_Api")]
+    public async Task A_partial_delete_with_a_known_count_and_a_cause_that_pressing_again_cannot_fix_names_that_causes_action(CloudErrorKind kind, string body)
+    {
+        // Issue #262 review round 4: "choose Delete cloud copy again" will not help a refused permission, so the cause's own action is offered.
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialMaybe_Title", body, ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), "Runs_DeleteCloud_Partial_Body", Arg.Any<ToastSeverity>());
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Network)]
+    [InlineData(CloudErrorKind.Quota)]
+    [InlineData(CloudErrorKind.Other)]
+    public async Task A_partial_delete_with_a_known_count_and_a_retryable_cause_keeps_the_count_copy(CloudErrorKind kind)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning);
     }
 
     [Theory]

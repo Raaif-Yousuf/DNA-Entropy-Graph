@@ -57,6 +57,27 @@ public sealed class RunsDeleteCloudPartialCopyTests
         resw[RunsCopy.DeleteCloudPartialMaybe(CloudErrorKind.ApiDisabled).Body].ShouldContain("run the setup check");
         resw[RunsCopy.DeleteCloudPartialMaybe(CloudErrorKind.Quota).Body].ShouldContain("Wait a few minutes");
         resw[RunsCopy.DeleteCloudPartialMaybe(CloudErrorKind.Network).Body].ShouldContain("Check your internet connection");
-        resw[RunsCopy.DeleteCloudPartialMaybe(CloudErrorKind.Other).Body].ShouldContain("choose Delete cloud copy again");
+
+        // Other has its own wording: the one thing only it says, and none of the other causes' actions.
+        var other = resw[RunsCopy.DeleteCloudPartialMaybe(CloudErrorKind.Other).Body];
+        other.ShouldContain("Something unexpected stopped the delete");
+        other.ShouldContain("to finish it");
+        foreach (var foreign in new[] { "Check your internet connection", "Wait a few minutes", "Turn billing back on", "run the setup check", "Ask your organization's administrator", "choose the Google account" })
+        {
+            other.ShouldNotContain(foreign);
+        }
+    }
+
+    [Fact]
+    public void The_unknown_count_copy_never_says_files_remain_because_it_does_not_know()
+    {
+        var resw = Resw();
+        var message = RunsCopy.DeleteCloudPartialUnknown;
+
+        resw[message.Title].ShouldNotContain("only partly deleted");
+        resw[message.Body].ShouldContain("may");
+        resw[message.Body].ShouldNotContain("are still");
+        resw[message.Body].ShouldContain("Choose Delete cloud copy again");
+        resw[message.Body].ShouldNotContain("—");
     }
 }
