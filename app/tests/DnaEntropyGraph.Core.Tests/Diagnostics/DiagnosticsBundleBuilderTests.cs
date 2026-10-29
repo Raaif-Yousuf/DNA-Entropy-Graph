@@ -285,6 +285,19 @@ public class DiagnosticsBundleBuilderTests
     }
 
     [Fact]
+    public void The_proxy_mode_is_recorded_and_never_the_proxy_address_or_a_sign_in()
+    {
+        var folder = SeededFolder();
+        folder["settings.json"] = """{"Theme":"Dark","proxy_mode":"manual","proxy_address":"proxy.secret-uni.edu:8080"}""";
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }));
+
+        using var document = JsonDocument.Parse(entries["versions.json"]);
+        document.RootElement.GetProperty("proxyMode").GetString().ShouldBe("manual");
+        entries.Values.ShouldAllBe(text => !text.Contains("secret-uni", StringComparison.Ordinal));
+        BuildSeeded().TryGetValue("versions.json", out var plain).ShouldBeTrue();
+        JsonDocument.Parse(plain!).RootElement.GetProperty("proxyMode").GetString().ShouldBe("unknown");
+    }
+    [Fact]
     public void Log_lines_keep_their_meaning()
     {
         var log = BuildSeeded()["files/logs/log-01.log"];

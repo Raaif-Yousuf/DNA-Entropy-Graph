@@ -63,6 +63,9 @@ internal sealed class AuthHarness : IDisposable
     /// <summary>When set, the service reads this clock (the locked-accounts-file retry window); otherwise the real one.</summary>
     public TimeProvider? Clock { get; set; }
 
+    /// <summary>The proxy policy the service reads (issue #239); null is the system default. Only matters with <see cref="UseProductionHttp"/>.</summary>
+    public DnaEntropyGraph.Core.Net.IProxyPolicy? Proxy { get; set; }
+
     /// <summary>How long a save waits for another copy's lock; short in tests that hold it.</summary>
     public TimeSpan? SaveLockWait { get; set; }
 
@@ -79,6 +82,7 @@ internal sealed class AuthHarness : IDisposable
         HttpHandler = UseProductionHttp ? null : Google,
         SignInTimeout = SignInTimeout,
         ProjectIdUntilSelectionExists = FallbackProjectId,
+        Proxy = Proxy,
     });
 
     public async Task<GoogleAccountService> SignedInAsync(string sub, string email, GoogleAccountService? service = null)

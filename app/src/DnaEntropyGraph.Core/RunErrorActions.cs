@@ -104,6 +104,8 @@ public static class RunErrorActions
         ["org_policy"] = RunErrorAction.AskAdministrator,
         ["network"] = RunErrorAction.CheckInternet,
         [RunErrorCodes.Other] = RunErrorAction.SaveDiagnostics,
+        [RunErrorCodes.ProxyBlocked] = RunErrorAction.OpenSettings,
+        [RunErrorCodes.NetworkCertificate] = RunErrorAction.AskAdministrator,
     };
 
     /// <summary>Every code with a declared action.</summary>
