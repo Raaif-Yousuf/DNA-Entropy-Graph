@@ -26,6 +26,9 @@ public sealed record GenBankLiteRecord(string LocusName, string Seq, int GeneCou
     public int? MappedCount { get; init; }
 }
 
+/// <summary>One feature of a record's feature table as the readers hand it to <see cref="GenBankLite.ReadTableFeatures" />: its key, its worker id, and what Biopython made of its location.</summary>
+internal sealed record TableFeature(string Key, string Id, LocationReading Reading);
+
 /// <summary>Result of a light GenBank read: every record found plus any non-fatal notices.</summary>
 public sealed record GenBankLiteResult(IReadOnlyList<GenBankLiteRecord> Records, IReadOnlyList<string> Notices)
 {
@@ -81,32 +84,134 @@ public static class GenBankLite
     }
 
     /// <summary>
-    /// What the worker's <c>records_from_parsed</c> / <c>_features_of</c> make of one record's feature table, for GenBank and EMBL alike: it drops a gene
-    /// (or, in a record with no gene features, a CDS) whose location cannot be read, with one counted notice per record (#543, #788, #796), and counts
-    /// the rest. Returns the gene and CDS counts that survive.
+    /// What the worker's <c>records_from_parsed</c> / <c>_features_of</c> make of one record's feature table, for GenBank and EMBL alike: it maps the record's gene
+    /// features (else its CDS features), dropping one whose location cannot be read (#543, #788, #796) or does not fit the sequence (#331, #694), each with a
+    /// notice, and a gene that was dropped is replaced by the CDS carrying the same gene id (#694). Returns the gene and CDS counts that survive and the number
+    /// the worker maps. Not modelled: the notices for a compound (spliced or origin-wrapping) feature that is kept.
     /// </summary>
     internal static (int Genes, int Cds, int Mapped) ReadTableFeatures(
-        string label, int recordIndex, IReadOnlyList<(string Key, string? DroppedText)> tableFeatures, List<string> notices, List<InputNotice> coded)
+        string label, int recordIndex, IReadOnlyList<TableFeature> tableFeatures, int sequenceLength, string recordId, List<string> notices, List<InputNotice> coded)
     {
-        var sourceKey = tableFeatures.Any(f => f.Key == "gene") ? "gene" : "CDS";
-        var lost = tableFeatures.Where(f => f.Key == sourceKey && f.DroppedText is not null).ToList();
+        var geneFeatures = tableFeatures.Where(f => f.Key == "gene").ToList();
+        var cdsFeatures = tableFeatures.Where(f => f.Key == "CDS").ToList();
+        var sourceKey = geneFeatures.Count > 0 ? "gene" : "CDS";
+        var source = geneFeatures.Count > 0 ? geneFeatures : cdsFeatures;
+
+        var lost = source.Where(f => f.Reading.Verdict == LocationVerdict.Dropped).ToList();
         if (lost.Count > 0)
         {
-            notices.Add(DroppedFeaturesNotice(label, recordIndex, sourceKey, lost.Select(f => f.DroppedText!).ToList()));
+            notices.Add(DroppedFeaturesNotice(label, recordIndex, sourceKey, lost.Select(f => f.Reading.QuotedText).ToList()));
             coded.Add(new InputNotice(InputNoticeCode.GenBankFeaturesDropped, lost.Count, recordIndex));
         }
 
-        // Counted from the parsed feature table (a wrapped qualifier line that starts with "gene" is not a feature),
-        // without the features whose location the worker cannot read.
-        var genes = tableFeatures.Count(f => f.Key == "gene" && f.DroppedText is null);
-        var cds = tableFeatures.Count(f => f.Key == "CDS" && f.DroppedText is null);
+        var outOfRange = 0;
 
-        // The worker maps the gene features if the record HAS any (_features_of: `gene_feats or cds_feats`), even when every one of them was dropped,
-        // and only then falls back to the CDS features, so a CDS is never counted beside a lost gene. Not modelled (#847): a gene dropped for lying
-        // outside the sequence, and the CDS that stands in for a dropped gene with the same gene id (#694).
-        return (genes, cds, sourceKey == "gene" ? genes : cds);
+        // _map: False when the feature is dropped, with its notice when it has one (an unreadable location was reported above).
+        bool Map(TableFeature f)
+        {
+            if (f.Reading.Verdict == LocationVerdict.Dropped)
+            {
+                return false;
+            }
+
+            if (Fits(f))
+            {
+                return true;
+            }
+
+            notices.Add(MalformedNotice(label, f.Id, f.Reading.Extent!, recordId, sequenceLength));
+            outOfRange++;
+            return false;
+        }
+
+        // #331: a feature's own coordinates must fit inside the record's sequence; only a single location ending in ">" may run past it.
+        bool Fits(TableFeature f)
+        {
+            var extent = f.Reading.Extent!;
+            var allowEndOverrun = extent.PartialEnd && !extent.IsCompound;
+            return !(extent.Parts.Any(p => p.Start < 0 || p.End <= p.Start)
+                || (!allowEndOverrun && extent.Parts.Any(p => p.End > sequenceLength)));
+        }
+
+        var mappedIds = new List<string>();
+        var mappedIdSet = new HashSet<string>(StringComparer.Ordinal); // the same ids, for the O(1) "already kept" test below
+        var droppedGeneIds = new List<string>();
+        foreach (var f in source)
+        {
+            if (Map(f))
+            {
+                mappedIds.Add(f.Id);
+                mappedIdSet.Add(f.Id);
+            }
+            else if (geneFeatures.Count > 0 && f.Id != f.Key)
+            {
+                droppedGeneIds.Add(f.Id); // a gene with no name of its own cannot be matched to a CDS
+            }
+        }
+
+        // #694: a gene feature that is dropped is replaced by the CDS feature carrying the same gene id, one stand-in per id, unless a kept
+        // feature already carries that id.
+        var fallbackIds = new List<string>();
+        if (droppedGeneIds.Count > 0)
+        {
+            var wanted = droppedGeneIds.Where(id => !mappedIdSet.Contains(id)).ToHashSet(StringComparer.Ordinal);
+            foreach (var cds in cdsFeatures)
+            {
+                if (wanted.Contains(cds.Id) && Map(cds))
+                {
+                    wanted.Remove(cds.Id);
+                    fallbackIds.Add(cds.Id);
+                }
+            }
+
+            if (fallbackIds.Count > 0)
+            {
+                var shown = string.Join(", ", fallbackIds.Take(DroppedShown).Select(id => PythonText.Ascii(CutLocationText(id))));
+                var more = fallbackIds.Count > DroppedShown ? $", and {fallbackIds.Count - DroppedShown} more" : string.Empty;
+                notices.Add($"{label} record {recordIndex}: {fallbackIds.Count} gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ({shown}{more}). "
+                    + "Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.");
+                coded.Add(new InputNotice(InputNoticeCode.GenBankGeneStoodInByCds, fallbackIds.Count, recordIndex));
+            }
+        }
+
+        if (outOfRange > 0)
+        {
+            coded.Add(new InputNotice(InputNoticeCode.GenBankFeaturesOutOfRange, outOfRange, recordIndex));
+        }
+
+        // The counts are what survives: the genes kept, the CDS features readable and in range (a CDS beside genes is counted though it is not mapped).
+        var mapped = mappedIds.Count + fallbackIds.Count;
+        var genes = geneFeatures.Count(f => f.Reading.Verdict != LocationVerdict.Dropped && Fits(f));
+        var cdsKept = cdsFeatures.Count(f => f.Reading.Verdict != LocationVerdict.Dropped && Fits(f));
+        return (genes, cdsKept, mapped);
     }
 
+    /// <summary>
+    /// The worker's <c>_malformed_notice</c> text, word for word for an ASCII id. An id is shown as Python's ascii() shows it, which equals the
+    /// worker's repr() for plain ASCII text; a printable non-ASCII character the worker keeps is escaped here (MEASURED 2026-10-29, fixture case
+    /// genbank_non_ascii_gene_id_outside_the_sequence_is_named_in_the_notice, a recorded csharp_divergence).
+    /// </summary>
+    private static string MalformedNotice(string label, string id, LocationExtent extent, string recordId, int sequenceLength)
+    {
+        var shownId = PythonText.Ascii(id);
+        if (extent.Parts.Any(p => p.End == p.Start))
+        {
+            return $"{label} feature {shownId} has a location between two bases (a site such as 1^2), not a span of bases, so it has no bases to measure; dropped from the gene features. "
+                + "Give it a span in the source file (for example 1..42) and run again.";
+        }
+
+        if (extent.Parts.Any(p => p.End > long.MaxValue))
+        {
+            return $"{label} feature {shownId} has a position too large to be a real coordinate (more than {long.MaxValue}); dropped from the gene features. "
+                + "Correct the position in the source file (for example 1..42) and run again.";
+        }
+
+        var begin = extent.Parts.Min(p => p.Start) + 1;
+        var end = extent.Parts.Max(p => p.End);
+        return $"{label} feature {shownId} has coordinates {begin}..{end}, which fall outside record {PythonText.Ascii(recordId)}'s own sequence length of {sequenceLength} nt; "
+            + "dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own "
+            + "ORIGIN block; check the file was not truncated or hand-edited.";
+    }
     // Python counts code points: cut at 40, to 37 plus "...".
     private static string CutLocationText(string text)
     {
@@ -138,7 +243,7 @@ public static class GenBankLite
         var tableChecked = false; // Biopython reads the feature table once per record, in its header
         long? locusLength = null; // the LOCUS line's length and topology: they decide how an origin-wrapping location reads
         var locusCircular = false;
-        var tableFeatures = new List<(string Key, string? DroppedText)>(); // the record's features in table order; DroppedText is set when Biopython cannot read the location
+        var tableFeatures = new List<TableFeature>(); // the record's features in table order, each with what Biopython made of its location
 
         void FlushRecord()
         {
@@ -160,7 +265,7 @@ public static class GenBankLite
             {
                 // Issue #543/#788: the worker drops a gene (or, in a record with no gene features, a CDS) whose location cannot
                 // be read, with one counted notice per record; so does the pill's gene count.
-                (geneCount, cdsCount, var mapped) = ReadTableFeatures("GenBank", recordIndex, tableFeatures, notices, coded);
+                (geneCount, cdsCount, var mapped) = ReadTableFeatures("GenBank", recordIndex, tableFeatures, recSeq.Length, identity!.Id, notices, coded);
                 records.Add(new GenBankLiteRecord(locusName, recSeq, geneCount, cdsCount, recordIndex) { MappedCount = mapped });
             }
             identity = null;
@@ -181,12 +286,11 @@ public static class GenBankLite
             // Inside ORIGIN Biopython only ends a record at "//" (or refuses at CONTIG), so a LOCUS
             // line there is sequence data, not a new record (MEASURED 2026-10-02: the worker's
             // genbank_two_locus_no_separator fixture is refused as "Invalid character 'E'").
-            if (!inOrigin && rawLine.StartsWith("LOCUS", StringComparison.Ordinal))
+            // A LOCUS line while a record is open and its ORIGIN has not begun is header text: Biopython's parse_header reads it with the other
+            // header lines, so it neither starts a record nor changes the first LOCUS line's name, length or topology (MEASURED 2026-10-29,
+            // readers_parity.json genbank_second_locus_line_*).
+            if (!inOrigin && locusName is null && rawLine.StartsWith("LOCUS", StringComparison.Ordinal))
             {
-                if (locusName is not null)
-                {
-                    FlushRecord(); // a LOCUS line with no preceding "//" - tolerate it, start fresh
-                }
                 var parts = rawLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                 locusName = parts.Length > 1 ? parts[1] : string.Empty;
                 identity = new RecordIdentity(locusName);
@@ -252,7 +356,7 @@ public static class GenBankLite
                             throw GenBankFeatureTable.RefuseLocation(recordIndex + 1);
                         }
 
-                        tableFeatures.Add((feature.Key, reading.Verdict == LocationVerdict.Dropped ? reading.QuotedText : null));
+                        tableFeatures.Add(new TableFeature(feature.Key, feature.Id, reading));
                     }
                     tableChecked = true;
                 }

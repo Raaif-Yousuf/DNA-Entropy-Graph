@@ -37,6 +37,28 @@
                 <Button x:Uid="ResultsExportPngButton" Command="{x:Bind ViewModel.ExportOverviewPngCommand}" />
             </StackPanel>
 
+            <!-- Issue #141: the run's own note and tags. Saved on the button, stored with the run, searchable from the Runs page. -->
+            <StackPanel Spacing="8" Visibility="{x:Bind ViewModel.CanEditAnnotations, Mode=OneWay}">
+                <TextBlock x:Uid="ResultsNotesHeading" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <TextBox
+                    x:Uid="ResultsNotesBox"
+                    AcceptsReturn="True"
+                    MaxLength="{x:Bind ViewModel.NotesMaxLength}"
+                    TextWrapping="Wrap"
+                    MinHeight="72"
+                    Text="{x:Bind ViewModel.NotesText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox
+                    x:Uid="ResultsTagsBox"
+                    Text="{x:Bind ViewModel.TagsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Uid="ResultsSaveNotesButton" Command="{x:Bind ViewModel.SaveAnnotationsCommand}" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        Text="{x:Bind ViewModel.AnnotationsStatusText, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.HasAnnotationsStatus, Mode=OneWay}" />
+                </StackPanel>
+            </StackPanel>
+
             <!-- Issue #118: the entropy overview strip. Shown only when the run wrote an entropy track; fills in just after the page. -->
             <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOverview, Mode=OneWay}">
                 <TextBlock Text="{x:Bind ViewModel.OverviewTitle, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" />

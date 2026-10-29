@@ -10,7 +10,7 @@
     "scripts/tests/test_new_issue.py": 4,
     "scripts/tests/test_release_assets.py": 1,
     "scripts/tests/test_release_workflow.py": 1,
-    "scripts/tests/test_require_premerge_hook.py": 8,
+    "scripts/tests/test_require_premerge_hook.py": 4,
     "scripts/tests/test_resw_merge.py": 1,
     "scripts/tests/test_run_hook.py": 1,
     "scripts/tests/test_sync_labels.py": 2,

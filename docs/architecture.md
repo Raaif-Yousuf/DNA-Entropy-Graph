@@ -298,6 +298,8 @@ regardless:
  - A row that cannot be rebuilt into a request (no project, unreadable options) is `Failed` with a code, never left
  non-terminal. A local-engine row (`Target = local`) is skipped: it has no VM to reattach, and a This PC row a killed app left non-terminal is not failed on relaunch yet (see local_engine.md section 6).
 
+ A reattached run re-stages its inputs the way a new run staged them: the FASTA, then the paired GFF3 when the run had one (the app's copy under `runs\<jobId>\annotation\`, else the original; issue #720), so the rebuilt manifest keeps inputs[].annotation; a paired run whose GFF3 is gone everywhere fails as input_missing rather than running with the worker's own genes. The pair is checked again with the same rules as a new run (AnnotationPairValidator) before anything is created, so a GFF3 edited since the run began fails as input_invalid with nothing provisioned.
+
  A reattached run is driven through ActiveRuns (Core/Cloud), the same registry the engine registers its own runs in, so Cancel stops and awaits whichever task drives a job before it writes its own phase (one writer). The cancel signals when it has ended (ActiveRuns.CancelAsync / WhenCancelSettledAsync), success or failure, so the reattach reports the run as the row then is without polling, and ends with the app's shutdown; a cancel that failed leaves the row non-terminal for the next launch. A lookup the cloud refused (billing, permission) is not evidence of a VM or a result: a run that could still provision then still needs its worker image, and a row with no recorded bucket is judged without creating one.
 
 The entry is `AppStartup.BeginAsync` (App/Startup), called once from `App.OnLaunched` and not awaited. Guards.Tests

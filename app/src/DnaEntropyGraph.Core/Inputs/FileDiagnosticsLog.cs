@@ -34,6 +34,7 @@ public sealed class FileDiagnosticsLog : IDiagnosticsLog
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
         {
+            // Best effort by design: a diagnostics line that cannot be written must never fail the operation being logged.
         }
     }
 }
