@@ -1,0 +1,1 @@
+- check_totest_format fails on split and unterminated ToTest rows; the existing unterminated rows are closed (#652).
