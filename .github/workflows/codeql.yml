@@ -104,6 +104,7 @@ jobs:
           patterns: |
             -**/obj/**
             -**/bin/**
+            -app/tests/**
           input: sarif-results/csharp.sarif
           output: sarif-results/csharp.sarif
 

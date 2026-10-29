@@ -46,11 +46,16 @@ def test_pull_request_and_push_to_main_are_path_filtered():
     assert re.search(r"^  push:\n(?:    .*\n)*?    branches: \[main\]", _on_block(), re.MULTILINE)
 
 
+def _steps(text: str) -> list[str]:
+    """The workflow's steps, one string each (a step starts at a six-space `- `); a plain split, so no regex can backtrack."""
+    return [chunk for chunk in re.split(r"(?m)^(?=      - )", text) if chunk.startswith("      - ")]
+
+
 def test_init_step_references_the_config_file():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(
-        r"codeql-action/init@[0-9a-f]{40}[^\n]*\n\s+with:\n(?:\s+.*\n)*?\s+config-file: \./\.github/codeql/codeql-config\.yml", text
-    )
+    init = [s for s in _steps(text) if re.search(r"codeql-action/init@[0-9a-f]{40}", s)]
+    assert init, "no codeql-action/init step"
+    assert any("\n        with:\n" in s and "          config-file: ./.github/codeql/codeql-config.yml\n" in s for s in init)
 
 
 def test_config_ignores_the_legacy_trees():
@@ -92,7 +97,8 @@ def _csharp_filter_steps() -> str:
 def test_csharp_results_are_filtered_of_generated_code_before_upload():
     body = _csharp_filter_steps()
     # analyze for csharp must NOT upload on its own, and writes SARIF where the filter reads it.
-    assert re.search(r"if: matrix\.language == 'csharp'\n\s+with:\n(?:\s+.*\n)*?\s+upload: failure-only", body)
+    analyze = [s for s in _steps(body) if re.search(r"codeql-action/analyze@[0-9a-f]{40}", s) and "if: matrix.language == 'csharp'" in s]
+    assert any("\n        with:\n" in s and "          upload: failure-only" in s for s in analyze)
     assert "output: sarif-results" in body
     assert re.search(r"advanced-security/filter-sarif@[0-9a-f]{40}", body)
     for pattern in ("-**/obj/**", "-**/bin/**"):
@@ -146,3 +152,61 @@ def test_built_projects_reach_every_product_project_so_the_extractor_sees_all_pr
     assert len(product) >= 7, "vacuous: expected the six app/src projects and CloudCli"
     assert product <= seen, f"not built or referenced, so CodeQL would not scan: {sorted(p.name for p in product - seen)}"
     assert not any("tests" in p.parts[-3:] for p in seen), "a test project is in the CodeQL build"
+
+
+_NOISE_RULES = (
+    "cs/xmldoc/missing-summary",
+    "cs/linq/missed-select",
+    "cs/linq/missed-where",
+    "cs/unmanaged-code",
+    "cs/call-to-unmanaged-code",
+    "py/import-and-import-from",
+)
+
+
+def test_config_excludes_the_style_only_rules_triaged_as_noise():
+    # #488 / #491: security-and-quality ships these style notes; every hit was triaged as not a defect
+    # (P/Invoke is the point of the Windows shell code; the rest are style). Real findings stay visible.
+    text = CONFIG.read_text(encoding="utf-8")
+    excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
+    assert set(_NOISE_RULES) <= excluded
+    assert "cs/path-combine" not in excluded, "path-combine stays visible: it is the rule that flags a rooted second argument"
+
+
+def _filter_patterns() -> list[str]:
+    """The pattern lines of the filter-sarif step (a block scalar of `-glob` lines)."""
+    step = next(s for s in _steps(_csharp_filter_steps()) if re.search(r"filter-sarif@[0-9a-f]{40}", s))
+    head, sep, tail = step.partition("          patterns: |\n")
+    assert sep, "filter-sarif has no patterns block"
+    out: list[str] = []
+    for line in tail.splitlines():
+        if not line.startswith("            "):
+            break
+        out.append(line.strip())
+    return out
+
+
+def test_sarif_filter_drops_test_projects_even_if_a_product_project_ever_compiles_them():
+    # Defence in depth (#761 / #653): the build above names no test project, but if the App build ever
+    # reached app/tests (a ProjectReference, a Compile glob), no test-project alert may gate a PR.
+    patterns = _filter_patterns()
+    assert "-app/tests/**" in patterns, patterns
+    assert "-**/obj/**" in patterns and "-**/bin/**" in patterns, patterns
+
+
+def test_config_ignores_python_test_roots_for_the_interpreted_lanes():
+    # paths-ignore is honoured for python (interpreted), so the pytest trees never raise alerts (#761).
+    text = CONFIG.read_text(encoding="utf-8")
+    ignored = set(re.findall(r"^  - '?([^'\n]+?)'?$", text.partition("paths-ignore:\n")[2].partition("\n\n")[0], re.MULTILINE))
+    assert {"worker/tests/**", "scripts/tests/**"} <= ignored, ignored
+    for root in ("worker/tests", "scripts/tests"):
+        assert (ROOT / root).is_dir(), f"vacuous: {root} no longer exists"
+    assert (ROOT / "app" / "tests").is_dir()
+
+
+def test_cs_path_combine_and_catch_all_stay_on():
+    # DECISION (agent-made, reversible) in codeql-config.yml: product hits of both rules take
+    # caller-supplied segments or are not all top-level, so neither is excluded.
+    text = CONFIG.read_text(encoding="utf-8")
+    excluded = set(re.findall(r"^  - exclude:\n      id: (\S+)$", text, re.MULTILINE))
+    assert not {"cs/path-combine", "cs/catch-of-all-exceptions"} & excluded

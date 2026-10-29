@@ -32,11 +32,16 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             return;
         }
 
+        // Issue #91: from here the VM going away is this app's doing, never a Spot preemption to retry.
+        terminator.NoteAppRequestedEnd(jobId);
         await rows.SetPhaseAsync(jobId, JobPhase.Cancelling, CancellationToken.None).ConfigureAwait(false);
 
         // A create the caller gave up on can still land. Wait for it (bounded) before looking, or the VM appears
         // after the run is recorded Cancelled and nothing ever deletes it.
         var settled = await provisioner.SettleInflightCreatesAsync(jobId).ConfigureAwait(false);
+
+        // Issue #92: a request still queued is deleted by its own name as well as by label.
+        var queued = provisioner.TakePendingRequests(jobId);
 
         // Issue #675: ask the worker to stop first so the outputs it already has are kept; every way out of the wait ends in the delete below.
         // The ask sits INSIDE the same guard as the delete: whatever it throws (a caller who gave up, an unexpected failure of a look), the VM is still deleted and the row
@@ -71,7 +76,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 }
             }
 
-            failure = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
+            failure = await DeleteAllAsync(jobId, settled, queued, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -83,7 +88,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // last attempt that the caller's token cannot cut, then the terminal state is recorded from what it finds.
             try
             {
-                failure = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, CancellationToken.None).ConfigureAwait(false);
+                failure = await DeleteAllAsync(jobId, settled, queued, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -93,6 +98,13 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         // Hard Rule 11: a cancel ends in exactly one recorded terminal state. Failed names the VM to delete by hand.
         await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
+    }
+
+    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, CancellationToken cancellationToken)
+    {
+        var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
+        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
+        return ownedNote ?? queuedNote;
     }
 
     /// <summary>

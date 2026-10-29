@@ -18,18 +18,22 @@ public class CloudGpuTestScriptContractTests
     private const string Project = "my-lab";
     private const string Job = "20261015-120000-ab3xy9";
 
-    private static string ScriptPath()
+    // #874: walk up from this source file first (the tree actually compiled), then from the output directory.
+    private static string ScriptPath([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
     {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        foreach (var start in new[] { Path.GetDirectoryName(thisFile), AppContext.BaseDirectory })
         {
-            var candidate = Path.Combine(dir.FullName, "scripts", "cloud_gpu_test.ps1");
-            if (File.Exists(candidate))
+            for (var dir = string.IsNullOrEmpty(start) ? null : new DirectoryInfo(start); dir is not null; dir = dir.Parent)
             {
-                return candidate;
+                var candidate = Path.Combine(dir.FullName, "scripts", "cloud_gpu_test.ps1");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
             }
         }
 
-        throw new FileNotFoundException("scripts/cloud_gpu_test.ps1 was not found above " + AppContext.BaseDirectory);
+        throw new FileNotFoundException("scripts/cloud_gpu_test.ps1 was not found above " + thisFile + " or " + AppContext.BaseDirectory);
     }
 
     private sealed record Printed(string[] Create, string[] Delete, string[] List, string[] Leak, string[] Ensure, string[] Get);

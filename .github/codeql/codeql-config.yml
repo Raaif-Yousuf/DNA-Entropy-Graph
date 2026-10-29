@@ -13,3 +13,32 @@ paths-ignore:
   - worker/legacy/**
   - '**/obj/**'
   - '**/bin/**'
+  - worker/tests/**
+  - scripts/tests/**
+
+# Test trees (pytest) are not shipped code; paths-ignore is honoured for python, so no alert is raised there.
+# The csharp equivalent (app/tests/**) is applied by filter-sarif in codeql.yml.
+#
+# DECISION (agent-made, reversible): cs/path-combine and cs/catch-of-all-exceptions stay ON for product code.
+# MEASURED 2026-10-29 (open alerts): 80 product cs/path-combine hits (app/src, app/tools); many join a
+# caller- or manifest-supplied segment (relative paths in RunTransfer, RunCloudResults, LocalJobRunner,
+# FileName, jobId), so they are the rule's real target and are reviewed, not excluded. 75 product
+# cs/catch-of-all-exceptions hits spread over 30+ files, not all top-level. Test-project hits (780 and 4)
+# are removed by the build scope and the filter-sarif pattern instead.
+
+# Style-only rules from the security-and-quality suite, triaged as noise in #488 and #491 (each hit
+# was read; none was a defect). P/Invoke is how the Windows shell code reaches the OS. Rules that can
+# flag a real defect (cs/path-combine, cs/catch-of-all-exceptions, cs/local-not-disposed) stay on.
+query-filters:
+  - exclude:
+      id: cs/xmldoc/missing-summary
+  - exclude:
+      id: cs/linq/missed-select
+  - exclude:
+      id: cs/linq/missed-where
+  - exclude:
+      id: cs/unmanaged-code
+  - exclude:
+      id: cs/call-to-unmanaged-code
+  - exclude:
+      id: py/import-and-import-from

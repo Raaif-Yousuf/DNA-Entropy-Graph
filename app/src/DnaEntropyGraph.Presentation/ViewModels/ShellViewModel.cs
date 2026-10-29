@@ -33,6 +33,10 @@ public sealed partial class ShellViewModel : ObservableObject
     private readonly AppDataRoot? _dataRoot;
     private readonly SimulatedCloudMode? _simulatedCloud;
     private readonly BuildIdentity? _build;
+    private readonly SessionRestorer? _session;
+    private readonly PrototypeImportViewModel? _prototypeImport;
+    private SessionTarget? _pendingRestore;
+    private bool _userNavigated;
     private readonly HashSet<string> _activeJobIds = new(StringComparer.Ordinal);
 
     // A plain field, not an [ObservableProperty]: no view binds the raw key (issue #490), only
@@ -58,7 +62,28 @@ public sealed partial class ShellViewModel : ObservableObject
     public TourViewModel? Tour { get; }
 
     /// <summary>Called once the window and its first page are up: shows the first-launch tour on a profile that has not seen it (issue #143).</summary>
-    public Task OnWindowLoadedAsync() => Tour?.StartIfFirstLaunchAsync() ?? Task.CompletedTask;
+    /// <remarks>Issue #243 follow-up: the tour waits for the startup offers (a modal dialog) to finish, so the two never stack.</remarks>
+    public async Task OnWindowLoadedAsync()
+    {
+        try
+        {
+            // Starts the offers if the window has not yet (order-independent), else joins the same task: the tour never opens over a dialog.
+            await RunStartupOffersAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // However the offers ended (cancelled, faulted), the tour still starts, and nothing escapes a fire-and-forget call.
+            System.Diagnostics.Trace.TraceWarning($"startup offers ended early: {ex.GetType().Name}");
+        }
+
+        if (Tour is not null)
+        {
+            await Tour.StartIfFirstLaunchAsync();
+        }
+    }
+
+    // The one offers task, started by whichever of RunStartupOffersAsync and OnWindowLoadedAsync is called first.
+    private Task? _startupOffers;
 
     /// <summary>NavigationViewDisplayMode.Minimal: the pane is hidden behind a button, so the tour's tips have nothing to point at.</summary>
     public const int MinimalNavigationDisplayMode = 0;
@@ -72,8 +97,10 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
     public Uri HelpUri => UserGuideLinks.UriFor(_helpPageKey, _build);
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, TourViewModel? tour = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, PrototypeImportViewModel? prototypeImport = null, TourViewModel? tour = null)
     {
+        _prototypeImport = prototypeImport;
+        _session = session;
         Updates = updates;
         Tour = tour;
         navigator.CurrentPageChanged += (_, _) => OnNavigatorPageChanged(navigator.CurrentPageKey);
@@ -154,11 +181,89 @@ public sealed partial class ShellViewModel : ObservableObject
     [RelayCommand]
     private void NavigateTo(string pageKey)
     {
+        _userNavigated = true;
         _navigator.NavigateTo(pageKey);
         _currentPageKey = pageKey;
         _helpPageKey = pageKey;
         OnPropertyChanged(nameof(CurrentPageTitle));
         OnPropertyChanged(nameof(HelpUri));
+
+        // Issue #244: the first time the remembered page's parent is shown at startup, open the remembered run on top of it. Once only,
+        // and only if the user has not already chosen another page (that choice replaced the pending restore).
+        var pending = _pendingRestore;
+        _pendingRestore = null;
+        if (pending is { SubPage: not null } && pending.NavKey == pageKey)
+        {
+            _navigator.NavigateTo(pending.SubPage, pending.Parameter);
+        }
+    }
+
+    /// <summary>First-launch offers, run once the window is showing (issue #243: bring in the earlier version's runs). Never throws.</summary>
+    public Task RunStartupOffersAsync(CancellationToken cancellationToken)
+        => (_startupOffers ??= RunOffersOnceAsync()).WaitAsync(cancellationToken);
+
+    // The offers run on the shell's own lifetime, not the first caller's token: that token only ends that caller's wait (WaitAsync above).
+    // Never throws: MainWindow awaits this in an async void handler, where an escaped exception would end the app.
+    private async Task RunOffersOnceAsync()
+    {
+        try
+        {
+            if (_prototypeImport is not null)
+            {
+                await _prototypeImport.OfferOnFirstLaunchAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Only the class is traced (a message can carry a path).
+            System.Diagnostics.Trace.TraceWarning($"startup offers failed: {ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>The navigation item the shell selects at startup: the remembered page's (issue #244), else New run; null when the user already chose a page. Valid after <see cref="PrepareSessionAsync"/>.</summary>
+    public string? StartupNavKey { get; private set; } = InitialPageKeyValue;
+
+    /// <summary>How long startup waits for the remembered page to resolve before opening on New run (issue #244). Tests shorten it.</summary>
+    public TimeSpan SessionRestoreTimeout { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Reads where the user left off (issue #244) before the first navigation. Never throws and never waits longer than
+    /// <see cref="SessionRestoreTimeout"/>: a locked or hung history means "start on New run". A page the user already chose wins over the restore.
+    /// </summary>
+    public async Task PrepareSessionAsync(CancellationToken cancellationToken)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        SessionTarget? target = null;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            // Task.Run so a settings read that blocks synchronously is bounded too, not only an awaited history read.
+            target = await Task.Run(() => _session.ResolveAsync(limit.Token), limit.Token).WaitAsync(SessionRestoreTimeout, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            limit.Cancel();
+            System.Diagnostics.Trace.TraceWarning("session restore timed out; opening on the default page");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            System.Diagnostics.Trace.TraceWarning($"session restore failed: {ex.GetType().Name}");
+        }
+
+        if (_userNavigated)
+        {
+            // The user went to a page while this was resolving (a nav item, or one with none such as the setup wizard): that choice stands,
+            // nothing is restored on top of it, and null tells the window to leave the selection alone.
+            StartupNavKey = null;
+            return;
+        }
+
+        _pendingRestore = target;
+        StartupNavKey = target?.NavKey ?? InitialPageKeyValue;
     }
 
     private void OnNavigatorPageChanged(string? pageKey)

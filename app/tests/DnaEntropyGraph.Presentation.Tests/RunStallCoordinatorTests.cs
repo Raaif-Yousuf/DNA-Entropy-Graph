@@ -232,4 +232,18 @@ public class RunStallCoordinatorTests
         _notices[0].Text.ShouldContain("RunNotice_Stalled");
         _notices[1].Text.ShouldBeEmpty();
     }
+
+    [Fact]
+    public void Waiting_for_a_graphics_card_is_shown_as_a_line_and_withdrawn_when_it_ends()
+    {
+        // Issue #92.
+        _strings.GetString("RunNotice_WaitingForGpu").Returns("waiting for a card");
+        var coordinator = NewCoordinator();
+
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.WaitingForGpu));
+        coordinator.OnNotice(new RunNotice("job-1", RunNoticeKind.WaitingForGpuEnded));
+
+        _notices.Select(n => n.Text).ShouldBe(["waiting for a card", string.Empty]);
+        _notices.ShouldAllBe(n => n.JobId == "job-1");
+    }
 }

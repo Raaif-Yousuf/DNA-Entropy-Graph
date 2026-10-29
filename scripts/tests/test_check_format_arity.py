@@ -183,3 +183,15 @@ def test_script_fails_when_it_checked_fewer_sites_than_the_floor(tmp_path):
         check=False,
     )
     assert ok.returncode == 0, ok.stderr
+
+
+def test_escaped_string_literal_before_a_format_call_does_not_desync_literal_pairing(tmp_path):
+    # Found on the 2026-10-29 merge: `"\n\n" + string.Format(..., GetString("K"), x)` made the literal
+    # regex (no backslash allowed) pair quotes across the call, so K looked unreferenced.
+    root = _tree(
+        tmp_path,
+        _resw(A="x {0}", B="y {0}"),
+        'text += "\\n\\n" + string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a);\n'
+        'var t = "\\"q\\"" + string.Format(CultureInfo.CurrentCulture, _strings.GetString("B"), b);',
+    )
+    assert _codes(root) == []

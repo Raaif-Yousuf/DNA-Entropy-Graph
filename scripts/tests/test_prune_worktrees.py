@@ -14,6 +14,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -65,7 +66,7 @@ class World:
             self.git_calls.append(args)
             return pw.git(cwd, *args, **kwargs)
 
-        defaults = dict(
+        defaults: dict[str, Any] = dict(
             repo=self.clone,
             tmp_root=self.tmp_root,
             min_age_hours=0.0,
@@ -404,7 +405,7 @@ def _leftover(world: World, name: str, *, record_sha: str | bool = True, with_ju
         subprocess.run(["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, check=False).returncode != 0
     )  # unreadable, like the real thing
     (world.tmp_root / "locks").mkdir(exist_ok=True)
-    record = {"pid": 0, "start": 0}
+    record: dict[str, int | str] = {"pid": 0, "start": 0}
     if sha:
         record["sha"] = sha
     (world.tmp_root / "locks" / f"{name}.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
@@ -522,7 +523,7 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     _git(world.clone, "branch", "release/1.0", "origin/main")
     kept_wt = world.add_worktree("co", branch="checked-out-merged-wt", commit=True)  # unmerged, stays
     _git(kept_wt, "branch", "unmerged-extra")  # same commit as the unmerged worktree head: not an ancestor
-    lane = world.add_worktree("lane-x")  # landed and removed: its branch becomes free
+    world.add_worktree("lane-x")  # landed and removed: its branch becomes free
     world.merged_branch("feat-merged")  # a real merged feature branch checked out nowhere
     dirty = world.add_worktree("lane-dirty")
     (dirty / "z.txt").write_bytes(b"z\n")  # dirty: stays, so its branch stays
@@ -530,8 +531,8 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     _git(world.clone, "branch", "fresh-lane", "origin/main")  # pre-created lane: points exactly at origin/main
     report = _run(world, apply=False, delete_merged_branches=True)
     assert "feat-merged" in world.branches()  # dry run
-    assert sorted(b.branch for b in report.branches_deleted) == sorted(["feat-merged", "lane-x"])
-    report = _run(world, apply=True, delete_merged_branches=True)
+    assert sorted(str(b.branch) for b in report.branches_deleted) == sorted(["feat-merged", "lane-x"])
+    _run(world, apply=True, delete_merged_branches=True)
     left = world.branches()
     for gone in ("feat-merged", "lane-x"):
         assert gone not in left
@@ -546,7 +547,6 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
         "release/1.0",
     ):
         assert kept in left
-    del lane
 
 
 def test_delete_merged_branches_also_takes_a_branch_whose_pr_merged_when_gh_is_used(world):
@@ -925,3 +925,374 @@ def test_an_operation_in_progress_keeps_the_worktree(world, marker):
     report = _run(world, apply=True)
     assert wt.is_dir()
     assert any(k.path == wt and "in progress" in k.reason for k in report.kept)
+
+
+# --- content-based "landed" (#812) ---------------------------------------------------------------------
+
+
+def _branch_with(world: World, name: str, files: dict[str, bytes], base: str = "origin/main") -> str:
+    """A local branch (checked out nowhere) with one commit of its own adding `files`. Returns the tip."""
+    tmp = world.root / "scratch" / name.replace("/", "_")
+    _git(world.clone, "worktree", "add", "-q", "--detach", str(tmp), base)
+    for rel, data in files.items():
+        (tmp / rel).write_bytes(data)
+        _git(tmp, "add", "--", rel)
+    _git(tmp, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", f"work {name}")
+    tip = _git(tmp, "rev-parse", "HEAD")
+    _git(world.clone, "worktree", "remove", "--force", str(tmp))
+    _git(world.clone, "branch", name, tip)
+    return tip
+
+
+def test_a_superseded_attempt_whose_content_landed_under_another_name_is_deleted(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})  # different commit, same content
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert sorted(str(b.branch) for b in report.branches_deleted) == ["feat-r1", "feat-r2"]
+    assert "feat-r1" not in world.branches()
+
+
+def test_a_branch_with_one_unique_hunk_is_kept(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n", "y.txt": b"only here\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert "feat-r1" in world.branches()
+    assert [b.branch for b in report.branches_deleted] == ["feat-r2"]
+
+
+def _commit_on_main(world: World, files: dict[str, bytes]) -> str:
+    """A plain commit on origin/main (not a merge). Returns the new main tip."""
+    _git(world.clone, "switch", "-q", "--detach", "origin/main")
+    for rel, data in files.items():
+        (world.clone / rel).write_bytes(data)
+        _git(world.clone, "add", "--", rel)
+    _git(world.clone, "commit", "-q", "-m", "main edit")
+    tip = _git(world.clone, "rev-parse", "HEAD")
+    _git(world.clone, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _git(world.clone, "fetch", "-q", "origin")
+    _git(world.clone, "switch", "-q", "-")
+    return tip
+
+
+def test_a_branch_whose_change_main_later_undid_is_not_contained(world):
+    _branch_with(world, "feat-old", {"a.txt": b"changed\n"})
+    r2 = _branch_with(world, "feat-new", {"a.txt": b"changed\n"})  # same content, different commit
+    world.merge_into_main(r2)
+    report = _run(world, apply=False, delete_merged_branches=True)
+    assert "feat-old" in [b.branch for b in report.branches_deleted]  # precondition: while main holds the change it IS contained
+    _commit_on_main(world, {"a.txt": b"one\n"})  # main undoes it
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert "feat-old" in world.branches()  # not an ancestor, and merging it would re-apply the change
+    assert "feat-old" not in [b.branch for b in report.branches_deleted]
+
+
+def test_a_merge_driver_in_info_attributes_cannot_make_an_edit_look_contained(world):
+    common = Path(_git(world.clone, "rev-parse", "--git-common-dir"))
+    common = common if common.is_absolute() else world.clone / common
+    (common / "info").mkdir(parents=True, exist_ok=True)
+    (common / "info" / "attributes").write_text("a.txt merge=keepmine\n", encoding="utf-8", newline="\n")
+    _git(world.clone, "config", "merge.keepmine.driver", "true")  # `true` leaves %A (main's side) in place: a silent 'ours'
+    _branch_with(world, "feat-edit", {"a.txt": b"X\n"})
+    _commit_on_main(world, {"a.txt": b"Y\n"})
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert "feat-edit" in world.branches() and report.branches_deleted == []
+
+
+def test_a_committed_gitattributes_merge_rule_cannot_make_an_edit_look_contained(world):
+    _commit_on_main(world, {".gitattributes": b"a.txt merge=keepmine\n"})
+    _git(world.clone, "config", "merge.keepmine.driver", "true")
+    _branch_with(world, "feat-edit", {"a.txt": b"X\n"})
+    _commit_on_main(world, {"a.txt": b"Y\n"})
+    (world.clone / ".gitattributes").write_bytes(b"a.txt merge=keepmine\n")  # the primary checkout (on main) has the rule in its tree
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert "feat-edit" in world.branches() and report.branches_deleted == []
+
+
+def test_contained_in_a_held_tip_makes_a_superseded_branch_landed_and_the_tip_itself_is_kept(world):
+    _branch_with(world, "queued", {"z.txt": b"z\n", "w.txt": b"w\n"})
+    _branch_with(world, "attempt-r1", {"z.txt": b"z\n"})  # a subset of the queued branch
+    report = _run(world, apply=False, delete_merged_branches=True)
+    assert report.branches_deleted == []  # without --contained-in nothing holds it
+    report = _run(world, apply=True, delete_merged_branches=True, contained_in=["queued"])
+    assert [b.branch for b in report.branches_deleted] == ["attempt-r1"]
+    assert "queued" in world.branches() and "attempt-r1" not in world.branches()
+
+
+def test_an_unresolvable_contained_in_ref_is_a_warning_not_a_crash(world):
+    _branch_with(world, "attempt-r1", {"z.txt": b"z\n"})
+    report = _run(world, apply=True, delete_merged_branches=True, contained_in=["no-such-ref"])
+    assert report.branches_deleted == [] and "no-such-ref" in world.text()
+
+
+def test_a_content_contained_branch_checked_out_in_a_dirty_worktree_is_never_deleted(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    wt = world.root / "wts" / "r1-wt"
+    _git(world.clone, "worktree", "add", "-q", str(wt), "feat-r1")
+    (wt / "unsaved.txt").write_bytes(b"work in progress\n")
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert wt.is_dir() and "feat-r1" in world.branches()
+    assert any(k.path == wt for k in report.kept)
+
+
+def test_a_clean_worktree_on_a_content_contained_branch_is_removed_and_its_branch_freed(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    wt = world.root / "wts" / "r1-wt"
+    _git(world.clone, "worktree", "add", "-q", str(wt), "feat-r1")
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert not wt.exists() and "feat-r1" not in world.branches()
+    assert [r.path.name for r in report.removed] == ["r1-wt"]
+
+
+def test_a_fresh_lane_sitting_on_main_is_not_swept_up_by_the_content_test(world):
+    _git(world.clone, "branch", "fresh-lane", "origin/main")
+    _run(world, apply=True, delete_merged_branches=True)
+    assert "fresh-lane" in world.branches()
+
+
+def _push_remote(world: World, name: str, files: dict[str, bytes]) -> str:
+    tip = _branch_with(world, name, files)
+    _git(world.clone, "push", "-q", "origin", f"{name}:refs/heads/{name}")
+    _git(world.clone, "branch", "-D", name)
+    _git(world.clone, "fetch", "-q", "origin")
+    return tip
+
+
+def _remote_heads(world: World) -> list[str]:
+    return sorted(_git(world.origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split())
+
+
+def test_remote_mode_is_a_dry_run_by_default_and_names_the_contained_branches(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-r1", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-uniq", {"u.txt": b"unique\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=False, remote=True, gh=world.gh_stub([]))
+    assert sorted(str(d.branch) for d in report.remote_deleted) == ["feat-r1", "feat-r2"]
+    assert _remote_heads(world) == ["feat-r1", "feat-r2", "feat-uniq", "main"]
+
+
+def test_remote_apply_deletes_contained_remote_branches_only(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-r1", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-uniq", {"u.txt": b"unique\n"})
+    _push_remote(world, "feat-open", {"x.txt": b"the fix\n"})
+    _push_remote(world, "queued", {"q.txt": b"q\n"})
+    _push_remote(world, "feat-sub", {"q.txt": b"q\n"})
+    world.merge_into_main(r2)
+    prs = [{"headRefName": "feat-open", "state": "OPEN", "headRefOid": "0" * 40, "baseRefName": "main"}]
+    report = _run(world, apply=True, remote=True, contained_in=["origin/queued"], gh=world.gh_stub(prs))
+    assert sorted(str(d.branch) for d in report.remote_deleted) == ["feat-r1", "feat-r2", "feat-sub"]
+    assert _remote_heads(world) == ["feat-open", "feat-uniq", "main", "queued"]
+
+
+def test_without_the_remote_flag_origin_is_never_touched(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, delete_merged_branches=True)
+    assert report.remote_deleted == []
+    assert "feat-r2" in _remote_heads(world)
+
+
+def test_remote_mode_without_gh_answers_deletes_nothing(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, remote=True, gh=[sys.executable, "-c", "import sys; sys.exit(1)"])
+    assert report.remote_deleted == [] and "feat-r2" in _remote_heads(world)
+    assert "gh" in world.text()
+
+
+def test_cli_flags_reach_the_context(world):
+    args = pw.parse_args(["--contained-in", "a", "b", "--remote", "--delete-merged-branches"])
+    ctx = pw.ctx_from_args(args, world.clone)
+    assert ctx.contained_in == ["a", "b"] and ctx.remote is True
+
+
+def test_a_keep_tip_that_is_a_subset_of_another_keep_tip_is_still_kept(world):
+    _branch_with(world, "queued", {"z.txt": b"z\n", "w.txt": b"w\n"})
+    _branch_with(world, "queued-sub", {"z.txt": b"z\n"})
+    report = _run(world, apply=True, delete_merged_branches=True, contained_in=["queued", "queued-sub"])
+    assert report.branches_deleted == []
+    assert {"queued", "queued-sub"} <= set(world.branches())
+
+
+# --- review round 2 (#812): remote safety, undo information ---------------------------------------------
+
+
+def _open_pr(head: str, base: str = "main") -> dict:
+    return {"headRefName": head, "state": "OPEN", "headRefOid": "0" * 40, "baseRefName": base}
+
+
+def test_a_remote_branch_that_is_the_base_of_an_open_stacked_pr_is_kept(world):
+    r2 = _push_remote(world, "feat-base", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-top", {"t.txt": b"top\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, remote=True, gh=world.gh_stub([_open_pr("feat-top", base="feat-base")]))
+    assert report.remote_deleted == [] and "feat-base" in _remote_heads(world)  # deleting a base auto-closes the PR on top of it
+
+
+def test_the_remote_open_check_asks_gh_for_open_prs_only(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    _run(world, apply=False, remote=True, gh=world.gh_stub([]))
+    assert world.gh_calls() and all("--state open" in c for c in world.gh_calls())
+
+
+def test_a_saturated_open_pr_list_refuses_all_remote_deletion(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, remote=True, gh_limit=1, gh=world.gh_stub([_open_pr("some-other")]))
+    assert report.remote_deleted == [] and "feat-r2" in _remote_heads(world)
+    assert "WARNING: remote branches skipped: gh returned 1 open PRs (--limit), so the list may be cut off. Close some, then retry" in world.out
+
+
+def test_remote_delete_is_a_lease_on_the_sha_we_read(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    old = _git(world.clone, "rev-parse", "refs/remotes/origin/feat-r2")
+    newer = _git(world.clone, "commit-tree", f"{old}^{{tree}}", "-p", old, "-m", "pushed by someone else meanwhile")
+    _git(world.clone, "push", "-q", "-f", "origin", f"{newer}:refs/heads/feat-r2")
+    _git(world.clone, "update-ref", "refs/remotes/origin/feat-r2", old)  # our view of origin is stale
+    report = _run(world, apply=True, remote=True, gh=world.gh_stub([]))
+    assert "feat-r2" in _remote_heads(world) and report.remote_deleted == []
+    assert "feat-r2" in world.text()
+
+
+def test_every_deleted_branch_and_worktree_is_printed_with_its_sha(world):
+    wt = world.add_worktree("lane-a")
+    wt_head = _git(wt, "rev-parse", "HEAD")
+    local = world.merged_branch("feat-local")
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    _run(world, apply=True, delete_merged_branches=True, remote=True, gh=world.gh_stub([]))
+    text = world.text()
+    assert f"lane-a@{wt_head}" in text and f"feat-local@{local}" in text and f"feat-r2@{r2}" in text
+
+
+def test_a_local_only_keep_tip_cannot_justify_a_remote_delete_but_still_justifies_a_local_one(world):
+    _branch_with(world, "queued", {"q.txt": b"q\n"})  # never pushed
+    _push_remote(world, "feat-sub", {"q.txt": b"q\n"})
+    _branch_with(world, "attempt-local", {"q.txt": b"q\n"})
+    report = _run(world, apply=True, delete_merged_branches=True, remote=True, contained_in=["queued"], gh=world.gh_stub([]))
+    assert "feat-sub" in _remote_heads(world) and report.remote_deleted == []
+    assert "WARNING: --contained-in queued is not on origin at the same commit, so it cannot justify a remote delete. Push it first" in world.out
+    assert "attempt-local" not in world.branches()  # local deletion may still use the tip
+
+
+def test_a_pushed_keep_tip_at_the_same_sha_justifies_a_remote_delete(world):
+    _push_remote(world, "queued", {"q.txt": b"q\n"})
+    _git(world.clone, "branch", "queued", "origin/queued")  # a local branch at the same sha as origin/queued
+    _push_remote(world, "feat-sub", {"q.txt": b"q\n"})
+    report = _run(world, apply=True, remote=True, contained_in=["queued"], gh=world.gh_stub([]))
+    assert [d.branch for d in report.remote_deleted] == ["feat-sub"]
+
+
+def test_a_remote_branch_checked_out_in_a_kept_worktree_is_not_deleted(world):
+    r2 = _push_remote(world, "feat-r2", {"x.txt": b"the fix\n"})
+    _push_remote(world, "feat-r1", {"x.txt": b"the fix\n"})
+    world.merge_into_main(r2)
+    wt = world.root / "wts" / "r1-wt"
+    _git(world.clone, "worktree", "add", "-q", "-b", "feat-r1", str(wt), "origin/feat-r1")
+    (wt / "unsaved.txt").write_bytes(b"work in progress\n")
+    report = _run(world, apply=True, remote=True, gh=world.gh_stub([]))
+    assert "feat-r1" in _remote_heads(world) and "feat-r2" not in _remote_heads(world)
+    assert [d.branch for d in report.remote_deleted] == ["feat-r2"]
+
+
+def test_a_dry_run_says_it_did_not_fetch(world):
+    _run(world, apply=False)
+    assert "not fetched" in world.text()
+    world.out.clear()
+    _run(world, apply=False, fetch=True)
+    assert "not fetched" not in world.text()
+
+
+def test_the_remote_path_does_not_blame_use_gh(world):
+    _run(world, apply=False, remote=True, gh=[sys.executable, "-c", "import sys; sys.exit(1)"])
+    assert "drop --use-gh" not in world.text()
+
+
+# --- review round 2b (#812): leases, stale tracking refs, gh pinning, old git ---------------------------
+
+
+def test_a_local_branch_that_moved_after_it_was_judged_survives_and_is_reported(world):
+    tip = world.merged_branch("feat-local")
+    newer = _git(world.clone, "commit-tree", f"{tip}^{{tree}}", "-p", tip, "-m", "moved meanwhile")
+
+    def moving_git(cwd, *args, **kwargs):
+        if args[:2] == ("update-ref", "-d"):
+            _git(world.clone, "update-ref", "refs/heads/feat-local", newer)  # someone commits between judgement and delete
+        return pw.git(cwd, *args, **kwargs)
+
+    report = _run(world, apply=True, delete_merged_branches=True, git=moving_git)
+    assert "feat-local" in world.branches() and _git(world.clone, "rev-parse", "feat-local") == newer
+    assert report.branches_deleted == []
+    assert f"WARNING: could not delete local branch feat-local@{tip} (it moved, or git refused); leaving it" in world.out
+
+
+def test_a_stale_tracking_ref_of_a_tip_deleted_on_origin_cannot_justify_a_remote_delete(world):
+    _push_remote(world, "queued", {"q.txt": b"q\n"})
+    _push_remote(world, "feat-sub", {"q.txt": b"q\n"})
+    _git(world.origin, "update-ref", "-d", "refs/heads/queued")  # gone on origin; our origin/queued is stale
+    assert _git(world.clone, "rev-parse", "--verify", "refs/remotes/origin/queued")
+    report = _run(world, apply=True, remote=True, contained_in=["origin/queued"], gh=world.gh_stub([]))
+    assert report.remote_deleted == [] and "feat-sub" in _remote_heads(world)
+    assert (
+        "WARNING: --contained-in origin/queued is not on origin at the same commit, so it cannot justify a remote delete. Push it first"
+        in world.out
+    )
+
+
+def test_fetch_prunes_so_deleted_origin_branches_do_not_linger(world):
+    _run(world, apply=True, fetch=True)
+    fetches = [c for c in world.git_calls if c and c[0] == "fetch"]
+    assert fetches and all("--prune" in c for c in fetches)
+
+
+def test_gh_is_pinned_to_the_repository_origin_points_at(world):
+    _git(world.clone, "config", f"url.{world.origin.as_posix()}.insteadOf", "https://github.com/Some-Owner/Some-Repo.git")
+    _git(world.clone, "remote", "set-url", "origin", "https://github.com/Some-Owner/Some-Repo.git")
+    _run(world, apply=False, remote=True, use_gh=True, gh=world.gh_stub([]))
+    calls = world.gh_calls()
+    assert len(calls) == 2 and all("--repo Some-Owner/Some-Repo" in c for c in calls)
+
+
+def test_a_git_without_attr_source_warns_once_and_only_ancestry_counts(world):
+    class Failed:
+        returncode = 129
+        stdout = b""
+        stderr = b"unknown option: --attr-source"
+
+    def old_git(cwd, *args, **kwargs):
+        if any(a.startswith("--attr-source") for a in args):
+            return Failed()
+        return pw.git(cwd, *args, **kwargs)
+
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    r2 = _branch_with(world, "feat-r2", {"x.txt": b"the fix\n"})
+    _branch_with(world, "feat-r3", {"y.txt": b"y\n"})
+    world.merge_into_main(r2)
+    report = _run(world, apply=True, delete_merged_branches=True, git=old_git)
+    warning = "WARNING: this git rejects --attr-source (needs 2.40 or newer), so the content test is off and only ancestry counts. Update git"
+    assert world.out.count(warning) == 1
+    assert [b.branch for b in report.branches_deleted] == ["feat-r2"]  # ancestry only: feat-r1 (same content, other commit) stays
+    assert "feat-r1" in world.branches()
+
+
+def test_the_containment_merge_runs_with_renormalize_and_autocrlf_off(world):
+    _branch_with(world, "feat-r1", {"x.txt": b"the fix\n"})
+    _run(world, apply=False, delete_merged_branches=True)
+    merges = [c for c in world.git_calls if "merge-tree" in c]
+    assert merges and all("merge.renormalize=false" in c and "core.autocrlf=false" in c for c in merges)
+
+
+def test_a_removed_detached_worktree_prints_how_to_get_it_back(world):
+    wt = world.add_worktree("lane-d", detach=True)
+    head = _git(wt, "rev-parse", "HEAD")
+    _run(world, apply=True)
+    assert f"    detached HEAD, undo with: git worktree add --detach {wt} {head}" in world.out

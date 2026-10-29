@@ -307,6 +307,10 @@ see through, so no query filter is needed. THEORY (unverified): the first CI run
 shows no new `cs/invalid-string-formatting`; if one fires from product-only flow, add a query-filter
 for that rule. `scripts/check_format_arity.py` is the real check (template placeholders vs argument
 count, plus unreferenced placeholder templates).
+Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
+`scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
+and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining
+manifest or caller supplied segments, so they are reviewed rather than excluded (evidence in `codeql-config.yml`).
 Dependabot watches `github-actions`, `pip` (`worker/`), and `nuget` (`app/`) weekly; the
 `docker` ecosystem is deliberately absent until issue #36's Dockerfiles need their own
 update cadence (they already exist as of this session but the ecosystem entry itself is a

@@ -47,7 +47,8 @@ KEY_ARG = re.compile(r'GetString\(\s*(?:"([^"\\]*)"|([A-Za-z_]\w*(?:\.[A-Za-z_]\
 PLACEHOLDER = re.compile(r"\{(\d+)(?:[,:][^{}]*)?\}")
 CONST = re.compile(r'\b(?:const|static\s+readonly)\s+string\s+(\w+)\s*=\s*"([^"\\]*)"')
 TYPE_DECL = re.compile(r"\b(?:class|record|struct|interface)\s+(\w+)")
-STRING_LITERAL = re.compile(r'"([^"\\\r\n]*)"')
+# Escapes are consumed pairwise, so "\n\n" is one literal; the alternatives are disjoint, so no backtracking.
+STRING_LITERAL = re.compile(r'"((?:[^"\\\r\n]|\\.)*)"')
 OBJECT_ARRAY = re.compile(r"^new\s+(?:object)?\s*\[\s*\]\s*\{(.*)\}$", re.DOTALL)
 MIN_CHECKED = 20
 

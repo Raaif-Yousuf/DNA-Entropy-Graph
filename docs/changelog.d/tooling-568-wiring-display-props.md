@@ -1,0 +1,1 @@
+- check_app_wiring.py: new UNBOUND-DISPLAY-PROPERTY finding (#568). A public string property of a type a view binds against (DataTemplate x:DataType or page ViewModel) that no .xaml binds is reported; C# and test references no longer count as use. Two real-tree entries allowlisted with reasons.
