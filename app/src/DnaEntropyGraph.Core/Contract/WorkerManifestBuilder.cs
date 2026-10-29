@@ -210,6 +210,25 @@ public static class WorkerManifestBuilder
             root["analysis"]!["gcWindow"] = options.GcWindow;
         }
 
+        // Issue #552: the region caller and the smoothed tracks read their options only when their file is requested.
+        if (options.OutputFiles.HasFlag(OutputFileKinds.Regions))
+        {
+            root["analysis"]!["regionThreshold"] = options.RegionThreshold;
+            root["analysis"]!["regionMinLength"] = options.RegionMinLength;
+            root["analysis"]!["regionMergeGap"] = options.RegionMergeGap;
+        }
+
+        if (options.OutputFiles.HasFlag(OutputFileKinds.Smoothed))
+        {
+            var windows = new JsonArray();
+            foreach (var w in options.SmoothingWindows)
+            {
+                windows.Add(w);
+            }
+
+            root["analysis"]!["smoothingWindows"] = windows;
+        }
+
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 

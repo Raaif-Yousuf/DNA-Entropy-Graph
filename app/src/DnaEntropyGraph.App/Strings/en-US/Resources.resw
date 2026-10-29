@@ -2831,4 +2831,118 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
     <value>Wait for a graphics card</value>
   </data>
+  <data name="Results_GenesTruncated" xml:space="preserve">
+    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  </data>
+  <data name="Results_GenesUnreadable" xml:space="preserve">
+    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_GenesRowsSkipped" xml:space="preserve">
+    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
+  </data>
+  <data name="Results_GenesOrderFile" xml:space="preserve">
+    <value>in the file's order</value>
+  </data>
+  <data name="Results_GenesOrderSorted" xml:space="preserve">
+    <value>sorted by {0}</value>
+  </data>
+  <data name="Results_GenesSortedAscending" xml:space="preserve">
+    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GenesSortedDescending" xml:space="preserve">
+    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GeneColumn_contig" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="Results_GeneColumn_gene" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="Results_GeneColumn_begin" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Results_GeneColumn_end" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="Results_GeneColumn_strand" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="Results_GeneColumn_length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="Results_GeneColumn_mean" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="Results_GeneColumn_min" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_max" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_low" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="Viewer_TrackFailed" xml:space="preserve">
+    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
+  </data>
+  <data name="Viewer_SmoothedToggle" xml:space="preserve">
+    <value>Smoothed over {0} bases</value>
+  </data>
+  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
+    <value>Smoothed entropy, {0} bases (bits)</value>
+  </data>
+  <data name="ResultsGenesHeading.Text" xml:space="preserve">
+    <value>Genes</value>
+  </data>
+  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
+    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
+  </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
 </root>

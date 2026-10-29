@@ -33,6 +33,65 @@ public sealed class IgvLoadPlannerTests : IDisposable
         Parse(plan).GetProperty("config").GetProperty("tracks").EnumerateArray().ToList();
 
     [Fact]
+    public void Region_calls_load_as_a_feature_track_preferring_the_bed_file()
+    {
+        Touch("s.fasta", "s.entropy.bedgraph", "s.regions.bed", "s.regions.gff3");
+
+        var tracks = Tracks(IgvLoadPlanner.Plan(_dir));
+
+        var regions = tracks.Single(t => t.GetProperty("url").GetString()!.Contains(".regions.", StringComparison.Ordinal));
+        regions.GetProperty("type").GetString().ShouldBe("annotation");
+        regions.GetProperty("format").GetString().ShouldBe("bed");
+        regions.GetProperty("url").GetString().ShouldBe(ViewerUrls.RunBaseUrl + "s.regions.bed");
+    }
+
+    [Fact]
+    public void A_gff3_regions_file_is_used_when_there_is_no_bed()
+    {
+        Touch("s.fasta", "s.entropy.bedgraph", "s.regions.gff3");
+
+        var regions = Tracks(IgvLoadPlanner.Plan(_dir)).Single(t => t.GetProperty("url").GetString()!.Contains(".regions.", StringComparison.Ordinal));
+
+        regions.GetProperty("format").GetString().ShouldBe("gff3");
+    }
+
+    [Fact]
+    public void No_regions_file_means_no_regions_track()
+    {
+        Touch("s.fasta", "s.entropy.bedgraph");
+
+        Tracks(IgvLoadPlanner.Plan(_dir)).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Smoothed_tracks_are_offered_by_window_and_are_not_drawn_until_asked_for()
+    {
+        Touch("s.fasta", "s.entropy.bedgraph", "s.entropy.smooth101.bedgraph", "s.entropy.smooth11.bedgraph", "s.entropy.smooth11.wig");
+
+        var plan = IgvLoadPlanner.Plan(_dir);
+
+        plan.SmoothedTracks.Select(s => s.Window).ShouldBe([11, 101]);
+        plan.SmoothedTracks[0].Format.ShouldBe("bedgraph", "bedGraph is preferred over WIG");
+        plan.SmoothedTracks[0].Url.ShouldBe(ViewerUrls.RunBaseUrl + "s.entropy.smooth11.bedgraph");
+        Tracks(plan).Count.ShouldBe(1, "the raw track stays the only one drawn at first");
+    }
+
+    [Fact]
+    public void A_smoothed_file_alone_is_not_an_entropy_track_so_the_run_is_still_refused()
+    {
+        Touch("s.fasta", "s.entropy.smooth51.bedgraph");
+
+        IgvLoadPlanner.Plan(_dir).Failure.ShouldBe(IgvPlanFailure.NoEntropyTrack);
+    }
+
+    [Fact]
+    public void A_file_that_only_looks_like_a_smoothed_track_is_ignored()
+    {
+        Touch("s.fasta", "s.entropy.bedgraph", "s.entropy.smoothX.bedgraph", "s.entropy.smooth0.bedgraph", "s.entropy.smooth51.bedgraph.bak");
+
+        IgvLoadPlanner.Plan(_dir).SmoothedTracks.ShouldBeEmpty();
+    }
+    [Fact]
     public void Full_run_folder_yields_reference_entropy_track_and_gene_track()
     {
         Touch("sample.fasta", "sample.entropy.bedgraph", "sample.genes.gff3", "sample.entropy.tsv");
