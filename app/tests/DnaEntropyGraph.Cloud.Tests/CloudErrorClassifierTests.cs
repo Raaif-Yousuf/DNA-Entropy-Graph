@@ -100,6 +100,32 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(expected);
     }
 
+    // Issue #772. THEORY (unverified, no live project): the documented text Compute answers an insert with when the zone does not offer the machine type.
+    [Theory]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-c/machineTypes/a2-ultragpu-1g' was not found")]
+    [InlineData("notFound", 404, "The resource 'projects/my-iam-project/zones/us-east4-c/machineTypes/a3-highgpu-1g' was not found")]
+    [InlineData(null, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")]
+    public void A_machine_type_the_zone_does_not_offer_is_a_per_zone_stockout_so_the_ladder_moves_on(string? code, int? httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(CloudErrorKind.Stockout);
+    }
+
+    [Theory]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/instances/deg-job-1' was not found")]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/disks/deg-job-1' was not found")]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/global/images/family-x' was not found")]
+    public void Any_other_missing_resource_is_not_a_stockout(string code, int httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldNotBe(CloudErrorKind.Stockout);
+    }
+
+    [Fact]
+    public void A_machine_type_not_found_never_hides_a_project_wide_refusal_in_the_same_message()
+    {
+        // The 403 rules run first: a refusal that happens to name a machine type is still a permission error.
+        CloudErrorClassifier.Classify(new CloudError("IAM_PERMISSION_DENIED", 403, "Permission 'compute.machineTypes.get' denied on machineTypes/g2-standard-8; resource was not found"))
+            .ShouldBe(CloudErrorKind.Permission);
+    }
     // Issue #539: a permission denial that names a billing permission is a missing role, not "billing is off".
     [Theory]
     [InlineData("IAM_PERMISSION_DENIED", 403, "Permission 'billing.resourceAssociations.create' denied on resource '//cloudbilling.googleapis.com/billingAccounts/AAA'.")]

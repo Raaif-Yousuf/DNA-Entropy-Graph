@@ -67,6 +67,9 @@ public class ZoneLadderTests
 
         public CloudOperationException? OfferFailure { get; init; }
 
+        /// <summary>A create in these zones fails with this error, classified the way the real gateway does (issue #772).</summary>
+        public Dictionary<string, CloudError> CreateErrorByZone { get; } = [];
+
         public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
         {
             lock (OfferReads)
@@ -109,6 +112,11 @@ public class ZoneLadderTests
                 if (full is not null)
                 {
                     await full.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+                }
+
+                if (CreateErrorByZone.TryGetValue(zone, out var fault))
+                {
+                    throw new CloudOperationException(fault, CloudErrorClassifier.Classify(fault));
                 }
 
                 return await inner.CreateVmAsync(spec, zone, cancellationToken).ConfigureAwait(false);
@@ -195,6 +203,40 @@ public class ZoneLadderTests
         recording.PeakInflight.ShouldBe(7);
     }
 
+    [Fact]
+    public async Task A_zone_without_the_machine_type_is_skipped_and_the_next_zone_starts_the_run()
+    {
+        // Issue #772. THEORY (unverified, no live project): the documented 404 text, not a recorded payload.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        recording.CreateErrorByZone["us-central1-a"] = new CloudError("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/machineTypes/g2-standard-8' was not found");
+        var spec = Spec("job-z772");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z772", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeTrue(result.FailureMessage);
+        result.Zone.ShouldNotBe("us-central1-a");
+        (await gcp.FindByJobIdAsync("job-z772", CancellationToken.None)).Select(v => v.Zone).ShouldBe([result.Zone!]);
+    }
+
+    [Fact]
+    public async Task When_no_zone_offers_the_machine_type_the_run_fails_as_a_stockout_naming_zones_not_as_a_project_error()
+    {
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        foreach (var zone in Offered)
+        {
+            recording.CreateErrorByZone[zone] = new CloudError("NOT_FOUND", 404, $"The resource 'projects/my-project/zones/{zone}/machineTypes/g2-standard-8' was not found");
+        }
+
+        var spec = Spec("job-z773");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z773", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeFalse();
+        result.FailureKind.ShouldBe(CloudErrorKind.Stockout);
+        recording.InflightBeforeEachCreate.Count.ShouldBe(Offered.Length, "every candidate zone is tried before the ladder gives up");
+    }
     [Fact]
     public async Task A_project_wide_error_aborts_the_whole_ladder_at_its_first_sighting()
     {

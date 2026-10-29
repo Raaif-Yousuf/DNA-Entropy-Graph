@@ -1,0 +1,1 @@
+- A machine type that a zone does not offer (Compute's 404 "The resource '.../machineTypes/<type>' was not found") now classifies as a per-zone stockout instead of `other`, so a project id containing `iam` can no longer turn it into a permission error that stops the run; the zone ladder already moved on to the next zone for `other` and ended a total failure as a stockout (#772).

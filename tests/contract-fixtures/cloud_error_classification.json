@@ -160,8 +160,30 @@
       "expected_bucket": "network",
       "from_prototype_test": null,
       "note": "Supplementary: exercises the 'network is unreachable' branch."
+    },
+    {
+      "id": "stockout-machine-type-not-found-in-zone-772",
+      "stderr": "The resource 'projects/my-project/zones/us-central1-c/machineTypes/a2-ultragpu-1g' was not found",
+      "expected_bucket": "stockout",
+      "from_prototype_test": null,
+      "note": "Issue #772, supplementary. THEORY (unverified, no live project): this is the DOCUMENTED Compute Engine text for instances.insert naming a machine type the zone does not offer (HTTP 404, reason notFound), NOT a recorded payload; a real one needs one failed insert on a project (docs/ToTest.md). A machine type missing from ONE zone is per-zone unavailability, so it is a stockout (move to the next zone), never a project-wide stop."
+    },
+    {
+      "id": "stockout-machine-type-not-found-project-id-contains-iam-772",
+      "stderr": "The resource 'projects/my-iam-project/zones/us-east4-c/machineTypes/a3-highgpu-1g' was not found",
+      "expected_bucket": "stockout",
+      "from_prototype_test": null,
+      "note": "Issue #772, supplementary, same documented (not recorded) text. A project id that contains 'iam' must not turn the refusal into a permission error through the substring stage."
+    },
+    {
+      "id": "other-instance-not-found-772",
+      "stderr": "The resource 'projects/my-project/zones/us-central1-a/instances/deg-job-1' was not found",
+      "expected_bucket": "other",
+      "from_prototype_test": null,
+      "note": "Issue #772, supplementary, documented (not recorded) text. Only a MACHINE TYPE that is not found is a per-zone stockout; any other missing resource stays 'other'."
     }
   ],
+
   "verified_against_source": "Manually verified against worker/src/dna_entropy/cloud/gcloud.py:classify_create_error during extraction on 2026-09-19, before the cloud/ package was relocated by issue #280.",
   "consumed_by": "https://github.com/Raaif-Yousuf/DNA-Entropy-Graph/issues/213 (worker: contract fixtures for the prototype's error classification and quota parsing cases, re-expressed for the C# port) tracks wiring this file into a DnaEntropyGraph.Core.ErrorCatalog xUnit test; not yet wired.",
   "related_docs": "docs/migration/2026-09-19-worker-migration-inventory.md section 'cloud/gcloud.py — GCP wrapper surface'"

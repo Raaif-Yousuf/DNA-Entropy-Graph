@@ -154,6 +154,14 @@ public static partial class CloudErrorClassifier
             return CloudErrorKind.AlreadyExists;
         }
 
+        // Issue #772. THEORY (unverified, no live project; the documented text, not a recorded payload): instances.insert in a zone that does not offer the
+        // machine type answers 404 "The resource 'projects/<p>/zones/<z>/machineTypes/<type>' was not found". That is one zone's availability, so it is a stockout
+        // (the ladder moves on), decided here and not left to the substring stage, which would read a project id containing "iam" as a permission error.
+        // Only a MACHINE TYPE that is not found counts: any other missing resource stays what it was.
+        if (status is null or 404 && lower.Contains("/machinetypes/", StringComparison.Ordinal) && lower.Contains("was not found", StringComparison.Ordinal))
+        {
+            return CloudErrorKind.Stockout;
+        }
         // Issue #92. THEORY (unverified, no live project): a queued flex-start request that is not granted in time ends with a code naming FLEX_START. After every rule above
         // (quota, permission, 403, org policy), and only when the code or message is about capacity: an invalid field or any other FLEX_START refusal is not a stockout.
         if (code.Contains("FLEX_START", StringComparison.Ordinal) && status != 400 && IsFlexExpiry(code.ToLowerInvariant() + " " + lower))
