@@ -56,6 +56,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly Func<string?, bool>? _hasSpotPrice;
 
     private readonly IRunCostSource? _costs;
+    private readonly IDiagnosticsLog? _log;
 
     private readonly IMessenger? _messenger;
 
@@ -78,8 +79,10 @@ public sealed partial class HistoryViewModel : ObservableObject
         IPricingSource? pricing = null,
         IRunCostSource? costs = null,
         IMessenger? messenger = null,
-        IDispatcher? dispatcher = null)
+        IDispatcher? dispatcher = null,
+        IDiagnosticsLog? log = null)
     {
+        _log = log;
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _costs = costs;
         _messenger = messenger;
@@ -212,7 +215,7 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return;
             }
 
-            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken);
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
             if (generation != Volatile.Read(ref _loadGeneration))
             {
                 return;

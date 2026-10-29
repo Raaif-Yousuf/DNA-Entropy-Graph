@@ -89,6 +89,9 @@ public class JobEngineSpendCapTests
             }
         }
 
+        public async Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken)
+            => (await GetAllAsync(cancellationToken)).Where(r => r.Kind == kind).ToList();
+
         public Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
         {
             lock (_rows)
@@ -219,8 +222,9 @@ public class JobEngineSpendCapTests
         var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
         run.VmReadyAt.ShouldNotBeNull("the runner records when the VM was known to exist, the start of what is booked");
         row.StartedUtc.ShouldBe(run.VmReadyAt!.Value);
-        run.EstimatedCostUsd.ShouldBe(row.UsdEst);
-        run.VmSeconds.ShouldNotBeNull();
+        // The run row carries no cost (nothing writes it); the figure the pages and the support zip show is the ledger entry, read through the cost source.
+        run.EstimatedCostUsd.ShouldBeNull();
+        (await new LedgerRunCostSource(h.Ledger).GetBookedAsync(CancellationToken.None))[jobId].ShouldBe(row.UsdEst!.Value, 1e-12);
     }
 
     [Fact]
@@ -235,8 +239,9 @@ public class JobEngineSpendCapTests
         var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
         var strings = new EchoStrings();
 
-        var header = RunCostText.Header(run, strings);
-        var row = RunCostText.Short(run, strings);
+        var figure = (await new LedgerRunCostSource(h.Ledger).GetBookedAsync(CancellationToken.None))[jobId];
+        var header = RunCostText.Header(run, figure, strings);
+        var row = RunCostText.Short(run, figure, strings);
 
         header.ShouldNotBeNull().ShouldContain(amount);
         row.ShouldNotBeNull().ShouldContain(amount);

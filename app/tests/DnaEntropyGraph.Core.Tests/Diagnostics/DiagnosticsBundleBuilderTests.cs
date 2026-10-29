@@ -579,6 +579,31 @@ public class DiagnosticsBundleBuilderTests
         entries["run-history.json"].ShouldContain(jobId);
     }
 
+    [Fact]
+    public void A_cloud_runs_booked_cost_and_VM_seconds_come_from_the_ledger_figure_and_the_booked_span_not_the_empty_run_row_columns()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double> { [run.JobId] = 1.25 }));
+
+        var row = JsonDocument.Parse(entries["run-history.json"]).RootElement[0];
+        row.GetProperty("estimatedCostUsd").GetDouble().ShouldBe(1.25);
+        row.GetProperty("vmSeconds").GetInt64().ShouldBe(1800);
+    }
+
+    [Fact]
+    public void A_run_with_no_ledger_entry_and_no_booked_span_shows_null_not_zero()
+    {
+        var run = Run with { EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = null, FinishedAt = null };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, double>()));
+
+        var row = JsonDocument.Parse(entries["run-history.json"]).RootElement[0];
+        row.GetProperty("estimatedCostUsd").ValueKind.ShouldBe(JsonValueKind.Null);
+        row.GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
     [Theory]
     [InlineData("Patient 42")]
     [InlineData("demo-run")]

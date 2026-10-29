@@ -16,7 +16,6 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// </summary>
 public static class RunCostText
 {
-
     /// <summary>The whole-dollars-and-cents text of a figure: rounded to the cent, never below one cent (a real VM ran).</summary>
     public static string Money(double usd)
         => Math.Max(0.01, Math.Round(usd, 2, MidpointRounding.AwayFromZero)).ToString("0.00", CultureInfo.InvariantCulture);
@@ -40,7 +39,7 @@ public static class RunCostText
     /// The booked figures, by job id: one read of the ledger. A source that is absent or fails shows no figure (a cost line is never worth failing a page for); only the
     /// caller giving up propagates.
     /// </summary>
-    public static async Task<IReadOnlyDictionary<string, double>> ReadBookedAsync(IRunCostSource? source, CancellationToken cancellationToken)
+    public static async Task<IReadOnlyDictionary<string, double>> ReadBookedAsync(IRunCostSource? source, CancellationToken cancellationToken, IDiagnosticsLog? log = null)
     {
         if (source is null)
         {
@@ -53,6 +52,8 @@ public static class RunCostText
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Logged by exception CLASS only (never a message that could carry a path) so support can see why a cost line is missing; the page shows none.
+            log?.Warning("run-cost", null, ex.GetType().Name);
             return new Dictionary<string, double>();
         }
     }
@@ -73,7 +74,8 @@ public static class RunCostText
             return strings.GetString(noCloudKey);
         }
 
-        // KNOWN LIMIT: the ledger entry does not record which rate it used, so "Spot" is the run's own flag plus the current price list: the ledger charges the Spot rate only\n        // when the machine HAS one (SpendLedger.UsdFor falls back to on-demand), so the label asks the same question. The figure itself is always the ledger's.
+        // KNOWN LIMIT: the ledger entry does not record which rate it used, so "Spot" is the run's own flag plus the current price list: the ledger charges the Spot rate only
+        // when the machine HAS one (SpendLedger.UsdFor falls back to on-demand), so the label asks the same question. The figure itself is always the ledger's.
         var spotRate = run.IsSpot == true && (hasSpotPrice is null || hasSpotPrice(run.MachineType));
         return bookedUsd is { } usd && double.IsFinite(usd) && usd >= 0
             ? string.Format(CultureInfo.CurrentCulture, strings.GetString(spotRate ? spotKey : estimateKey), Money(usd))

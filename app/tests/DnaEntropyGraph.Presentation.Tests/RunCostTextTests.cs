@@ -123,6 +123,9 @@ public sealed class RunCostTextTests
         var failing = Substitute.For<IRunCostSource>();
         failing.GetBookedAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyDictionary<string, double>>>(_ => throw new IOException("db locked"));
         (await RunCostText.ReadBookedAsync(failing, TestContext.Current.CancellationToken)).ShouldBeEmpty();
+        var log = Substitute.For<IDiagnosticsLog>();
+        (await RunCostText.ReadBookedAsync(failing, TestContext.Current.CancellationToken, log)).ShouldBeEmpty("the page shows no cost line");
+        log.Received(1).Warning("run-cost", null, nameof(IOException));
         var cancelling = Substitute.For<IRunCostSource>();
         cancelling.GetBookedAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyDictionary<string, double>>>(_ => throw new OperationCanceledException());
         await Should.ThrowAsync<OperationCanceledException>(() => RunCostText.ReadBookedAsync(cancelling, TestContext.Current.CancellationToken));

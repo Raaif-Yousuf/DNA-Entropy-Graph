@@ -51,7 +51,7 @@ public static partial class DiagnosticsBundleBuilder
     private static partial Regex LogFile();
 
     /// <exception cref="DiagnosticsLeakException">Sequence-like or credential-like text survived redaction; no zip is produced.</exception>
-    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info)
+    public static byte[] Build(IDiagnosticsSource source, IReadOnlyList<RunRecord> runs, DiagnosticsInfo info, IReadOnlyDictionary<string, double>? bookedUsd = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(runs);
@@ -105,7 +105,7 @@ public static partial class DiagnosticsBundleBuilder
             },
             Indented);
         entries["settings.json"] = JsonSerializer.Serialize(settings.Values, Indented);
-        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId))), Indented);
+        entries["run-history.json"] = JsonSerializer.Serialize(runs.Select(run => ToHistoryRow(run, ids.Map(run.JobId), bookedUsd is not null && bookedUsd.TryGetValue(run.JobId, out var usd) ? usd : null)), Indented);
 
         // A copied log is stored under a neutral name: the original can carry a user, patient or input name. The mapping from
         // the original is written nowhere in the zip.
@@ -299,7 +299,7 @@ public static partial class DiagnosticsBundleBuilder
 
     // The history as an allowlist of fields: identifiers, states, error codes, timings and hardware. Never the name,
     // the error detail (free text), the output folder, the project, bucket or VM names, notes or tags.
-    private static object ToHistoryRow(RunRecord run, string jobId) => new
+    private static object ToHistoryRow(RunRecord run, string jobId, double? bookedUsd) => new
     {
         jobId,
         phase = run.Phase.ToString(),
@@ -314,8 +314,9 @@ public static partial class DiagnosticsBundleBuilder
         gpuType = run.GpuType,
         isSpot = run.IsSpot,
         vmReused = run.VmReused,
-        vmSeconds = run.VmSeconds,
-        estimatedCostUsd = run.EstimatedCostUsd,
+        // Issue #100: nothing writes the run row's cost columns any more. The cost is the spend-ledger figure the caller read; the VM seconds are the booked span itself.
+        vmSeconds = run.VmSeconds ?? (run.VmReadyAt is { } ready && run.FinishedAt is { } done && done >= ready ? (long)(done - ready).TotalSeconds : (long?)null),
+        estimatedCostUsd = bookedUsd ?? run.EstimatedCostUsd,
         actualCostUsd = run.ActualCostUsd,
         cloudResultsDeleted = run.CloudResultsDeleted,
         appVersion = run.AppVersion,

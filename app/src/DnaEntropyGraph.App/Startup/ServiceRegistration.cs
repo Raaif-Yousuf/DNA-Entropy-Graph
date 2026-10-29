@@ -190,7 +190,7 @@ public static class ServiceRegistration
             runs: sp.GetRequiredService<RunRepository>()));
         services.AddSingleton<DnaEntropyGraph.Core.Cost.ISpendCapGate>(sp => sp.GetRequiredService<SpendLedger>());
         // Issues #100 and #557: the Results header and the Runs rows read a run's cost from its ledger entry, the only record of it.
-        services.AddSingleton<IRunCostSource>(sp => new LedgerRunCostSource(sp.GetRequiredService<ICostLedgerRepository>()));
+        services.AddSingleton<IRunCostSource>(sp => new LedgerRunCostSource(sp.GetRequiredService<ICostLedgerRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IRunRepository>(sp => new LedgerRecordingRunRepository(sp.GetRequiredService<RunRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
@@ -248,7 +248,8 @@ public static class ServiceRegistration
         services.AddSingleton<IDiagnosticsExporter>(sp => new DiagnosticsExporter(
             new FolderDiagnosticsSource(root.Path),
             sp.GetRequiredService<IRunRepository>(),
-            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>())));
+            () => DiagnosticsInfoProvider.Current(sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<IStringResourceProvider>()),
+            sp.GetRequiredService<IRunCostSource>()));
 
         // Issue #458: the worker image comes from the list pinned by digest that ships with the app.
         services.AddSingleton<PinnedWorkerImageList>(_ => PinnedWorkerImageProvider.LoadShippedList());

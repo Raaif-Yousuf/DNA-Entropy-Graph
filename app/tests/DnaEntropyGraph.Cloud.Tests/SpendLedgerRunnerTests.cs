@@ -42,6 +42,9 @@ public class SpendLedgerRunnerTests
 
         public Task<IReadOnlyList<CostLedgerEntry>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<CostLedgerEntry>>(_rows.ToList());
 
+        public async Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken)
+            => (await GetAllAsync(cancellationToken)).Where(r => r.Kind == kind).ToList();
+
         public Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
         {
             var stored = entry with { Id = _rows.Count + 1 };

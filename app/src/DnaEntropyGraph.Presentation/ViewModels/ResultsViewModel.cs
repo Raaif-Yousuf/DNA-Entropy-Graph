@@ -66,6 +66,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private readonly IRunCostSource? _costs;
 
+    private readonly IDiagnosticsLog? _log;
+
     public ResultsViewModel(
         IRunRepository runRepository,
         IRunOutputReader outputReader,
@@ -76,9 +78,11 @@ public sealed partial class ResultsViewModel : ObservableObject
         IEntropyOverviewSource? overviewSource = null,
         IOverviewImageExporter? imageExporter = null,
         IPricingSource? pricing = null,
-        IRunCostSource? costs = null)
+        IRunCostSource? costs = null,
+        IDiagnosticsLog? log = null)
     {
         _costs = costs;
+        _log = log;
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
@@ -141,7 +145,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
-            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken);
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
             if (generation != Volatile.Read(ref _loadGeneration))
             {
                 return;

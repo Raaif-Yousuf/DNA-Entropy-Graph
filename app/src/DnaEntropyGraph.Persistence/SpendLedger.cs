@@ -107,6 +107,13 @@ public sealed class SpendLedger : ISpendCapGate
     /// never re-driven). Idempotent through the unique index. Every read of the month, so every cap check, runs it. Returns the rows
     /// including what it added.
     /// </summary>
+    /// <summary>
+    /// Issues #100 and #557: the same repair for the pages that show a run's booked cost. The Runs and Results pages never make a month-to-date read, so a ledger append that
+    /// failed after its run row was stored would show no figure until the next cap check; they call this first. Idempotent (the unique index), and a no-op with no run history.
+    /// </summary>
+    public async Task BookUnbookedRunsAsync(CancellationToken cancellationToken)
+        => await ReconcileAsync(await _ledger.GetByKindAsync(VmRuntimeKind, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+
     private async Task<IReadOnlyList<CostLedgerEntry>> ReconcileAsync(IReadOnlyList<CostLedgerEntry> rows, CancellationToken cancellationToken)
     {
         if (_runs is null)
@@ -249,4 +256,4 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
             System.Diagnostics.Trace.TraceWarning($"cost_ledger_write_failed: {ex.GetType().Name}");
         }
     }
-}
+}
