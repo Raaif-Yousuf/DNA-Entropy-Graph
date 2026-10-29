@@ -177,6 +177,17 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_drive_root_output_folder_never_makes_a_recorded_folder_below_it_writable()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        var run = Run(folder) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.GetPathRoot(_base) }) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+    [Fact]
     public async Task A_recorded_folder_outside_the_output_root_is_refused_before_anything_is_written()
     {
         PutResult();
