@@ -65,6 +65,11 @@ public class ZoneLadderTests
 
         public int PeakInflight { get; private set; }
 
+        /// <summary>Every zone a create was sent to, in order, and the ones whose injected fault fired (issue #772).</summary>
+        public List<string> ZonesTried { get; } = [];
+
+        public List<string> FaultsFired { get; } = [];
+
         public CloudOperationException? OfferFailure { get; init; }
 
         /// <summary>A create in these zones fails with this error, classified the way the real gateway does (issue #772).</summary>
@@ -88,6 +93,7 @@ public class ZoneLadderTests
             {
                 before = _inflight++;
                 InflightBeforeEachCreate.Add(before);
+                ZonesTried.Add(zone);
                 PeakInflight = Math.Max(PeakInflight, _inflight);
                 if (batches is not null)
                 {
@@ -116,6 +122,11 @@ public class ZoneLadderTests
 
                 if (CreateErrorByZone.TryGetValue(zone, out var fault))
                 {
+                    lock (InflightBeforeEachCreate)
+                    {
+                        FaultsFired.Add(zone);
+                    }
+
                     throw new CloudOperationException(fault, CloudErrorClassifier.Classify(fault));
                 }
 
@@ -250,6 +261,29 @@ public class ZoneLadderTests
 
         result.Success.ShouldBeTrue(result.FailureMessage);
         result.Zone.ShouldNotBe("us-central1-a");
+        recording.ZonesTried[0].ShouldBe("us-central1-a", "the first zone is really tried, so the fault below it is not skipped by luck");
+        recording.FaultsFired.ShouldBe(["us-central1-a"], "the injected 404 fired in that zone and the ladder moved on");
+        recording.ZonesTried.Count.ShouldBeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task When_every_zone_misses_the_machine_type_and_quota_is_zero_everywhere_the_failure_is_still_the_fixable_quota()
+    {
+        // Issue #772: before the rule a machine-type 404 was "other", which let the quota read decide; it must still.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered).WithAllRegionsGpuCap(0);
+        var recording = new Recording(gcp);
+        foreach (var zone in Offered)
+        {
+            recording.CreateErrorByZone[zone] = new CloudError("NOT_FOUND", 404, $"The resource 'projects/my-project/zones/{zone}/machineTypes/g2-standard-8' was not found");
+        }
+
+        var spec = Spec("job-z775");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z775", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeFalse();
+        result.FailureKind.ShouldBe(CloudErrorKind.Quota, "the user can fix a quota; a stockout message would send them to wait for nothing");
+        recording.ZonesTried.Count.ShouldBe(Offered.Length);
     }
 
     [Fact]

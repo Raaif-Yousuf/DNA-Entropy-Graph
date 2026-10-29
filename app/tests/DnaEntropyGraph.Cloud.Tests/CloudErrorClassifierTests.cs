@@ -140,6 +140,34 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(null, httpStatus, message)).ShouldBe(expected);
     }
 
+    [Theory]
+    [InlineData("IAM_PERMISSION_DENIED")]
+    [InlineData("QUOTA_EXCEEDED")]
+    [InlineData("ALREADY_EXISTS")]
+    public void A_404_whose_structured_code_says_something_else_is_not_decided_by_the_machine_type_rule(string code)
+    {
+        var kind = CloudErrorClassifier.Classify(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found"));
+
+        kind.ShouldNotBe(CloudErrorKind.Stockout);
+    }
+
+    [Fact]
+    public void A_404_with_the_permission_code_is_left_to_the_other_rules_and_stays_other_not_a_stockout()
+    {
+        CloudErrorClassifier.Classify(new CloudError("IAM_PERMISSION_DENIED", 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found"))
+            .ShouldBe(CloudErrorKind.Other);
+    }
+
+    [Theory]
+    [InlineData("RESOURCE_NOT_FOUND")]
+    [InlineData("notFound")]
+    [InlineData("NOT_FOUND")]
+    [InlineData(null)]
+    public void A_404_with_a_not_found_code_or_none_is_a_machine_type_miss(string? code)
+    {
+        CloudErrorClassifier.IsMachineTypeNotFound(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")).ShouldBeTrue();
+        CloudErrorClassifier.Classify(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")).ShouldBe(CloudErrorKind.Stockout);
+    }
     [Fact]
     public void A_403_that_names_a_machine_type_is_still_a_permission_error()
     {

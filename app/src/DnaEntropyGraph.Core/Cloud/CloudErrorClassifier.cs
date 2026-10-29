@@ -160,8 +160,7 @@ public static partial class CloudErrorClassifier
         // Only a MACHINE TYPE that is not found counts: any other missing resource stays what it was.
         // A real HTTP 404 only: a status-less message is the substring stage's to judge. And only when nothing else in the message is a project-wide refusal: the quoted resource
         // name (which carries the user's project id) is cut out first, then the rest must read as no more than "not found" to the substring stage.
-        if (status == 404 && lower.Contains("/machinetypes/", StringComparison.Ordinal) && lower.Contains("was not found", StringComparison.Ordinal)
-            && ClassifyBySubstring(QuotedName().Replace(lower, " ")) == CloudErrorKind.Other)
+        if (IsMachineTypeNotFound(error))
         {
             return CloudErrorKind.Stockout;
         }
@@ -207,6 +206,24 @@ public static partial class CloudErrorClassifier
             || lower.Contains("iam_permission_denied", StringComparison.Ordinal)
             || lower.Contains("does not have permission", StringComparison.Ordinal)
             || PermissionNamedDenied().IsMatch(lower);
+
+    /// <summary>
+    /// Issue #772: an insert answered 404 because the zone does not offer the machine type (THEORY (unverified): the documented text). Needs a real 404, a structured code that is
+    /// absent or says not-found (a 404 carrying any other code, IAM_PERMISSION_DENIED for one, is not this), and nothing else in the message, once the quoted resource name is
+    /// cut out, that reads as billing, API-off, quota or permission.
+    /// </summary>
+    public static bool IsMachineTypeNotFound(CloudError error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+
+        var lower = (error.Message ?? string.Empty).ToLowerInvariant();
+        var code = error.Code?.ToUpperInvariant() ?? string.Empty;
+        return error.HttpStatus == 404
+            && code is "" or "NOT_FOUND" or "NOTFOUND" or "RESOURCE_NOT_FOUND"
+            && lower.Contains("/machinetypes/", StringComparison.Ordinal)
+            && lower.Contains("was not found", StringComparison.Ordinal)
+            && ClassifyBySubstring(QuotedName().Replace(lower, " ")) == CloudErrorKind.Other;
+    }
 
     /// <summary>A single-quoted name inside a message ('projects/p/zones/z/machineTypes/t'), which can carry words (a project id with "iam" in it) that are not the error's own.</summary>
     [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'")]
