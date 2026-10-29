@@ -96,16 +96,19 @@ public sealed class CostEstimateServiceTests
 
     private sealed class RefreshingSource : IPricingSource, IPricingRefresh
     {
-        public double OnDemand { get; private set; } = 0.85;
+        private int _refreshes;
+        private double _onDemand = 0.85;
 
-        public int Refreshes { get; private set; }
+        public double OnDemand => Volatile.Read(ref _onDemand);
+
+        public int Refreshes => Volatile.Read(ref _refreshes);
 
         public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good.Replace("0.85", OnDemand.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
         public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
         {
-            Refreshes++;
-            OnDemand = 1.7;
+            Interlocked.Increment(ref _refreshes);
+            Volatile.Write(ref _onDemand, 1.7);
             return Task.CompletedTask;
         }
     }
@@ -115,8 +118,12 @@ public sealed class CostEstimateServiceTests
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private double _onDemand = 0.85;
+        private int _refreshes;
 
-        public int Refreshes { get; private set; }
+        public int Refreshes => Volatile.Read(ref _refreshes);
+
+        /// <summary>Set inside the source, the moment a refresh has begun (on whatever thread it ran on).</summary>
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void Finish() => _release.SetResult();
 
@@ -124,7 +131,8 @@ public sealed class CostEstimateServiceTests
 
         public async Task RefreshIfStaleAsync(CancellationToken cancellationToken)
         {
-            Refreshes++;
+            Interlocked.Increment(ref _refreshes);
+            Started.TrySetResult();
             await _release.Task.ConfigureAwait(false);
             Volatile.Write(ref _onDemand, 1.7);
         }
@@ -157,6 +165,7 @@ public sealed class CostEstimateServiceTests
         var first = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
         var again = await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+        await source.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         source.Refreshes.ShouldBe(1, "a refresh still running is not started a second time");
 
         source.Finish();
@@ -172,24 +181,91 @@ public sealed class CostEstimateServiceTests
     [Fact]
     public async Task A_background_refresh_that_changed_nothing_raises_no_prices_changed()
     {
-        var source = new SlowSource();
-        var service = new CostEstimateService(new UnchangedAfterRefresh(source), _runs, TimeSpan.FromMilliseconds(20));
+        var source = new UnchangedAfterRefresh();
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromSeconds(30));
+        var raised = 0;
+        service.PricesChanged += () => Interlocked.Increment(ref raised);
+
+        // The estimate waits for the refresh it started, and the service decides about PricesChanged inside that same task, so when this returns the decision is made.
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+
+        source.Refreshes.ShouldBe(1, "the refresh did run, so a zero below is a decision and not a refresh that never happened");
+        Volatile.Read(ref raised).ShouldBe(0, "the refresh left the prices as they were, so there is nothing for the page to redo");
+    }
+
+    [Fact]
+    public async Task A_background_refresh_that_changed_the_prices_raises_prices_changed_once()
+    {
+        // The positive control of the test above: same waiting, a source whose refresh does move a price.
+        var source = new RefreshingSource();
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromSeconds(30));
         var raised = 0;
         service.PricesChanged += () => Interlocked.Increment(ref raised);
 
         await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
-        source.Finish();
-        await Task.Delay(200, TestContext.Current.CancellationToken);
 
-        raised.ShouldBe(0, "the refresh left the prices as they were, so there is nothing for the page to redo");
+        Volatile.Read(ref raised).ShouldBe(1);
     }
 
-    /// <summary>Takes the refresh of a source but always serves the shipped price.</summary>
-    private sealed class UnchangedAfterRefresh(SlowSource inner) : IPricingSource, IPricingRefresh
+    [Fact]
+    public async Task A_refresh_with_the_same_prices_on_a_new_day_raises_no_prices_changed()
     {
+        // Issue #214 review round 4 (L): the fingerprint was the table's whole JSON, which carries asOf and source, so a new day alone looked like a price change.
+        var clock = new DayClock(new DateTimeOffset(2026, 10, 16, 9, 0, 0, TimeSpan.Zero));
+        var shipped = Substitute.For<IPricingSource>();
+        shipped.Load().Returns(PricingTable.Parse(PricingTableTests.Good));
+        var gateway = Substitute.For<DnaEntropyGraph.Core.Cloud.IPricingCatalogGateway>();
+        gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DnaEntropyGraph.Core.Cloud.CatalogSku>>(CatalogFixtures.G2AndDisk()));
+        var cache = new OneFileCache();
+        await new CatalogPricingSource(shipped, gateway, cache, clock).RefreshIfStaleAsync(CancellationToken.None);
+        cache.Json.ShouldNotBeNull("day one wrote the cache");
+
+        clock.Advance(TimeSpan.FromDays(1));
+        var source = new CatalogPricingSource(shipped, gateway, cache, clock);
+        source.Current.Origin.ShouldBe(PricingOrigin.CacheStale);
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromSeconds(30));
+        var raised = 0;
+        service.PricesChanged += () => Interlocked.Increment(ref raised);
+
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+
+        source.Current.AsOf.ShouldBe(new DateOnly(2026, 10, 17), "the catalog was read again on the new day");
+        await gateway.Received(2).ListComputeSkusAsync(Arg.Any<CancellationToken>());
+        Volatile.Read(ref raised).ShouldBe(0, "the catalog gave the same prices as the cache, only the date moved");
+    }
+
+    private sealed class DayClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private sealed class OneFileCache : IPricingCacheStore
+    {
+        public string? Json { get; private set; }
+
+        public string? Read() => Json;
+
+        public void Write(string json) => Json = json;
+    }
+
+    /// <summary>Takes the refresh but always serves the shipped price.</summary>
+    private sealed class UnchangedAfterRefresh : IPricingSource, IPricingRefresh
+    {
+        private int _refreshes;
+
+        public int Refreshes => Volatile.Read(ref _refreshes);
+
         public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good);
 
-        public Task RefreshIfStaleAsync(CancellationToken cancellationToken) => inner.RefreshIfStaleAsync(cancellationToken);
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _refreshes);
+            return Task.CompletedTask;
+        }
     }
 
     [Fact]
