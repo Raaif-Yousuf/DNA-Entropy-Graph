@@ -272,13 +272,26 @@ def test_cpu_bootstrap_and_project_install_are_hash_verified() -> None:
 
 
 def test_cuda_comments_do_not_claim_the_base_is_unpinned() -> None:
-    """The FROM is pinned by digest (test_cuda_base_is_pinned_by_digest); a comment saying it is
-    not pinned yet is stale and misleads the next reader about what is locked."""
+    """Rule-shaped: while every FROM is pinned by @sha256, no comment may say the base is unpinned."""
+    import re
+
     text = DOCKERFILE_CUDA.read_text(encoding="utf-8")
-    assert "isn't pinned by digest" not in text
-    assert "not pinned by digest" not in text
-    assert "Python dependencies are NOT locked" in text, "say plainly what the cuda image does not lock"
+    froms = [ln for ln in _code_only(DOCKERFILE_CUDA).splitlines() if ln.startswith("FROM ")]
+    assert froms and all(re.search(r"@sha256:[0-9a-f]{64}", ln) for ln in froms)
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("#"):
+            assert not re.search(r"(?i)(isn't|is not|not|never|un)\s*pinned|pinned by digest yet", ln), (
+                f"stale claim that the base is unpinned: {ln!r}"
+            )
+
+
+def test_cuda_lock_follow_up_is_named_by_issue_number() -> None:
+    assert "#921" in DOCKERFILE_CUDA.read_text(encoding="utf-8")
 
 
 def test_build_requirements_ends_with_a_newline() -> None:
     assert BUILD_REQUIREMENTS.read_bytes().endswith(b"\n")
+
+
+def test_trivyignore_ends_with_a_newline() -> None:
+    assert (WORKER_DIR.parent / ".trivyignore.yaml").read_bytes().endswith(b"\n")

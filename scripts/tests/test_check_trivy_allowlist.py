@@ -165,3 +165,13 @@ def test_the_template_example_only_allowlists_a_fixable_finding():
     text = (REPO / ".trivyignore.yaml").read_text(encoding="utf-8")
     assert "no fixed version upstream" not in text
     assert "fixable" in text.lower()
+
+
+def test_a_statement_that_is_only_a_comment_counts_as_missing(mod):
+    text = "vulnerabilities:\n  - id: CVE-2026-1111\n    statement: # why\n    expired_at: 2026-12-01\n"
+    assert any("statement" in p and "missing" in p for p in mod.problems(text, TODAY))
+
+
+def test_a_statement_with_text_then_a_comment_still_counts(mod):
+    text = "vulnerabilities:\n  - id: CVE-2026-1111\n    statement: real reason # why\n    expired_at: 2026-12-01\n"
+    assert mod.problems(text, TODAY) == []

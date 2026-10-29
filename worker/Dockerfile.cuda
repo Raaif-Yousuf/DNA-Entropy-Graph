@@ -64,7 +64,7 @@ COPY src ./src
 # false confidence. These installs also build in pip's isolated environment, which fetches
 # an unhashed setuptools/wheel. Locking is deferred until issue #37's spike (open) runs this image on real hardware, re-resolve `uv.lock` (or a dedicated cuda-extra
 # lock) INCLUDING the NGC base's own torch build as a constraint, and switch this line to
-# the same `uv export --locked` pattern Dockerfile.cpu uses. (No issue tracks that lock itself yet.)
+# the same `uv export --locked` pattern Dockerfile.cpu uses. (That lock is tracked in #921.)
 RUN pip install ".[genes,evo]"
 
 # gpu-test mode (issue #759): worker/vm/startup.sh runs `pytest -m gpu` inside this image

@@ -78,6 +78,8 @@ def _parse(text: str) -> tuple[list[dict[str, str]], list[str]]:
         value = value.strip()
         if name != "statement":
             value = _COMMENT_RE.sub("", value)  # a trailing `# comment` (a `#` in a statement is text)
+        elif value.startswith("#"):
+            value = ""  # a statement that is only a comment is no statement
         entries[-1][name] = value.strip("'\"")
     if not saw_key:
         problems.append("no `vulnerabilities:` key (write `vulnerabilities: []` for an empty list)")
