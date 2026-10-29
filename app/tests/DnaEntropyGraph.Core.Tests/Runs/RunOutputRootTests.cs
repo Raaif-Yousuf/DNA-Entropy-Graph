@@ -87,4 +87,31 @@ public class RunOutputRootTests
         RunOutputRoot.IsSafelyInside(@"C:\out\run", @"C:\out").ShouldBeTrue();
         RunOutputRoot.IsSafelyInside(@"C:\out2\run", @"C:\out").ShouldBeFalse();
     }
+
+    [Fact]
+    public void IsContained_rejects_a_drive_root_and_a_junction_but_accepts_a_real_folder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "rog-" + Guid.NewGuid().ToString("N"));
+        var outside = Path.Combine(Path.GetTempPath(), "rog-out-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "real"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            RunOutputRoot.IsContained(Path.Combine(root, "real"), root).ShouldBeTrue();
+            RunOutputRoot.IsContained(@"C:\Windows\Temp\x", @"C:\").ShouldBeFalse("main's drive-root rule (IsSafelyInside)");
+
+            var link = Path.Combine(root, "link");
+            Directory.CreateSymbolicLink(link, outside);
+            RunOutputRoot.IsContained(link, root).ShouldBeFalse("the #588 reparse-point rule (NoReparseBetween)");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Creating a symlink needs developer mode or elevation; the junction arm is then covered by the Cloud.Tests streamed-download tests.
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+            Directory.Delete(outside, true);
+        }
+    }
 }
