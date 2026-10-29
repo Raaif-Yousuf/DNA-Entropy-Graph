@@ -755,7 +755,7 @@
     <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
   </data>
   <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
-    <value>Search by name, file or id</value>
+    <value>Search by name, file, note or tag</value>
   </data>
   <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
     <value>Search runs</value>
@@ -765,45 +765,6 @@
   </data>
   <data name="RunsRefreshButton.Content" xml:space="preserve">
     <value>Refresh</value>
-  </data>
-  <data name="RunsImportButton.Content" xml:space="preserve">
-    <value>Find runs from other computers</value>
-  </data>
-  <data name="Runs_Import_Running" xml:space="preserve">
-    <value>Looking in your cloud results for runs from other computers...</value>
-  </data>
-  <data name="Runs_Import_None" xml:space="preserve">
-    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
-  </data>
-  <data name="Runs_Import_Done_One" xml:space="preserve">
-    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
-  </data>
-  <data name="Runs_Import_Done_Many" xml:space="preserve">
-    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
-  </data>
-  <data name="Runs_Import_NoProject" xml:space="preserve">
-    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed" xml:space="preserve">
-    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
-  </data>
-  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
-    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
-  </data>
-  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
-    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed_Network" xml:space="preserve">
-    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
-  </data>
-  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
-    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
-  </data>
-  <data name="Runs_Imported_Badge" xml:space="preserve">
-    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
   </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>
@@ -1047,12 +1008,6 @@
   </data>
   <data name="Results_ExportPngFailed" xml:space="preserve">
     <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
-  </data>
-  <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
-  </data>
-  <data name="Results_ExportPngNoFolder" xml:space="preserve">
-    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
   </data>
   <data name="ResultsExportPngButton.Content" xml:space="preserve">
     <value>Save picture</value>
@@ -2138,6 +2093,120 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="RunError_worker_stage_stuck" xml:space="preserve">
     <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
+  <data name="SettingsTransferHeader.Text" xml:space="preserve">
+    <value>Share settings</value>
+  </data>
+  <data name="SettingsTransferExplainer.Text" xml:space="preserve">
+    <value>Save your defaults to a file, or load a file a colleague saved, so a whole lab starts from the same settings. The file holds your defaults and presets only. It never holds your sign-in, your folders or your program locations.</value>
+  </data>
+  <data name="SettingsTransferExportButton.Content" xml:space="preserve">
+    <value>Export settings</value>
+  </data>
+  <data name="SettingsTransferImportButton.Content" xml:space="preserve">
+    <value>Import settings</value>
+  </data>
+  <data name="SettingsTransferApplyButton.Content" xml:space="preserve">
+    <value>Apply these changes</value>
+  </data>
+  <data name="SettingsTransferCancelButton.Content" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="SettingsTransferArrow.Text" xml:space="preserve">
+    <value>becomes</value>
+  </data>
+  <data name="SettingsFileTypeLabel" xml:space="preserve">
+    <value>Settings file</value>
+  </data>
+  <data name="SettingsTransferFileName" xml:space="preserve">
+    <value>dna-entropy-graph-settings.json</value>
+  </data>
+  <data name="SettingsTransferExportDone" xml:space="preserve">
+    <value>Saved your settings to {0}. Send that file to a colleague, who can load it with Import settings.</value>
+  </data>
+  <data name="SettingsTransferExportFailed" xml:space="preserve">
+    <value>The settings file could not be saved. Choose a different folder, then select Export settings again.</value>
+  </data>
+  <data name="SettingsTransferImportNotSettings" xml:space="preserve">
+    <value>That file is not a settings file from this app. Choose a file that was made with Export settings, then try again.</value>
+  </data>
+  <data name="SettingsTransferImportNewer" xml:space="preserve">
+    <value>That settings file was made by a newer version of the app. Install the latest version from the About group on this page, then select Import settings again.</value>
+  </data>
+  <data name="SettingsTransferImportNothing" xml:space="preserve">
+    <value>Nothing in that file would change your settings. Choose a different file if you expected changes.</value>
+  </data>
+  <data name="SettingsTransferImportReadFailed" xml:space="preserve">
+    <value>That file could not be read. Check that no other program has it open, then select Import settings again.</value>
+  </data>
+  <data name="SettingsTransferImportLocked" xml:space="preserve">
+    <value>The settings could not be saved because another copy of the app has the settings file open. Close the other copies of the app, then select Apply these changes again.</value>
+  </data>
+  <data name="SettingsTransferImportDone" xml:space="preserve">
+    <value>Imported {0} settings and {1} presets. If a page is already open, switch to another page and back to see them.</value>
+  </data>
+  <data name="SettingsTransferPreviewSummary" xml:space="preserve">
+    <value>This file would change {0} settings and add {1} presets. Nothing is saved until you select Apply these changes.</value>
+  </data>
+  <data name="SettingsTransferPreviewSkipped" xml:space="preserve">
+    <value>{0} entries in the file were skipped because they are not valid on this computer.</value>
+  </data>
+  <data name="SettingsTransferValueDefault" xml:space="preserve">
+    <value>not set</value>
+  </data>
+  <data name="SettingsTransferValueOn" xml:space="preserve">
+    <value>On</value>
+  </data>
+  <data name="SettingsTransferValueOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="SettingsKeyLabel_Theme" xml:space="preserve">
+    <value>Theme</value>
+  </data>
+  <data name="SettingsKeyLabel_NotifyWhenDone" xml:space="preserve">
+    <value>Notify when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_OpenFolderWhenDone" xml:space="preserve">
+    <value>Open the results folder when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_OpenResultsWhenDone" xml:space="preserve">
+    <value>Open the results when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_UpdateChannel" xml:space="preserve">
+    <value>Update channel</value>
+  </data>
+  <data name="SettingsKeyLabel_UpdateCheckOnLaunch" xml:space="preserve">
+    <value>Check for updates at start</value>
+  </data>
+  <data name="SettingsKeyLabel_IdleStoppedVmHours" xml:space="preserve">
+    <value>Hours a stopped rented computer may sit idle</value>
+  </data>
+  <data name="SettingsKeyLabel_ResultsRetentionDays" xml:space="preserve">
+    <value>Days to keep results in the cloud</value>
+  </data>
+  <data name="SettingsKeyLabel_OutputFilesGenBank" xml:space="preserve">
+    <value>Output files for GenBank inputs</value>
+  </data>
+  <data name="SettingsKeyLabel_OutputFilesSequence" xml:space="preserve">
+    <value>Output files for pasted or FASTA inputs</value>
+  </data>
+  <data name="SettingsKeyLabel_RunTarget" xml:space="preserve">
+    <value>Where runs happen</value>
+  </data>
+  <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
+    <value>IGV connection number</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
+  </data>
   <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
     <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
   </data>
@@ -2324,9 +2393,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="StallDialog_KeepWaiting" xml:space="preserve">
     <value>Keep waiting</value>
   </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
   <data name="RunError_input_accession_invalid" xml:space="preserve">
     <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
   </data>
@@ -2338,9 +2404,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
-  </data>
-  <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
   <data name="NewRunPillKind_Ncbi" xml:space="preserve">
     <value>NCBI record</value>
@@ -2676,14 +2739,62 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
+  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
+    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
+    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
+    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
+    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
+    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
+  </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
   <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
     <value>Drag along the strip to open the viewer at that part of the sequence.</value>
-  </data>
-  <data name="ViewerIndexFailed_Title" xml:space="preserve">
-    <value>The viewer could not prepare this sequence file</value>
-  </data>
-  <data name="ViewerIndexFailed_Body" xml:space="preserve">
-    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="DatabaseNewerThanApp" xml:space="preserve">
     <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
@@ -2694,182 +2805,50 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
-  <data name="Results_ExportPng_Title" xml:space="preserve">
-    <value>Entropy of {0}, record {1}</value>
+  <data name="RunError_stockout_waited" xml:space="preserve">
+    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
   </data>
-  <data name="Results_ExportPng_XAxis" xml:space="preserve">
-    <value>Position (bases)</value>
+  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
+    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
   </data>
-  <data name="Results_ExportPng_YAxis" xml:space="preserve">
-    <value>Entropy (bits, 0 to 2)</value>
+  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
+    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
   </data>
-  <data name="Results_GenesTruncated" xml:space="preserve">
-    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
+    <value>Wait for a graphics card</value>
   </data>
-  <data name="Results_GenesUnreadable" xml:space="preserve">
-    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
+  <data name="Results_NotesSaved" xml:space="preserve">
+    <value>Saved.</value>
   </data>
-  <data name="Results_GenesSortedAscending" xml:space="preserve">
-    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  <data name="Results_NotesSaveFailed" xml:space="preserve">
+    <value>Could not save your note. Press Save notes to try again; if it keeps failing, close any other window of this app and try once more.</value>
   </data>
-  <data name="Results_GenesSortedDescending" xml:space="preserve">
-    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  <data name="ResultsNotesHeading.Text" xml:space="preserve">
+    <value>Your notes</value>
   </data>
-  <data name="Results_GeneColumn_contig" xml:space="preserve">
-    <value>Record</value>
+  <data name="ResultsNotesBox.Header" xml:space="preserve">
+    <value>Note</value>
   </data>
-  <data name="Results_GeneColumn_gene" xml:space="preserve">
-    <value>Gene</value>
+  <data name="ResultsNotesBox.PlaceholderText" xml:space="preserve">
+    <value>For example: the clone that failed sequencing</value>
   </data>
-  <data name="Results_GeneColumn_begin" xml:space="preserve">
-    <value>Start</value>
+  <data name="ResultsTagsBox.Header" xml:space="preserve">
+    <value>Tags (separate with commas)</value>
   </data>
-  <data name="Results_GeneColumn_end" xml:space="preserve">
-    <value>End</value>
+  <data name="ResultsTagsBox.PlaceholderText" xml:space="preserve">
+    <value>For example: clone7, redo</value>
   </data>
-  <data name="Results_GeneColumn_strand" xml:space="preserve">
-    <value>Strand</value>
+  <data name="ResultsSaveNotesButton.Content" xml:space="preserve">
+    <value>Save notes</value>
   </data>
-  <data name="Results_GeneColumn_length" xml:space="preserve">
-    <value>Length</value>
+  <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
+    <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
   </data>
-  <data name="Results_GeneColumn_mean" xml:space="preserve">
-    <value>Mean entropy</value>
+  <data name="Results_NotesEditedDuringSave" xml:space="preserve">
+    <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>
   </data>
-  <data name="Results_GeneColumn_min" xml:space="preserve">
-    <value>Lowest entropy</value>
-  </data>
-  <data name="Results_GeneColumn_max" xml:space="preserve">
-    <value>Highest entropy</value>
-  </data>
-  <data name="Results_GeneColumn_low" xml:space="preserve">
-    <value>Low-entropy share</value>
-  </data>
-  <data name="Viewer_SmoothedToggle" xml:space="preserve">
-    <value>Smoothed over {0} bases</value>
-  </data>
-  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
-    <value>Smoothed entropy, {0} bases (bits)</value>
-  </data>
-  <data name="ResultsGenesHeading.Text" xml:space="preserve">
-    <value>Genes</value>
-  </data>
-  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
-    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
-  </data>
-  <data name="Results_GenesRowsSkipped" xml:space="preserve">
-    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
-  </data>
-  <data name="Results_GenesOrderFile" xml:space="preserve">
-    <value>in the file's order</value>
-  </data>
-  <data name="Results_GenesOrderSorted" xml:space="preserve">
-    <value>sorted by {0}</value>
-  </data>
-  <data name="Viewer_TrackFailed" xml:space="preserve">
-    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
-  </data>
-  <data name="SettingsTransferHeader.Text" xml:space="preserve">
-    <value>Share settings</value>
-  </data>
-  <data name="SettingsTransferExplainer.Text" xml:space="preserve">
-    <value>Save your defaults to a file, or load a file a colleague saved, so a whole lab starts from the same settings. The file holds your defaults and presets only. It never holds your sign-in, your folders or your program locations.</value>
-  </data>
-  <data name="SettingsTransferExportButton.Content" xml:space="preserve">
-    <value>Export settings</value>
-  </data>
-  <data name="SettingsTransferImportButton.Content" xml:space="preserve">
-    <value>Import settings</value>
-  </data>
-  <data name="SettingsTransferApplyButton.Content" xml:space="preserve">
-    <value>Apply these changes</value>
-  </data>
-  <data name="SettingsTransferCancelButton.Content" xml:space="preserve">
-    <value>Cancel</value>
-  </data>
-  <data name="SettingsTransferArrow.Text" xml:space="preserve">
-    <value>becomes</value>
-  </data>
-  <data name="SettingsFileTypeLabel" xml:space="preserve">
-    <value>Settings file</value>
-  </data>
-  <data name="SettingsTransferFileName" xml:space="preserve">
-    <value>dna-entropy-graph-settings.json</value>
-  </data>
-  <data name="SettingsTransferExportDone" xml:space="preserve">
-    <value>Saved your settings to {0}. Send that file to a colleague, who can load it with Import settings.</value>
-  </data>
-  <data name="SettingsTransferExportFailed" xml:space="preserve">
-    <value>The settings file could not be saved. Choose a different folder, then select Export settings again.</value>
-  </data>
-  <data name="SettingsTransferImportNotSettings" xml:space="preserve">
-    <value>That file is not a settings file from this app. Choose a file that was made with Export settings, then try again.</value>
-  </data>
-  <data name="SettingsTransferImportNewer" xml:space="preserve">
-    <value>That settings file was made by a newer version of the app. Install the latest version from the About group on this page, then select Import settings again.</value>
-  </data>
-  <data name="SettingsTransferImportNothing" xml:space="preserve">
-    <value>Nothing in that file would change your settings. Choose a different file if you expected changes.</value>
-  </data>
-  <data name="SettingsTransferImportReadFailed" xml:space="preserve">
-    <value>That file could not be read. Check that no other program has it open, then select Import settings again.</value>
-  </data>
-  <data name="SettingsTransferImportLocked" xml:space="preserve">
-    <value>The settings could not be saved because another copy of the app has the settings file open. Close the other copies of the app, then select Apply these changes again.</value>
-  </data>
-  <data name="SettingsTransferImportDone" xml:space="preserve">
-    <value>Imported {0} settings and {1} presets. If a page is already open, switch to another page and back to see them.</value>
-  </data>
-  <data name="SettingsTransferPreviewSummary" xml:space="preserve">
-    <value>This file would change {0} settings and add {1} presets. Nothing is saved until you select Apply these changes.</value>
-  </data>
-  <data name="SettingsTransferPreviewSkipped" xml:space="preserve">
-    <value>{0} entries in the file were skipped because they are not valid on this computer.</value>
-  </data>
-  <data name="SettingsTransferValueDefault" xml:space="preserve">
-    <value>not set</value>
-  </data>
-  <data name="SettingsTransferValueOn" xml:space="preserve">
-    <value>On</value>
-  </data>
-  <data name="SettingsTransferValueOff" xml:space="preserve">
-    <value>Off</value>
-  </data>
-  <data name="SettingsKeyLabel_Theme" xml:space="preserve">
-    <value>Theme</value>
-  </data>
-  <data name="SettingsKeyLabel_NotifyWhenDone" xml:space="preserve">
-    <value>Notify when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_OpenFolderWhenDone" xml:space="preserve">
-    <value>Open the results folder when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_OpenResultsWhenDone" xml:space="preserve">
-    <value>Open the results when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_UpdateChannel" xml:space="preserve">
-    <value>Update channel</value>
-  </data>
-  <data name="SettingsKeyLabel_UpdateCheckOnLaunch" xml:space="preserve">
-    <value>Check for updates at start</value>
-  </data>
-  <data name="SettingsKeyLabel_IdleStoppedVmHours" xml:space="preserve">
-    <value>Hours a stopped rented computer may sit idle</value>
-  </data>
-  <data name="SettingsKeyLabel_ResultsRetentionDays" xml:space="preserve">
-    <value>Days to keep results in the cloud</value>
-  </data>
-  <data name="SettingsKeyLabel_OutputFilesGenBank" xml:space="preserve">
-    <value>Output files for GenBank inputs</value>
-  </data>
-  <data name="SettingsKeyLabel_OutputFilesSequence" xml:space="preserve">
-    <value>Output files for pasted or FASTA inputs</value>
-  </data>
-  <data name="SettingsKeyLabel_RunTarget" xml:space="preserve">
-    <value>Where runs happen</value>
-  </data>
-  <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
-    <value>IGV connection number</value>
+  <data name="Results_NotesRunGone" xml:space="preserve">
+    <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
   </data>
   <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
     <value>Earlier version</value>
@@ -2907,36 +2886,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
     <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
   </data>
-  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
-    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
-    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
-  </data>
-  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
-    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
-    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
-    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
-    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
-  </data>
-  <data name="RunError_stockout_waited" xml:space="preserve">
-    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
-  </data>
-  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
-    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
-  </data>
-  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
-    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
-  </data>
-  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
-    <value>Wait for a graphics card</value>
-  </data>
   <data name="PageTitle_RunProgress" xml:space="preserve">
     <value>Run progress</value>
   </data>
@@ -2945,6 +2894,90 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="PageTitle_Results" xml:space="preserve">
     <value>Results</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="Results_GenesTruncated" xml:space="preserve">
+    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  </data>
+  <data name="Results_GenesUnreadable" xml:space="preserve">
+    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_GenesRowsSkipped" xml:space="preserve">
+    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
+  </data>
+  <data name="Results_GenesOrderFile" xml:space="preserve">
+    <value>in the file's order</value>
+  </data>
+  <data name="Results_GenesOrderSorted" xml:space="preserve">
+    <value>sorted by {0}</value>
+  </data>
+  <data name="Results_GenesSortedAscending" xml:space="preserve">
+    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GenesSortedDescending" xml:space="preserve">
+    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GeneColumn_contig" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="Results_GeneColumn_gene" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="Results_GeneColumn_begin" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Results_GeneColumn_end" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="Results_GeneColumn_strand" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="Results_GeneColumn_length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="Results_GeneColumn_mean" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="Results_GeneColumn_min" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_max" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_low" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="Viewer_TrackFailed" xml:space="preserve">
+    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
+  </data>
+  <data name="Viewer_SmoothedToggle" xml:space="preserve">
+    <value>Smoothed over {0} bases</value>
+  </data>
+  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
+    <value>Smoothed entropy, {0} bases (bits)</value>
+  </data>
+  <data name="ResultsGenesHeading.Text" xml:space="preserve">
+    <value>Genes</value>
+  </data>
+  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
+    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
+  </data>
+  <data name="Results_ExportPngFailedInExports" xml:space="preserve">
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPngNoFolder" xml:space="preserve">
+    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPng_Title" xml:space="preserve">
+    <value>Entropy of {0}, record {1}</value>
+  </data>
+  <data name="Results_ExportPng_XAxis" xml:space="preserve">
+    <value>Position (bases)</value>
+  </data>
+  <data name="Results_ExportPng_YAxis" xml:space="preserve">
+    <value>Entropy (bits, 0 to 2)</value>
   </data>
   <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
     <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>

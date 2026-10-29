@@ -102,6 +102,7 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+      security-events: write
     strategy:
       fail-fast: true
       matrix:
@@ -116,6 +117,10 @@ jobs:
       # must be pinned (a multi-stage file with one pinned stage fails). The logic is a script with its own tests.
       - name: the base image is pinned by digest
         run: python3 scripts/release_dockerfile_base_pinned.py "worker/Dockerfile.${{ matrix.variant }}"
+
+      # #255: an accepted CVE that has expired fails here, before an hour of image build, not after it.
+      - name: the Trivy allowlist has no expired entry
+        run: python3 scripts/check_trivy_allowlist.py
 
       # The NGC PyTorch base is large; an ubuntu runner has about 14 GB free until these are removed.
       - name: free disk space
@@ -150,9 +155,41 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      # Report first, gate second, so a failing gate still leaves the findings in the Security tab. The report lists every
+      # HIGH and CRITICAL finding (fixable or not) and never fails; the gate below is the one that stops the release.
+      # Accepted CVEs live in .trivyignore.yaml, each with an expiry (scripts/check_trivy_allowlist.py, run above). A single
+      # *.yaml `trivyignores` value is handed to Trivy as TRIVY_IGNOREFILE (parsed as YAML, expired_at honoured), not
+      # concatenated into a plain file: MEASURED 2026-10-16, trivy-action entrypoint.sh at the pinned sha, lines 22-73.
+      - name: Trivy report (SARIF, fixable and unfixed HIGH and CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ github.token }}
+        with:
+          image-ref: ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}
+          severity: 'CRITICAL,HIGH'
+          limit-severities-for-sarif: true
+          exit-code: '0'
+          format: sarif
+          output: trivy-${{ matrix.variant }}.sarif
+          trivyignores: .trivyignore.yaml
+
+      # A code-scanning outage must never block a release: continue-on-error so a failed upload does not fail the job. The
+      # always() on THIS step makes it run (and so upload whatever was written) even if the report step failed; the gate below
+      # has no always() and runs only if the report step succeeded. (The gate is the only blocker.) THEORY (unverified): code
+      # scanning accepts SARIF from a tag ref; the first release must check it (docs/ToTest.md, #255 row).
+      - name: upload the Trivy report to code scanning
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3.38.2
+        with:
+          sarif_file: trivy-${{ matrix.variant }}.sarif
+          category: trivy-${{ matrix.variant }}
+
       # The gate. A failing scan stops the release (the publish job needs this one); the pushed tag is never written into
-      # worker-images.json, so no released app can run it.
-      - name: Trivy scan (fails on a fixable HIGH or CRITICAL finding)
+      # worker-images.json, so no released app can run it. A fixable HIGH or CRITICAL finding fails it; unfixed ones are
+      # only reported above.
+      - name: Trivy gate (fails on a fixable HIGH or CRITICAL finding)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_USERNAME: ${{ github.actor }}
@@ -163,6 +200,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
           format: table
+          trivyignores: .trivyignore.yaml
 
       - name: SBOM (CycloneDX)
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
