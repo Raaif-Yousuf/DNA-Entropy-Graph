@@ -33,6 +33,30 @@ public static class CloudAuditContext
         }
     }
 
+    /// <summary>
+    /// The one way to give up on a call started by <see cref="StartUnderDeadline{T}"/> (a deadline passed, or the caller cancelled while the wait unwound before the link
+    /// passed it on): tells the call to stop now, and observes a fault it may still raise later, since nobody is waiting to see it. Never throws: a callback the callee
+    /// registered on its token can throw, and <see cref="CancellationTokenSource.CancelAsync"/> would then raise an <see cref="AggregateException"/> that REPLACES the
+    /// cancellation or timeout the caller's filters look for.
+    /// </summary>
+    public static async Task StopAbandonedAsync(CancellationTokenSource deadline, Task? abandoned)
+    {
+        try
+        {
+            await deadline.CancelAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Only the class is traced (a callee's message can carry a name).
+            System.Diagnostics.Trace.TraceWarning($"A cancellation callback of an abandoned cloud call threw: {ex.GetType().Name}");
+        }
+
+        if (abandoned is not null)
+        {
+            _ = abandoned.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
     internal static CancellationToken? CurrentCaller => Caller.Value;
 
     private sealed class CallerRestore(CancellationToken? previous) : IDisposable

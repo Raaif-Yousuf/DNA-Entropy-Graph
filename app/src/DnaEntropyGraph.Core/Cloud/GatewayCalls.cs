@@ -34,18 +34,12 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // The caller's wait can unwind (and dispose the linked source) before the link has passed the cancel on, so the call would keep running unaware: tell it now.
-            await deadline.CancelAsync().ConfigureAwait(false);
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
             throw;
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            await deadline.CancelAsync().ConfigureAwait(false);
-            if (task is not null)
-            {
-                // The abandoned call may still fault later; nobody is waiting to see it.
-                _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            }
-
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
             throw new CloudOperationException(new CloudError("TIMEOUT", null, "request timed out"), CloudErrorKind.Network);
         }
     }

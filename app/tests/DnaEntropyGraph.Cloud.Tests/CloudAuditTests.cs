@@ -176,19 +176,33 @@ public class CloudAuditTests
         (await SingleEntryAsync(log)).Outcome.ShouldBe("timeout");
     }
 
-    [Fact]
-    public async Task A_user_cancel_through_GatewayCalls_is_still_recorded_as_cancelled()
+    private sealed class SignallingLog : ICloudAuditLog
     {
-        var log = new MemoryLog();
+        private readonly TaskCompletionSource<CloudAuditEntry> _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<CloudAuditEntry> Finished => _finished.Task;
+
+        public void Record(CloudAuditEntry entry)
+        {
+            if (entry.Phase != "started")
+            {
+                _finished.TrySetResult(entry);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_user_cancel_through_GatewayCalls_reaches_the_call_it_abandoned_and_is_recorded_as_cancelled()
+    {
+        // The inner call ends ONLY when the token it was handed (GatewayCalls' linked token) is cancelled, so the audit entry exists only if the user's cancel was relayed to it.
+        var log = new SignallingLog();
         using var cts = new CancellationTokenSource();
         var inner = Substitute.For<IComputeGateway>();
-
-        // Ends on the token the gateway was HANDED (GatewayCalls' linked token), and keeps it so the test can show the inner call received the user's cancel.
-        CancellationToken handed = default;
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         inner.StopVmAsync("deg-j", "z", Arg.Any<CancellationToken>()).Returns(ci =>
         {
-            handed = ci.Arg<CancellationToken>();
-            return Task.Delay(Timeout.Infinite, handed);
+            reached.SetResult();
+            return Task.Delay(Timeout.Infinite, ci.Arg<CancellationToken>());
         });
         var gateway = new AuditedComputeGateway(inner, new CloudAuditor(log, () => null, TimeProvider.System));
         var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromSeconds(30) }, new FakeGcp());
@@ -198,11 +212,91 @@ public class CloudAuditTests
                 await gateway.StopVmAsync("deg-j", "z", token);
                 return 0;
             }, cts.Token);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => pending);
-        handed.IsCancellationRequested.ShouldBeTrue("the inner call must have received the cancel through the token it was handed");
-        (await SingleEntryAsync(log)).Outcome.ShouldBe("cancelled");
+        var entry = await log.Finished.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        entry.Outcome.ShouldBe("cancelled");
+    }
+
+    [Fact]
+    public async Task A_user_cancel_stays_a_cancel_when_a_callback_the_call_registered_throws()
+    {
+        // CancelAsync runs the callee's callbacks; one that throws surfaces as an AggregateException that must not replace the cancellation (callers filter on it).
+        var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromSeconds(30) }, new FakeGcp());
+        using var cts = new CancellationTokenSource();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var pending = calls.CallAsync<int>(async token =>
+            {
+                token.Register(() => throw new InvalidOperationException("callee callback"));
+                reached.SetResult();
+                await Task.Delay(Timeout.Infinite, token);
+                return 0;
+            }, cts.Token);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        try
+        {
+            await cts.CancelAsync();
+        }
+        catch (AggregateException)
+        {
+            // The link may hand the throwing callback to the canceller; the test is about what CallAsync reports.
+        }
+
+        await Should.ThrowAsync<OperationCanceledException>(() => pending);
+    }
+
+    [Fact]
+    public async Task Stopping_an_abandoned_call_swallows_a_callback_that_throws_and_still_cancels()
+    {
+        using var deadline = new CancellationTokenSource();
+        deadline.Token.Register(() => throw new InvalidOperationException("callee callback"));
+
+        await CloudAuditContext.StopAbandonedAsync(deadline, null);
+
+        deadline.IsCancellationRequested.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_abandoned_call_that_faults_later_is_observed_and_never_reaches_UnobservedTaskException()
+    {
+        var marker = new InvalidOperationException("abandoned " + Guid.NewGuid());
+        var seen = false;
+        void Handler(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            if (e.Exception.Flatten().InnerExceptions.Any(x => ReferenceEquals(x, marker)))
+            {
+                seen = true;
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            await AbandonThenFaultAsync(marker);
+            for (var i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+
+            seen.ShouldBeFalse("the fault of a call nobody waits for any more must be observed");
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static async Task AbandonThenFaultAsync(Exception marker)
+    {
+        var source = new TaskCompletionSource<int>();
+        using var deadline = new CancellationTokenSource();
+        await CloudAuditContext.StopAbandonedAsync(deadline, source.Task);
+        source.SetException(marker);
     }
 
     [Fact]
