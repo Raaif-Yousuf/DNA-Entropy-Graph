@@ -70,3 +70,12 @@ for you. This group tells the app where they are and how to talk to IGV.
 - **Reset to default** on each row clears that row only.
 
 A change applies the next time you press the button; there is nothing to restart.
+
+## Share settings
+
+**Export settings** saves your defaults and your own presets to a file you choose, so a lab can start from the same settings. **Import settings** reads a file made that way, lists every setting it would change (what it is now, then what it would become) and saves nothing until you select **Apply these changes**. **Cancel** throws the preview away.
+
+- The file holds: theme, the "when a run finishes" switches, update choices, the idle-computer and cloud-results limits, the default output files, where runs happen, the IGV connection number, and your presets.
+- The file never holds: your sign-in, your installation number, window position, the location of IGV or Geneious on your PC, or developer switches. If a file you import names one of those, it is skipped.
+- A file made by a newer version of the app is refused, and the page tells you to update first.
+- After you apply, the groups on this page show the new values at once, the theme changes straight away, and New run uses the new defaults the next time it opens.

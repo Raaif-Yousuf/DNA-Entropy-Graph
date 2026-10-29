@@ -57,7 +57,8 @@ public sealed partial class RunListItem : ObservableObject
         IAsyncRelayCommand deleteCloudCommand,
         IAsyncRelayCommand deleteLocalCommand,
         IAsyncRelayCommand removeCommand,
-        IRelayCommand? copyOwnerRequestCommand = null)
+        IRelayCommand? copyOwnerRequestCommand = null,
+        IAsyncRelayCommand? waitForGpuCommand = null)
     {
         Run = run;
         Title = title;
@@ -66,6 +67,7 @@ public sealed partial class RunListItem : ObservableObject
         DetailText = detailText;
         var finished = HistoryViewModel.IsFinished(run.Phase);
         HasLocalFiles = finished && hasLocalFiles;
+        CanDeleteLocal = HasLocalFiles && !run.Imported;
         CanRedownload = finished && cloudAvailable;
         CanDeleteCloud = finished && cloudAvailable && canDeleteCloud;
         DeleteCloudHint = deleteCloudHint;
@@ -78,6 +80,7 @@ public sealed partial class RunListItem : ObservableObject
         DeleteLocalCommand = deleteLocalCommand;
         RemoveCommand = removeCommand;
         CopyOwnerRequestCommand = copyOwnerRequestCommand;
+        WaitForGpuCommand = waitForGpuCommand;
     }
 
     public RunRecord Run { get; }
@@ -93,6 +96,12 @@ public sealed partial class RunListItem : ObservableObject
     public string DetailText { get; }
 
     public bool HasLocalFiles { get; }
+
+    /// <summary>Whether Delete files on this PC is on: the run has files here and the app wrote them. An imported run's folder is the user's own (Hard Rule 14).</summary>
+    public bool CanDeleteLocal { get; }
+
+    /// <summary>Why Delete files on this PC is off for an imported run (its tooltip); null when it is not off for that reason.</summary>
+    public string? DeleteLocalHint { get; init; }
 
     public bool CanRedownload { get; }
 
@@ -146,4 +155,12 @@ public sealed partial class RunListItem : ObservableObject
     public IRelayCommand? CopyOwnerRequestCommand { get; }
 
     public bool HasOwnerRequest => CopyOwnerRequestCommand is not null;
+
+    /// <summary>
+    /// Issue #92: "Wait for a graphics card", the action of a run that failed because Google had none free: starts the same run again, queued by Google until a card is free.
+    /// Null (and <see cref="HasWaitForGpu"/> false) for every other run, and for one that already waited.
+    /// </summary>
+    public IAsyncRelayCommand? WaitForGpuCommand { get; }
+
+    public bool HasWaitForGpu => WaitForGpuCommand is not null;
 }
