@@ -57,6 +57,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+import check_totest_format as ctf  # noqa: E402
+
 REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
@@ -623,6 +629,75 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
+def _prefix(row: ctf.Row) -> str:
+    return repr(row.cells[3][:40]) if len(row.cells) > 3 else ""
+
+
+def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str]]:
+    """After the union: close `## Queue` table rows missing their trailing `|`, then drop a row that duplicates a row
+    main carries. A row is dropped ONLY when its cells (stripped) equal the kept row's; the kept copy is main's (the
+    union puts main's lines after the lane's, so the LAST copy whose cells main also has). A row that shares the
+    duplicate key (check_totest_format's: issue + "Do this") but differs in any cell, or a duplicate main does not
+    carry, is left alone and reported, so premerge refuses it and the lane reconciles it instead of losing an edit.
+    Other lines are byte-identical. Returns (text, rows dropped, rows closed, one message per unresolved pair)."""
+    lines = text.splitlines(keepends=True)
+    closed = 0
+    for row in ctf.parse_rows(text):
+        body = lines[row.line_no - 1]
+        content = body.splitlines()[0] if body.splitlines() else body
+        if not content.rstrip().endswith("|"):
+            lines[row.line_no - 1] = content.rstrip() + " |" + body[len(content) :]
+            closed += 1
+    main_cells = {row.cells for row in ctf.parse_rows(main_text)} if main_text else set()
+    by_key: dict[tuple[str, str], list[ctf.Row]] = {}
+    for row in ctf.parse_rows("".join(lines)):
+        key = ctf.duplicate_key(row)
+        if key is not None:
+            by_key.setdefault(key, []).append(row)
+    drop: set[int] = set()
+    problems: list[str] = []
+    for group in by_key.values():
+        if len(group) < 2:
+            continue
+        keep = next((r for r in reversed(group) if r.cells in main_cells), None)
+        if keep is None:
+            first = group[0]
+            problems.append(
+                f"{TOTEST} has {len(group)} rows for {first.cells[0]} ({_prefix(first)}) and main does not carry them: "
+                "reconcile the rows (keep one) before landing"
+            )
+            continue
+        for other in group:
+            if other is keep:
+                continue
+            if other.cells == keep.cells:
+                drop.add(other.line_no - 1)
+                continue
+            differing = [name for name, a, b in zip(ctf.COLUMNS, keep.cells, other.cells, strict=False) if a != b]
+            problems.append(
+                f"{TOTEST} row {keep.cells[0]} ({_prefix(keep)}) differs from main's copy in: "
+                f"{', '.join(differing)}: reconcile the row (keep one) before landing"
+            )
+    kept = "".join(ln for i, ln in enumerate(lines) if i not in drop)
+    return kept, len(drop), closed, problems
+
+
+def _normalise_union_totest(ctx: Ctx, name: str, merged: bytes, main: bytes) -> bytes:
+    """Normalise the union-resolved ToTest.md (see normalize_totest); a file that is not UTF-8 is returned untouched."""
+    try:
+        text, main_text = merged.decode("utf-8"), main.decode("utf-8")
+    except UnicodeDecodeError:
+        ctx.say(f"- {name} is not UTF-8: ToTest normalisation skipped, the union is left as git made it")
+        return merged
+    fixed, dropped, closed, unresolved = normalize_totest(text, main_text)
+    for message in unresolved:
+        ctx.say(f"WARNING: {message}")
+    if not (dropped or closed):
+        return merged
+    ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")
+    return fixed.encode("utf-8")
+
+
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
     if git(wt, "merge-base", "--is-ancestor", f"{REMOTE}/{BASE}", "HEAD", check=False).returncode == 0:
         return
@@ -657,7 +732,10 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
             for path, data in zip((ours, base, theirs), parts, strict=True):
                 path.write_bytes(data)
             git(wt, "merge-file", "--union", str(ours), str(base), str(theirs), check=False)
-            (wt / name).write_bytes(ours.read_bytes())
+            merged_bytes = ours.read_bytes()
+        if name == TOTEST:
+            merged_bytes = _normalise_union_totest(ctx, name, merged_bytes, parts[2])
+        (wt / name).write_bytes(merged_bytes)
         git(wt, "add", "--", name)
         ctx.say(f"- union-resolved {name}")
     git(wt, *ident, "commit", "--no-edit", "-q")
@@ -918,7 +996,7 @@ def land(
         _push(ctx, wt, land_branch, pushed_head)
         pushed = True
         url = _create_pr(ctx, wt, land_branch, title, body_file)
-        _record_landed(ctx, url, full_sha)
+        _record_landed(ctx, url, pushed_head)  # the PR head the hook must allow, not the pre-merge lane tip (#904)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")
             rc = _merge_when_green(ctx, url, pushed_head, checks_timeout, checks_poll, rerun_failed_once)
