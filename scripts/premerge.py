@@ -122,6 +122,9 @@ EXEMPT_TEST_PROJECTS: dict[str, str] = {
 # a load-slowed suite still finishes and a genuinely hung one is still caught inside half an hour.
 LONG_TIMEOUT = 1800.0
 DEFAULT_TIMEOUT = 900.0
+# #959: scripts/tests runs under pytest-xdist. MEASURED 2026-10-29: serial it took 1600s under agent load (1874 passed, 19 skipped),
+# a long tail of ~0.8s subprocess/git tests, so workers (not a few slow tests) are the lever. Capped so it plays fair with heavy.py slots.
+SCRIPTS_TESTS_MAX_WORKERS = 8
 DEFAULT_BASE = "origin/main"
 
 SCRIPT_REF = re.compile(r"scripts/[A-Za-z0-9_./-]+\.(?:py|ps1)")
@@ -177,6 +180,13 @@ def discover_check_scripts(root: Path) -> list[Path]:
 
 def discover_test_projects(root: Path) -> list[Path]:
     return sorted((root / "app" / "tests").glob("*/*.csproj"))
+
+
+def scripts_test_workers(cpus: int | None = -1) -> int:
+    """xdist worker count for the scripts-tests gate: half the CPUs, at least 2, at most SCRIPTS_TESTS_MAX_WORKERS."""
+    if cpus == -1:
+        cpus = os.cpu_count()
+    return max(2, min(SCRIPTS_TESTS_MAX_WORKERS, (cpus or 0) // 2))
 
 
 def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE) -> list[Gate]:
@@ -250,7 +260,23 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
     gates += [
         Gate(
             "scripts-tests",
-            ["uv", "run", "--with", "pytest", "--with", "pyyaml", "python", "-m", "pytest", "scripts/tests", "-q"],
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "--with",
+                "pytest-xdist",
+                "--with",
+                "pyyaml",
+                "python",
+                "-m",
+                "pytest",
+                "scripts/tests",
+                "-q",
+                "-n",
+                str(scripts_test_workers()),
+            ],
             root,
             tier="full",
             timeout=LONG_TIMEOUT,  # MEASURED 2026-10-29 (#925): see LONG_TIMEOUT; the 900s default killed a green 1086s run

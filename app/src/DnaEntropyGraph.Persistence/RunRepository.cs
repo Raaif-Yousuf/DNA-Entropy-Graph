@@ -11,7 +11,7 @@ namespace DnaEntropyGraph.Persistence;
 /// <c>CreatedAt</c>) rather than relying on Dapper's implicit name matching,
 /// so a rename on either side is a compile error here, not a silent NULL.
 /// </summary>
-public sealed class RunRepository : IRunRepository, IRunHistoryRemover
+public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnnotations
 {
     private const string SelectAllSql = """
         SELECT Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
@@ -31,8 +31,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
     // Upsert overwrote these columns, the very next phase change after a
     // user typed a note would silently erase it - a wired-to-nothing bug
     // that would not show up until someone actually used the feature.
-    // When #141 is built, it gets its own UpdateNotesAsync/UpdateTagsAsync
-    // rather than going through this general Upsert.
+    // Issue #141: notes and tags are written by UpdateAsync (IRunAnnotations),
+    // which writes only those two columns, never through this general Upsert.
     private const string UpsertSql = """
         INSERT INTO Runs (
             Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
@@ -68,10 +68,13 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
     private readonly SqliteDatabase _database;
 
     private readonly DataPathMapper _paths;
+    private readonly IDiagnosticsLog _log;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _warned = new(StringComparer.Ordinal);
 
     /// <param name="paths">Portable mode (issue #144): stores paths under the portable folder relative to it. Null stores every path as given.</param>
-    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null)
+    public RunRepository(SqliteDatabase database, DataPathMapper? paths = null, IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _database = database;
         _paths = paths ?? new DataPathMapper(null);
     }
@@ -135,11 +138,37 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         }
     }
 
+    /// <summary>Issue #141: writes only Notes and TagsJson, so it can neither overwrite a concurrent phase write nor be overwritten by one.</summary>
+    public async Task<bool> UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(
+            "UPDATE Runs SET Notes = @Notes, TagsJson = @TagsJson WHERE Id = @Id;",
+            new { Id = jobId, Notes = notes, TagsJson = tagsJson },
+            cancellationToken: cancellationToken);
+        return await connection.ExecuteAsync(command).ConfigureAwait(false) > 0;
+    }
+
     public async Task DeleteAsync(string jobId, CancellationToken cancellationToken)
     {
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition("DELETE FROM Runs WHERE Id = @Id;", new { Id = jobId }, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A stored output folder that does not expand inside the portable folder reads back as null. The next upsert of the row writes that
+    /// null over the stored text, so the loss is logged here, once per run id for the life of this repository (a History refresh reads every row again): the run id and a fixed class name, never the stored text.
+    /// </summary>
+    private string? MapOutputDir(RunRow row)
+    {
+        var mapped = _paths.FromStored(row.OutputDir);
+        if (mapped is null && row.OutputDir is not null && _warned.TryAdd(row.Id, true))
+        {
+            _log.Warning("run-repository", row.Id, "OutputDirOutsidePortableFolder");
+        }
+
+        return mapped;
     }
 
     private RunRecord ToRecord(RunRow row) => new(
@@ -168,7 +197,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover
         LastProgressSeq: (int)row.LastProgressSeq,
         LastHeartbeatAt: Iso.Parse(row.LastHeartbeatAt),
         StatusGeneration: row.StatusGeneration is null ? null : (int)row.StatusGeneration,
-        OutputDir: _paths.FromStored(row.OutputDir),
+        OutputDir: MapOutputDir(row),
         EstimatedCostUsd: row.EstimatedCostUsd,
         ActualCostUsd: row.ActualCostUsd,
         VmSeconds: row.VmSeconds,

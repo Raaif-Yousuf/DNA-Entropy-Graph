@@ -17,7 +17,7 @@ what it runs, and where CI runs the same thing.
 | `app/tests/*.Tests` (unit, five libraries) | Laptop (`premerge.py`, full mode; one gate per discovered project), `ci-app.yml` (per assembly, with `--hangdump`, TRX uploaded as the `test-results` artifact, and the step fails if fewer than five `.trx` files exist; #438). The App is built with Windows App SDK bootstrap option `None` in every configuration (no dialog, a missing runtime exits with its HRESULT) and the job installs then asserts Windows App Runtime 1.8, because the bootstrap cannot be disabled for these tests (`BootstrapNeverShowsUiGuardTests`) | `cd app; dotnet test tests/<Project>/<Project>.csproj` (cwd must be `app/`) | Live |
 | `app/tests/DnaEntropyGraph.Guards.Tests` | Laptop (`premerge.py --fast`), `ci-app.yml` | `cd app; dotnet test tests/DnaEntropyGraph.Guards.Tests/DnaEntropyGraph.Guards.Tests.csproj` | Live; seconds |
 | `app/tests/*.UiTests` | Not run by `premerge.py` or CI (WinUI-hosted; every test is a skip today) | Manual, or a `docs/ToTest.md` row (`Needs: app-dev`) | Exempt, named in `scripts/premerge.py` |
-| `scripts/tests` (the guards' own tests) | Laptop (`premerge.py`, full mode), `ci-docs.yml`'s `scripts-tests` job | `uv run --with pytest --with pyyaml python -m pytest scripts/tests -q` | Live |
+| `scripts/tests` (the guards' own tests) | Laptop (`premerge.py`, full mode), `ci-docs.yml`'s `scripts-tests` job | `uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts/tests -q -n auto` (parallel, #959; premerge uses half the CPUs, 2 to 8 via `scripts_test_workers`, CI uses `-n auto`) | Live |
 | `scripts/check_*.py` (every repo guard) | Laptop (`premerge.py`, discovered by glob), `ci-docs.yml`'s `checks` job (same glob) | `worker\.venv\Scripts\python.exe scripts\check_<name>.py` | Live; `check_third_party_notices.py` runs in `premerge.py` full mode only (needs dotnet); `check_pyright.py` (pyright ratchet) is excluded from `ci-docs.yml`'s glob and runs in `ci-worker.yml`'s `pyright ratchet` job instead |
 | `THIRD-PARTY-NOTICES.md` freshness | `ci-notices.yml` (windows-latest: dotnet SDK + `uv sync --frozen` worker venv), `premerge.py` full mode | `worker\.venv\Scripts\python.exe scripts\check_third_party_notices.py` | Written 2026-10-02 (#416), NOT yet run on a real runner: see `docs/ToTest.md` |
 | Lint (`ruff check` worker and scripts) | Laptop (`premerge.py`), `ci-worker.yml`, `ci-docs.yml` | `uvx ruff check worker`, `uvx ruff check scripts` | Live; no format gate for `scripts/` yet (#430) |
@@ -129,8 +129,12 @@ test_readers_parity.py` replays it against the Python readers; the C# `FastaLite
 wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
 test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
 may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
-those blocks are the list of known wording differences (none since #689: every GenBank case
-matches the worker word for word).
+those blocks are the list of known wording differences. The EMBL ones are refusals that diverge for one of two reasons, stated in each
+block's `reason`: the worker echoes a line of the file in its message, which the app never does (the ID-line and footer ones, #846), or
+Biopython's own exception text for a refused location is not ported (the empty-join, bad-misc_feature and stray-close-paren ones, #796).
+One GenBank block (#847) is a notice, not a refusal: the app shows a non-ASCII gene id escaped (`ascii()`) where the worker shows it raw (`repr()`). The same file
+carries `embl_cases`, replayed against `read_embl` and `EmblLite` (`EmblLiteParityTests`): header `//`,
+unrecognised ID line layouts, where the file ends, and an ID line inside the header or the sequence.
 
 ## Fixtures
 

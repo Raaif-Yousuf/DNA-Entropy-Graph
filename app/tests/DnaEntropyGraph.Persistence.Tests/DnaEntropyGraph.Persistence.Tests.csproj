@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Persistence\DnaEntropyGraph.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Presentation\DnaEntropyGraph.Presentation.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,14 @@
+# Accepted CVEs for the release image scan (release.yml, images job; #255).
+# The gate runs with ignore-unfixed: true, so an UNFIXED CVE never fails it and must NOT be listed here. Allowlist only a
+# FIXABLE HIGH or CRITICAL finding you cannot take yet (the fix needs a base-image or dependency bump you cannot ship now).
+# Preferred remedy is the bump itself (a new base digest); an entry is the exception.
+# Every entry needs: id, statement (why it cannot be taken, and the issue that removes it), expired_at (YYYY-MM-DD, at
+# most 90 days out). Optional: paths, purls (lists, as Trivy's own format). An expired entry always fails
+# scripts/check_trivy_allowlist.py, and fails the scan too when the CVE is fixable (Trivy stops honouring it), so a stale
+# acceptance breaks the release instead of hiding. Format and rules: docs/packaging_design.md section 7 (Containers).
+#
+#   vulnerabilities:
+#     - id: CVE-2026-12345
+#       statement: fixed in base 25.07 but that base is not yet verified on a GPU, bump tracked in issue #NNN
+#       expired_at: 2026-12-01
+vulnerabilities: []
