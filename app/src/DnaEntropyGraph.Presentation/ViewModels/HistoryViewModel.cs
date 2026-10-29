@@ -33,6 +33,8 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly IGcpAccount _account;
     private readonly TimeProvider _time;
     private readonly IEntropyOverviewSource? _overview;
+    private readonly IRunImporter? _importer;
+    private readonly ImportedRunDismissals? _dismissals;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
 
@@ -62,9 +64,13 @@ public sealed partial class HistoryViewModel : ObservableObject
         IShellLauncher launcher,
         IGcpAccount account,
         TimeProvider time,
-        IEntropyOverviewSource? overview = null)
+        IEntropyOverviewSource? overview = null,
+        IRunImporter? importer = null,
+        ImportedRunDismissals? dismissals = null)
     {
+        _dismissals = dismissals;
         _overview = overview;
+        _importer = importer;
         _runRepository = runRepository;
         _remover = remover;
         _navigator = navigator;
@@ -87,6 +93,66 @@ public sealed partial class HistoryViewModel : ObservableObject
         ];
         _selectedStatusFilter = StatusFilters[0];
     }
+
+    [ObservableProperty]
+    private bool _isImporting;
+
+    [ObservableProperty]
+    private string _importStatusText = string.Empty;
+
+    public bool CanImport => _importer is not null;
+
+    /// <summary>
+    /// Issue #111: finds finished runs other computers left in this project's results bucket and adds them as read-only rows.
+    /// The result is a status line on the page (what was found, or the one thing to do), never an escaped exception.
+    /// </summary>
+    [RelayCommand(AllowConcurrentExecutions = false)]
+    private async Task ImportRunsAsync(CancellationToken cancellationToken)
+    {
+        if (_importer is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_account.SelectedProjectId))
+        {
+            ImportStatusText = _strings.GetString(RunsCopy.ImportNoProject);
+            return;
+        }
+
+        IsImporting = true;
+        ImportStatusText = _strings.GetString(RunsCopy.ImportRunning);
+        try
+        {
+            var result = await _importer.ImportAsync(_account.SelectedProjectId, cancellationToken);
+            ImportStatusText = _strings.GetString(result.Imported switch { 0 => RunsCopy.ImportNone, 1 => RunsCopy.ImportDoneOne, _ => RunsCopy.ImportDoneMany });
+            if (result.Imported > 0)
+            {
+                await RefreshAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ImportStatusText = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            ImportStatusText = _strings.GetString(ImportFailureKey(ex));
+        }
+        finally
+        {
+            IsImporting = false;
+        }
+    }
+
+    private static string ImportFailureKey(Exception failure) => failure switch
+    {
+        CloudOperationException { Kind: CloudErrorKind.Permission or CloudErrorKind.OrgPolicy } => RunsCopy.ImportFailedPermission,
+        CloudOperationException { Kind: CloudErrorKind.Billing or CloudErrorKind.ApiDisabled } => RunsCopy.ImportFailedSetup,
+        CloudOperationException { Kind: CloudErrorKind.Network } => RunsCopy.ImportFailedNetwork,
+        AccountAuthException => RunsCopy.ImportFailedSignIn,
+        _ => RunsCopy.ImportFailed,
+    };
 
     public IReadOnlyList<RunStatusFilterOption> StatusFilters { get; }
 
@@ -233,17 +299,23 @@ public sealed partial class HistoryViewModel : ObservableObject
             DeleteCloudHint(run),
             ReasonFor(run),
             new AsyncRelayCommand(() => OpenAsync(run)),
-            new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase)),
+            new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase) && !run.Imported),
             new AsyncRelayCommand(() => RedownloadAsync(run)),
             new AsyncRelayCommand(() => DeleteCloudAsync(run)),
             new AsyncRelayCommand(() => DeleteLocalAsync(run)),
             new AsyncRelayCommand(() => RemoveAsync(run)),
-            OwnerRequestFor(run))
+            OwnerRequestFor(run),
+            WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
+            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
+            IsImported = run.IsCloudImport,
+            ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }
+
+    private static string ShortInstallation(string? id) => string.IsNullOrWhiteSpace(id) ? "?" : id.Length > 8 ? id[..8] : id;
 
     /// <summary>The "Preset: name" line of a run started from an option preset (issue #136), read from the options the run recorded.</summary>
     private string? PresetLine(RunRecord run)
@@ -264,6 +336,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
 
         var hasCode = !string.IsNullOrWhiteSpace(run.ErrorCode);
+        // Issue #92: a stockout after the run already waited cannot say "press Wait"; it says the wait ran out.
+        if (run.Phase == JobPhase.Failed && IsStockout(run) && RunOptionsJson.TryDeserialize(run.OptionsJson)?.WaitForGpu == true)
+        {
+            return _strings.GetString("RunError_stockout_waited");
+        }
+
         return run.Phase == JobPhase.Failed || hasCode ? _strings.GetString(RunErrorCodes.ResourceKey(run.ErrorCode)) : null;
     }
 
@@ -300,7 +378,9 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         }
 
-        var key = !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
+        var key = run.IsCloudImport ? RunsCopy.DeleteCloudHintImported
+            : run.IsPrototypeImport ? RunsCopy.DeleteCloudHintPrototype
+            : !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
             : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
             : RunsCopy.DeleteCloudHintNotConnected;
         return _strings.GetString(key);
@@ -334,7 +414,18 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
     }
 
-    private Task RerunAsync(RunRecord run) => ActAsync(
+    private static bool IsStockout(RunRecord run) => run.ErrorCode == RunErrorCodes.For(CloudErrorKind.Stockout);
+
+    /// <summary>
+    /// Issue #92: the "Wait for a graphics card" action of a run that failed with a stockout and did not already wait. Null for every other run, and for one whose
+    /// options cannot be read (the ordinary Run again reports that).
+    /// </summary>
+    private AsyncRelayCommand? WaitForGpuFor(RunRecord run)
+        => run.Phase == JobPhase.Failed && IsStockout(run) && RunOptionsJson.TryDeserialize(run.OptionsJson) is { WaitForGpu: false }
+            ? new AsyncRelayCommand(() => RerunAsync(run, waitForGpu: true))
+            : null;
+
+    private Task RerunAsync(RunRecord run, bool waitForGpu = false) => ActAsync(
         async () =>
         {
             // A run still going owns its VM; starting another from its row would rent a second one.
@@ -367,7 +458,7 @@ public sealed partial class HistoryViewModel : ObservableObject
                 }
             }
 
-            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation }, CancellationToken.None);
+            var jobId = await _engine.StartRunAsync(options with { InputPath = input, AnnotationPath = annotation, WaitForGpu = waitForGpu || options.WaitForGpu }, CancellationToken.None);
             _navigator.NavigateTo("RunProgress", jobId);
             return null;
         },
@@ -409,6 +500,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return null;
             }
 
+            // Hard Rule 14: an imported run's folder is the user's own. The button is off; this stops a command fired another way.
+            if (run.Imported)
+            {
+                return RunsCopy.DeleteLocal(LocalDeleteStatus.Refused);
+            }
+
             var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
             if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
             {
@@ -435,6 +532,13 @@ public sealed partial class HistoryViewModel : ObservableObject
                 || !await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.RemoveConfirmTitle), _strings.GetString(RunsCopy.RemoveConfirmBody), CancellationToken.None))
             {
                 return null;
+            }
+
+            // Issue #111: remember an imported run was dismissed, or the next scan would add it straight back.
+            // Only a bucket-found run: a prototype run's id can never come back from the bucket scan, so it does not belong in that setting.
+            if (run.IsCloudImport)
+            {
+                _dismissals?.Add(run.JobId);
             }
 
             await _remover.DeleteAsync(run.JobId, CancellationToken.None);

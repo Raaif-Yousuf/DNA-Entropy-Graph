@@ -7,6 +7,8 @@ the real venv are never touched.
 
 from __future__ import annotations
 
+import contextlib
+import importlib
 import json
 import os
 import subprocess
@@ -27,11 +29,39 @@ import json, sys
 from pathlib import Path
 log = Path(sys.argv[1])
 log.open("a", encoding="utf-8", newline="\\n").write(json.dumps(sys.argv[2:]) + "\\n")
+hang = Path(str(log) + ".hang")
+if hang.exists() and " ".join(sys.argv[2:4]) in hang.read_text(encoding="utf-8").split(","):
+    import time
+    time.sleep(60)
+if sys.argv[2:4] == ["pr", "view"]:
+    import subprocess
+    failing = Path(str(log) + ".viewfail")  # the first N `pr view` calls exit 1 with no output
+    if failing.exists():
+        seen = sum(1 for ln in log.read_text(encoding="utf-8").splitlines() if json.loads(ln)[:2] == ["pr", "view"])
+        if seen <= int(failing.read_text()):
+            sys.stderr.write("HTTP 502")
+            sys.exit(1)
+    fixed = Path(str(log) + ".headoid")
+    oid = fixed.read_text(encoding="utf-8").strip() if fixed.exists() else ""
+    if not oid:
+        head = ""
+        for ln in log.read_text(encoding="utf-8").splitlines():
+            call = json.loads(ln)
+            if call[:2] == ["pr", "create"]:
+                head = call[call.index("--head") + 1]
+        origin = Path(str(log) + ".origin").read_text(encoding="utf-8").strip()
+        out = subprocess.run(["git", "ls-remote", origin, "refs/heads/" + head], capture_output=True, text=True).stdout.split()
+        oid = out[0] if out else ""
+    print(json.dumps({} if oid == "NONE" else {"headRefOid": oid}))
+    sys.exit(0)
 if sys.argv[2:4] == ["pr", "checks"]:
     # scripted replies: the Nth `pr checks` call gets replies[N] (the last one repeats); a string is raw stdout
     replies = json.loads(Path(str(log) + ".checks").read_text(encoding="utf-8"))
     seen = sum(1 for ln in log.read_text(encoding="utf-8").splitlines() if '"checks"' in ln) - 1
     reply = replies[min(seen, len(replies) - 1)]
+    if isinstance(reply, dict):  # {"exit": N, "stderr": "..."}: gh itself failed (no JSON on stdout)
+        sys.stderr.write(reply.get("stderr", ""))
+        sys.exit(reply["exit"])
     print(reply if isinstance(reply, str) else json.dumps(reply))
     sys.exit(1 if isinstance(reply, str) else 0)
 if sys.argv[2:4] == ["run", "rerun"]:
@@ -50,6 +80,12 @@ def _git(cwd: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8", errors="replace").strip()
 
 
+def _git_bytes(cwd: Path, *args: str) -> bytes:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    return proc.stdout
+
+
 @dataclass
 class World:
     root: Path
@@ -64,6 +100,7 @@ class World:
 
     def ctx(self) -> lw.Ctx:
         stub = self.root / "gh_stub.py"
+        Path(str(self.gh_log) + ".origin").write_text(str(self.origin), encoding="utf-8")
 
         def fake_premerge(wt: Path, venv: Path, full: bool) -> tuple[int, str]:
             self.premerge_calls.append((wt, full))
@@ -168,7 +205,9 @@ def test_green_landing_records_the_pr_for_the_merge_hook(world):
 
     sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
     assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
-    landed = json.loads(premerge_stamp.landed_path(world.clone).read_text(encoding="utf-8"))
+    landed_file = premerge_stamp.landed_path(world.clone)
+    assert landed_file is not None
+    landed = json.loads(landed_file.read_text(encoding="utf-8"))
     assert list(landed.values())[0]["head"] == sha
 
 
@@ -248,6 +287,132 @@ def test_a_totest_only_conflict_is_union_resolved_and_both_rows_survive(world):
     assert "| lane row |" in merged and "| main row |" in merged and "<<<<" not in merged
     assert _git(world.origin, "rev-list", "--parents", "-n", "1", "feat/1-x").count(" ") == 2  # a merge commit
     assert world.venv_intact() and world.leftover_worktrees() == []
+
+
+# --- ToTest.md normalisation after the union (#892) ------------------------------------------------------
+
+TT_HEAD = (
+    "## Queue\n\n| # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |\n"
+    "| --- | --- | --- | --- | --- | --- |\n"
+)
+
+
+def _tt(issue: int, do: str = "do a", sha: str = "abc1234", needs: str = "gpu-vm", close: bool = True) -> str:
+    return f"| #{issue} | {sha} | {needs} | {do} | p | f |" + ("\n" if close else "")
+
+
+def _land_totest(world, lane: str, main: str) -> list[str]:
+    """Land a lane and main that both append to the Queue table; return the landed ToTest.md lines."""
+    world.advance_main({"docs/ToTest.md": TT_HEAD.encode()})
+    sha = world.commit_on_branch("feat/1-x", {"docs/ToTest.md": (TT_HEAD + lane).encode()})
+    world.advance_main({"docs/ToTest.md": (TT_HEAD + main).encode()})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    return _git(world.origin, "show", "feat/1-x:docs/ToTest.md").splitlines()
+
+
+def test_a_row_both_sides_carry_is_kept_once_and_mains_copy_wins(world):
+    # a stacked chain whose bottom just landed: the lane has #91 and #92, main has #5 and the same #91
+    lines = _land_totest(world, _tt(91) + _tt(92, "do b"), _tt(5, "do x") + _tt(91))
+    rows = [ln for ln in lines if ln.startswith("| #") and ln[3].isdigit()]
+    assert rows == [_tt(92, "do b").strip(), _tt(5, "do x").strip(), _tt(91).strip()], rows
+
+
+def test_a_row_with_the_same_key_but_a_different_cell_is_kept_and_named_for_the_lane_to_reconcile(world, capsys):
+    import check_totest_format as ctf
+
+    lane = _tt(91, "do a", sha="def5678") + _tt(92, "do b")
+    lines = _land_totest(world, lane, _tt(5, "do x") + _tt(91, "do a"))
+    out = capsys.readouterr().out
+    assert _tt(91, "do a", sha="def5678").strip() in lines and _tt(91, "do a").strip() in lines  # the lane's edit survives
+    assert "#91" in out and "do a" in out and "Closed by (commit sha)" in out and "reconcile" in out
+    assert "line " not in out.split("reconcile")[0].split("WARNING")[-1]  # no worktree line numbers: the file is deleted after the land
+    assert len(ctf.find_duplicate_rows(ctf.parse_rows("\n".join(lines) + "\n"))) == 1  # premerge will refuse it
+
+
+def test_a_lane_only_duplicate_is_left_and_named_not_collapsed(world, capsys):
+    lines = _land_totest(world, _tt(93, "do c") + _tt(93, "do c"), _tt(5, "do x"))
+    out = capsys.readouterr().out
+    assert [ln for ln in lines if ln.startswith("| #93")] == [_tt(93, "do c").strip()] * 2
+    assert "#93" in out and "do c" in out and "reconcile" in out
+
+
+def test_identical_copies_of_a_row_main_carries_collapse_to_mains_copy(world):
+    lines = _land_totest(world, _tt(91) + _tt(91) + _tt(92, "do b"), _tt(5, "do x") + _tt(91))
+    assert [ln for ln in lines if ln.startswith("| #91")] == [_tt(91).strip()]
+
+
+def test_a_copy_that_differs_from_mains_in_the_sha_cell_is_not_dropped():
+    text = TT_HEAD + _tt(91, sha="def5678") + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91))
+    assert dropped == 0 and out == text
+    assert len(conflicts) == 1 and "#91" in conflicts[0] and "Closed by (commit sha)" in conflicts[0]
+
+
+def test_a_main_copy_lacking_the_closing_pipe_still_wins_over_the_lane_copy():
+    text = TT_HEAD + _tt(91) + _tt(5, "do x") + _tt(91)
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
+    assert dropped == 1 and not conflicts
+    assert out == TT_HEAD + _tt(5, "do x") + _tt(91)
+
+
+def test_a_totest_that_is_not_utf8_is_left_as_the_union_made_it_and_says_so(world, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"docs/ToTest.md": b"| header |\n| row0 |\n| lane \xff |\n"})
+    world.advance_main({"docs/ToTest.md": b"| header |\n| row0 |\n| main |\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    out = capsys.readouterr().out
+    assert "not UTF-8" in out and "skipped" in out
+    assert b"| lane \xff |" in _git_bytes(world.origin, "show", "feat/1-x:docs/ToTest.md")
+
+
+def test_a_row_missing_its_closing_pipe_is_closed(world):
+    lines = _land_totest(world, _tt(93, "do c").rstrip("\n |") + "\n" + _tt(94, "do d"), _tt(5, "do x"))
+    assert _tt(93, "do c").strip() in lines
+    assert all(ln.rstrip().endswith("|") for ln in lines if ln.startswith("|"))
+
+
+def test_a_genuinely_distinct_row_is_kept(world):
+    # same issue, different "Do this"; and another issue with the same "Do this": neither is a duplicate
+    lines = _land_totest(world, _tt(91, "do b") + _tt(7, "do a"), _tt(91, "do a"))
+    rows = [ln for ln in lines if ln.startswith("| #") and ln[3].isdigit()]
+    assert sorted(rows) == sorted([_tt(91, "do b").strip(), _tt(7, "do a").strip(), _tt(91, "do a").strip()])
+
+
+def test_normalize_totest_touches_only_queue_table_rows():
+    tail = "prose | with a pipe\n## Other\n| #1 | x | y\n"
+    text = "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(1) + _tt(2).rstrip(" |\n") + "\n" + tail
+    out, dropped, closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(1))
+    assert (dropped, closed, conflicts) == (1, 1, [])
+    assert out == "intro | not a row\n" + TT_HEAD + _tt(1) + _tt(2) + tail  # lines outside the table are byte-identical
+    out, dropped, closed, _ = lw.normalize_totest(TT_HEAD + _tt(2).rstrip(" |\n") + "\r\n", "")
+    assert (dropped, closed) == (0, 1) and out.endswith(" |\r\n")
+
+
+def test_a_row_ending_in_a_unicode_line_break_does_not_glue_the_next_line():
+    row = _tt(2).rstrip(" |\n")
+    text = TT_HEAD + row + "\x0c" + _tt(3)
+    out, _dropped, closed, _ = lw.normalize_totest(text, "")
+    assert closed == 1 and out == TT_HEAD + row + " |\x0c" + _tt(3)
+
+
+# --- the sha recorded for the merge hook is the one pushed (#904) ----------------------------------------
+
+
+def test_a_lane_behind_main_records_the_pushed_merge_commit_not_the_lane_tip(world):
+    import premerge_stamp
+
+    sha = world.commit_on_branch("feat/1-x", {"b.txt": b"new\n"})
+    world.advance_main({"a.txt": b"two\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    pushed = _git(world.origin, "rev-parse", "refs/heads/feat/1-x")
+    assert pushed != sha
+    landed_file = premerge_stamp.landed_path(world.clone)
+    assert landed_file is not None
+    assert list(json.loads(landed_file.read_text(encoding="utf-8")).values())[0]["head"] == pushed
+    sys.path.insert(0, str(SCRIPTS_DIR / "hooks"))
+    hook = importlib.import_module("require_premerge_before_pr")
+
+    assert hook.verdict(f"gh pr merge 7 --merge --match-head-commit {pushed}", world.clone) is None
+    assert hook.verdict(f"gh pr merge 7 --merge --match-head-commit {sha}", world.clone) is not None
 
 
 def test_any_other_conflict_refuses_names_the_files_and_pushes_nothing(world, capsys):
@@ -587,7 +752,15 @@ def _check(name: str, bucket: str, run: int | None = None) -> dict[str, str]:
 
 
 def _land_green(
-    world: World, replies: list, *, timeout: float = 100.0, poll: float = 10.0, merge_rc: int = 0, rerun: bool = False, rerun_rc: int = 0
+    world: World,
+    replies: list,
+    *,
+    timeout: float = 100.0,
+    poll: float = 10.0,
+    merge_rc: int = 0,
+    rerun: bool = False,
+    rerun_rc: int = 0,
+    gh_timeout: float | None = None,
 ) -> tuple[int, Clock]:
     if rerun_rc:
         (world.root / "gh.log.rerunrc").write_text(str(rerun_rc), encoding="utf-8")
@@ -598,6 +771,8 @@ def _land_green(
     body = world.root / "body.md"
     body.write_text("body\n", encoding="utf-8", newline="\n")
     ctx = world.ctx()
+    if gh_timeout is not None:
+        ctx.gh_timeout = gh_timeout
     clock = Clock()
     ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
     rc = lw.land(
@@ -784,6 +959,593 @@ def test_the_run_lock_records_the_commit_so_a_killed_run_leftover_can_be_judged_
     body.write_text("body\n", encoding="utf-8", newline="\n")
     assert lw.land(ctx, "feat/794-x", sha, "feat: x", body) == lw.EXIT_OK
     assert seen[0]["sha"] == sha and seen[0]["pid"] == os.getpid()
+
+
+# MEASURED 2026-10-16: PR #811 had every check green, yet land_wt logged "no checks were reported after 1800 s". The same log's
+# worktree cleanup failed with 3221225794 (0xC0000142, a process that could not start), so gh itself was failing on every poll and
+# the failure was read as "no checks yet".
+GH_DLL_FAIL = {"exit": 66, "stderr": ""}  # the real code was 3221225794, which does not fit a portable exit status
+
+
+def test_gh_failing_on_every_poll_is_not_reported_as_no_checks(world, capsys):
+    rc, _ = _land_green(world, [GH_DLL_FAIL], timeout=30.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_PENDING and _calls(world, "merge") == []
+    assert "gh could not read the checks" in out and "rc=66" in out
+    assert "no checks were reported" not in out
+
+
+def test_the_gh_error_text_is_shown(world, capsys):
+    _land_green(world, [{"exit": 1, "stderr": "HTTP 502: Bad Gateway"}], timeout=20.0, poll=10.0)
+    assert "HTTP 502" in capsys.readouterr().out
+
+
+def test_a_gh_failure_is_warned_about_once_not_every_poll(world, capsys):
+    _land_green(world, [GH_DLL_FAIL], timeout=50.0, poll=10.0)
+    assert capsys.readouterr().out.count("WARNING: gh pr checks failed") == 1
+
+
+def test_a_transient_gh_failure_still_merges_once_checks_are_green(world):
+    rc, _ = _land_green(world, [GH_DLL_FAIL, [_check("a", "pass"), _check("dependency review", "skipping")]])
+    assert rc == lw.EXIT_OK
+    assert len(_calls(world, "merge")) == 1
+
+
+def test_all_pass_plus_skipping_merges(world):
+    rc, _ = _land_green(world, [[_check("a", "pass"), _check("dependency review", "skipping")]])
+    assert rc == lw.EXIT_OK and len(_calls(world, "merge")) == 1
+
+
+def test_genuine_no_checks_reported_keeps_its_own_message(world, capsys):
+    _land_green(world, ["no checks reported on the 'feat/66-x' branch"], timeout=20.0, poll=10.0)
+    out = capsys.readouterr().out
+    assert "no checks were reported" in out and "gh could not read" not in out
+
+
+# --- round 6: every subprocess is bounded, and a timeout kills the whole tree ---------------------------------------
+
+
+def _pid_gone(pid: int, wait: float = 10.0) -> bool:
+    end = time.time() + wait
+    while time.time() < end:
+        if not lw.pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+GRANDCHILD = """\
+import subprocess, sys, time
+from pathlib import Path
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+Path(sys.argv[1]).write_text(str(gc.pid))
+time.sleep(60)
+"""
+
+
+def test_run_bounded_kills_the_whole_tree_on_timeout(tmp_path):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    start = time.time()
+    with pytest.raises(subprocess.TimeoutExpired):
+        lw.run_bounded([sys.executable, str(script), str(pidfile)], timeout=2.0)
+    assert time.time() - start < 15  # the grandchild holds the pipes open: only a tree kill returns promptly
+    assert _pid_gone(int(pidfile.read_text()))
+
+
+def test_run_bounded_returns_output_and_stdin_like_run():
+    proc = lw.run_bounded([sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read()); sys.exit(3)"], stdin=b"hi", timeout=30)
+    assert proc.returncode == 3 and proc.stdout == b"hi"
+
+
+def test_git_has_a_timeout_and_names_it(tmp_path):
+    hang = f"alias.zz=!{Path(sys.executable).as_posix()} -c 'import time; time.sleep(60)'"
+    with pytest.raises(lw.LandError, match="timed out"):
+        lw.git(tmp_path, "-c", hang, "zz", timeout=1.0)
+
+
+def test_a_hung_gh_pr_checks_is_a_read_failure_not_a_hang(world):
+    (world.root / "gh.log.hang").write_text("pr checks", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    start = time.time()
+    assert lw._read_checks(ctx, "7") is None
+    assert time.time() - start < 15
+    assert "timed out" in ctx.checks_error
+
+
+def test_hung_check_reads_still_reach_the_deadline(world, capsys):
+    (world.root / "gh.log.hang").write_text("pr checks", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 0.5
+    clock = Clock()
+    ctx.sleep, ctx.monotonic = clock.sleep, clock.monotonic
+    assert lw._merge_when_green(ctx, "https://github.com/o/r/pull/7", "a" * 40, 30.0, 10.0) == lw.EXIT_CHECKS_PENDING
+    assert "timed out" in capsys.readouterr().out
+    assert _calls(world, "merge") == []
+
+
+def test_a_hung_gh_pr_merge_is_a_failure_that_names_the_pr(world, capsys):
+    (world.root / "gh.log.hang").write_text("pr merge", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    assert rc == lw.EXIT_FAILED
+    assert "timed out" in capsys.readouterr().out
+
+
+def test_a_hung_gh_pr_create_is_a_failure(world):
+    (world.root / "gh.log.hang").write_text("pr create", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    with pytest.raises(lw.LandError, match="timed out"):
+        lw._create_pr(ctx, world.clone, "feat/x", "t", world.root / "body.md")
+
+
+def test_a_hung_gh_run_rerun_is_not_a_successful_rerun(world):
+    (world.root / "gh.log.hang").write_text("run rerun", encoding="utf-8")
+    ctx = world.ctx()
+    ctx.gh_timeout = 1.0
+    assert lw._rerun_failed(ctx, "7", [_check("a", "fail", run=5)]) is False
+
+
+def test_proc_start_time_is_stable_for_a_live_pid_and_none_for_a_dead_one():
+    first = lw.proc_start_time(os.getpid())
+    assert isinstance(first, float) and first > 0
+    assert lw.proc_start_time(os.getpid()) == first
+    assert lw.proc_start_time(_dead_pid()) is None
+
+
+# --- round 7 ---------------------------------------------------------------------------------------------------------
+
+
+def _origin_sha(world: World, branch: str) -> str:
+    return _git(world.origin, "rev-parse", f"refs/heads/{branch}")
+
+
+def test_the_merge_is_pinned_to_the_head_that_was_pushed(world):
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_OK
+    merge = _calls(world, "merge")[0]
+    assert merge[merge.index("--match-head-commit") + 1] == _origin_sha(world, "feat/66-x")
+
+
+def test_a_pr_head_that_moved_since_the_push_is_never_merged(world, capsys):
+    (world.root / "gh.log.headoid").write_text("f" * 40, encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_RED
+    assert _calls(world, "merge") == []
+    out = capsys.readouterr().out
+    assert "head" in out and "changed" in out and "https://github.com/o/r/pull/7" in out and out.isascii()
+
+
+def test_an_unreadable_pr_head_is_never_merged_blind(world):
+    (world.root / "gh.log.hang").write_text("pr view", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert _calls(world, "merge") == []
+
+
+def test_a_pr_view_with_no_head_is_never_merged_blind(world):
+    (world.root / "gh.log.headoid").write_text("NONE", encoding="utf-8")  # the stub prints {}
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert _calls(world, "merge") == []
+
+
+def test_premerge_is_bounded_and_a_timeout_is_a_red_result(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(argv, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw["timeout"], b"", b"")
+
+    monkeypatch.setattr(lw, "run_bounded", fake)
+    code, out = lw.run_premerge(tmp_path, tmp_path, False, timeout=42.0)
+    assert seen["timeout"] == 42.0
+    assert code == 124 and "ERROR" in out and "timed out after 42 s" in out
+    lw.run_premerge(tmp_path, tmp_path, False)
+    assert seen["timeout"] == lw.PREMERGE_TIMEOUT_SECONDS
+
+
+def test_the_premerge_timeout_flag_reaches_the_real_premerge(world, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lw, "land", lambda ctx, *a, **k: seen.append(ctx.premerge) or 0)
+    body = world.root / "body.md"
+    body.write_text("b\n", encoding="utf-8", newline="\n")
+    args = ["--branch", "feat/1-x", "--sha", "a" * 40, "--title", "t", "--body-file", str(body)]
+    assert lw.main([*args, "--premerge-timeout", "5"], repo=world.clone) == 0
+    assert lw.main(args, repo=world.clone) == 0
+    assert seen[0].keywords["timeout"] == 5.0
+    assert seen[1].keywords["timeout"] == lw.PREMERGE_TIMEOUT_SECONDS
+
+
+def _hook(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(f"#!/bin/sh\n{body}\n".encode())
+    path.chmod(0o755)  # git skips a hook that is not executable (Windows ignores the mode bit; Linux CI does not)
+
+
+def _land_with_push_timeout(world, branch):
+    sha = world.commit_on_branch(branch, {"b.txt": b"new\n"})
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    ctx = world.ctx()
+    ctx.git_timeout = 6.0
+    return lw.land(ctx, branch, sha, "feat: t", body), ctx
+
+
+def test_a_push_that_timed_out_but_reached_origin_carries_on(world, capsys):
+    _hook(world.origin / "hooks" / "post-receive", "sleep 25")  # the ref is updated, then the client waits on the hook
+    rc, _ = _land_with_push_timeout(world, "feat/77-x")
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_OK, out
+    assert "push timed out" in out and "origin already has" in out
+    assert "feat/77-x" in world.remote_branches()
+    assert _calls(world, "create")
+
+
+def test_a_push_that_timed_out_and_did_not_arrive_says_so(world, capsys):
+    _hook(world.clone / ".git" / "hooks" / "pre-push", "sleep 25")
+    rc, _ = _land_with_push_timeout(world, "feat/77-y")
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_FAILED
+    assert "push timed out" in out and "not on origin" in out
+    assert "feat/77-y" not in world.remote_branches()
+    assert not _calls(world, "create")
+
+
+def test_a_push_timeout_with_an_unanswerable_ls_remote_names_the_branch(world, capsys, monkeypatch):
+    real = lw.git
+
+    def spy(cwd, *args, **kw):
+        if args[:1] in (("push",), ("ls-remote",)):
+            raise lw.LandTimeout("git timed out after 1 s", lw.EXIT_FAILED)
+        return real(cwd, *args, **kw)
+
+    monkeypatch.setattr(lw, "git", spy)
+    sha = world.commit_on_branch("feat/77-z", {"b.txt": b"new\n"})
+    body = world.root / "body.md"
+    body.write_text("body\n", encoding="utf-8", newline="\n")
+    rc = lw.land(world.ctx(), "feat/77-z", sha, "feat: t", body)
+    assert rc == lw.EXIT_FAILED
+    assert "branch may exist on origin: feat/77-z" in capsys.readouterr().out
+
+
+def test_a_lock_left_in_the_throwaway_worktree_goes_with_the_worktree(world):
+    sha = world.commit_on_branch("feat/78-x", {"b.txt": b"new\n"})
+    wt = world.tmp_root / "feat-78-x-20200101000001"
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    _git(world.clone, "worktree", "add", "-q", "--detach", str(wt), sha)
+    gitdir = Path(_git(wt, "rev-parse", "--absolute-git-dir"))
+    (gitdir / "index.lock").write_bytes(b"")  # what a killed git can leave behind
+    lw._remove_worktree(world.ctx(), wt)
+    assert not wt.exists() and not gitdir.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="ctypes prototypes are a Windows concern")
+def test_the_win32_calls_have_pointer_safe_prototypes():
+    import ctypes
+
+    k32 = lw._kernel32()
+    assert k32.OpenProcess.restype is ctypes.c_void_p
+    assert k32.CloseHandle.argtypes == [ctypes.c_void_p]
+    assert k32.GetProcessTimes.argtypes[0] is ctypes.c_void_p
+    assert k32.GetExitCodeProcess.argtypes[0] is ctypes.c_void_p
+    assert lw.pid_alive(os.getpid()) is True
+
+
+def test_kill_pid_tree_ends_a_process_and_its_child_and_reports_it(tmp_path):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    try:
+        end = time.time() + 10
+        while not pidfile.exists() and time.time() < end:
+            time.sleep(0.1)
+        assert lw.kill_pid_tree(proc.pid) is True
+        assert _pid_gone(int(pidfile.read_text()))
+        assert not lw.pid_alive(proc.pid)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+FORKER = """import subprocess, sys, time
+end = time.time() + 20
+while time.time() < end:
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+"""
+
+POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="the POSIX /proc walk; Windows uses taskkill /T")
+
+
+def _session_members(sid: int) -> list[int]:
+    """Live (non-zombie) pids in session `sid`, from /proc itself rather than anything a process reports about itself."""
+    found = []
+    for entry in os.listdir("/proc"):
+        if entry.isdigit():
+            try:
+                rest = Path(f"/proc/{entry}/stat").read_text(errors="replace").rpartition(")")[2].split()
+            except OSError:
+                continue
+            if int(rest[3]) == sid and rest[0] not in ("Z", "X", "x"):
+                found.append(int(entry))
+    return found
+
+
+@POSIX_ONLY
+def test_kill_pid_tree_leaves_no_child_forked_while_it_was_scanning(tmp_path):
+    script = tmp_path / "forker.py"
+    script.write_text(FORKER, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script)], start_new_session=True)  # pid == sid: every descendant shares it
+    try:
+        end = time.time() + 10
+        while len(_session_members(proc.pid)) < 4 and time.time() < end:
+            time.sleep(0.05)
+        assert len(_session_members(proc.pid)) >= 4
+        assert lw.kill_pid_tree(proc.pid) is True
+        proc.wait()
+        end = time.time() + 5
+        while _session_members(proc.pid) and time.time() < end:
+            time.sleep(0.1)
+        assert _session_members(proc.pid) == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_skips_a_pid_whose_start_time_changed():
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        start = lw._proc_ident(victim.pid)
+        assert isinstance(start, int)
+        assert lw._kill_if_same(victim.pid, start + 1) is False  # a reused pid has a different start time
+        assert victim.poll() is None
+        assert lw._kill_if_same(victim.pid, start) is True
+        victim.wait(timeout=10)
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+ORPHANER = """import subprocess, sys, time
+from pathlib import Path
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+Path(sys.argv[1]).write_text(str(gc.pid))
+while not Path(sys.argv[2]).exists():
+    time.sleep(0.05)
+"""
+
+
+@POSIX_ONLY
+def test_a_posix_kill_still_reaches_a_victim_whose_parent_died_after_the_scan(tmp_path):
+    pidfile, gofile = tmp_path / "gc.pid", tmp_path / "go"
+    script = tmp_path / "orphaner.py"
+    script.write_text(ORPHANER, encoding="utf-8", newline="\n")
+    parent = subprocess.Popen([sys.executable, str(script), str(pidfile), str(gofile)])
+    gc = 0
+    try:
+        end = time.time() + 10
+        while not (pidfile.exists() and pidfile.read_text()) and time.time() < end:
+            time.sleep(0.05)
+        gc = int(pidfile.read_text())
+        start = lw._proc_ident(gc)  # recorded while the parent is alive, like a scan
+        assert start is not None
+        gofile.write_text("x")
+        parent.wait(timeout=10)  # the parent dies after the scan: gc is reparented to init
+        fields = lw._proc_fields(gc)
+        assert fields is not None
+        assert fields[1] != parent.pid
+        assert lw._kill_if_same(gc, start) is True  # identity is pid + start time only, never the ppid
+        assert _pid_gone(gc)
+    finally:
+        parent.kill()
+        parent.wait()
+        if gc:
+            with contextlib.suppress(OSError):
+                os.kill(gc, 9)
+
+
+@POSIX_ONLY
+def test_a_posix_kill_freezes_the_root_before_it_scans_for_descendants(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    states = []
+    real = lw._proc_table
+
+    def spy():
+        fields = lw._proc_fields(victim.pid)
+        states.append(fields[0] if fields else None)
+        return real()
+
+    monkeypatch.setattr(lw, "_proc_table", spy)
+    try:
+        assert lw.kill_pid_tree(victim.pid) is True
+        assert states and set(states) == {"T"}  # stopped (and the stop confirmed) at EVERY scan, so nothing can fork unseen
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_waits_for_a_late_stop_before_trusting_a_scan(monkeypatch):
+    import threading
+
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._kill_if_same
+    states = []
+
+    timers = []
+
+    def late_stop(pid, start, sig=None):  # SIGSTOP "returns" at once but only lands 0.15 s later
+        if pid == victim.pid and sig == lw.signal.SIGSTOP:
+            timer = threading.Timer(0.15, lambda: real(pid, start, sig))  # identity-checked, so never a recycled pid
+            timer.daemon = True
+            timers.append(timer)
+            timer.start()
+            return True
+        return real(pid, start, sig)
+
+    real_table = lw._proc_table
+
+    def spy():
+        fields = lw._proc_fields(victim.pid)
+        states.append(fields[0] if fields else None)
+        return real_table()
+
+    monkeypatch.setattr(lw, "_kill_if_same", late_stop)
+    monkeypatch.setattr(lw, "_proc_table", spy)
+    try:
+        assert lw.kill_pid_tree(victim.pid) is True
+        assert states and set(states) == {"T"}  # the scan waited for the stop to land
+    finally:
+        for timer in timers:
+            timer.cancel()
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_without_proc_still_kills_the_root(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)
+    monkeypatch.setattr(lw.os.path, "isdir", lambda p: False if p == "/proc" else real_isdir(p))  # what macOS looks like
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=3.0) is True
+        assert victim.wait(timeout=10) != 0
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_with_proc_but_an_unreadable_root_does_not_blind_kill(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(lw, "_proc_ident", lambda pid: None)  # /proc exists: None means gone (or a transient parse failure)
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=0.5) is False
+        assert victim.poll() is None
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_interrupted_right_after_the_stop_does_not_leave_it_frozen(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._kill_if_same
+
+    def stop_then_interrupt(pid, start, sig=None):
+        result = real(pid, start, sig)
+        if pid == victim.pid and sig == lw.signal.SIGSTOP:
+            raise KeyboardInterrupt  # between the signal and the caller's bookkeeping
+        return result
+
+    monkeypatch.setattr(lw, "_kill_if_same", stop_then_interrupt)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            lw.kill_pid_tree(victim.pid)
+        monkeypatch.undo()
+        assert victim.wait(timeout=10) != 0  # killed by the finally (it was registered before the stop), not left in state T
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_never_signals_a_process_group_or_everything(monkeypatch):
+    sent = []
+    monkeypatch.setattr(lw.os, "kill", lambda pid, sig: sent.append((pid, sig)))  # a real os.kill(0/-1) would be a disaster
+    for bad in (0, 1, -1):
+        assert lw.kill_pid_tree(bad, wait=0.1) is False
+    assert sent == []
+
+
+@POSIX_ONLY
+def test_a_posix_kill_leaves_a_recycled_root_alone(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    real = lw._proc_ident
+    calls = []
+
+    def ident(pid):  # the first read (the caller's record of who the root was) predates a pid recycle
+        calls.append(pid)
+        value = real(pid)
+        return value + 1 if len(calls) == 1 and value is not None else value
+
+    monkeypatch.setattr(lw, "_proc_ident", ident)
+    try:
+        assert lw.kill_pid_tree(victim.pid, wait=0.5) is False
+        assert victim.poll() is None  # a different process than the one recorded: never signalled
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_whose_root_stop_failed_still_kills_the_descendants(tmp_path, monkeypatch):
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(GRANDCHILD, encoding="utf-8", newline="\n")
+    proc = subprocess.Popen([sys.executable, str(script), str(pidfile)])
+    real = lw._kill_if_same
+
+    def fake(pid, start, sig=None):
+        return None if (pid == proc.pid and sig == lw.signal.SIGSTOP) else real(pid, start, sig)  # None: the stop raised OSError
+
+    monkeypatch.setattr(lw, "_kill_if_same", fake)
+    try:
+        end = time.time() + 10
+        while not pidfile.exists() and time.time() < end:
+            time.sleep(0.1)
+        assert lw.kill_pid_tree(proc.pid) is True
+        assert _pid_gone(int(pidfile.read_text()))
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@POSIX_ONLY
+def test_a_posix_kill_that_hits_an_exception_does_not_leave_the_tree_stopped(monkeypatch):
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    def boom():
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(lw, "_proc_table", boom)
+    try:
+        with pytest.raises(RuntimeError):
+            lw.kill_pid_tree(victim.pid)
+        victim.wait(timeout=10)  # killed by the finally, not left in state T
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+def test_pid_alive_treats_a_lowercase_x_state_as_dead(monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX /proc")
+    real = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, *a, **k: "1 (a b) x " + " ".join(["0"] * 25) if str(self).startswith("/proc/") else real(self, *a, **k)
+    )
+    assert lw.pid_alive(os.getpid()) is False
+
+
+def test_a_transient_pr_view_failure_is_retried_with_backoff_then_merged(world):
+    (world.root / "gh.log.viewfail").write_text("2", encoding="utf-8")
+    rc, clock = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_OK
+    assert len(_calls(world, "view")) == 3 and len(_calls(world, "merge")) == 1
+    assert clock.sleeps == [lw.HEAD_READ_BACKOFF_SECONDS, 2 * lw.HEAD_READ_BACKOFF_SECONDS]
+
+
+def test_a_pr_view_that_keeps_failing_gives_up_after_three_reads_without_merging(world):
+    (world.root / "gh.log.viewfail").write_text("99", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("a", "pass")]])
+    assert rc == lw.EXIT_CHECKS_PENDING
+    assert len(_calls(world, "view")) == 3 and _calls(world, "merge") == []
 
 
 def test_a_failing_record_landed_only_warns_and_the_landing_still_succeeds(world, monkeypatch, capsys):

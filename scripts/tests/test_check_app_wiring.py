@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -822,3 +824,347 @@ def test_a_consumer_of_a_nested_generic_service_is_satisfied_and_the_registratio
 def test_a_nested_generic_factory_registration_is_still_a_factory_registration():
     text = "s.AddSingleton<IRepo<Run, Guid>>(sp => new Repo());"
     assert caw._factory_only_types(text) == {"IRepo<Run,Guid>"}
+
+
+# --- #568: a display property no XAML binds is wired to nothing, whatever C# and tests read -------------------
+
+ITEM_CS = """
+namespace Demo.ViewModels;
+
+public sealed class RunListItem
+{
+    public string Title { get; init; } = "";
+
+    public string ReasonText { get; init; } = "";
+}
+"""
+
+ITEM_PAGE = """
+<Page x:Class="Demo.Views.RunsPage">
+    <ListView>
+        <ListView.ItemTemplate>
+            <DataTemplate x:DataType="vm:RunListItem">
+                <StackPanel>
+                    <TextBlock Text="{x:Bind Title}" />
+                    <TextBlock Text="{x:Bind ReasonText}" />
+                </StackPanel>
+            </DataTemplate>
+        </ListView.ItemTemplate>
+    </ListView>
+</Page>
+"""
+
+ITEM_READER = "public class Reader { string A(RunListItem i) => i.ReasonText; }\n"
+ITEM_TEST = "public class T { void A(RunListItem i) { _ = i.ReasonText; } }\n"
+
+
+def _item_tree(root: Path, page: str = ITEM_PAGE, extra: dict[str, str] | None = None) -> Path:
+    files = {
+        "src/Demo.Presentation/RunListItem.cs": ITEM_CS,
+        "src/Demo.App/Views/RunsPage.xaml": page,
+    }
+    files.update(extra or {})
+    return _tree(root, files)
+
+
+def test_a_template_item_property_bound_in_the_template_is_clean(tmp_path):
+    assert _codes_of(_item_tree(tmp_path / "w"), "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_a_template_item_property_with_its_x_bind_deleted_is_flagged_by_name(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', "")
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_production_and_test_references_do_not_count_as_a_binding(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', "")
+    root = _item_tree(
+        tmp_path / "w",
+        page,
+        {"src/Demo.App/Reader.cs": ITEM_READER, "tests/Demo.Tests/ItemTests.cs": ITEM_TEST},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_a_name_in_plain_xaml_text_that_is_not_a_binding_does_not_count(tmp_path):
+    page = ITEM_PAGE.replace('<TextBlock Text="{x:Bind ReasonText}" />', '<TextBlock x:Name="ReasonText" />')
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+def test_a_property_used_inside_an_x_bind_function_call_counts_as_bound(tmp_path):
+    page = ITEM_PAGE.replace("{x:Bind ReasonText}", "{x:Bind local:Fmt.Show(ReasonText)}")
+    assert _codes_of(_item_tree(tmp_path / "w", page), "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_a_positional_record_parameter_nothing_binds_is_flagged(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.Presentation/Row.cs": "public sealed record Row(string Header, string Hidden);\n",
+            "src/Demo.App/Views/RowsPage.xaml": (
+                '<Page><DataTemplate x:DataType="vm:Row"><TextBlock Text="{x:Bind Header}" /></DataTemplate></Page>'
+            ),
+        },
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["Row.Hidden"]
+
+
+def test_a_page_viewmodel_plain_property_nothing_binds_is_flagged(tmp_path):
+    vm = VM.replace("[RelayCommand]", 'public string Summary => "";\n\n    [RelayCommand]')
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.Presentation/ViewModels/ThingViewModel.cs": vm,
+            "src/Demo.App/Views/ThingPage.xaml": PAGE,
+            "src/Demo.App/Strings/en-US/Resources.resw": RESW,
+        },
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["ThingViewModel.Summary"]
+
+
+def test_a_command_property_and_a_private_or_static_property_are_not_display_properties(tmp_path):
+    cs = (
+        "public sealed class RunListItem\n{\n"
+        '    public string Title { get; init; } = "";\n'
+        "    public IRelayCommand OpenCommand { get; }\n"
+        '    private string Secret { get; } = "";\n'
+        '    public static string Shared { get; } = "";\n'
+        '    public string Method() => "";\n}\n'
+    )
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="{x:Bind Title}" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == []
+
+
+def test_the_display_property_scanner_sees_the_real_tree():
+    # Vacuity: the scanner must find at least one typed template and its properties on the real app.
+    scan = caw.read_tree(REPO_ROOT / "app")
+    assert caw._display_property_candidates(scan), "no display-property candidates found in app/"
+
+
+def test_only_string_text_is_held_to_a_binding_not_state_flags_enums_or_identifiers(tmp_path):
+    cs = (
+        "public sealed class RunListItem\n{\n"
+        '    public string Title { get; init; } = "";\n'
+        "    public bool IsOk { get; init; }\n"
+        "    public RunStatusFilter Status { get; init; }\n"
+        '    public string JobId { get; init; } = "";\n'
+        "    public string? ActionUrl { get; init; }\n"
+        '    public string Hint { get; init; } = "";\n}\n'
+    )
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="{x:Bind Title}" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.Hint"]
+
+
+def test_a_nullable_string_property_is_a_display_property(tmp_path):
+    cs = "public sealed class RunListItem\n{\n    public string? ReasonText { get; }\n}\n"
+    page = '<Page><DataTemplate x:DataType="vm:RunListItem"><TextBlock Text="x" /></DataTemplate></Page>'
+    root = _tree(
+        tmp_path / "w",
+        {"src/Demo.Presentation/RunListItem.cs": cs, "src/Demo.App/Views/RunsPage.xaml": page},
+    )
+    assert _codes_of(root, "UNBOUND-DISPLAY-PROPERTY") == ["RunListItem.ReasonText"]
+
+
+# --- #601: UNREGISTERED-RESOLVE blind spots ---------------------------------------------------------------------
+
+
+def test_a_generic_resolve_of_an_unregistered_type_is_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IOptions<Missing>>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["IOptions<Missing>"]  # was: nothing, the regex stopped at '<'
+
+
+def test_a_generic_resolve_of_a_registered_generic_type_is_not_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton<IRepo<Run, Guid>, Repo>();",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IRepo<Run,Guid>>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Repo.cs": "public sealed class Repo { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_generic_type_parameter_resolve_is_not_reported(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/Helpers.cs": "public static class H { public static T Get<T>(IServiceProvider p) => p.GetRequiredService<T>(); }\n",  # noqa: E501
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_resolve_in_another_startup_file_is_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/AppStartup.cs": (
+                "public static class AppStartup { public static void Run(IServiceProvider p) {"
+                " p.GetRequiredService<Dep>(); p.GetRequiredService<Ghost>(); } }\n"
+            ),
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Ghost"]
+
+
+def test_a_resolve_in_a_test_file_is_not_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "tests/Demo.Tests/T.cs": "public class T { void A(IServiceProvider p) { p.GetRequiredService<Ghost>(); } }\n",
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_type_registered_in_another_startup_file_satisfies_a_resolve(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Dep>();"),
+            "src/Demo.App/Startup/Extra.cs": "public static class Extra { public static void Add(IServiceCollection s) { s.AddSingleton<Other>(); } }\n",  # noqa: E501
+            "src/Demo.App/Startup/AppStartup.cs": "public static class A { public static void Run(IServiceProvider p) { p.GetRequiredService<Other>(); } }\n",  # noqa: E501
+            "src/Demo.Core/Dep.cs": "public sealed class Dep { }\n",
+            "src/Demo.Core/Other.cs": "public sealed class Other { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []
+
+
+def test_a_method_group_factory_is_a_factory_registration_not_constructor_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>(CreateWatcher);"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []  # was: Watcher(Func<int>)
+
+
+def test_an_interface_and_implementation_method_group_factory_is_skipped_too(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<IWatcher, Watcher>(Startup.Create);"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher : IWatcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []
+
+
+def test_a_plain_registration_is_still_constructor_checked(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration("s.AddSingleton<Watcher>();"),
+            "src/Demo.Core/Watcher.cs": "public sealed class Watcher { public Watcher(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == ["Watcher(Func<int>)"]
+
+
+def test_a_cast_bodied_factory_registers_the_cast_type(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton(_ => (IFoo)new Foo());",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<IFoo>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Foo.cs": "public sealed class Foo : IFoo { public Foo(Func<int> f) { } }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == []  # was: IFoo (registered nothing)
+    assert _codes_of(root, "UNREGISTERED-DEPENDENCY") == []  # a factory, so Foo's constructor is not injected
+
+
+def test_a_cast_bodied_factory_registers_what_it_returns_not_the_implementation(tmp_path):
+    root = _tree(
+        tmp_path / "w",
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": _registration(
+                "s.AddSingleton(_ => (IFoo)new Foo());",
+                "s.AddSingleton<W>(sp => new W(sp.GetRequiredService<Foo>()));",
+            ),
+            "src/Demo.Core/W.cs": "public sealed class W { }\n",
+            "src/Demo.Core/Foo.cs": "public sealed class Foo : IFoo { }\n",
+        },
+    )
+    assert _codes_of(root, "UNREGISTERED-RESOLVE") == ["Foo"]
+
+
+# --- #601 follow-up: the generic-argument scanners are bounded (a premerge guard must never stall a landing) -----
+
+_PATHOLOGICAL = {
+    "unbalanced_adds": "s.AddSingleton<" * 1500,
+    "unbalanced_resolves": "sp.GetRequiredService<" * 1500,
+    "deep_nesting": "sp.GetRequiredService<" + "A<" * 3000 + "B" + ">" * 3000 + ">()",
+    "ten_k_line_no_close": "sp.GetRequiredService<" + "IFoo, " * 2000,
+    "comparisons": "if (a < b && c < d) " * 600,
+    "long_property_line": "public " + "Dictionary<string, " * 600 + "int" + ">" * 600 + " Name",
+}
+
+_CHILD = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import check_app_wiring as caw
+root = Path(sys.argv[2])
+start = time.perf_counter()
+caw.collect_findings(root)
+print(f"{time.perf_counter() - start:.3f}")
+"""
+
+
+def _pathological_tree(root: Path, body: str) -> Path:
+    registration = "public static class ServiceRegistration {\n  void A(IServiceCollection s, IServiceProvider sp) {\n" + body + "\n  }\n}\n"
+    return _tree(
+        root,
+        {
+            "src/Demo.App/Startup/ServiceRegistration.cs": registration,
+            "src/Demo.Presentation/ThingViewModel.cs": "public sealed class ThingViewModel {\n" + body + " { get; set; }\n}\n",
+            "src/Demo.App/Views/ThingPage.xaml": '<Page><TextBlock Text="{x:Bind Name}" /></Page>',
+        },
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_PATHOLOGICAL))
+def test_pathological_generic_input_is_scanned_in_linear_time(tmp_path, name):
+    root = _pathological_tree(tmp_path / "w", _PATHOLOGICAL[name])
+    result = subprocess.run(
+        [sys.executable, "-c", _CHILD, str(SCRIPTS_DIR), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=30,  # a hang fails here instead of stalling the suite
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert float(result.stdout.strip()) < 2.0, f"{name} took {result.stdout.strip()}s"

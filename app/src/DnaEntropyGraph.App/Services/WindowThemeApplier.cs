@@ -12,6 +12,10 @@ namespace DnaEntropyGraph.App.Services;
 /// </summary>
 public sealed class WindowThemeApplier : IThemeApplier
 {
+    private readonly IHighContrastSource _highContrast;
+
+    public WindowThemeApplier(IHighContrastSource highContrast) => _highContrast = highContrast;
+
     private FrameworkElement? _root;
     private AppWindowTitleBar? _titleBar;
 
@@ -36,7 +40,8 @@ public sealed class WindowThemeApplier : IThemeApplier
             // A null palette (follow the system) resets every colour to the system default.
             // Issue #110: under a Windows high contrast theme the system's own caption colours are the readable ones;
             // the fixed black or white palette would sit on a background of the user's choosing, so it is not applied.
-            var palette = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? null : CaptionButtonPalette.For(resolved);
+            // Issue #701: HighContrastThemeReapplier calls Apply again when the user switches high contrast while the app runs.
+            var palette = _highContrast.IsHighContrast ? null : CaptionButtonPalette.For(resolved);
             _titleBar.ButtonForegroundColor = palette?.Foreground;
             _titleBar.ButtonHoverForegroundColor = palette?.Foreground;
             _titleBar.ButtonPressedForegroundColor = palette?.Foreground;

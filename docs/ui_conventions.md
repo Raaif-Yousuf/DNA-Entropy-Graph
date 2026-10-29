@@ -31,9 +31,28 @@ Shell behaviour MEASURED 2026-10-02 (#489, #490): the header is the localized
 is selected at startup (`NavigationView.Loaded`), so header, selection and frame agree; a
 destination with no page registered in `Startup/NavigationRoutes.cs` shows the one generic
 `PlaceholderPage` instead of an empty frame; the OS window title is `AppDisplayName`.
+Header and selection follow the frame, not the click (#499, #701, #807): the shell subscribes to
+`INavigator.CurrentPageChanged`, so a nav item, a page's own `NavigateTo`, Back and a deep link all
+update `CurrentPageTitle` and `SelectedNavKey`. The in-page headings of RunProgress (the stage title), Results (the run's name) and Viewer (an
+error title only) say something other than the page name, so the NavigationView header is kept above them (checked
+2026-10-16: no page repeats its own `PageTitle_<key>`). The rule for a page with no nav item (RunProgress,
+Results, Viewer, Wizard): it shows its own `PageTitle_<key>` header and NO item is selected (a
+NavigationView raises no selection change for an already-selected item, so keeping the parent
+selected would make the parent's nav item unclickable). `NavSelectionBinder` mirrors
+`SelectedNavKey` onto the NavigationView; `ShellViewModel.NavigateTo` ignores a null key and the
+page the frame already shows, so that mirror never pushes a duplicate page. `RecordingNavigator`
+must forward `CurrentPageKey` and `CurrentPageChanged`: DI hands the shell the decorator.
 Window placement: nothing is saved while the window is minimized or maximized, a saved
 rect that is the minimized sentinel (-32000) or smaller than 320x200 is refused, and a
 first launch is 1280x800 DIPs (scaled by the window DPI, kept within 5% of the work area).
+
+Session restore (#244): `RecordingNavigator` wraps the app's `INavigator`, so every navigation (nav rail or any ViewModel) saves
+`session.page` and `session.run` (`SessionStore`). Only pages reopenable from a key are saved: New run, Runs, Cloud, Settings, and
+Results or Run progress with their run id; the viewer and the wizard leave the last page alone. At startup `MainWindow.Loaded`
+awaits `ShellViewModel.PrepareSessionAsync`, selects `StartupNavKey` (the remembered nav page, or Runs for a remembered run), and
+the first `NavigateTo` of that item opens the run page on top, once. A remembered run that is gone opens New run; a Run progress
+page whose run completed while the app was closed opens Results. An Open with or notification launch is routed by
+`ActivationRouter` after the shell is ready, so it still wins. Both keys are `Excluded` in `SettingsCatalog` (not shared).
 
 ## 2. Copy rules (CLAUDE.md rule 13; this is the rationale and the worked examples)
 
@@ -236,6 +255,20 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). The paste box (closed), the status line and Treat as RNA also reset. A start that fails keeps everything.
+What stays across runs, on purpose: the preset, the ticked output files and the run target (they are the user's
+intent for runs in general and match Settings); `PresetPickerTests` pins it. Not persisted across app restarts.
+Back to the page never re-delivers its Open-with files: the page forwards `NavigationArrival` (parameter plus
+`NavigationMode` as a number) and only a New navigation's parameter is acted on. `NewRunPage.OnNavigatedFrom`
+calls `Bindings.StopTracking()`, so the long-lived ViewModel (its `PropertyChanged` and `Items`) does not keep a
+left page alive; the page is not cached, a new instance is made on every visit. THEORY (unverified): the
+memory effect itself was not measured, only that the release is explicit.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,
@@ -300,6 +333,18 @@ same commit** (decide: share it, or say why not; a path, an id, a secret or a de
 carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
 which every settings group already treats as "re-read the store".
 
+### Earlier version import (issue #243)
+
+`PrototypeImportViewModel` (one singleton, shared by the shell and the Settings "Earlier version" group). On the first launch of a
+profile `MainWindow.Loaded` calls `ShellViewModel.RunStartupOffersAsync` after `MarkReady`; it scans off the UI thread, sets
+`prototype_import_done` whatever it finds, and asks (a `ConfirmAsync` dialog) only when there are runs not already in history.
+The scan reads the places the prototype's own code used (MEASURED 2026-10-16 from `worker/legacy`: `%APPDATA%\dna-entropy\config.json`
+with `last_zone` and `ssh_key_file`, and `%USERPROFILE%\Downloads\<name>\<name>.entropy.bedgraph`, which is the profile folder, not the
+Windows known folder). It never writes there. An imported row is `Completed`, `Imported = true`, target `local`, with no bucket,
+prefix or VM, so every cloud action is off; its `OutputDir` is the folder it was found in. Ids are `legacy-` plus a hash of the
+folder, so a second import adds nothing. A folder holding `provenance.json` was written by this app and is skipped.
+`RunRecord.Imported` means two things, told apart without a migration: `IsPrototypeImport` (`Imported` and target `local`) shows the earlier-version delete hint and no cloud badge; `IsCloudImport` (`Imported` and not local, issue #111) shows the "Found in your cloud results" badge, and only it is written to the bucket-dismissals setting on Remove. The first-launch tour (#143) starts only after `RunStartupOffersAsync` finishes (`ShellViewModel.OnWindowLoadedAsync` awaits it), so the tour never opens over the dialog, in either call order (whichever of the two runs first starts the one offers task; the tour starts however it ended). A prototype row's Delete cloud copy tooltip is its own string (`Runs_DeleteCloud_Hint_Prototype`, pointing to Open).
+
 ## 11. The setup wizard (issue #99)
 
 One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
@@ -337,7 +382,7 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Runs: `RunListItem.Sparkline` (48 points, `TrackResampler`) is filled after the list shows, one finished run at a time, by
   `HistoryViewModel.LoadSparklinesAsync`; `Controls/EntropySparkline` is a plain `Polyline` (a ScottPlot control per card would
   own one GPU surface each). `EntropyOverviewSource` remembers the last 64 tracks by path, size and write time.
-- Not done: drag-select on the strip to jump the viewer (the Viewer page has no locus parameter yet), and a contig picker for a
+- Drag-select (#699): dragging a span on the strip opens the embedded viewer at that range (`OverviewSelection` clamps it and ignores a click; the Viewer page key takes a `ViewerRunTarget` with a locus, a plain folder string still works). Not done: a contig picker for a
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).

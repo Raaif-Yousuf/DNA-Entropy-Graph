@@ -30,6 +30,8 @@ public sealed partial class SettingsPage : Page
     public SettingsTransferViewModel Transfer { get; }
     public TourViewModel Tour { get; }
 
+    public PrototypeImportViewModel PrototypeImport { get; }
+
     public SettingsPage()
     {
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
@@ -44,6 +46,7 @@ public sealed partial class SettingsPage : Page
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         Proxy = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ProxySettingsViewModel>();
         Transfer = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsTransferViewModel>();
+        PrototypeImport = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<PrototypeImportViewModel>();
         Tour = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<TourViewModel>();
         InitializeComponent();
     }

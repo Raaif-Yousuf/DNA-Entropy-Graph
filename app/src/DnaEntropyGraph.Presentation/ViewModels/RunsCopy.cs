@@ -31,12 +31,28 @@ public static class RunsCopy
     public const string RemoveConfirmTitle = "Runs_Remove_Confirm_Title";
     public const string RemoveConfirmBody = "Runs_Remove_Confirm_Body";
 
+    /// <summary>The tooltip on Delete files on this PC for a run imported from the earlier version (issue #243): its folder is the user's own.</summary>
+    public const string DeleteLocalHintImported = "Runs_DeleteLocal_Hint_Imported";
+
     /// <summary>The request text for the project owner (issue #604). <c>{0}</c> the role, <c>{1}</c> the worker account's email, <c>{2}</c> the project id, <c>{3}</c> the grantee clause.</summary>
     public const string OwnerRequestActAs = "Runs_OwnerRequest_ActAs";
 
     /// <summary>The clause naming who is to receive the role (<c>{0}</c> the signed-in email), the request text's <c>{3}</c>; left out when nobody is signed in.</summary>
     public const string OwnerRequestGrantee = "Runs_OwnerRequest_Grantee";
     public const string PresetLine = "Runs_PresetLine";
+    public const string DeleteCloudHintImported = "Runs_DeleteCloud_Hint_Imported";
+    public const string DeleteCloudHintPrototype = "Runs_DeleteCloud_Hint_Prototype";
+    public const string ImportedBadge = "Runs_Imported_Badge";
+    public const string ImportRunning = "Runs_Import_Running";
+    public const string ImportNone = "Runs_Import_None";
+    public const string ImportDoneOne = "Runs_Import_Done_One";
+    public const string ImportDoneMany = "Runs_Import_Done_Many";
+    public const string ImportNoProject = "Runs_Import_NoProject";
+    public const string ImportFailed = "Runs_Import_Failed";
+    public const string ImportFailedPermission = "Runs_Import_Failed_Permission";
+    public const string ImportFailedSetup = "Runs_Import_Failed_Setup";
+    public const string ImportFailedNetwork = "Runs_Import_Failed_Network";
+    public const string ImportFailedSignIn = "Runs_Import_Failed_SignIn";
 
     public static readonly RunsMessage OwnerRequestCopied = Pair("Runs_OwnerRequest_Copied_Title", "Runs_OwnerRequest_Copied_Body", ToastSeverity.Success);
     public static readonly RunsMessage OwnerRequestCopyFailed = Pair("Runs_OwnerRequest_CopyFailed_Title", "Runs_OwnerRequest_CopyFailed_Body", ToastSeverity.Error);
@@ -95,8 +111,9 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
+        DeleteCloudHintImported, DeleteCloudHintPrototype, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
-        .. FilterKeys,
+        .. FilterKeys, DeleteLocalHintImported,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),

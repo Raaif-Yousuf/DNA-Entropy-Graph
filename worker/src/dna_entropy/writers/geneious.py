@@ -159,7 +159,11 @@ class GeneiousWriter:
         """
         total_length = sum(len(values) for _, values in blocks)
         binned = max_per_base_features is not None and total_length > max_per_base_features
-        bin_size = max(1, math.ceil(total_length / max_per_base_features)) if binned else 1
+        # the None test is for the type checker only: `binned` already implies it
+        if binned and max_per_base_features is not None:
+            bin_size = max(1, math.ceil(total_length / max_per_base_features))
+        else:
+            bin_size = 1
 
         lines = ["##gff-version 3"]
         for chrom, values in blocks:

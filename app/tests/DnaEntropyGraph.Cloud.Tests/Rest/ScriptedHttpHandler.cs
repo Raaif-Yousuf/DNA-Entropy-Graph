@@ -55,10 +55,14 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
         return this;
     }
 
+    /// <summary>Called as a request scripted by <see cref="Hangs"/> parks, before it waits: a test on a virtual clock moves it from here so the caller's deadline (armed before the request was sent) fires.</summary>
+    public Action? OnHang { get; set; }
+
     /// <summary>Queues a request that never answers: it ends only when the request's own token is cancelled (a hung connection).</summary>
     public ScriptedHttpHandler Hangs(HttpMethod method, string absolutePath)
         => Calls(method, absolutePath, async token =>
         {
+            OnHang?.Invoke();
             await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
             return new HttpResponseMessage(HttpStatusCode.OK);
         });

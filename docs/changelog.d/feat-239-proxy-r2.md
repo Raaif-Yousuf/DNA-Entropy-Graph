@@ -1,1 +1,0 @@
-- fix(proxy): proxy settings key constants are now `ProxySettingKeys.ModeKey` and `AddressKey` so the settings-key guard finds them by its normal `Key` naming rule (the filename heuristic is gone); a test pins the tour key literal in the settings catalog to `TourSettings.CompletedKey`; the proxy design section is renumbered to §21 (#239)
