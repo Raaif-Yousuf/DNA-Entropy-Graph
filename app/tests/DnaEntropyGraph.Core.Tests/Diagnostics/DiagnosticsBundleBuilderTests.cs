@@ -289,7 +289,7 @@ public class DiagnosticsBundleBuilderTests
     {
         var folder = SeededFolder();
         folder["settings.json"] = """{"Theme":"Dark","proxy_mode":"manual","proxy_address":"proxy.secret-uni.edu:8080"}""";
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }, null));
 
         using var document = JsonDocument.Parse(entries["versions.json"]);
         document.RootElement.GetProperty("proxyMode").GetString().ShouldBe("manual");
