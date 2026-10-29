@@ -60,6 +60,7 @@ public static class SettingsCatalog
         [ViewerSettingKeys.GeneiousPath] = "A program path on this PC.",
         ["session.page"] = "Where the user was when they closed the app (issue #244); about this PC's last session, not a preference.",
         ["session.run"] = "The run the user was looking at when they closed the app (issue #244).",
+        ["prototype_import_done"] = "Whether this PC already looked for the earlier version's runs (issue #243); about this PC, not a preference.",
         [PresetStore.SettingsKey] = "Presets travel in their own versioned block of the file, not as a raw setting.",
     };
 
