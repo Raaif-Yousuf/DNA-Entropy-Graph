@@ -539,7 +539,7 @@ real coordinate", instead of both being called "outside the sequence length". Th
 
 **Issue #847: the app's local read follows the same rules.** `GenBankLite` and `EmblLite` (`ReadTableFeatures`)
 map a record's `gene` features (else its `CDS`), drop one whose location is unreadable or does not fit the
-sequence (only a single location ending in `>` may run past it), name each drop with the worker's notice, and
+sequence (only a single location ending in `>` may run past it), name each drop with the worker's notice (word for word for an ASCII id; the app shows a non-ASCII id escaped where the worker's `repr()` keeps it, MEASURED 2026-10-29), and
 let the CDS with the same gene id stand in, per id, unless a kept feature already has that id. A feature's id
 is the first value of `/gene`, else `/locus_tag`, `/product`, `/label`, else its key. A second `LOCUS` line
 before `ORIGIN` is header text (it neither starts a record nor changes the first line's name, length or

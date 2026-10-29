@@ -611,6 +611,30 @@
           "Read 1 record(s) with 0 gene feature(s) from the GenBank (not re-annotated)."
         ]
       }
+    },
+    {
+      "id": "genbank_non_ascii_gene_id_outside_the_sequence_is_named_in_the_notice",
+      "text": "LOCUS       a                  8 bp    DNA     linear   UNK 01-JAN-2000\nFEATURES             Location/Qualifiers\n     gene            1..4\n                     /gene=\"ok\"\n     gene            join(1..2,4..50)\n                     /gene=\"\u0394recA\"\nORIGIN\n        1 acgtacgt\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "GenBank feature '\u0394recA' has coordinates 1..50, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ]
+      },
+      "csharp_divergence": {
+        "reason": "The worker names an id with repr(), which keeps a printable non-ASCII character; the app shows it with ascii() (escaped), which is safe to display anywhere. The text matches the worker's word for word for an ASCII id.",
+        "notices": [
+          "GenBank feature '\\u0394recA' has coordinates 1..50, which fall outside record 'a''s own sequence length of 8 nt; dropped from the gene features (not reported) rather than kept with a wrong span. This means the file's feature table disagrees with its own ORIGIN block; check the file was not truncated or hand-edited.",
+          "Read 1 record(s) with 1 gene feature(s) from the GenBank (not re-annotated)."
+        ],
+        "issue": 847
+      }
     }
   ],
   "embl_cases": [
@@ -1080,6 +1104,28 @@
           "EMBL record 1: 1 gene feature(s) could not be used, so the CDS feature with the same gene id was used instead ('x'). Its span is the coding sequence, not the full gene. Correct the gene feature's location in the source file to use the gene's own span.",
           "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
         ]
+      }
+    },
+    {
+      "id": "embl_header_line_starting_with_two_slashes_is_header_text",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\n//x\nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt        8\n//\n",
+      "python": {
+        "records": [
+          {
+            "seq": "ACGTACGT",
+            "gene_count": 1
+          }
+        ],
+        "notices": [
+          "Read 1 record(s) with 1 gene feature(s) from the EMBL (not re-annotated)."
+        ]
+      }
+    },
+    {
+      "id": "embl_header_terminator_with_trailing_spaces_is_still_the_terminator",
+      "text": "ID   toy; SV 1; linear; genomic DNA; STD; UNC; 8 BP.\nXX\n//  \nFH   Key             Location/Qualifiers\nFH\nFT   gene            1..4\nFT                   /gene=\"x\"\nXX\nSQ   Sequence 8 BP; 2 A; 2 C; 2 G; 2 T; 0 other;\n     acgtacgt        8\n//\n",
+      "python": {
+        "error": "Could not parse the EMBL file (record 1): Premature end of sequence data marker '//' found. Check the file was not truncated or hand-edited, or re-export it from the tool that made it."
       }
     }
   ]

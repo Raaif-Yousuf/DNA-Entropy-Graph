@@ -2123,6 +2123,12 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
     <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
   </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
+    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
+  </data>
   <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
     <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
   </data>

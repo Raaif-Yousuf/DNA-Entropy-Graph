@@ -129,8 +129,10 @@ test_readers_parity.py` replays it against the Python readers; the C# `FastaLite
 wording in `readers/fasta.py` fails the Python test; changing it in `FastaLite.cs` fails the C#
 test; the fixture is never edited to make a case pass. `GenBankLite` is a partial port, so a case
 may carry a `csharp_divergence` block (the port's own expected text, a reason, a tracking issue);
-those blocks are the list of known wording differences (none for GenBank since #689; the EMBL ones are refusals
-where the worker echoes a line of the file in its message, which the app never does, #846). The same file
+those blocks are the list of known wording differences. The EMBL ones are refusals that diverge for one of two reasons, stated in each
+block's `reason`: the worker echoes a line of the file in its message, which the app never does (the ID-line and footer ones, #846), or
+Biopython's own exception text for a refused location is not ported (the empty-join, bad-misc_feature and stray-close-paren ones, #796).
+One GenBank block (#847) is a notice, not a refusal: the app shows a non-ASCII gene id escaped (`ascii()`) where the worker shows it raw (`repr()`). The same file
 carries `embl_cases`, replayed against `read_embl` and `EmblLite` (`EmblLiteParityTests`): header `//`,
 unrecognised ID line layouts, where the file ends, and an ID line inside the header or the sequence.
 

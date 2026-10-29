@@ -134,12 +134,14 @@ public static class GenBankLite
         }
 
         var mappedIds = new List<string>();
+        var mappedIdSet = new HashSet<string>(StringComparer.Ordinal); // the same ids, for the O(1) "already kept" test below
         var droppedGeneIds = new List<string>();
         foreach (var f in source)
         {
             if (Map(f))
             {
                 mappedIds.Add(f.Id);
+                mappedIdSet.Add(f.Id);
             }
             else if (geneFeatures.Count > 0 && f.Id != f.Key)
             {
@@ -152,7 +154,7 @@ public static class GenBankLite
         var fallbackIds = new List<string>();
         if (droppedGeneIds.Count > 0)
         {
-            var wanted = droppedGeneIds.Where(id => !mappedIds.Contains(id)).ToHashSet(StringComparer.Ordinal);
+            var wanted = droppedGeneIds.Where(id => !mappedIdSet.Contains(id)).ToHashSet(StringComparer.Ordinal);
             foreach (var cds in cdsFeatures)
             {
                 if (wanted.Contains(cds.Id) && Map(cds))
@@ -184,7 +186,11 @@ public static class GenBankLite
         return (genes, cdsKept, mapped);
     }
 
-    /// <summary>The worker's <c>_malformed_notice</c> text, word for word (an id is shown as Python's ascii() shows it, which is repr() for plain text).</summary>
+    /// <summary>
+    /// The worker's <c>_malformed_notice</c> text, word for word for an ASCII id. An id is shown as Python's ascii() shows it, which equals the
+    /// worker's repr() for plain ASCII text; a printable non-ASCII character the worker keeps is escaped here (MEASURED 2026-10-29, fixture case
+    /// genbank_non_ascii_gene_id_outside_the_sequence_is_named_in_the_notice, a recorded csharp_divergence).
+    /// </summary>
     private static string MalformedNotice(string label, string id, LocationExtent extent, string recordId, int sequenceLength)
     {
         var shownId = PythonText.Ascii(id);

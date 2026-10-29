@@ -67,6 +67,8 @@ public class InputNoticeResourceTests
                 InputNoticeCode.AnnotationUnmatchedNames,
                 InputNoticeCode.AnnotationFeaturesPastEnd,
                 InputNoticeCode.GenBankFeaturesDropped,
+                InputNoticeCode.GenBankFeaturesOutOfRange,
+                InputNoticeCode.GenBankGeneStoodInByCds,
             ],
             ignoreOrder: true);
         foreach (var code in counted)

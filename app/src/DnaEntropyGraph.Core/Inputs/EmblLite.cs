@@ -82,9 +82,10 @@ public static class EmblLite
             switch (phase)
             {
                 case Phase.Header:
-                    if (line.StartsWith("//", StringComparison.Ordinal))
+                    if (PythonText.TrimEnd(line) == "//")
                     {
-                        // Scanner.parse_header: a record terminator before the feature table or the sequence block (MEASURED 2026-10-29).
+                        // Scanner.parse_header: a record terminator before the feature table or the sequence block. Only a line that is exactly
+                        // "//" once trailing white space is cut counts; "//x" is header text (MEASURED 2026-10-29, fixture embl_header_line_starting_with_two_slashes_is_header_text).
                         throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Premature end of sequence data marker '//' found", FeatureTableFormat.Embl);
                     }
 

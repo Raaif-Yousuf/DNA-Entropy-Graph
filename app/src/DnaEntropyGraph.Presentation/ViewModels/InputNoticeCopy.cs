@@ -20,6 +20,8 @@ public static class InputNoticeCopy
             InputNoticeCode.AnnotationUnmatchedNames => "NewRunNotice_AnnotationUnmatchedNames_One",
             InputNoticeCode.AnnotationFeaturesPastEnd => "NewRunNotice_AnnotationFeaturesPastEnd_One",
             InputNoticeCode.GenBankFeaturesDropped => "NewRunNotice_GenBankFeaturesDropped_One",
+            InputNoticeCode.GenBankFeaturesOutOfRange => "NewRunNotice_GenBankFeaturesOutOfRange_One",
+            InputNoticeCode.GenBankGeneStoodInByCds => "NewRunNotice_GenBankGeneStoodInByCds_One",
             _ => KeyFor(code),
         }
         : KeyFor(code);
