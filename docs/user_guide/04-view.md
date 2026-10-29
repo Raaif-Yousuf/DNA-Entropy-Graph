@@ -63,6 +63,12 @@ finished run later with **Open** on its row of the Runs page. The Results page s
   what is in that file. If the run did not write a summary file, or it cannot be read,
   the page says so instead of showing blanks, and **Open folder** shows you what the run
   did write.
+- **Genes.** When the run wrote a gene table (`<name>.genes.tsv`), one row per gene: its
+  record, start, end, strand, length, and the mean, lowest and highest entropy over that
+  gene's own bases, plus the share of its bases with low entropy. Choose a column heading
+  to sort by it (lowest first); choose it again to reverse. Numbers sort as numbers, so
+  the order matches sorting the same column of the file in a spreadsheet. A long table
+  shows its first 500 genes; **Open** next to the file in the Files list opens all of them.
 - **Files.** Every file in the run's results folder, with its size. For each one,
   **Open** opens it in the program Windows uses for that kind of file (only the kinds of
   file this app writes are opened from here; use Show in folder for anything else), **Show in folder** selects it in File Explorer, and
@@ -132,6 +138,14 @@ The embedded viewer shows your sequence, a bar graph of the entropy (always draw
 It works with no internet connection, because everything it needs ships inside the app and
 reads your results from the folder on your computer. It follows the app's light or dark
 theme.
+
+When your run wrote them, two more things appear. **Entropy regions** (the stretches the
+run called as low or high entropy, from the `.regions.bed` file) show as a feature track under
+the entropy graph. **Smoothed tracks** (a rolling average of the entropy over, for example, 51
+bases) are listed as tick boxes above the viewer, all off to begin with so the raw entropy
+graph stays the one you read; tick one to draw it under the raw graph on the same 0 to 2 bit
+scale, untick it to remove it. A smoothed dip is an easier thing to over-read than the raw
+graph: it is not by itself the edge of a gene. The tick boxes work once the viewer has drawn the run.
 
 If your file holds more than one sequence record, a **Sequence record** list appears above
 the viewer. Choose a record and the viewer jumps straight to it; if you have scrolled away, press **Go to record** to jump back to the one that is chosen. For a run that read both

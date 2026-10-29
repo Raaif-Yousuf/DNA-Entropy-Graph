@@ -7,7 +7,7 @@
 
     <!--
         Issue #102: a finished run's numbers and files. Everything is read from the run's own output folder by
-        ResultsViewModel. Gene tables (#552) and Export PNG (#587) are not here yet.
+        ResultsViewModel. Issue #552: the gene tables, sortable by their headings. Issue #587: Save picture (the PNG of the overview).
     -->
     <ScrollViewer>
         <StackPanel Padding="24" Spacing="16">
@@ -106,6 +106,83 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
+            <!-- Issue #552: the gene tables (one per *.genes.tsv), each sortable by its headings. -->
+            <TextBlock
+                x:Uid="ResultsGenesHeading"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                Visibility="{x:Bind ViewModel.HasGeneTables, Mode=OneWay}" />
+
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsGeneNoticeVisible, Mode=OneWay}"
+                Severity="Informational"
+                IsClosable="False"
+                Message="{x:Bind ViewModel.GeneNoticeText, Mode=OneWay}" />
+
+            <ItemsControl ItemsSource="{x:Bind ViewModel.GeneTables}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ResultsGeneTable">
+                        <StackPanel Spacing="6" Margin="0,0,0,12">
+                            <TextBlock Text="{x:Bind Title}" Visibility="{x:Bind HasTitle}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="{x:Bind SortSummary, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.7" TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.2*" />
+                                    <ColumnDefinition Width="1.2*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="0.6*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Content="{x:Bind ContigHeader}" Grid.Column="0" Command="{x:Bind SortByCommand}" CommandParameter="contig" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind GeneHeader}" Grid.Column="1" Command="{x:Bind SortByCommand}" CommandParameter="gene" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind BeginHeader}" Grid.Column="2" Command="{x:Bind SortByCommand}" CommandParameter="begin" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind EndHeader}" Grid.Column="3" Command="{x:Bind SortByCommand}" CommandParameter="end" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind StrandHeader}" Grid.Column="4" Command="{x:Bind SortByCommand}" CommandParameter="strand" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind LengthHeader}" Grid.Column="5" Command="{x:Bind SortByCommand}" CommandParameter="length" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MeanHeader}" Grid.Column="6" Command="{x:Bind SortByCommand}" CommandParameter="mean" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MinHeader}" Grid.Column="7" Command="{x:Bind SortByCommand}" CommandParameter="min" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind MaxHeader}" Grid.Column="8" Command="{x:Bind SortByCommand}" CommandParameter="max" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                                <Button Content="{x:Bind LowHeader}" Grid.Column="9" Command="{x:Bind SortByCommand}" CommandParameter="low" Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Left" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{x:Bind Rows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:GeneRowItem">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="1.2*" />
+                                                <ColumnDefinition Width="1.2*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="0.6*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{x:Bind Contig}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind GeneId}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind BeginText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="3" Text="{x:Bind EndText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="4" Text="{x:Bind Strand}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="5" Text="{x:Bind LengthText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="6" Text="{x:Bind MeanText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="7" Text="{x:Bind MinText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="8" Text="{x:Bind MaxText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="9" Text="{x:Bind LowText}" TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{x:Bind TruncatedNotice, Mode=OneWay}" Visibility="{x:Bind IsTruncated}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
             <TextBlock
                 x:Uid="ResultsFilesHeading"
                 Style="{StaticResource SubtitleTextBlockStyle}"

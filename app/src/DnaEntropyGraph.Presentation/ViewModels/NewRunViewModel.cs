@@ -37,6 +37,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly IStringResourceProvider _strings;
     private readonly IPastedInputStore _pastedStore;
     private readonly ICostEstimateService _estimates;
+    private readonly IDispatcher? _dispatcher;
     private readonly IInputFileSystem _files;
     private readonly NewRunIntake? _intake;
     private readonly Func<string, InputFormat, AmbiguityPolicy, bool, InputValidationResult> _validate;
@@ -110,7 +111,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         bool? offerAnnotation = null,
         bool? offerAccession = null,
         IAccessionLookup? accessionLookup = null,
-        RunTargetPickerViewModel? runTarget = null)
+        RunTargetPickerViewModel? runTarget = null,
+        IDispatcher? dispatcher = null)
     {
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
@@ -141,6 +143,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         _strings = strings;
         _pastedStore = pastedStore;
         _estimates = estimates;
+        _dispatcher = dispatcher;
+        _estimates.PricesChanged += OnPricesChanged;
         _files = files ?? new LocalInputFileSystem();
         _validate = validate ?? ((path, format, policy, rna) => InputFileValidator.Validate(path, format, policy, rna));
         _pasteCountText = CountText(0);
@@ -1286,6 +1290,20 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             // The month figure includes VM time accrued by runs that have not ended; say so.
             SpendCapText += " " + _strings.GetString("NewRunSpendCapInProgress");
+        }
+    }
+
+    // A background price read finished with different prices (on a pool thread): the line on screen was made from the older ones, so ask again.
+    // Through the dispatcher when there is one, because the answer sets properties the page is bound to. The VM is a singleton, so the subscription never needs undoing.
+    private void OnPricesChanged()
+    {
+        if (_dispatcher is { } dispatcher)
+        {
+            dispatcher.Enqueue(() => _ = RefreshEstimateAsync());
+        }
+        else
+        {
+            _ = RefreshEstimateAsync();
         }
     }
 

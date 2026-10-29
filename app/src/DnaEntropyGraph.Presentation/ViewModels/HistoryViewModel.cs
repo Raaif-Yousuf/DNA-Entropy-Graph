@@ -352,8 +352,9 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             PresetText = PresetLine(run),
             CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
-            IsImported = run.Imported,
-            ImportedText = run.Imported ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
+            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
+            IsImported = run.IsCloudImport,
+            ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
     }
@@ -421,7 +422,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         }
 
-        var key = run.Imported ? RunsCopy.DeleteCloudHintImported
+        var key = run.IsCloudImport ? RunsCopy.DeleteCloudHintImported
+            : run.IsPrototypeImport ? RunsCopy.DeleteCloudHintPrototype
             : !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
             : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
             : RunsCopy.DeleteCloudHintNotConnected;
@@ -542,6 +544,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return null;
             }
 
+            // Hard Rule 14: an imported run's folder is the user's own. The button is off; this stops a command fired another way.
+            if (run.Imported)
+            {
+                return RunsCopy.DeleteLocal(LocalDeleteStatus.Refused);
+            }
+
             var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
             if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
             {
@@ -571,7 +579,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             // Issue #111: remember an imported run was dismissed, or the next scan would add it straight back.
-            if (run.Imported)
+            // Only a bucket-found run: a prototype run's id can never come back from the bucket scan, so it does not belong in that setting.
+            if (run.IsCloudImport)
             {
                 _dismissals?.Add(run.JobId);
             }

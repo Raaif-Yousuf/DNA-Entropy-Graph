@@ -67,6 +67,40 @@ public sealed class PricingTable
 
     public MachinePrice? Find(string machineType) => _machines.GetValueOrDefault(machineType);
 
+    /// <summary>Every machine this list prices (issue #214: the catalog resolver keeps the shipped row for a machine the catalog does not price).</summary>
+    public IReadOnlyCollection<MachinePrice> Machines => _machines.Values;
+
+    /// <summary>A table built in code (issue #214: from catalog prices). <see cref="Parse"/> is still the one way to read a file.</summary>
+    public static PricingTable Create(DateOnly asOf, string region, string source, double diskUsdPerGbMonth, IEnumerable<MachinePrice> machines)
+        => new(asOf, region, source, diskUsdPerGbMonth, machines.ToDictionary(m => m.MachineType, StringComparer.Ordinal));
+
+    /// <summary>The same schema <see cref="Parse"/> reads, so a table written to the daily cache comes back identical. LF line endings.</summary>
+    public string ToJson()
+    {
+        var machines = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var machine in _machines.Values.OrderBy(m => m.MachineType, StringComparer.Ordinal))
+        {
+            machines[machine.MachineType] = new Dictionary<string, object?>
+            {
+                ["accelerator"] = machine.Accelerator,
+                ["onDemandUsdPerHour"] = machine.OnDemandUsdPerHour,
+                ["spotUsdPerHour"] = machine.SpotUsdPerHour,
+            };
+        }
+
+        var document = new Dictionary<string, object>
+        {
+            ["schema"] = SupportedSchema,
+            ["asOf"] = AsOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["currency"] = "USD",
+            ["region"] = Region,
+            ["source"] = Source,
+            ["disk"] = new Dictionary<string, object> { ["type"] = "pd-balanced", ["usdPerGbMonth"] = DiskUsdPerGbMonth },
+            ["machines"] = machines,
+        };
+        return JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n") + "\n";
+    }
+
     public static PricingLoadResult Parse(string json)
     {
         JsonDocument document;

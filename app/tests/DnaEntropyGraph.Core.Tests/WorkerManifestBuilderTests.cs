@@ -296,6 +296,34 @@ public class WorkerManifestBuilderTests
         => Should.Throw<ArgumentException>(() => Build(inputs: [StagedInput.ForAccession("NC_045512.2", null), new StagedInput("a.gff3", "a.gff3", IsAnnotation: true)]));
 
     [Fact]
+    public void Region_options_ride_along_only_when_regions_are_chosen()
+    {
+        var off = Build(Opts(o => o with { OutputFiles = OutputFileKinds.Stats, RegionThreshold = 0.9 }));
+        off.GetProperty("analysis").TryGetProperty("regionThreshold", out _).ShouldBeFalse("nothing reads it without the regions file");
+
+        var on = Build(Opts(o => o with { OutputFiles = OutputFileKinds.Regions | OutputFileKinds.Stats, RegionThreshold = 0.75, RegionMinLength = 30, RegionMergeGap = 8 })).GetProperty("analysis");
+        on.GetProperty("regionThreshold").GetDouble().ShouldBe(0.75);
+        on.GetProperty("regionMinLength").GetInt32().ShouldBe(30);
+        on.GetProperty("regionMergeGap").GetInt32().ShouldBe(8);
+    }
+
+    [Fact]
+    public void Smoothing_windows_ride_along_only_when_smoothed_tracks_are_chosen()
+    {
+        var off = Build(Opts(o => o with { OutputFiles = OutputFileKinds.Stats, SmoothingWindows = [11] }));
+        off.GetProperty("analysis").TryGetProperty("smoothingWindows", out _).ShouldBeFalse();
+
+        var on = Build(Opts(o => o with { OutputFiles = OutputFileKinds.Smoothed | OutputFileKinds.Stats, SmoothingWindows = [11, 101] })).GetProperty("analysis");
+        on.GetProperty("smoothingWindows").EnumerateArray().Select(e => e.GetInt32()).ToList().ShouldBe([11, 101]);
+    }
+
+    [Fact]
+    public void The_probability_matrix_is_off_by_default_and_named_only_when_chosen()
+    {
+        Outputs(Build()).ShouldNotContain("probs");
+        Outputs(Build(Opts(o => o with { OutputFiles = OutputCatalog.Defaults | OutputFileKinds.Probs }))).ShouldContain("probs");
+    }
+    [Fact]
     public void Gc_and_codons_are_requested_only_when_chosen_and_gc_carries_its_window()
     {
         var plain = Build();
