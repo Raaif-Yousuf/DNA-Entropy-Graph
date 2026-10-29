@@ -884,36 +884,46 @@ def _is_codeql(check: dict[str, str]) -> bool:
     return name == "codeql" or name.startswith("analyze ")
 
 
+def _ascii(text: str) -> str:
+    """Hard Rule 5: every console line is ASCII; gh-derived text (paths, stderr) may not be."""
+    return text.encode("ascii", "replace").decode("ascii")
+
+
 def _alert_pages(raw: str) -> list[dict[str, Any]]:
-    """`gh api --paginate` prints one JSON array per page back to back; decode them all."""
+    """`gh api --paginate` prints one JSON array per page back to back (whitespace between); decode them all.
+    Anything that is not a non-empty run of JSON arrays is `unexpected response`, never a count of zero."""
     dec, pos, out = json.JSONDecoder(), 0, []
     raw = raw.strip()
+    if not raw:
+        raise ValueError("unexpected response")
     while pos < len(raw):
-        page, pos = dec.raw_decode(raw, pos)
+        try:
+            page, pos = dec.raw_decode(raw, pos)
+        except ValueError:
+            raise ValueError("unexpected response") from None
+        if not isinstance(page, list):
+            raise ValueError("unexpected response")
+        out.extend(a for a in page if isinstance(a, dict))
         while pos < len(raw) and raw[pos].isspace():
             pos += 1
-        out.extend(a for a in page if isinstance(a, dict)) if isinstance(page, list) else None
     return out
 
 
-def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
-    """Read-only triage (#920): summarise the PR's open code-scanning alerts after a red CodeQL check. Never dismisses
-    anything, never changes the exit code; any failure is one `- could not list` line."""
+def _codeql_summary_lines(ctx: Ctx, pr: str) -> list[str]:
+    """The triage lines for `pr`; raises on any failure (the caller turns that into one `- could not list` line)."""
     number = pr.rstrip("/").rsplit("/", 1)[-1]
     m = re.match(r"https?://[^/]+/([^/]+/[^/]+)/pull/\d+", pr)
     slug = m.group(1) if m else "{owner}/{repo}"
     api = f"repos/{slug}/code-scanning/alerts?ref=refs/pull/{number}/merge&state=open&per_page=100"
     try:
         proc = run_bounded([*ctx.gh, "api", api, "--paginate"], timeout=ctx.gh_timeout)
-        if proc.returncode != 0:
-            raise ValueError(f"rc={proc.returncode}: {(_text(proc.stderr) or _text(proc.stdout))[:200] or '(no output)'}")
-        alerts = _alert_pages(_text(proc.stdout))
     except subprocess.TimeoutExpired:
-        ctx.say(f"- could not list CodeQL alerts: gh timed out after {int(ctx.gh_timeout)} s")
-        return
-    except (OSError, ValueError) as err:
-        ctx.say(f"- could not list CodeQL alerts: {' '.join(str(err).split())}")
-        return
+        raise ValueError(f"gh timed out after {int(ctx.gh_timeout)} s") from None
+    if proc.returncode != 0:
+        raise ValueError(f"rc={proc.returncode}: {(_text(proc.stderr) or _text(proc.stdout))[:200] or '(no output)'}")
+    alerts = _alert_pages(_text(proc.stdout))
+    if not alerts:
+        return [f"CodeQL: 0 open alert(s) on PR {number} (the failure is a build/analysis error, not alerts)"]
     rules: dict[str, list[str]] = {}
     paths: list[str] = []
     for a in alerts:
@@ -932,12 +942,22 @@ def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
             dirs[top] = dirs.get(top, 0) + 1
         dtxt = ", ".join(f"{d} {n}" for d, n in sorted(dirs.items(), key=lambda kv: (-kv[1], kv[0])))
         parts.append(f"{rid} {len(plist)} ({dtxt})")
-    ctx.say(f"CodeQL: {len(alerts)} open alert(s) on PR {number}: " + ", ".join(parts))
-    if alerts:
-        if all(p.startswith(TEST_PATH_PREFIXES) for p in paths):
-            ctx.say("- every alert is under a test path (app/tests/, worker/tests/, scripts/tests/)")
-        else:
-            ctx.say("- not all under a test path (app/tests/, worker/tests/, scripts/tests/)")
+    verdict = "every alert is under a test path" if all(p.startswith(TEST_PATH_PREFIXES) for p in paths) else "not all under a test path"
+    return [
+        f"CodeQL: {len(alerts)} open alert(s) on PR {number}: " + ", ".join(parts),
+        f"- {verdict} (app/tests/, worker/tests/, scripts/tests/)",
+    ]
+
+
+def _report_codeql_alerts(ctx: Ctx, pr: str) -> None:
+    """Read-only triage (#920) after a red CodeQL check. Never dismisses anything, never changes the exit code, never raises:
+    any failure at all (gh, parsing, an odd payload) is one ASCII `- could not list CodeQL alerts: <reason>` line."""
+    try:
+        lines = [_ascii(ln) for ln in _codeql_summary_lines(ctx, pr)]
+    except Exception as err:  # noqa: BLE001  (a triage aid must not break the refusal path)
+        lines = [_ascii(f"- could not list CodeQL alerts: {' '.join(str(err).split()) or type(err).__name__}")]
+    for line in lines:
+        ctx.say(line)
 
 
 def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll: float, rerun_failed_once: bool = False) -> int:
@@ -949,6 +969,7 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
     rerun_spent = False
     gh_warned = False
     triaged = False  # the CodeQL alert summary prints at most once per run, on whichever refusal comes first
+    red: list[dict[str, str]] = []
     while True:
         checks = _read_checks(ctx, pr)
         if checks is None and ctx.checks_error and not gh_warned:
@@ -981,6 +1002,9 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             if not waiting and not red:
                 break
         if ctx.monotonic() >= deadline:
+            if any(_is_codeql(c) for c in red) and not triaged:
+                triaged = True
+                _report_codeql_alerts(ctx, pr)
             if waiting:
                 what = f"still pending: {_names(waiting)}"
             elif ctx.checks_error:
@@ -990,6 +1014,9 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
             ctx.say(
                 f"ERROR: not merging {pr}: {what} after {int(timeout)} s. Run `gh pr checks {pr} --watch`, then merge by hand; the PR stays open"
             )
+            if any(_is_codeql(c) for c in red) and not triaged:
+                triaged = True
+                _report_codeql_alerts(ctx, pr)
             return EXIT_CHECKS_PENDING
         ctx.sleep(min(poll, deadline - ctx.monotonic()))
     # Never merge a head other than the one that was verified and pushed: read the PR's head now and pin the merge to it.
