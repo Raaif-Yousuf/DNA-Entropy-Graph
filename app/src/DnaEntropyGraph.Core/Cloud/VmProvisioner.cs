@@ -250,7 +250,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             // one aborts the ladder). Network is not in this list: another
             // zone cannot fix an unreachable API, and reporting it as a
             // stockout after trying them all is the bug this guards against.
-            return ZoneAttempt.Lost(zone, kind);
+            // Issue #772: a zone that lacks the machine type is a per-zone stockout to the CLASSIFIER (its text says what happened), but to the ladder's total-failure verdict it
+            // is what it was before the rule, "other": it must not outvote a quota read of zero everywhere, which the user can fix.
+            return ZoneAttempt.Lost(zone, kind == CloudErrorKind.Stockout && CloudErrorClassifier.IsMachineTypeNotFound(outcome.Error!) ? CloudErrorKind.Other : kind);
         }
     }
 

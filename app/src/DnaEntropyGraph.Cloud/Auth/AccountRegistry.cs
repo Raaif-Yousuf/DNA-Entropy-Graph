@@ -66,36 +66,29 @@ public sealed class AccountRegistry
         => @"Local\DnaEntropyGraph.accounts." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(Path.Combine(directory, "accounts.json")).ToUpperInvariant())), 0, 8);
 
     /// <summary>
-    /// True when the damaged file could not be moved aside (the folder is read-only or denied): a problem with the folder, not a lock, so trying again
-    /// does not help. <see cref="Unreadable"/> is also true then, so <see cref="Save"/> refuses.
+    /// What the last <see cref="Load"/> found: true when the damaged file could not be moved aside (the folder is read-only or denied), a problem
+    /// with the folder, not a lock, so trying again does not help. <see cref="Unreadable"/> is also true then. Set by <see cref="Load"/> only
+    /// (it is how a test reads the answer); code that must act on an answer uses <see cref="LoadWithOutcome"/> or <see cref="Update"/>, which hand it back.
     /// </summary>
-    public bool QuarantineFailed { get; private set; }
+    internal bool QuarantineFailed { get; private set; }
 
     /// <summary>Where the last <see cref="Load"/> set an unparseable file aside (<c>accounts.json.bad</c>, or <c>.bad.1</c>, <c>.bad.2</c> and so on, never over an earlier one), or null when it set nothing aside.</summary>
-    public string? QuarantinedTo { get; private set; }
+    internal string? QuarantinedTo { get; private set; }
+
+    /// <summary>
+    /// True when the last <see cref="Load"/> found the file but could not read it (another program or copy of the app holds it) after retrying.
+    /// The list is then empty only because it is unread.
+    /// </summary>
+    internal bool Unreadable { get; private set; }
 
     /// <summary>
     /// A missing file is an empty list (a first run). A file that does not parse is also an empty list, but the file is first moved aside
-    /// (<see cref="QuarantinedTo"/>) so the next <see cref="Save"/> cannot overwrite the only copy of the user's account list (issue #616).
+    /// (<see cref="QuarantinedTo"/>) so the next <see cref="Update"/> cannot overwrite the only copy of the user's account list (issue #616).
     /// A file that cannot be read at all (locked, no access) is an empty list and is left where it is.
     /// </summary>
-    public AccountsFile Load()
+    internal AccountsFile Load()
     {
-        LoadOutcome outcome;
-        try
-        {
-            // Under the same lock as Save, so a read never races another process's replace, and the move aside never races a Save.
-            var read = default(LoadOutcome);
-            WithLock(() => read = ReadLocked(), ReadLockWait);
-            outcome = read;
-        }
-        catch (TokenStorageException)
-        {
-            // The lock was never granted: the file is untouched and Save refuses until a Load succeeds.
-            outcome = new LoadOutcome(AccountsFile.Empty, Unreadable: true, QuarantineFailed: false, null);
-        }
-
-        // Published only now: a Save that runs while this Load waits for the lock still sees the previous answer and refuses if it was "unreadable".
+        var outcome = LoadWithOutcome();
         QuarantinedTo = outcome.QuarantinedTo;
         QuarantineFailed = outcome.QuarantineFailed;
         Unreadable = outcome.Unreadable;
@@ -103,12 +96,25 @@ public sealed class AccountRegistry
     }
 
     /// <summary>
-    /// True when the last <see cref="Load"/> found the file but could not read it (another program or copy of the app holds it) after retrying.
-    /// The list is then empty only because it is unread, so <see cref="Save"/> refuses to replace the file until a later <see cref="Load"/> succeeds.
+    /// <see cref="Load"/>, handing the whole answer back to the caller (no shared state to re-read from another thread, issue #620 review).
     /// </summary>
-    public bool Unreadable { get; private set; }
+    internal LoadOutcome LoadWithOutcome()
+    {
+        try
+        {
+            // Under the same lock as Update, so a read never races another process's replace, and the move aside never races an update.
+            var read = default(LoadOutcome);
+            WithLock(() => read = ReadLocked(), ReadLockWait);
+            return read;
+        }
+        catch (TokenStorageException)
+        {
+            // The lock was never granted: the file is untouched.
+            return new LoadOutcome(AccountsFile.Empty, Unreadable: true, QuarantineFailed: false, null);
+        }
+    }
 
-    private readonly record struct LoadOutcome(AccountsFile File, bool Unreadable, bool QuarantineFailed, string? QuarantinedTo);
+    internal readonly record struct LoadOutcome(AccountsFile File, bool Unreadable, bool QuarantineFailed, string? QuarantinedTo);
 
     private LoadOutcome ReadLocked()
     {
@@ -150,39 +156,74 @@ public sealed class AccountRegistry
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Could not move it aside: the damaged file stays where it is and Save refuses.
+            // Could not move it aside: the damaged file stays where it is and an update refuses.
             return new LoadOutcome(AccountsFile.Empty, true, true, null);
         }
     }
+
     /// <summary>
-    /// Replaces the file atomically under a named mutex in the <c>Local\</c> namespace (one Windows session, so every copy of the app one user runs;
-    /// an elevated copy cannot be assumed to share it), so two processes or instances saving at once serialise instead of colliding on one temp file.
-    /// Refuses while <see cref="Unreadable"/>.
+    /// Issue #620: the one way to change the list. Under a named mutex in the <c>Local\</c> namespace (one Windows session, so every copy of the app one
+    /// user runs; an elevated copy cannot be assumed to share it) it reads the file as it is NOW, hands it to <paramref name="change"/>, and replaces
+    /// the file atomically with the answer, so another copy's change made since this copy last loaded is part of what <paramref name="change"/> sees
+    /// and is kept (a load-modify-save would replace it with a stale list), and two writers at once serialise instead of colliding on one temp file.
+    /// <paramref name="change"/> runs while the lock is held: keep it short (no waiting, no network). Whatever it throws leaves the file untouched.
+    /// <paramref name="onQuarantined"/> is told, under the lock and before <paramref name="change"/> runs, where a damaged file was set aside by this
+    /// very read (it is never told of one set aside earlier); it must not take a lock a <see cref="Load"/> caller holds.
+    /// <paramref name="afterWrite"/> runs under the same lock once the file is written (and never when it was not): work that must be atomic with the list change, such as
+    /// deleting a token file only if it is still the one <paramref name="change"/> compared. It must not throw what it cannot leave behind: the list is already changed.
+    /// Throws <see cref="AccountsFileFolderException"/> when the file is damaged and cannot be set aside (the folder is the problem), <see cref="AccountsFileLockedException"/> when the file exists but cannot be read (it is never replaced then), and a
+    /// <see cref="TokenStorageException"/> when it cannot be written. Returns the file that was written.
     /// </summary>
-    public void Save(AccountsFile file)
-        => WithLock(() =>
+    public AccountsFile Update(Func<AccountsFile, AccountsFile> change, Action<string>? onQuarantined = null, Action? afterWrite = null)
+    {
+        AccountsFile? written = null;
+        WithLock(() =>
         {
-            if (Unreadable)
+            var outcome = ReadLocked();
+            if (outcome.QuarantineFailed)
+            {
+                throw new AccountsFileFolderException(new IOException("the accounts file is damaged and could not be set aside, so it is not replaced"));
+            }
+
+            if (outcome.Unreadable)
             {
                 throw new AccountsFileLockedException(new IOException("the accounts file exists but could not be read, so it is not replaced"));
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-            DeleteOrphanTempFiles();
-            var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
-            try
+            if (outcome.QuarantinedTo is { } setAside)
             {
-                File.WriteAllText(temp, JsonSerializer.Serialize(file, Json) + "\n", new UTF8Encoding(false));
-                File.Move(temp, _path, overwrite: true);
+                onQuarantined?.Invoke(setAside);
             }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
+
+            written = change(outcome.File);
+            Write(written);
+            afterWrite?.Invoke();
         }, _saveLockWait);
+        return written!;
+    }
+
+    /// <summary>Tests only: runs under the lock just before the file is written, to play a write that fails (disk full) after a set-aside.</summary>
+    internal Action? BeforeWriteForTest { get; set; }
+
+    private void Write(AccountsFile file)
+    {
+        BeforeWriteForTest?.Invoke();
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        DeleteOrphanTempFiles();
+        var temp = _path + "." + Guid.NewGuid().ToString("n") + ".tmp";
+        try
+        {
+            File.WriteAllText(temp, JsonSerializer.Serialize(file, Json) + "\n", new UTF8Encoding(false));
+            File.Move(temp, _path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
+    }
 
     /// <summary>A save that died between writing its temp file and moving it leaves one behind. Under the lock nothing else is mid-save, but only old ones go: a copy that does not share the lock may be.</summary>
     private void DeleteOrphanTempFiles()

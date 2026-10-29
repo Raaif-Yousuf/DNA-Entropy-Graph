@@ -20,3 +20,15 @@ public sealed class AccountsFileLockedException : TokenStorageException
     {
     }
 }
+
+/// <summary>
+/// <c>accounts.json</c> is damaged and the folder will not let the app move it aside, so nothing was written. A folder problem (the same advice as a disk failure),
+/// not a hold: kept apart from <see cref="AccountsFileLockedException"/> so "Try again" is never offered for it.
+/// </summary>
+public sealed class AccountsFileFolderException : TokenStorageException
+{
+    public AccountsFileFolderException(Exception inner)
+        : base(inner)
+    {
+    }
+}

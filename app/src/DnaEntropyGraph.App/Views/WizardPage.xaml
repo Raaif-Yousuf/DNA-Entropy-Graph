@@ -71,8 +71,10 @@
                     </Grid>
                     <TextBlock x:Uid="WizardStep_SignIn_Why" TextWrapping="Wrap" Opacity="0.8" />
                     <TextBlock Text="{x:Bind ViewModel.SignInErrorText, Mode=OneWay}" Visibility="{x:Bind ViewModel.HasSignInError, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock Text="{x:Bind ViewModel.AccountsFileLockedText, Mode=OneWay}" Visibility="{x:Bind ViewModel.IsAccountsFileLocked, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Uid="WizardSignInButton" Command="{x:Bind ViewModel.SignInCommand}" Visibility="{x:Bind ViewModel.IsNotSignedIn, Mode=OneWay}" />
+                        <Button x:Uid="WizardSignInButton" Command="{x:Bind ViewModel.SignInCommand}" Visibility="{x:Bind ViewModel.ShowSignInButton, Mode=OneWay}" />
+                        <Button Content="{x:Bind ViewModel.AccountsFileRetryText, Mode=OneWay}" Command="{x:Bind ViewModel.RetryAccountsFileCommand}" Visibility="{x:Bind ViewModel.IsAccountsFileLocked, Mode=OneWay}" />
                         <Button Content="{x:Bind ViewModel.SignInActionText, Mode=OneWay}" Command="{x:Bind ViewModel.SignInCommand}" Visibility="{x:Bind ViewModel.HasSignInAction, Mode=OneWay}" />
                     </StackPanel>
                 </StackPanel>

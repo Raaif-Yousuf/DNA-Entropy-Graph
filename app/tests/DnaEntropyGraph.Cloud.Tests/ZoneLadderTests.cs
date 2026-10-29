@@ -65,7 +65,15 @@ public class ZoneLadderTests
 
         public int PeakInflight { get; private set; }
 
+        /// <summary>Every zone a create was sent to, in order, and the ones whose injected fault fired (issue #772).</summary>
+        public List<string> ZonesTried { get; } = [];
+
+        public List<string> FaultsFired { get; } = [];
+
         public CloudOperationException? OfferFailure { get; init; }
+
+        /// <summary>A create in these zones fails with this error, classified the way the real gateway does (issue #772).</summary>
+        public Dictionary<string, CloudError> CreateErrorByZone { get; } = [];
 
         public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
         {
@@ -85,6 +93,7 @@ public class ZoneLadderTests
             {
                 before = _inflight++;
                 InflightBeforeEachCreate.Add(before);
+                ZonesTried.Add(zone);
                 PeakInflight = Math.Max(PeakInflight, _inflight);
                 if (batches is not null)
                 {
@@ -109,6 +118,16 @@ public class ZoneLadderTests
                 if (full is not null)
                 {
                     await full.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+                }
+
+                if (CreateErrorByZone.TryGetValue(zone, out var fault))
+                {
+                    lock (InflightBeforeEachCreate)
+                    {
+                        FaultsFired.Add(zone);
+                    }
+
+                    throw new CloudOperationException(fault, CloudErrorClassifier.Classify(fault));
                 }
 
                 return await inner.CreateVmAsync(spec, zone, cancellationToken).ConfigureAwait(false);
@@ -193,6 +212,78 @@ public class ZoneLadderTests
 
         sizes.ShouldBe([1, 1, 1, 3, 5, 7, 2]);
         recording.PeakInflight.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task A_zone_without_the_machine_type_is_skipped_and_the_next_zone_starts_the_run()
+    {
+        // Issue #772. THEORY (unverified, no live project): the documented 404 text, not a recorded payload.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        recording.CreateErrorByZone["us-central1-a"] = new CloudError("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/machineTypes/g2-standard-8' was not found");
+        var spec = Spec("job-z772");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z772", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeTrue(result.FailureMessage);
+        result.Zone.ShouldNotBe("us-central1-a");
+        (await gcp.FindByJobIdAsync("job-z772", CancellationToken.None)).Select(v => v.Zone).ShouldBe([result.Zone!]);
+    }
+
+    [Fact]
+    public async Task When_no_zone_offers_the_machine_type_the_run_fails_as_a_stockout_naming_zones_not_as_a_project_error()
+    {
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        foreach (var zone in Offered)
+        {
+            recording.CreateErrorByZone[zone] = new CloudError("NOT_FOUND", 404, $"The resource 'projects/my-project/zones/{zone}/machineTypes/g2-standard-8' was not found");
+        }
+
+        var spec = Spec("job-z773");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z773", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeFalse();
+        result.FailureKind.ShouldBe(CloudErrorKind.Stockout);
+        recording.InflightBeforeEachCreate.Count.ShouldBe(Offered.Length, "every candidate zone is tried before the ladder gives up");
+    }
+    [Fact]
+    public async Task A_zone_without_the_machine_type_is_skipped_even_when_the_project_id_contains_iam()
+    {
+        // Issue #772. A project called williams-lab holds "iam": the substring stage would read the 404 as a permission error and abort the whole ladder.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        recording.CreateErrorByZone["us-central1-a"] = new CloudError("NOT_FOUND", 404, "The resource 'projects/williams-lab/zones/us-central1-a/machineTypes/g2-standard-8' was not found");
+        var spec = Spec("job-z774");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z774", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeTrue(result.FailureMessage);
+        result.Zone.ShouldNotBe("us-central1-a");
+        recording.ZonesTried[0].ShouldBe("us-central1-a", "the first zone is really tried, so the fault below it is not skipped by luck");
+        recording.FaultsFired.ShouldBe(["us-central1-a"], "the injected 404 fired in that zone and the ladder moved on");
+        recording.ZonesTried.Count.ShouldBeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task When_every_zone_misses_the_machine_type_and_quota_is_zero_everywhere_the_failure_is_still_the_fixable_quota()
+    {
+        // Issue #772: before the rule a machine-type 404 was "other", which let the quota read decide; it must still.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered).WithAllRegionsGpuCap(0);
+        var recording = new Recording(gcp);
+        foreach (var zone in Offered)
+        {
+            recording.CreateErrorByZone[zone] = new CloudError("NOT_FOUND", 404, $"The resource 'projects/my-project/zones/{zone}/machineTypes/g2-standard-8' was not found");
+        }
+
+        var spec = Spec("job-z775");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z775", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeFalse();
+        result.FailureKind.ShouldBe(CloudErrorKind.Quota, "the user can fix a quota; a stockout message would send them to wait for nothing");
+        recording.ZonesTried.Count.ShouldBe(Offered.Length);
     }
 
     [Fact]
