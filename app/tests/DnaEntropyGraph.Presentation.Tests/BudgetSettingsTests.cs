@@ -25,6 +25,11 @@ public sealed class BudgetSettingsTests
     public BudgetSettingsTests()
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+
+        // The list phrasing is resw copy (Hard Rule 13): distinctive formats, so a joiner written in code instead of read from these keys shows.
+        _strings.GetString("BudgetThresholdItem").Returns("i{0}");
+        _strings.GetString("BudgetThresholdsJoiner").Returns("+");
+        _strings.GetString("BudgetThresholdsAnd").Returns("{0}&{1}");
         _account.SelectedProjectId.Returns(Project);
         _budgets.ConsoleLinkAsync(Project, Arg.Any<CancellationToken>()).Returns("https://console.cloud.google.com/billing/AAA/budgets");
     }
@@ -403,7 +408,34 @@ public sealed class BudgetSettingsTests
 
         vm.HasBudget.ShouldBeTrue();
         vm.StatusText.ShouldBe("BudgetStatusExistsNoAmount");
-        vm.AmountText.ShouldBe("50");
+        vm.AmountText.ShouldBeEmpty("a budget with no fixed amount has nothing to show, and the default 50 would turn it into a fixed 50 on Save");
+    }
+
+    [Fact]
+    public async Task Saving_with_the_box_empty_after_opening_a_follow_last_month_budget_asks_for_an_amount_and_changes_nothing()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false });
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetAmountInvalid");
+        await _budgets.DidNotReceive().SaveAsync(Arg.Any<string>(), Arg.Any<decimal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Text_typed_before_the_first_look_finishes_survives_it()
+    {
+        // Issue #148 review round 4 (L): the project-change reset also ran on the first open and overwrote text typed before the look began.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(75m));
+        var vm = Open();
+        vm.AmountText = "30";
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBe("30");
+        vm.HasBudget.ShouldBeTrue();
     }
 
     [Fact]
@@ -449,12 +481,24 @@ public sealed class BudgetSettingsTests
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        vm.StatusText.ShouldBe("with:" + 75m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) + "|25% and 75%");
+        vm.StatusText.ShouldBe("with:" + 75m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) + "|i25&i75");
 
         _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false, ThresholdPercents = [50, 90, 100] });
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        vm.StatusText.ShouldBe("noamount:50%, 90% and 100%");
+        vm.StatusText.ShouldBe("noamount:i50+i90&i100");
+    }
+
+    [Fact]
+    public async Task One_threshold_is_just_the_item_phrase_with_no_joiner()
+    {
+        _strings.GetString("BudgetStatusExistsNoAmount").Returns("noamount:{0}");
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false, ThresholdPercents = [12.5] });
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("noamount:i" + 12.5.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture));
     }
 
     [Fact]
@@ -478,7 +522,7 @@ public sealed class BudgetSettingsTests
 
         await vm.SaveCommand.ExecuteAsync(null);
 
-        vm.StatusText.ShouldBe("saved:120|50%, 90% and 100%");
+        vm.StatusText.ShouldBe("saved:120|i50+i90&i100");
     }
 
     [Fact]

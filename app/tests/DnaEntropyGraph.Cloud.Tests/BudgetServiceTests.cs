@@ -223,22 +223,72 @@ public class BudgetServiceTests
         gcp.BudgetUpsertCalls.ShouldBe(0);
     }
 
-    [Fact]
-    public async Task Not_being_allowed_to_read_whether_the_API_is_on_also_names_the_project_not_a_billing_role_and_keeps_the_original_error()
+    private static CloudOperationException Refused() => new(new CloudError("PERMISSION_DENIED", 403, "raw google text"), CloudErrorKind.Permission);
+
+    private static IServiceEnablementGateway ReadRefusedServices()
     {
-        // Issue #148 review round 3 (M): only the enable call was mapped; the read (no serviceusage.services.get) fell to the billing-administrator message.
-        var original = new CloudOperationException(new CloudError("PERMISSION_DENIED", 403, "raw google text"), CloudErrorKind.Permission);
         var services = NSubstitute.Substitute.For<IServiceEnablementGateway>();
-        services.IsServiceEnabledAsync(Project, RequiredServices.BillingBudgets, Arg.Any<CancellationToken>()).Returns<Task<bool>>(_ => throw original);
+        services.IsServiceEnabledAsync(Project, RequiredServices.BillingBudgets, Arg.Any<CancellationToken>()).Returns<Task<bool>>(_ => throw Refused());
+        return services;
+    }
+
+    [Fact]
+    public async Task Not_being_allowed_to_read_whether_the_API_is_on_does_not_block_a_save_that_the_budget_call_accepts()
+    {
+        // Issue #148 review round 4 (L): a user with the billing role but without serviceusage.services.get used to be stopped here even when the API was already on.
+        var services = ReadRefusedServices();
         var gcp = await LinkedAsync();
         var service = new BudgetService(gcp, gcp, services, Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var saved = await service.SaveAsync(Project, 50m, CancellationToken.None);
+
+        saved.AmountUsd.ShouldBe(50m);
+        gcp.BudgetUpsertCalls.ShouldBe(1);
+        await services.DidNotReceive().EnableServicesAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission)]
+    [InlineData(CloudErrorKind.ApiDisabled)]
+    public async Task A_refused_read_then_a_budget_call_that_fails_as_api_off_or_refused_names_the_project_and_the_read_step(CloudErrorKind kind)
+    {
+        var budgetFailure = new CloudOperationException(new CloudError("BUDGET", 403, "raw budget text"), kind);
+        var budgets = NSubstitute.Substitute.For<IBudgetGateway>();
+        budgets.UpsertAsync(Arg.Any<BudgetSpec>(), Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw budgetFailure);
+        var gcp = await LinkedAsync();
+        var service = new BudgetService(budgets, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
 
         var ex = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
         ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiEnablePermission);
-        ex.InnerException.ShouldBeSameAs(original);
-        gcp.BudgetUpsertCalls.ShouldBe(0);
+        ex.Error.Message.ShouldContain("Checking whether", Case.Sensitive, "the diagnostic names the step that was refused: the read, not the enable");
+        ex.InnerException.ShouldBeSameAs(budgetFailure);
+    }
+
+    [Fact]
+    public async Task A_refused_read_then_a_budget_call_that_fails_for_another_reason_keeps_that_reason()
+    {
+        var budgetFailure = new CloudOperationException(new CloudError("BUDGET", 503, "down"), CloudErrorKind.Network);
+        var budgets = NSubstitute.Substitute.For<IBudgetGateway>();
+        budgets.UpsertAsync(Arg.Any<BudgetSpec>(), Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw budgetFailure);
+        var gcp = await LinkedAsync();
+        var service = new BudgetService(budgets, gcp, ReadRefusedServices(), Installation("inst-a"), (_, _) => Task.CompletedTask);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => service.SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.ShouldBeSameAs(budgetFailure);
+    }
+
+    [Fact]
+    public async Task A_refused_enable_names_the_enable_step_not_the_read()
+    {
+        var gcp = (await LinkedAsync()).WithServiceDisabled(Project, RequiredServices.BillingBudgets).WithNotProjectOwner(Project);
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
+
+        ex.Error.Message.ShouldContain("Switching on", Case.Sensitive);
+        ex.Error.Message.ShouldNotContain("Checking whether", Case.Sensitive);
     }
 
     [Fact]

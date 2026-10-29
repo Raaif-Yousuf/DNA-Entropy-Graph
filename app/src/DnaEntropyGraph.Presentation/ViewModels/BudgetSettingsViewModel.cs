@@ -108,13 +108,18 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
 
         // What was typed was typed for one project: another project's budget is shown (and the box is Google's again) when it is chosen.
+        // Only a real CHANGE counts: the first open has no other project whose text could leak, and anything typed before the first look is the user's own.
         if (!string.Equals(project, _shownProject, StringComparison.Ordinal))
         {
+            var changed = _shownProject is not null;
             _shownProject = project;
-            _amountEdited = false;
+            if (changed)
+            {
+                _amountEdited = false;
 
-            // Text typed for the other project must not survive into this one (and be saved as its budget); an existing budget here replaces the default below.
-            SetAmount(Format(BudgetNaming.DefaultAmountUsd));
+                // Text typed for the other project must not survive into this one (and be saved as its budget); an existing budget here replaces the default below.
+                SetAmount(Format(BudgetNaming.DefaultAmountUsd));
+            }
         }
 
         IsBusy = true;
@@ -302,7 +307,13 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
         if (!budget.AmountKnown)
         {
-            // A budget that follows last month's spend has no amount to show, and "0 a month" would be wrong; the box keeps what it had.
+            // A budget that follows last month's spend has no amount to show, and "0 a month" would be wrong. An untouched box is left EMPTY, not at the default:
+            // Save would otherwise turn a follow-last-month budget into a fixed default. Save with an empty box asks for an amount (BudgetAmountInvalid) and changes nothing.
+            if (!_amountEdited)
+            {
+                SetAmount(string.Empty);
+            }
+
             StatusText = budget.ThresholdPercents.Count == 0
                 ? _strings.GetString("BudgetStatusNoThresholds")
                 : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExistsNoAmount"), Thresholds(budget));
@@ -320,11 +331,17 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetStatusExists"), Format(budget.AmountUsd), Thresholds(budget));
     }
 
-    /// <summary>The percentages the budget really emails at, as a phrase: "50%", "50% and 90%", "50%, 90% and 100%". Read from the budget, never assumed.</summary>
-    private static string Thresholds(BudgetInfo budget)
+    /// <summary>
+    /// The percentages the budget really emails at, as a phrase ("50%", "50% and 90%", "50%, 90% and 100%"). Read from the budget, never assumed.
+    /// Every word of it (the percent sign, the joiner, the "and") is resw copy (Hard Rule 13): BudgetThresholdItem, BudgetThresholdsJoiner, BudgetThresholdsAnd.
+    /// </summary>
+    private string Thresholds(BudgetInfo budget)
     {
-        var parts = budget.ThresholdPercents.Select(p => p.ToString("0.##", CultureInfo.CurrentCulture) + "%").ToList();
-        return parts.Count == 1 ? parts[0] : string.Join(", ", parts.Take(parts.Count - 1)) + " and " + parts[^1];
+        var item = _strings.GetString("BudgetThresholdItem");
+        var parts = budget.ThresholdPercents.Select(p => string.Format(CultureInfo.CurrentCulture, item, p.ToString("0.##", CultureInfo.CurrentCulture))).ToList();
+        return parts.Count == 1
+            ? parts[0]
+            : string.Format(CultureInfo.CurrentCulture, _strings.GetString("BudgetThresholdsAnd"), string.Join(_strings.GetString("BudgetThresholdsJoiner"), parts.Take(parts.Count - 1)), parts[^1]);
     }
 
     private void SetAmount(string text)

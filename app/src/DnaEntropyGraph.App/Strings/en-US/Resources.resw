@@ -2124,10 +2124,19 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>There was no budget alert left to remove. Press Create or update the alert if you want one.</value>
   </data>
   <data name="BudgetStatusExistsNoAmount" xml:space="preserve">
-    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {0} of the amount that budget follows (last month's spend), so no fixed amount is shown here. Press Create or update the alert to set a fixed amount instead.</value>
+    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {0} of the amount that budget follows (last month's spend), so no fixed amount is shown here. To set a fixed amount instead, type one in the box and press Create or update the alert.</value>
   </data>
   <data name="BudgetStatusNoThresholds" xml:space="preserve">
     <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. Press Create or update the alert to add them.</value>
+  </data>
+  <data name="BudgetThresholdItem" xml:space="preserve">
+    <value>{0}%</value>
+  </data>
+  <data name="BudgetThresholdsJoiner" xml:space="preserve">
+    <value>, </value>
+  </data>
+  <data name="BudgetThresholdsAnd" xml:space="preserve">
+    <value>{0} and {1}</value>
   </data>
   <data name="BudgetError_ApiEnablePermission" xml:space="preserve">
     <value>Your Google account is not allowed to switch on the Cloud Billing Budget API for this project. Open the matching Google page and switch it on there, then press Create or update the alert again.</value>
