@@ -300,6 +300,32 @@ public class JobReconcilerTests
         outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
         env.Row("job-sp").FinishedAt.ShouldBe(vmStart.AddMinutes(25));
     }
+
+    [Fact]
+    public async Task A_run_whose_VM_is_gone_and_has_no_heartbeat_books_until_the_status_files_last_write()
+    {
+        var env = new Env();
+        var began = new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero);
+        await env.SeedAsync("job-su", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = began });
+        PutStatus(env, "job-su", Heartbeat(TimeSpan.FromMinutes(25)));
+
+        await OneAsync(env.Reconciler(), "job-su");
+
+        env.Row("job-su").FinishedAt.ShouldBe(began.AddMinutes(25), "the worker's own updatedAt is the sign of life when the row has no heartbeat");
+    }
+
+    [Fact]
+    public async Task A_run_whose_VM_is_gone_with_no_evidence_at_all_books_no_longer_than_its_run_limit()
+    {
+        var env = new Env();
+        var vmStart = DateTimeOffset.UtcNow.AddHours(-21);
+        await env.SeedAsync("job-ne", JobPhase.Running, uploaded: true, vm: false, tweak: row => row with { VmReadyAt = vmStart });
+
+        await OneAsync(env.Reconciler(), "job-ne");
+
+        env.Row("job-ne").FinishedAt.ShouldBe(vmStart + RunLimit, "no heartbeat and no status: capped at start + the run's limit, never the 21 hours until the app came back");
+    }
+
     // Issue #679 (b), reviewed: a gone VM is run_time_limit only on the worker's OWN evidence of how long the VM lived (status.json startedAt to
     // updatedAt, one clock), never on the row's start time, which counts the hours the app was closed after the VM had already died.
     private static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;

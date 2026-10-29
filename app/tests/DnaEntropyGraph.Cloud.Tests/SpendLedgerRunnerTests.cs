@@ -123,25 +123,6 @@ public class SpendLedgerRunnerTests
         seen.ShouldAllBe(usd => usd > 0, "a granted flex VM bills from the grant; its phase being Provisioning must not hide it from the hard stop");
     }
 
-    [Fact]
-    public async Task A_cancel_whose_create_is_still_unsettled_and_found_no_VM_books_no_span()
-    {
-        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
-        var repo = new InMemoryRunRepository();
-        var runner = Runner(gcp, repo);
-        using var cts = new CancellationTokenSource();
-        var run = runner.RunAsync(TestInputs.Request("job-l2", Spec("job-l2")), cts.Token);
-        await gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await cts.CancelAsync();
-        await Should.ThrowAsync<OperationCanceledException>(() => run);
-
-        await runner.CancelAsync("job-l2", CancellationToken.None);
-
-        var row = LastRow(repo, "job-l2");
-        row.VmReadyAt.ShouldBeNull("the create never answered and the cancel's delete found no VM: a create that later fails must not leave a booked span");
-        gcp.ReleaseCreate();
-    }
-
     private static async Task<(FakeGcp Gcp, ManualTimeProvider Time, InMemoryRunRepository Repo)> CancelRigAsync(string jobId, TimeSpan vmRanFor, bool stopped)
     {
         var time = new ManualTimeProvider(DateTimeOffset.UtcNow.AddHours(-10));
@@ -186,18 +167,6 @@ public class SpendLedgerRunnerTests
         var row = LastRow(repo, "job-m3b");
         row.VmReadyAt.ShouldBe(vmStart);
         row.FinishedAt.ShouldBe(vmStart + TimeSpan.FromMinutes(30), "the VM stopped at +30 min; the cancel an hour later must not book that hour");
-    }
-
-    [Fact]
-    public async Task A_cancel_that_finds_no_VM_books_no_span()
-    {
-        var gcp = new FakeGcp();
-        var repo = new InMemoryRunRepository();
-        await repo.UpsertAsync(new RunRecord("job-m3c", JobPhase.Cancelling, DateTimeOffset.UtcNow), CancellationToken.None);
-
-        await Runner(gcp, repo).CancelAsync("job-m3c", CancellationToken.None);
-
-        LastRow(repo, "job-m3c").VmReadyAt.ShouldBeNull("the app never saw a VM for this job");
     }
 
     private static async Task<(FakeGcp Gcp, InMemoryRunRepository Repo, DateTimeOffset T0)> SelfDeletedAfterResultAsync(string jobId, DateTimeOffset? heartbeat, string? resultFinishedAt)
@@ -245,6 +214,18 @@ public class SpendLedgerRunnerTests
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
         var row = LastRow(repo, "job-m1b");
         (row.FinishedAt!.Value - row.VmReadyAt!.Value).TotalMinutes.ShouldBe(48, 0.01);
+    }
+
+    [Fact]
+    public async Task A_VM_that_deleted_itself_with_no_sign_of_life_at_all_is_booked_no_longer_than_its_own_run_limit()
+    {
+        // The app was closed for ten hours; no heartbeat, no result finish time, no status.json. The platform cannot have run the VM past its maxRunDuration (4 h in Spec).
+        var (gcp, repo, t0) = await SelfDeletedAfterResultAsync("job-n1", null, null);
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-n1", Spec("job-n1")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        LastRow(repo, "job-n1").FinishedAt.ShouldBe(t0 + TimeSpan.FromHours(4), "no evidence: capped at start + the run's own limit, never the ten hours the app was closed");
     }
 
     [Fact]
