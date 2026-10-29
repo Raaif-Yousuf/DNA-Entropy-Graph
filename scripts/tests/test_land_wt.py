@@ -1623,3 +1623,44 @@ def test_a_non_codeql_failed_check_makes_no_alert_call_and_prints_nothing_extra(
     assert rc == lw.EXIT_CHECKS_RED
     assert [c for c in world.gh_calls() if c[0] == "api"] == []
     assert "CodeQL" not in out and "alerts" not in out
+
+
+def _api_calls(world: World) -> list[list[str]]:
+    return [c for c in world.gh_calls() if c[0] == "api"]
+
+
+def test_the_could_not_be_re_run_refusal_prints_the_codeql_breakdown(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("cs/useless-upcast", "app/tests/X/H.cs")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)]], rerun=True, rerun_rc=1)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "could not be re-run" in out
+    assert "CodeQL: 1 open alert(s) on PR 7: cs/useless-upcast 1 (app 1)" in out
+    assert "every alert is under a test path" in out
+    assert len(_api_calls(world)) == 1
+
+
+def test_the_no_rerun_flag_path_prints_the_codeql_breakdown(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("py/x", "scripts/a.py")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)]], rerun=False)
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "CodeQL: 1 open alert(s) on PR 7: py/x 1 (scripts 1)" in capsys.readouterr().out
+
+
+def test_a_second_red_after_a_rerun_prints_the_breakdown_exactly_once(world, capsys):
+    (world.root / "gh.log.alerts").write_text(json.dumps([_alert("py/x", "scripts/a.py")]), encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)], [_check("CodeQL", "fail", run=5)]], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_CHECKS_RED
+    assert "still red after one re-run" in out
+    assert out.count("CodeQL: 1 open alert(s)") == 1
+    assert len(_api_calls(world)) == 1
+
+
+def test_a_rerun_that_goes_green_prints_nothing_and_makes_no_api_call(world, capsys):
+    (world.root / "gh.log.alerts").write_text("[]", encoding="utf-8")
+    rc, _ = _land_green(world, [[_check("CodeQL", "fail", run=5)], [_check("CodeQL", "pass", run=5)]], rerun=True)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_OK
+    assert "CodeQL:" not in out and "alerts" not in out
+    assert _api_calls(world) == []

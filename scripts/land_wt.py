@@ -948,6 +948,7 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
     deadline = ctx.monotonic() + timeout
     rerun_spent = False
     gh_warned = False
+    triaged = False  # the CodeQL alert summary prints at most once per run, on whichever refusal comes first
     while True:
         checks = _read_checks(ctx, pr)
         if checks is None and ctx.checks_error and not gh_warned:
@@ -966,11 +967,15 @@ def _merge_when_green(ctx: Ctx, pr: str, pushed_head: str, timeout: float, poll:
                     ctx.sleep(poll)  # let the rerun replace the stale red before it is read again
                     continue
                 ctx.say(f"ERROR: not merging {pr}: failed check(s) {_names(red)} could not be re-run. Re-run them by hand; the PR stays open")
+                if any(_is_codeql(c) for c in red) and not triaged:
+                    triaged = True
+                    _report_codeql_alerts(ctx, pr)
                 return EXIT_CHECKS_RED
             elif red:
                 again = " (still red after one re-run)" if rerun_spent else ""
                 ctx.say(f"ERROR: not merging {pr}: failed check(s){again}: {_names(red)}. Fix them and push; the PR stays open")
-                if any(_is_codeql(c) for c in red):
+                if any(_is_codeql(c) for c in red) and not triaged:
+                    triaged = True
                     _report_codeql_alerts(ctx, pr)
                 return EXIT_CHECKS_RED
             if not waiting and not red:
