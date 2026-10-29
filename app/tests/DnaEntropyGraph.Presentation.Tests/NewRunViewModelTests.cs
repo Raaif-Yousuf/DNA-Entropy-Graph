@@ -633,6 +633,13 @@ public sealed class NewRunViewModelTests : IDisposable
         gated.Entered.Wait(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ShouldBeTrue();
         _viewModel.AddDroppedCommand.Execute(new DroppedItems([third], 0, false));
         var secondDrop = _viewModel.AddDroppedCommand.ExecutionTask!;
+        // MEASURED 2026-10-29 (#841, 3 crashes in about 125 runs of this class): the page owns Items on one UI thread, but here the two drops run on thread-pool threads, so the first drop adding
+        // second.fasta while the second drop was still in its duplicate check made `Items.Any` throw "Collection was modified" and take the test host down. The third pill is on the page before
+        // anything is released, so the only thread that touches Items afterwards is the first drop's.
+        // Items.Count == 2 only proves the third pill was added; the second drop still enumerates Items afterwards (duplicate check, RNA offer, output choices). Only the first file is gated, so
+        // the second drop can run to completion on its own; wait for that before the first drop is allowed to add second.fasta.
+        await secondDrop.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        _viewModel.Items.Count.ShouldBe(2);
         gated.Release();
         await firstDrop;
         await secondDrop;
@@ -1055,12 +1062,34 @@ public sealed class NewRunViewModelTests : IDisposable
     private void EstimateReturns(CostEstimateResult result)
         => _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(result));
 
-    /// <summary>The refresh runs without being awaited by the page, so a test waits for the text instead of racing it.</summary>
+    /// <summary>
+    /// The refresh runs without being awaited by the page, so a test waits for the text instead of racing it. It waits on the view model's own PropertyChanged signal (#841), not on a poll with a short deadline;
+    /// the 20 s bound is only a safety net that turns a lost signal into a failed assertion on the returned text.
+    /// </summary>
     private async Task<string> EstimateTextWhen(Func<string, bool> done)
     {
-        for (var i = 0; i < 200 && !done(_viewModel.EstimateText); i++)
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Check(object? sender, System.ComponentModel.PropertyChangedEventArgs? args)
         {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
+            if (done(_viewModel.EstimateText))
+            {
+                reached.TrySetResult();
+            }
+        }
+
+        _viewModel.PropertyChanged += Check;
+        try
+        {
+            Check(null, null);
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken).ConfigureAwait(true);
+        }
+        catch (TimeoutException)
+        {
+            // Fall through: the caller's assertion on the text names what never arrived.
+        }
+        finally
+        {
+            _viewModel.PropertyChanged -= Check;
         }
 
         return _viewModel.EstimateText;
@@ -1130,6 +1159,7 @@ public sealed class NewRunViewModelTests : IDisposable
         EstimateReturns(Point(9, 0.13));
 
         await AddOne(Write("bad.fasta", ">x\nACGTXACGTACGT\n"));
+        // Negative evidence, real time (#841): nothing may change, so a window that is too short can only hide a regression and never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBeEmpty();
@@ -1203,6 +1233,7 @@ public sealed class NewRunViewModelTests : IDisposable
         EstimateReturns(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
 
         await AddOne(Write("n.fasta", ">a\n" + Dna + "\n"));
+        // Negative evidence, real time (#841): nothing may change, so a window that is too short can only hide a regression and never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBeEmpty();
@@ -1227,6 +1258,7 @@ public sealed class NewRunViewModelTests : IDisposable
             .Returns<Task<CostEstimateResult>>(_ => throw new InvalidOperationException("boom"));
 
         var pill = await AddOne(Write("x.fasta", ">a\n" + Dna + "\n"));
+        // Negative evidence, real time (#841): nothing may change, so a window that is too short can only hide a regression and never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
 
         pill.IsValid.ShouldBeTrue();
@@ -1246,6 +1278,7 @@ public sealed class NewRunViewModelTests : IDisposable
         (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
 
         slow.SetResult(Point(99, 9.99));
+        // Negative evidence, real time (#841): nothing may change, so a window that is too short can only hide a regression and never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _viewModel.EstimateText.ShouldBe("Estimate: about $0.13, about 9 minutes");
@@ -1574,7 +1607,6 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel = NewViewModel(validate: (path, format, policy, rna) =>
         {
             _viewModel.BrowseCommand.Cancel();
-            Thread.Sleep(50);
             return InputFileValidator.Validate(path, format, policy, rna);
         });
     }
@@ -1585,7 +1617,6 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel = NewViewModel(validate: (path, format, policy, rna) =>
         {
             _viewModel.AddPastedCommand.Cancel();
-            Thread.Sleep(50);
             return InputFileValidator.Validate(path, format, policy, rna);
         });
         _viewModel.PasteText = Dna;
@@ -1603,7 +1634,6 @@ public sealed class NewRunViewModelTests : IDisposable
         {
             var path = new LocalPastedInputStore(root).Save(text);
             cancel();
-            Thread.Sleep(50);
             return path;
         }
 
@@ -1670,6 +1700,7 @@ public sealed class NewRunViewModelTests : IDisposable
         _viewModel.PasteText = "ACGT";
 
         _viewModel.PasteCountText.ShouldBe("NewRunPasteCount:4");
+        // Negative evidence, real time (#841): nothing may change, so a window that is too short can only hide a regression and never fail correct code.
         await Task.Delay(700, TestContext.Current.CancellationToken);
         _viewModel.PasteCountText.ShouldBe("NewRunPasteCount:4");
     }

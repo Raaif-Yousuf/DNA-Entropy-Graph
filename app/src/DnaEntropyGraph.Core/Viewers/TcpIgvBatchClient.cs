@@ -19,6 +19,7 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
     private readonly TimeSpan _connectTimeout;
     private readonly TimeSpan _replyTimeout;
     private readonly TimeSpan _loadReplyTimeout;
+    private readonly TimeProvider _time;
 
     public TcpIgvBatchClient()
         : this(DefaultConnectTimeout, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(60))
@@ -30,8 +31,10 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
     {
     }
 
-    public TcpIgvBatchClient(TimeSpan connectTimeout, TimeSpan replyTimeout, TimeSpan loadReplyTimeout)
+    /// <param name="timeProvider">The clock the connect and reply waits run on (null: the system clock). A test passes a manual clock so a wait ends when the test says time passed, never because a loaded machine was slow (#841).</param>
+    public TcpIgvBatchClient(TimeSpan connectTimeout, TimeSpan replyTimeout, TimeSpan loadReplyTimeout, TimeProvider? timeProvider = null)
     {
+        _time = timeProvider ?? TimeProvider.System;
         _connectTimeout = connectTimeout;
         _replyTimeout = replyTimeout;
         _loadReplyTimeout = loadReplyTimeout;
@@ -54,8 +57,8 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
         using var client = new TcpClient();
         try
         {
-            using var connect = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            connect.CancelAfter(_connectTimeout);
+            using var connectTimeout = new CancellationTokenSource(_connectTimeout, _time);
+            using var connect = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectTimeout.Token);
             await client.ConnectAsync(IPAddress.Loopback, port, connect.Token);
         }
         catch (Exception ex) when (ex is SocketException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
@@ -72,8 +75,8 @@ public sealed class TcpIgvBatchClient : IIgvBatchClient
             {
                 await writer.WriteLineAsync(command.AsMemory(), cancellationToken);
 
-                using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                wait.CancelAfter(IsLoad(command) ? _loadReplyTimeout : _replyTimeout);
+                using var replyTimeout = new CancellationTokenSource(IsLoad(command) ? _loadReplyTimeout : _replyTimeout, _time);
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, replyTimeout.Token);
                 string? reply;
                 try
                 {
