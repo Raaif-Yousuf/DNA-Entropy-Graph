@@ -19,23 +19,30 @@ app/src `en-US/Resources.resw` outside obj/ and bin/.
 1. `string.Format([culture,] <recv>.GetString(<"literal" | Class.Const>), args...)`: the template's
    highest placeholder index + 1 must equal the argument count (TOO-MANY-ARGS / TOO-FEW-ARGS) and
    the key must exist (MISSING-KEY). A parenthesised receiver `(a ?? b).GetString("K")` counts.
+   A LITERAL template (`string.Format("x {0}", a)`, regular, verbatim or raw, not interpolated) is
+   checked the same way, so excluding CodeQL's cs/invalid-string-formatting loses nothing here.
 2. Wrapper helpers: a method `Name(string key, params object[] args)` whose body does
-   `string.Format(..., GetString(key), args)` is detected, its body is not itself a site, and EVERY
-   call `Name("Key", a, b)` in the same file is checked like (1). A `Class.Const` key is resolved and a
-   conditional key `c ? "A" : "B"` checks every branch.
-3. Every resw value with a placeholder must be referenced by a string literal or const somewhere in
-   the scanned code (UNREFERENCED-TEMPLATE), the "wired to nothing" shape for a template.
+   `string.Format(..., GetString(key), args)` is detected; that one call is not a site, and EVERY
+   call `Name("Key", a, b)` / `this.Name(...)` is checked like (1), in the helper's file and in the
+   other files of the same `partial` class. A `Class.Const` key is resolved and a conditional key
+   `c ? "A" : "B"` checks every branch.
+3. Every resw value with a placeholder must be referenced by a string literal, or by a const that is
+   used somewhere in the scanned code (UNREFERENCED-TEMPLATE), the "wired to nothing" shape.
+4. A file that ends inside a string, char or comment (LEX-DESYNC) fails the run, naming the file, so a
+   scanner desync can never pass silently.
 
-What stays DYNAMIC (cannot be checked, listed in KNOWN_DYNAMIC): a key that is a variable or a
-`switch` expression, an unparseable call, and a spread of any variable declared as `object[]` (it is
-not one argument). A wrapper helper defined in one file and called from another is not followed.
+What stays DYNAMIC (cannot be checked, listed in KNOWN_DYNAMIC): a key that is a variable, a `switch`
+expression or an ambiguous const (same class and const name in two namespaces), an unparseable call,
+a helper call whose first argument is not a literal key, and a spread of any array-typed sole argument
+(declared `T[]`, `.ToArray()`, or a non-object/string array initializer), which is not one argument.
+A helper called from a class that is not a partial sibling of its file is not followed.
 
 HOW IT READS C# (and its limits)
 --------------------------------
 A text scanner, not a compiler: it blanks `//`, `///` and `/* */` comments, steps over regular,
 verbatim, raw (triple-quote) and interpolated string literals and char literals, splits arguments
-at depth 0, expands `new object[] { ... }`, and resolves `Class.Const` / `Outer.Inner.Const` keys
-(`const string` and `static readonly string`) by enclosing-type span. Known gap: an interpolated
+at depth 0, expands `new object[] { ... }` / `new string[] { ... }` / `new[] { ... }`, and resolves
+`Class.Const` / `Ns.Class.Const` keys (`const string`, `static readonly string`) by namespace and enclosing-type span. Known gap: an interpolated
 string whose hole contains a quote is treated as a plain string.
 
 Dynamic sites (`GetString(key)`, a `params` spread, an unparseable call) cannot be checked. They
@@ -51,6 +58,7 @@ import argparse
 import re
 import sys
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,12 +71,45 @@ LITERAL_KEY = re.compile(r'^"([^"\\]*)"$')
 DOTTED_NAME = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
 HELPER_DECL = re.compile(r"\b(\w+)\s*\(\s*string\s+(\w+)\s*,\s*params\s+object\s*\[\s*\]\s+(\w+)\s*\)")
 STRING_FORMAT = re.compile(r"\b[Ss]tring\.Format\(")
-ARRAY_DECL = re.compile(r"\bobject\s*\[\s*\]\s+(\w+)")
-ARRAY_VAR_INIT = re.compile(r"\bvar\s+(\w+)\s*=\s*new\s*(?:object\s*)?\[")
+ARRAY_DECL = re.compile(r"\b[\w.<>?]+\s*\[\s*\]\s+(\w+)")
+ARRAY_VAR_INIT = re.compile(r"\bvar\s+(\w+)\s*=\s*new\s*(?:[\w.<>?]+\s*)?\[")
+ARRAY_VAR_TOARRAY = re.compile(r"\bvar\s+(\w+)\s*=[^;\n]*\.ToArray\(\)")
+NEW_ARRAY_ARG = re.compile(r"^new\s*(?:[\w.<>?]+\s*)?\[")
+NAMESPACE = re.compile(r"\bnamespace\s+([\w.]+)")
+IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
+NUMERIC_ARG = re.compile(r"^(?:[-+]?\d[\w.]*|true|false|null|default|'[^']*')$")
+KEYWORDS = frozenset(
+    [
+        "return",
+        "await",
+        "yield",
+        "throw",
+        "else",
+        "case",
+        "in",
+        "is",
+        "as",
+        "not",
+        "and",
+        "or",
+        "new",
+        "do",
+        "when",
+        "if",
+        "while",
+        "foreach",
+        "for",
+        "using",
+        "lock",
+        "out",
+        "ref",
+        "switch",
+    ]
+)
 PLACEHOLDER = re.compile(r"\{(\d+)(?:[,:][^{}]*)?\}")
 CONST = re.compile(r'\b(?:const|static\s+readonly)\s+string\s+(\w+)\s*=\s*"([^"\\]*)"')
 TYPE_DECL = re.compile(r"\b(?:class|record|struct|interface)\s+(\w+)")
-OBJECT_ARRAY = re.compile(r"^new\s*(?:object\s*)?\[\s*\]\s*\{(.*)\}$", re.DOTALL)
+OBJECT_ARRAY = re.compile(r"^new\s*(?:(?:object|string)\s*)?\[\s*\]\s*\{(.*)\}$", re.DOTALL)
 MIN_CHECKED = 20
 
 # Files with call sites the scanner cannot resolve (wrapper helpers taking the key as a parameter,
@@ -113,45 +154,83 @@ def placeholder_count(template: str) -> int:
     return max((int(m) for m in PLACEHOLDER.findall(stripped)), default=-1) + 1
 
 
-def _skip_string(text: str, i: int) -> int:
-    """Index just past the string literal whose opening quote is text[i]."""
-    if text.startswith('"""', i):
+def _prefix_has_at(text: str, i: int) -> bool:
+    """True when the quote at text[i] is preceded by an `@` (verbatim) in `@"`, `$@"` or `@$"`."""
+    k = i - 1
+    while k >= 0 and i - k <= 3 and text[k] in "@$":
+        if text[k] == "@":
+            return True
+        k -= 1
+    return False
+
+
+def _scan_string(text: str, i: int) -> tuple[int, bool]:
+    """(index just past the literal whose opening quote is text[i], whether it was terminated).
+
+    A regular literal ends at a line break (unterminated); a raw literal needs its own quote run."""
+    at = _prefix_has_at(text, i)
+    if text.startswith('"""', i) and not at:
         n = 3
         while text.startswith('"', i + n):
             n += 1
         end = text.find('"' * n, i + n)
-        return len(text) if end < 0 else end + n
-    verbatim = text[i - 1 : i] == "@" or text[i - 2 : i] == "@$"  # @"..." and $@"..."; @$"..." is the same prefix reversed
+        return (len(text), False) if end < 0 else (end + n, True)
     j = i + 1
     while j < len(text):
-        if verbatim:
-            if text[j] == '"':
+        c = text[j]
+        if at:
+            if c == '"':
                 if text[j + 1 : j + 2] == '"':
                     j += 2
                     continue
-                return j + 1
+                return j + 1, True
         else:
-            if text[j] == "\\":
+            if c == "\\":
                 j += 2
                 continue
-            if text[j] == '"':
-                return j + 1
+            if c == '"':
+                return j + 1, True
+            if c in "\r\n":
+                return j, False
         j += 1
-    return j
+    return len(text), False
+
+
+def _skip_string(text: str, i: int) -> int:
+    return _scan_string(text, i)[0]
+
+
+def _scan_char(text: str, i: int) -> tuple[int, bool]:
+    j = i + 1
+    while j < len(text) and text[j] != "'":
+        if text[j] in "\r\n":
+            return j, False
+        j += 2 if text[j] == "\\" else 1
+    return (j + 1, True) if j < len(text) else (len(text), False)
 
 
 def _skip_char(text: str, i: int) -> int:
-    j = i + 1
-    while j < len(text) and text[j] != "'":
-        j += 2 if text[j] == "\\" else 1
-    return j + 1
+    return _scan_char(text, i)[0]
 
 
-def mask(text: str) -> tuple[str, str]:
+def _literal_content(text: str, i: int, j: int) -> str:
+    """The value text of the terminated literal text[i:j] (escapes of regular literals stay as written)."""
+    if text.startswith('"""', i) and not _prefix_has_at(text, i):
+        q = 3
+        while text.startswith('"', i + q):
+            q += 1
+        return text[i + q : j - q]
+    if _prefix_has_at(text, i):
+        return text[i + 1 : j - 1].replace('""', '"')
+    return text[i + 1 : j - 1]
+
+
+def mask(text: str, problems: list[int] | None = None) -> tuple[str, str]:
     """Return (no_comments, code_only), both the same length and line layout as `text`.
 
     no_comments keeps strings and blanks every comment form; code_only also blanks the inside of
-    string and char literals, so brace/paren scans see code only.
+    string and char literals, so brace/paren scans see code only. When `problems` is given, the index
+    of every unterminated string, char or block comment is appended to it.
     """
     nc: list[str] = []
     co: list[str] = []
@@ -170,14 +249,18 @@ def mask(text: str) -> tuple[str, str]:
             i = j
         elif two == "/*":
             j = text.find("*/", i + 2)
+            if j < 0 and problems is not None:
+                problems.append(i)
             j = n if j < 0 else j + 2
             nc.append(blank(text[i:j]))
             co.append(blank(text[i:j]))
             i = j
         elif text[i] in "\"'":
-            j = _skip_string(text, i) if text[i] == '"' else _skip_char(text, i)
+            j, ok = _scan_string(text, i) if text[i] == '"' else _scan_char(text, i)
+            if not ok and problems is not None:
+                problems.append(i)
             nc.append(text[i:j])
-            co.append(text[i] + blank(text[i + 1 : j - 1]) + text[j - 1 : j] if j - i >= 2 else text[i:j])
+            co.append(text[i] + blank(text[i + 1 : j - 1]) + text[j - 1 : j] if ok and j - i >= 2 else text[i] + blank(text[i + 1 : j]))
             i = j
         else:
             nc.append(text[i])
@@ -233,19 +316,21 @@ def string_literals(text: str) -> list[str]:
             i = _skip_char(text, i)
         elif c == '"':
             j = _skip_string(text, i)
-            if text.startswith('"""', i):
-                q = 3
-                while text.startswith('"', i + q):
-                    q += 1
-                out.append(text[i + q : j - q])
-            elif text[i - 1 : i] == "@" or text[i - 2 : i] == "@$":
-                out.append(text[i + 1 : j - 1].replace('""', '"'))
-            else:
-                out.append(text[i + 1 : j - 1])
+            out.append(_literal_content(text, i, j))
             i = j
         else:
             i += 1
     return out
+
+
+def _whole_literal(arg: str) -> str | None:
+    """The value of `arg` when it is exactly one non-interpolated string literal, else None."""
+    arg = arg.strip()
+    k = 1 if arg.startswith('@"') else 0
+    if not arg.startswith('"', k):
+        return None
+    end, ok = _scan_string(arg, k)
+    return _literal_content(arg, k, end) if ok and end == len(arg) else None
 
 
 def _is_build_dir(rel_parts: tuple[str, ...]) -> bool:
@@ -273,11 +358,14 @@ class Helper:
 
     name: str
     decl_start: int
-    body_range: tuple[int, int]
+    inner_start: int  # the one string.Format call in the body that is the wrapper itself
+    type_name: str
+    partial: bool
 
 
 def _find_helpers(text: str, code: str) -> list[Helper]:
     helpers: list[Helper] = []
+    spans = _type_spans(code)
     for m in HELPER_DECL.finditer(text):
         key_param, arr_param = m.group(2), m.group(3)
         i = m.end()
@@ -314,9 +402,36 @@ def _find_helpers(text: str, code: str) -> list[Helper]:
                 args = args[1:]
             kv = KEY_VAR_ARG.match(args[0]) if args else None
             if len(args) == 2 and kv and kv.group(1) == key_param and args[1] == arr_param:
-                helpers.append(Helper(m.group(1), m.start(1), (i, end)))
+                enclosing = [sp for sp in spans if sp[0] < m.start() < sp[1]]
+                type_name = max(enclosing)[2] if enclosing else ""
+                partial = bool(type_name) and re.search(rf"\bpartial\s+(?:class|record|struct)\s+{re.escape(type_name)}\b", code) is not None
+                helpers.append(Helper(m.group(1), m.start(1), fm.start(), type_name, partial))
                 break
     return helpers
+
+
+def _is_declaration(code: str, start: int) -> bool:
+    """True when the name at code[start] is preceded by a return type or modifier, so it declares a method."""
+    k = start - 1
+    while k >= 0 and code[k].isspace():
+        k -= 1
+    if k < 0:
+        return False
+    if code[k] == ">":
+        return code[k - 1 : k] != "="  # `=> Name(` is a call; `List<T> Name(` is a declaration
+    if code[k] == "]":
+        return True
+    if code[k].isalnum() or code[k] == "_":
+        e = k
+        while k >= 0 and (code[k].isalnum() or code[k] == "_"):
+            k -= 1
+        return code[k + 1 : e + 1] not in KEYWORDS
+    return False
+
+
+def _is_array_spread(arg: str, array_vars: set[str]) -> bool:
+    """A sole `args` argument that is array-typed is a params spread, not one value."""
+    return arg in array_vars or arg.endswith(".ToArray()") or NEW_ARRAY_ARG.match(arg) is not None
 
 
 def _ternary_split(arg: str) -> tuple[str, str] | None:
@@ -348,7 +463,7 @@ def _ternary_split(arg: str) -> tuple[str, str] | None:
     return None
 
 
-def _literal_keys(arg: str, consts: dict[str, str]) -> list[str] | None:
+def _literal_keys(arg: str, consts: dict[str, set[str]]) -> list[str] | None:
     """Every resw key `arg` can be: a bare literal or const, or a conditional whose branches all are."""
     one = _literal_key(arg, consts)
     if one is not None:
@@ -360,14 +475,17 @@ def _literal_keys(arg: str, consts: dict[str, str]) -> list[str] | None:
     return left + right if left is not None and right is not None else None
 
 
-def _literal_key(arg: str, consts: dict[str, str]) -> str | None:
-    """The resw key of a bare `"Key"` or `Class.Const` argument, else None."""
+def _literal_key(arg: str, consts: dict[str, set[str]]) -> str | None:
+    """The resw key of a bare `"Key"` or `Ns.Class.Const` argument, else None (also None when ambiguous)."""
     lit = LITERAL_KEY.match(arg)
     if lit:
         return lit.group(1)
     if DOTTED_NAME.match(arg):
         parts = arg.split(".")
-        return consts.get(arg) or consts.get(".".join(parts[-2:]))
+        for k in range(len(parts) - 1):
+            values = consts.get(".".join(parts[k:]))
+            if values:
+                return next(iter(values)) if len(values) == 1 else None
     return None
 
 
@@ -393,12 +511,17 @@ def _type_spans(code: str) -> list[tuple[int, int, str]]:
     return spans
 
 
-def _collect_consts(no_comments: str, code: str, consts: dict[str, str]) -> None:
+def _collect_consts(no_comments: str, code: str, consts: dict[str, set[str]], decls: Counter[str], by_name: dict[str, set[str]]) -> None:
     spans = _type_spans(code)
+    ns = NAMESPACE.search(code)
+    prefix = ns.group(1).split(".") if ns else []
     for m in CONST.finditer(no_comments):
         chain = [name for (a, b, name) in sorted(spans) if a < m.start() < b]
-        for start in range(len(chain)):
-            consts[".".join([*chain[start:], m.group(1)])] = m.group(2)
+        full = [*prefix, *chain, m.group(1)]
+        for start in range(len(full) - 1):
+            consts.setdefault(".".join(full[start:]), set()).add(m.group(2))
+        decls[m.group(1)] += 1
+        by_name.setdefault(m.group(1), set()).add(m.group(2))
 
 
 def _object_array_args(arg: str) -> list[str] | None:
@@ -409,88 +532,129 @@ def _object_array_args(arg: str) -> list[str] | None:
     return parsed[0] if parsed else None
 
 
+@dataclass
+class _File:
+    rel: str
+    text: str
+    code: str
+    array_vars: set[str]
+    helpers: list[Helper]
+
+
 def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) -> Result:
     """Scan app/src and app/tools. `known_dynamic=None` turns the dynamic-site allowlist check off."""
     result = Result()
     templates = load_templates(_resw_files(root))
-    files = []
+    files: list[_File] = []
     for p in _cs_files(root):
-        no_comments, code = mask(p.read_text(encoding="utf-8-sig"))
-        files.append((p, no_comments, code))
+        raw = p.read_text(encoding="utf-8-sig")
+        problems: list[int] = []
+        text, code = mask(raw, problems)
+        rel = p.relative_to(root).as_posix()
+        for index in problems:
+            result.findings.append(
+                Finding(
+                    "LEX-DESYNC",
+                    "",
+                    rel,
+                    raw.count("\n", 0, index) + 1,
+                    "a string, char or comment is not terminated: the rest of the file was not scanned reliably",
+                )
+            )
+        array_vars = set(ARRAY_DECL.findall(code)) | set(ARRAY_VAR_INIT.findall(code)) | set(ARRAY_VAR_TOARRAY.findall(code))
+        files.append(_File(rel, text, code, array_vars, _find_helpers(text, code)))
 
-    consts: dict[str, str] = {}
+    consts: dict[str, set[str]] = {}
+    decls: Counter[str] = Counter()
+    by_name: dict[str, set[str]] = {}
     literals: set[str] = set()
-    for _path, no_comments, code in files:
-        literals.update(string_literals(no_comments))
-        _collect_consts(no_comments, code, consts)
-    literals.update(consts.values())
+    idents: Counter[str] = Counter()
+    for f in files:
+        # a const's own declaring literal is not a reference; the const counts only when its name is used (below)
+        literals.update(string_literals(CONST.sub(lambda m: " " * len(m.group(0)), f.text)))
+        _collect_consts(f.text, f.code, consts, decls, by_name)
+        idents.update(IDENT.findall(f.code))
+    for name, values in by_name.items():
+        if idents[name] > decls[name]:  # the const's name is used somewhere besides its declarations
+            literals.update(values)
 
     dynamic: dict[str, list[int]] = {}
+
+    def check_template(label: str, template: str, rest: list[str], rel: str, line: int) -> None:
+        result.checked += 1
+        need = placeholder_count(template)
+        if len(rest) > need:
+            result.findings.append(Finding("TOO-MANY-ARGS", label, rel, line, f"template takes {need}, call passes {len(rest)}"))
+        elif len(rest) < need:
+            result.findings.append(Finding("TOO-FEW-ARGS", label, rel, line, f"template takes {need}, call passes {len(rest)}"))
 
     def check(key: str, rest: list[str], rel: str, line: int) -> None:
         if key not in templates:
             result.findings.append(Finding("MISSING-KEY", key, rel, line, "no such entry in any Resources.resw"))
             return
-        result.checked += 1
-        need = placeholder_count(templates[key])
-        if len(rest) > need:
-            result.findings.append(Finding("TOO-MANY-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
-        elif len(rest) < need:
-            result.findings.append(Finding("TOO-FEW-ARGS", key, rel, line, f"template takes {need}, call passes {len(rest)}"))
+        check_template(key, templates[key], rest, rel, line)
 
-    for path, text, code in files:
-        rel = path.relative_to(root).as_posix()
-        array_vars = set(ARRAY_DECL.findall(code)) | set(ARRAY_VAR_INIT.findall(code))
-        helpers = _find_helpers(text, code)
+    def args_after(args: list[str]) -> list[str]:
+        rest = args[1:]
+        if len(rest) == 1 and (expanded := _object_array_args(rest[0])) is not None:
+            rest = expanded
+        return rest
 
-        def args_after(args: list[str]) -> list[str]:
-            rest = args[1:]
-            if len(rest) == 1 and (expanded := _object_array_args(rest[0])) is not None:
-                rest = expanded
-            return rest
-
-        def line_of(index: int, text: str = text) -> int:
-            return text.count("\n", 0, index) + 1
-
-        for m in STRING_FORMAT.finditer(text):
-            if any(h.body_range[0] <= m.start() < h.body_range[1] for h in helpers):
-                continue  # the wrapper's own body: its call sites are checked below
-            line = line_of(m.start())
-            parsed = split_args(text, m.end())
+    for f in files:
+        skip = {h.inner_start for h in f.helpers}
+        for m in STRING_FORMAT.finditer(f.text):
+            if m.start() in skip:
+                continue  # a wrapper's own call: its call sites are checked below
+            line = f.text.count("\n", 0, m.start()) + 1
+            parsed = split_args(f.text, m.end())
             if parsed is None:
-                dynamic.setdefault(rel, []).append(line)
+                dynamic.setdefault(f.rel, []).append(line)
                 continue
             args = parsed[0]
             if args and CULTURE.match(args[0]):
                 args = args[1:]
             if not args:
                 continue
-            key_match = KEY_ARG.match(args[0])
             rest = args_after(args)
-            if not key_match or (len(rest) == 1 and rest[0] in array_vars):
-                dynamic.setdefault(rel, []).append(line)
+            spread = len(rest) == 1 and _is_array_spread(rest[0], f.array_vars)
+            literal = _whole_literal(args[0])
+            if literal is not None and not spread:
+                check_template("literal " + literal[:30], literal, rest, f.rel, line)
+                continue
+            key_match = KEY_ARG.match(args[0])
+            if not key_match or spread:
+                dynamic.setdefault(f.rel, []).append(line)
                 continue
             key = key_match.group(1)
             if key is None:
                 key = _literal_key(key_match.group(2), consts)
                 if key is None:
-                    dynamic.setdefault(rel, []).append(line)
+                    dynamic.setdefault(f.rel, []).append(line)
                     continue
-            check(key, rest, rel, line)
+            check(key, rest, f.rel, line)
 
-        for h in helpers:
-            for m in re.finditer(rf"(?<![\w.]){re.escape(h.name)}\s*\(", text):
-                if m.start() == h.decl_start:
-                    continue
-                line = line_of(m.start())
-                parsed = split_args(text, m.end())
-                keys = _literal_keys(parsed[0][0], consts) if parsed and parsed[0] else None
-                rest = args_after(parsed[0]) if parsed and parsed[0] else []
-                if keys is None or (len(rest) == 1 and rest[0] in array_vars):
-                    dynamic.setdefault(rel, []).append(line)
-                    continue
-                for key in keys:
-                    check(key, rest, rel, line)
+    for owner in files:
+        for h in owner.helpers:
+            targets = [owner]
+            if h.partial:
+                sibling = re.compile(rf"\bpartial\s+(?:class|record|struct)\s+{re.escape(h.type_name)}\b")
+                targets += [g for g in files if g is not owner and sibling.search(g.code)]
+            call = re.compile(rf"(?<![\w.])(?:this\.)?{re.escape(h.name)}\s*\(")
+            for f in targets:
+                for m in call.finditer(f.code):
+                    if (f is owner and m.start() <= h.decl_start < m.end()) or _is_declaration(f.code, m.start()):
+                        continue
+                    parsed = split_args(f.text, m.end())
+                    if parsed is None or not parsed[0] or NUMERIC_ARG.match(parsed[0][0]):
+                        continue  # another overload (or no arguments), not this helper
+                    line = f.text.count("\n", 0, m.start()) + 1
+                    keys = _literal_keys(parsed[0][0], consts)
+                    rest = args_after(parsed[0])
+                    if keys is None or (len(rest) == 1 and _is_array_spread(rest[0], f.array_vars)):
+                        dynamic.setdefault(f.rel, []).append(line)
+                        continue
+                    for key in keys:
+                        check(key, rest, f.rel, line)
 
     result.skipped = sum(len(v) for v in dynamic.values())
     if known_dynamic is not None:
@@ -519,7 +683,9 @@ def scan_repo(root: Path, known_dynamic: dict[str, int] | None = KNOWN_DYNAMIC) 
     for key, value in sorted(templates.items()):
         if placeholder_count(value) > 0 and key not in literals:
             result.findings.append(
-                Finding("UNREFERENCED-TEMPLATE", key, "Resources.resw", 0, "has placeholders but no string literal or const in app/src names it")
+                Finding(
+                    "UNREFERENCED-TEMPLATE", key, "Resources.resw", 0, "has placeholders but no string literal or used const in app/src names it"
+                )
             )
     return result
 

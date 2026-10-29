@@ -307,10 +307,13 @@ product code only does not remove that flow source: MEASURED 2026-10-29: 5 open 
 rule, the 5 open ones all in product code. DECISION (agent-made, reversible): the rule is excluded in
 `codeql-config.yml` and `scripts/check_format_arity.py` replaces it.
 `scripts/check_format_arity.py` reads the real template and checks (scope: `app/src` and `app/tools`, never
-obj/bin): every `string.Format(..., GetString("Key" | Class.Const), args)`, every call of a detected wrapper helper
-`Name(string key, params object[] args)` in the same file (conditional keys check each branch), and that every
-placeholder template is referenced. MEASURED 2026-10-29: 110 sites checked, 11 left dynamic (variable or `switch`
-keys, spreads of an `object[]` variable, unparseable calls), each listed with an exact count in `KNOWN_DYNAMIC`.
+obj/bin): every `string.Format(..., GetString("Key" | Ns.Class.Const), args)`, every `string.Format` with a literal
+template, every call of a detected wrapper helper `Name(string key, params object[] args)` (own file and `partial`
+siblings; conditional keys check each branch), that every placeholder template is referenced by a literal or a used
+const, and that no file ends inside a string or comment (LEX-DESYNC). Stays dynamic, with exact counts in
+`KNOWN_DYNAMIC`: variable, `switch` or ambiguous-const keys, array-typed sole arguments (a params spread),
+unparseable calls, and helper calls whose first argument is not a literal key. MEASURED 2026-10-29: 110 sites
+checked, 11 dynamic.
 Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
 `scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
 and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining

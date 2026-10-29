@@ -318,3 +318,138 @@ def test_helper_call_with_a_conditional_key_checks_every_branch(tmp_path):
 def test_parenthesised_receiver_before_get_string_is_still_a_key_argument(tmp_path):
     cs = 'show(string.Format(CultureInfo.CurrentCulture, (strings ?? new Provider()).GetString("A"), x, y));'
     assert _codes(_tree(tmp_path, _resw(A="a {0}"), cs)) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_literal_template_with_too_many_arguments_is_flagged(tmp_path):
+    assert [c for c, _ in _codes(_tree(tmp_path, _resw(), 'var s = string.Format("x {0}", a, b);'))] == ["TOO-MANY-ARGS"]
+
+
+def test_literal_template_with_the_culture_overload_and_too_few_arguments_is_flagged(tmp_path):
+    cs = 'var s = string.Format(CultureInfo.InvariantCulture, "x {0} {1}", a);'
+    assert [c for c, _ in _codes(_tree(tmp_path, _resw(), cs))] == ["TOO-FEW-ARGS"]
+
+
+def test_matching_literal_templates_pass_and_count_as_checked(tmp_path):
+    cs = 'var s = string.Format("x {0}", a);\nvar t = string.Format(CultureInfo.CurrentCulture, @"C:\\{0}\\{1}", a, b);'
+    root = _tree(tmp_path, _resw(), cs)
+    result = cfa.scan_repo(root, known_dynamic={})
+    assert result.findings == [] and result.checked == 2 and result.skipped == 0
+
+
+def test_verbatim_literal_template_with_doubled_quotes_is_checked(tmp_path):
+    assert [c for c, _ in _codes(_tree(tmp_path, _resw(), 'var s = string.Format(@"say ""{0}""", a, b);'))] == ["TOO-MANY-ARGS"]
+
+
+def test_overloads_beside_the_helper_cause_no_dynamic_or_stale_change(tmp_path):
+    cs = (
+        HELPER
+        + "private string Format(long n) => n.ToString();\n"
+        + "private string Format(string a, int b) => a;\n"
+        + 'var s = Format("A", x);\nvar n = Format(5L);\n'
+    )
+    root = _tree(tmp_path, _resw(A="a {0}"), cs)
+    assert _codes(root) == []
+    assert cfa.scan_repo(root, known_dynamic={}).checked == 1
+
+
+def test_this_receiver_helper_call_mismatch_is_caught(tmp_path):
+    assert _codes(_tree(tmp_path, _resw(K="x {0}"), HELPER + 'var s = this.Format("K", a, b, c);')) == [("TOO-MANY-ARGS", "K")]
+
+
+def test_helper_name_inside_a_string_or_comment_is_not_a_call(tmp_path):
+    cs = HELPER + 'var k = _strings.GetString("K");\nvar t = "Format(\\"K\\", a, b, c)";\n// Format("K", a, b, c)\n/* Format("K", a, b, c) */\n'
+    assert _codes(_tree(tmp_path, _resw(K="x {0}"), cs)) == []
+
+
+def test_helper_called_from_a_partial_sibling_file_is_checked(tmp_path):
+    root = _tree(
+        tmp_path,
+        _resw(K="x {0}"),
+        "public partial class P {\n" + HELPER + "}",
+        extra_cs='public partial class P { void G() { var s = Format("K", a, b); } }',
+    )
+    other = root / "app" / "src" / "DnaEntropyGraph.Presentation" / "Other.cs"
+    other.write_text(
+        'public class Q { string Format(string k, params object[] a) => k; void G() { var s = Format("K", a, b, c); } }', encoding="utf-8"
+    )
+    assert _codes(root) == [("TOO-MANY-ARGS", "K")]
+
+
+def test_other_string_format_calls_inside_the_helper_body_are_still_checked(tmp_path):
+    cs = (
+        "private string Format(string key, params object[] args)\n"
+        '{ var x = string.Format("a {0}", 1, 2); return string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args); }\n'
+    )
+    assert [c for c, _ in _codes(_tree(tmp_path, _resw(), cs))] == ["TOO-MANY-ARGS"]
+
+
+def test_verbatim_string_starting_with_doubled_quote_does_not_desync(tmp_path):
+    assert cfa.string_literals('var q = @"""x"; var k = "K";') == ['"x', "K"]
+    assert cfa.string_literals('var q = @""""; var k = "K";') == ['"', "K"]
+    cs = 'var q = @"""x";\nvar s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a, b);'
+    assert _codes(_tree(tmp_path, _resw(A="{0}"), cs)) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_unterminated_regular_string_stops_at_the_line_end_and_is_reported(tmp_path):
+    cs = 'var s = "abc;\nvar t = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), a, b);'
+    codes = [c for c, _ in _codes(_tree(tmp_path, _resw(A="{0}"), cs))]
+    assert "LEX-DESYNC" in codes and "TOO-MANY-ARGS" in codes
+
+
+def test_file_ending_inside_a_comment_or_raw_string_is_reported(tmp_path):
+    for n, tail in enumerate(("/* never closed", 'var r = """ never closed')):
+        root = _tree(tmp_path / str(n), _resw(), "int x;\n" + tail)
+        finding = cfa.scan_repo(root, known_dynamic={}).findings
+        assert [f.code for f in finding] == ["LEX-DESYNC"] and finding[0].path.endswith("Vm.cs"), tail
+
+
+def test_script_exits_one_when_a_file_ends_inside_a_literal(tmp_path):
+    root = _tree(tmp_path, _resw(), 'var s = string.Format("x {0}", a);\n/* open')
+    run = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), "--no-dynamic-check", "--min-checked", "0"], capture_output=True, text=True
+    )
+    assert run.returncode == 1 and "LEX-DESYNC" in run.stderr and "Vm.cs" in run.stderr
+
+
+def test_any_array_typed_sole_argument_is_a_params_spread(tmp_path):
+    for n, pre in enumerate(("string[] parts = Get();", "var parts = items.Select(x).ToArray();", "T[] parts;")):
+        cs = pre + '\nvar s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), parts);'
+        result = cfa.scan_repo(_tree(tmp_path / str(n), _resw(A="{0} {1}"), cs), known_dynamic=None)
+        assert result.findings == [] and result.skipped == 1 and result.checked == 0, pre
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), items.ToArray());'
+    assert cfa.scan_repo(_tree(tmp_path / "x", _resw(A="{0} {1}"), cs), known_dynamic=None).skipped == 1
+
+
+def test_new_string_array_initializer_is_expanded(tmp_path):
+    cs = 'var s = string.Format(CultureInfo.CurrentCulture, _strings.GetString("A"), new string[] { a, b });'
+    assert _codes(_tree(tmp_path, _resw(A="{0}"), cs)) == [("TOO-MANY-ARGS", "A")]
+
+
+def test_an_unreferenced_const_does_not_mark_its_template_referenced(tmp_path):
+    root = _tree(tmp_path, _resw(A="a {0}"), 'static class K { public const string Orphan = "A"; }')
+    assert _codes(root) == [("UNREFERENCED-TEMPLATE", "A")]
+
+
+def test_a_const_used_in_code_marks_its_template_referenced(tmp_path):
+    cs = 'static class K { public const string Used = "A"; }\nvar t = _strings.GetString(K.Used);'
+    assert _codes(_tree(tmp_path, _resw(A="a {0}"), cs)) == []
+
+
+def test_same_class_and_const_name_in_two_namespaces_is_ambiguous_unless_qualified(tmp_path):
+    root = _tree(
+        tmp_path,
+        _resw(A="{0}", B="{0}"),
+        'namespace N1;\nstatic class Keys { public const string Gpu = "A"; }\n'
+        "class U { string f() => string.Format(CultureInfo.CurrentCulture, _strings.GetString(Keys.Gpu), x, y); }",
+        extra_cs='namespace N2;\nstatic class Keys { public const string Gpu = "B"; }',
+    )
+    result = cfa.scan_repo(root, known_dynamic=None)
+    assert result.findings == [] and result.skipped == 1
+    qualified = _tree(
+        tmp_path / "q",
+        _resw(A="{0}", B="{0}"),
+        'namespace N1;\nstatic class Keys { public const string Gpu = "A"; }\n'
+        "class U { string f() => string.Format(CultureInfo.CurrentCulture, _strings.GetString(N1.Keys.Gpu), x, y); }",
+        extra_cs='namespace N2;\nstatic class Keys { public const string Gpu = "B"; }',
+    )
+    assert _codes(qualified) == [("TOO-MANY-ARGS", "A")]
