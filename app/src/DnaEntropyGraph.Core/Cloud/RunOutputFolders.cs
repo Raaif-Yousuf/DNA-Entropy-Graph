@@ -55,14 +55,20 @@ public static class RunOutputFolders
     }
 
     /// <summary>
-    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName_2.ext</c>, <c>_3</c> and so on when that exists: a file the
-    /// user may care about is never silently overwritten (Hard Rule 14).
+    /// The one folder for the exports (pictures) of a run whose own folder belongs to the user: <c>parent\name exports</c>, the same path every time
+    /// for the same run. Only names it; the caller creates it when it has something to write.
+    /// </summary>
+    public static string ExportsFolder(string parent, string name) => Path.Combine(parent, Sanitize(name + " exports"));
+
+    /// <summary>
+    /// A path in <paramref name="folder"/> named <c>baseName.ext</c>, or <c>baseName (2).ext</c>, <c>(3)</c> and so on when anything (a file or a
+    /// folder) already has that name: a file the user may care about is never silently overwritten (Hard Rule 14).
     /// </summary>
     public static string UniqueFilePath(string folder, string baseName, string extension)
     {
         for (var n = 1; ; n++)
         {
-            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName}_{n}{extension}");
+            var candidate = Path.Combine(folder, n == 1 ? baseName + extension : $"{baseName} ({n}){extension}");
             if (!Path.Exists(candidate))
             {
                 return candidate;

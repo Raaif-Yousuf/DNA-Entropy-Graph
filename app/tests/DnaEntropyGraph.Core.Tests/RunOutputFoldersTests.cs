@@ -18,6 +18,31 @@ public sealed class RunOutputFoldersTests : IDisposable
     }
 
     [Fact]
+    public void UniqueFilePath_numbers_a_taken_name_in_brackets_and_counts_a_folder_of_that_name_as_taken()
+    {
+        Directory.CreateDirectory(_parent);
+        RunOutputFolders.UniqueFilePath(_parent, "chr1.entropy", ".png").ShouldBe(Path.Combine(_parent, "chr1.entropy.png"));
+
+        File.WriteAllText(Path.Combine(_parent, "chr1.entropy.png"), "x");
+        Directory.CreateDirectory(Path.Combine(_parent, "chr1.entropy (2).png"));
+
+        RunOutputFolders.UniqueFilePath(_parent, "chr1.entropy", ".png").ShouldBe(Path.Combine(_parent, "chr1.entropy (3).png"));
+    }
+
+    [Fact]
+    public void ExportsFolder_is_one_deterministic_safe_name_per_run_and_creates_nothing()
+    {
+        var first = RunOutputFolders.ExportsFolder(_parent, "my:run");
+        var second = RunOutputFolders.ExportsFolder(_parent, "my:run");
+
+        second.ShouldBe(first);
+        Path.GetDirectoryName(first).ShouldBe(_parent);
+        Path.GetFileName(first).ShouldEndWith(" exports");
+        Path.GetFileName(first).ShouldNotContain(":");
+        Directory.Exists(_parent).ShouldBeFalse("naming a folder must not create it");
+    }
+
+    [Fact]
     public void Creates_the_folder_named_after_the_input()
     {
         var folder = RunOutputFolders.CreateUnique(_parent, "SetTnpB");

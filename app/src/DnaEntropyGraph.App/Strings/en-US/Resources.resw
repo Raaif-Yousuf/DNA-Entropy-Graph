@@ -1048,6 +1048,9 @@
   <data name="Results_ExportPngFailed" xml:space="preserve">
     <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
   </data>
+  <data name="Results_ExportPngNoFolder" xml:space="preserve">
+    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
+  </data>
   <data name="ResultsExportPngButton.Content" xml:space="preserve">
     <value>Save picture</value>
   </data>

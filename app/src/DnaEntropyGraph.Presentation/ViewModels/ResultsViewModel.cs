@@ -396,8 +396,9 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     /// <summary>
     /// Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer. A run imported
-    /// from the earlier version has a folder that is the user's own: its PNG goes to a new folder under the default output folder instead.
-    /// A file that already exists is never overwritten; the new one gets a number.
+    /// from the earlier version has a folder that is the user's own: its pictures go to one exports folder per run under the default output
+    /// folder instead (made only when a picture is written). A downloaded cloud run's folder is the app's own and is used as it is.
+    /// A name that is already taken is never overwritten; the new one gets a number.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
     private async Task ExportOverviewPngAsync()
@@ -411,10 +412,13 @@ public sealed partial class ResultsViewModel : ObservableObject
         var run = _run;
         string? path = null;
         var written = false;
-        if (run is { Imported: true } && _exportRoot is null)
+
+        // Only an earlier-version import has a folder that is the user's own (Hard Rule 14); a cloud download's folder is the app's.
+        var ownFolder = run is { IsPrototypeImport: true };
+        if (ownFolder && _exportRoot is null)
         {
-            // No safe place to write: say so rather than fall back to the user's own folder.
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // No safe place to write, and the results folder is not the problem: say so rather than fall back to the user's own folder.
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngNoFolder);
             return;
         }
 
@@ -423,16 +427,41 @@ public sealed partial class ResultsViewModel : ObservableObject
             (path, written) = await Task.Run(
                 () =>
                 {
-                    var target = run is { Imported: true } && _exportRoot is not null
-                        ? RunOutputFolders.CreateUnique(_exportRoot.Parent(), (string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name) + " exports")
+                    var target = ownFolder && _exportRoot is not null && run is not null
+                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name)
                         : folder;
-                    var file = UnusedPath(target, SafeFileName(contig.Name) + ".entropy", ".png");
-                    return (file, exporter.Export(contig, labels, file));
+                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
+
+                    // One exports folder per run, made only now that there is something to write, and taken away again if nothing was.
+                    var made = !Directory.Exists(target);
+                    Directory.CreateDirectory(target);
+                    var ok = false;
+                    try
+                    {
+                        ok = exporter.Export(contig, labels, file);
+                    }
+                    finally
+                    {
+                        if (!ok && made)
+                        {
+                            try
+                            {
+                                Directory.Delete(target);
+                            }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                            {
+                                // Not empty or not ours to remove: leave it.
+                            }
+                        }
+                    }
+
+                    return (file, ok);
                 },
                 CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
             written = false;
         }
 
@@ -444,19 +473,6 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
         }
-    }
-
-    // Hard Rule 14: a picture is never written over a file that is already there (another run in a shared folder, or two records whose
-    // names clean up to the same text). The first free name wins: name.png, name (2).png, name (3).png.
-    private static string UnusedPath(string folder, string stem, string extension)
-    {
-        var path = Path.Combine(folder, stem + extension);
-        for (var n = 2; File.Exists(path); n++)
-        {
-            path = Path.Combine(folder, string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{stem} ({n}){extension}"));
-        }
-
-        return path;
     }
 
     // A contig name comes from the user's own file: only its letters, digits and a few safe marks may reach a file name.

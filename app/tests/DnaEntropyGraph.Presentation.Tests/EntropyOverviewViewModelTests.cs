@@ -44,12 +44,12 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     private static RunRecord Row(string id, string? outputDir, JobPhase phase = JobPhase.Completed)
         => new(id, phase, Now.AddHours(-1), Name: id, OutputDir: outputDir, OptionsJson: "{}", Bucket: "b", JobPrefix: $"jobs/{id}/");
 
-    private async Task<(ResultsViewModel Vm, IOverviewImageExporter Exporter)> Results(EntropyOverview? overview)
+    private async Task<(ResultsViewModel Vm, IOverviewImageExporter Exporter)> Results(EntropyOverview? overview, IOverviewImageExporter? exporterOverride = null)
     {
         var repository = Substitute.For<IRunRepository>();
         repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { Row("job", _dir) });
         _source.Load(_dir).Returns(overview);
-        var exporter = Substitute.For<IOverviewImageExporter>();
+        var exporter = exporterOverride ?? Substitute.For<IOverviewImageExporter>();
         var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter);
         await vm.LoadAsync("job", TestContext.Current.CancellationToken);
         return (vm, exporter);
@@ -120,7 +120,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         File.WriteAllText(Path.Combine(own, "proto.entropy.bedgraph"), "x");
         var before = Directory.EnumerateFileSystemEntries(own, "*", SearchOption.AllDirectories).Order().ToList();
         var exports = Path.Combine(_dir, "exports");
-        var vm = await ResultsFor(Row("legacy-1", own) with { Imported = true }, exports, WritingExporter());
+        var vm = await ResultsFor(Row("legacy-1", own) with { Imported = true, Target = "local" }, exports, WritingExporter());
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
@@ -151,7 +151,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         var own = Path.Combine(_dir, "proto2");
         Directory.CreateDirectory(own);
         var repository = Substitute.For<IRunRepository>();
-        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { Row("legacy-2", own) with { Imported = true } });
+        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { Row("legacy-2", own) with { Imported = true, Target = "local" } });
         _source.Load(own).Returns(Overview("chr1"));
         var exporter = WritingExporter();
         var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter);
@@ -160,7 +160,81 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
         exporter.DidNotReceiveWithAnyArgs().Export(default!, default!, default!);
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngNoFolder, "the failure text about the results folder would name the wrong action");
+    }
+
+    [Fact]
+    public async Task A_run_downloaded_from_the_cloud_keeps_its_picture_in_its_own_results_folder_like_any_run()
+    {
+        var own = Path.Combine(_dir, "downloaded");
+        Directory.CreateDirectory(own);
+        var exports = Path.Combine(_dir, "exports");
+        var vm = await ResultsFor(Row("cloud-1", own) with { Imported = true, Target = "cloud" }, exports, WritingExporter());
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        File.Exists(Path.Combine(own, "chr1.entropy.png")).ShouldBeTrue();
+        Directory.Exists(exports).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Two_pictures_of_an_earlier_version_run_share_one_exports_folder_and_the_second_is_numbered()
+    {
+        var own = Path.Combine(_dir, "proto3");
+        Directory.CreateDirectory(own);
+        var exports = Path.Combine(_dir, "exports3");
+        var vm = await ResultsFor(Row("legacy-3", own) with { Imported = true, Target = "local" }, exports, WritingExporter());
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        var folder = Directory.EnumerateDirectories(exports).ShouldHaveSingleItem();
+        Directory.EnumerateFiles(folder).Select(Path.GetFileName).Order().ShouldBe(["chr1.entropy (2).png", "chr1.entropy.png"]);
+    }
+
+    [Fact]
+    public async Task A_failed_export_of_an_earlier_version_run_leaves_no_empty_folder_behind()
+    {
+        var own = Path.Combine(_dir, "proto4");
+        Directory.CreateDirectory(own);
+        var exports = Path.Combine(_dir, "exports4");
+        var failing = Substitute.For<IOverviewImageExporter>();
+        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
+        var vm = await ResultsFor(Row("legacy-4", own) with { Imported = true, Target = "local" }, exports, failing);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
         vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailed);
+        (Directory.Exists(exports) ? Directory.EnumerateFileSystemEntries(exports) : []).ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(UnauthorizedAccessException))]
+    [InlineData(typeof(ArgumentException))]
+    [InlineData(typeof(NotSupportedException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task Any_exception_from_the_exporter_becomes_the_failure_notice_not_a_crash(Type exception)
+    {
+        var failing = Substitute.For<IOverviewImageExporter>();
+        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns<bool>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        var (vm, _) = await Results(Overview("chr1"), failing);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailed);
+    }
+
+    [Fact]
+    public async Task A_folder_named_like_the_picture_counts_as_taken()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "chr1.entropy.png"));
+        var (vm, exporter) = await Results(Overview("chr1"));
+        exporter.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Path.GetFileName((string)exporter.ReceivedCalls().Single().GetArguments()[2]!).ShouldBe("chr1.entropy (2).png");
     }
 
     [Fact]
