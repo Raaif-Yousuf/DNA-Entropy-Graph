@@ -1,8 +1,10 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Diagnostics;
 using Shouldly;
 using Xunit;
@@ -170,18 +172,164 @@ public sealed class DiagnosticsNotesTagsTests
         entries.Single(e => e.Key.EndsWith("result.json")).Value.ShouldContain("\"status\"");
     }
 
+    // A number leaf is copied as it is (the redactor scrubs strings), so a tag spelled like a number survives the primary scrub. That is
+    // the case only the whole-file backstop can see; a tag that RedactLine already removes cannot prove the backstop (cold review round 3).
     [Fact]
-    public void A_distinctive_tag_still_in_a_copied_file_after_redaction_withholds_that_file_whole()
+    public void A_distinctive_tag_that_survives_redaction_in_a_copied_file_withholds_that_file_whole()
     {
-        // The backstop must still fire for a real leak: a distinctive tag inside a kept JSON value that the redactor let through.
-        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"clone7\"]");
-        var files = new Dictionary<string, string> { [$"runs/{JobId}/status.json"] = "{\"stage\":\"clone7\"}" };
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"42.5\"]");
+        var files = new Dictionary<string, string>
+        {
+            [$"runs/{JobId}/progress.jsonl"] = "{\"seq\":1,\"stage\":\"running\",\"percent\":42.5}\n",
+            [$"runs/{JobId}/status.json"] = "{\"stage\":\"running\",\"percent\":7}",
+        };
 
-        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info);
+        var entries = BuildEntries(files, run);
+
+        entries.Single(e => e.Key.EndsWith("progress.jsonl")).Value.ShouldBe("<omitted: file withheld>");
+        entries.Single(e => e.Key.EndsWith("status.json")).Value.ShouldContain("running");
+    }
+
+    [Fact]
+    public void ContainsUserText_sees_a_distinctive_word_but_not_a_marker_or_a_vocabulary_word()
+    {
+        var redactor = new DiagnosticsRedactor(Info.UserProfilePath, [], ["clone7", "level", "user"]);
+
+        redactor.ContainsUserText("saw clone7 here").ShouldBeTrue();
+        redactor.ContainsUserText("\"level\":\"info\" <user> <path>").ShouldBeFalse();
+    }
+
+    private static Dictionary<string, string> BuildEntries(IReadOnlyDictionary<string, string> files, RunRecord run, HashSet<string>? truncated = null)
+    {
+        var zip = DiagnosticsBundleBuilder.Build(new TruncatingSource(files, truncated ?? []), [run], Info);
         using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
-        var text = archive.Entries.Where(e => e.FullName.StartsWith("files/", StringComparison.Ordinal)).Select(e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd()).Single();
+        return archive.Entries.ToDictionary(e => e.FullName, e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd());
+    }
 
-        text.ShouldNotContain("clone7", Case.Insensitive);
+    private sealed class TruncatingSource(IReadOnlyDictionary<string, string> files, HashSet<string> truncated) : IDiagnosticsSource
+    {
+        public IReadOnlyList<string> ListFiles() => files.Keys.ToList();
+
+        public DiagnosticsFile? TryRead(string relativePath, long maxBytes)
+            => files.TryGetValue(relativePath, out var text) ? new DiagnosticsFile(Encoding.UTF8.GetBytes(text), truncated.Contains(relativePath)) : null;
+    }
+
+    // The vocabulary is derived from the code's own lists, so a tag equal to any value the bundle keeps leaves that value readable.
+    public static TheoryData<string> KeptValues()
+    {
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var stage in WorkerStages.All)
+        {
+            values.Add(stage);
+        }
+
+        foreach (var code in RunErrorCodes.All.Concat(RunErrorCodes.WorkerErrorCodes))
+        {
+            values.Add(code);
+        }
+
+        foreach (var kind in Enum.GetValues<CloudErrorKind>())
+        {
+            values.Add(kind.ToString());
+            values.Add(string.Concat(kind.ToString().Select((c, i) => i > 0 && char.IsUpper(c) ? "_" + char.ToLowerInvariant(c) : char.ToLowerInvariant(c).ToString())));
+        }
+
+        foreach (var gpu in GpuCatalog.Shipped.Gpus)
+        {
+            values.Add(gpu.MachineType);
+            values.Add(gpu.Tier.ToString());
+            values.UnionWith(gpu.Accelerator.Split('-'));
+        }
+
+        values.UnionWith(["L4", "A100", "H100", "quota", "stockout", "billing", "permission", "network"]);
+        values.RemoveWhere(v => v.Length < 2 || v.All(char.IsDigit) || v.Length > 40);
+        var data = new TheoryData<string>();
+        foreach (var value in values.OrderBy(v => v, StringComparer.Ordinal))
+        {
+            data.Add(value);
+        }
+
+        return data;
+    }
+
+    [Fact]
+    public void The_kept_value_roster_is_not_vacuous()
+    {
+        KeptValues().Count().ShouldBeGreaterThan(80);
+    }
+
+    // MEASURED 2026-10-28 (cold review round 3): the first vocabulary missed worker stages, error codes, cloud buckets and GPU names, so a tag
+    // "quota" or "L4" blanked those words in every kept leaf.
+    [Theory]
+    [MemberData(nameof(KeptValues))]
+    public void A_tag_equal_to_a_value_the_bundle_keeps_leaves_that_value_readable(string value)
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: JsonSerializer.Serialize(new[] { value }));
+        var files = new Dictionary<string, string>
+        {
+            [$"runs/{JobId}/progress.jsonl"] = JsonSerializer.Serialize(new { seq = 1, stage = value, level = "info", percent = 5 }) + "\n",
+        };
+
+        var progress = BuildEntries(files, run).Single(e => e.Key.EndsWith("progress.jsonl")).Value;
+
+        progress.ShouldContain($"\"stage\":\"{value}\"");
+    }
+
+    // The fixed words of the bundle's own omission markers must never turn a marker into a withheld file.
+    [Theory]
+    [InlineData("omitted")]
+    [InlineData("withheld")]
+    [InlineData("too")]
+    [InlineData("large")]
+    [InlineData("valid")]
+    [InlineData("json")]
+    public void A_tag_that_is_a_word_of_an_omission_marker_leaves_the_marker_as_it_is(string tag)
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: $"[\"{tag}\"]");
+        var files = new Dictionary<string, string>
+        {
+            [$"runs/{JobId}/status.json"] = "{\"stage\":\"running\"}",
+            [$"runs/{JobId}/result.json"] = "not json at all",
+        };
+
+        var entries = BuildEntries(files, run, [$"runs/{JobId}/status.json"]);
+
+        entries.Single(e => e.Key.EndsWith("status.json")).Value.ShouldBe("<omitted: file too large>");
+        entries.Single(e => e.Key.EndsWith("result.json")).Value.ShouldBe("<omitted: file is not valid json>");
+    }
+
+    // The marker roster has one source (DiagnosticsMarkers); the redactor's backstop and the leak scan read it, and so does the vocabulary.
+    [Fact]
+    public void Every_marker_the_builder_writes_matches_the_one_marker_pattern_and_its_words_are_vocabulary()
+    {
+        List<string> markers =
+        [
+            DiagnosticsMarkers.OmittedFile, DiagnosticsMarkers.OmittedNote, DiagnosticsMarkers.OmittedUnreadable, DiagnosticsMarkers.OmittedTooLarge,
+            DiagnosticsMarkers.Unparseable, .. DiagnosticsMarkers.Words.Select(w => $"<{w}>"),
+        ];
+
+        var pattern = new System.Text.RegularExpressions.Regex($"^(?:{DiagnosticsMarkers.Pattern})$");
+        foreach (var marker in markers)
+        {
+            pattern.IsMatch(marker).ShouldBeTrue(marker);
+        }
+
+        DiagnosticsMarkers.Words.Count.ShouldBeGreaterThanOrEqualTo(7);
+        foreach (var word in DiagnosticsMarkers.Words.Concat(["omitted", "withheld"]))
+        {
+            DiagnosticsRedactor.IsLogVocabulary(word).ShouldBeTrue(word);
+        }
+    }
+
+    [Fact]
+    public void The_leak_scan_ignores_every_marker_even_when_a_sensitive_value_is_one_of_its_words()
+    {
+        var entries = new Dictionary<string, string>
+        {
+            ["a"] = string.Join(' ', DiagnosticsMarkers.Words.Select(w => $"<{w}>")) + " " + DiagnosticsMarkers.OmittedFile + " " + DiagnosticsMarkers.OmittedNote,
+        };
+
+        DiagnosticsLeakScan.FindLeak(entries, [.. DiagnosticsMarkers.Words, "omitted", "withheld"]).ShouldBeNull();
     }
 
     [Fact]

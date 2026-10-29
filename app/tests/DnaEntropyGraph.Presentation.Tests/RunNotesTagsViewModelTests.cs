@@ -193,7 +193,37 @@ public sealed class RunNotesTagsViewModelTests
 
         vm.NotesText.ShouldBe("  first and more");
         vm.TagsText.ShouldBe(" a ;A, b");
-        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesEditedDuringSave);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Editing_either_box_during_the_save_never_ends_on_Saved(bool editNotes, bool editTags)
+    {
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = "one";
+        vm.TagsText = "a";
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        if (editNotes)
+        {
+            vm.NotesText = "one two";
+        }
+
+        if (editTags)
+        {
+            vm.TagsText = "a, b";
+        }
+
+        gate.SetResult(true);
+        await saving;
+
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesEditedDuringSave);
     }
 
     [Fact]
@@ -213,6 +243,7 @@ public sealed class RunNotesTagsViewModelTests
 
         vm.NotesText.ShouldBe("hello");
         vm.TagsText.ShouldBe("x, y");
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
     }
 
     [Fact]

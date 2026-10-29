@@ -143,9 +143,9 @@ public static partial class DiagnosticsBundleBuilder
     }
 
     // Fixed words only: the leak scan blanks exactly this shape (and "<omitted: file too large>") before it checks identifiers.
-    private const string OmittedFile = "<omitted: file withheld>";
+    private const string OmittedFile = DiagnosticsMarkers.OmittedFile;
 
-    private const string OmittedUnreadable = "<omitted: file is not valid json>";
+    private const string OmittedUnreadable = DiagnosticsMarkers.OmittedUnreadable;
 
     private static string EntryName(Loaded file, JobIdWithholder ids, Dictionary<string, int> logCounters)
     {
@@ -298,7 +298,7 @@ public static partial class DiagnosticsBundleBuilder
         var spec = SpecFor(file.Kind);
         if (file.Kind is FileKind.Status or FileKind.Result)
         {
-            return file.Truncated ? "<omitted: file too large>" : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
+            return file.Truncated ? DiagnosticsMarkers.OmittedTooLarge : redactor.RedactJson(file.Text, spec!, ids.FolderId(file.Path), ids.Rewrite, ids.ExactPlaceholder);
         }
 
         // A cut file starts mid-line: drop that partial line and say so.
@@ -389,7 +389,7 @@ public static partial class DiagnosticsBundleBuilder
         return DiagnosticsLeakScan.Find(probe, scrub) is null ? redacted : OmittedNote;
     }
 
-    private const string OmittedNote = "<omitted: note withheld>";
+    private const string OmittedNote = DiagnosticsMarkers.OmittedNote;
 
     private static byte[] Zip(SortedDictionary<string, string> entries, DateTimeOffset createdUtc)
     {

@@ -444,18 +444,20 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         // Tidy a box only when it still holds what was saved: anything typed while the write ran is the user's, not ours to replace.
-        if (string.Equals(NotesText, capturedNotesText, StringComparison.Ordinal))
+        // Then the page must not say "Saved." about text it did not store, so it says what was stored and what to do about the rest.
+        var notesUnchanged = string.Equals(NotesText, capturedNotesText, StringComparison.Ordinal);
+        var tagsUnchanged = string.Equals(TagsText, capturedTagsText, StringComparison.Ordinal);
+        if (notesUnchanged)
         {
             NotesText = notes ?? string.Empty;
         }
 
-        if (string.Equals(TagsText, capturedTagsText, StringComparison.Ordinal))
+        if (tagsUnchanged)
         {
             TagsText = RunTags.Format(tags);
         }
 
-
-        AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaved);
+        AnnotationsStatusText = _strings.GetString(notesUnchanged && tagsUnchanged ? ResultsCopy.NotesSaved : ResultsCopy.NotesEditedDuringSave);
     }
 
     private bool IsStillShowing(string jobId, int generation)
@@ -464,5 +466,3 @@ public sealed partial class ResultsViewModel : ObservableObject
     [RelayCommand]
     private void ShowRuns() => _navigator.NavigateTo("Runs");
 }
-
-

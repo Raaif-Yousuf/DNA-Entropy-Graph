@@ -57,17 +57,43 @@ public sealed class SettingsDiagnosticsNotesTests
     [Fact]
     public async Task The_box_stays_ticked_while_the_file_is_still_being_written()
     {
+        var started = new TaskCompletionSource();
         var gate = new TaskCompletionSource();
-        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(_ => gate.Task);
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(_ =>
+        {
+            started.TrySetResult();
+            return gate.Task;
+        });
         _viewModel.IncludeNotesAndTags = true;
 
         var saving = _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         _viewModel.IncludeNotesAndTags.ShouldBeTrue();
         gate.SetResult();
         await saving;
         _viewModel.IncludeNotesAndTags.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_choice_made_while_the_file_is_being_written_is_kept_for_the_next_file()
+    {
+        var started = new TaskCompletionSource();
+        var gate = new TaskCompletionSource();
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(_ =>
+        {
+            started.TrySetResult();
+            return gate.Task;
+        });
+
+        var saving = _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _viewModel.IncludeNotesAndTags = true;
+        gate.SetResult();
+        await saving;
+
+        await _exporter.Received(1).ExportAsync("C:\\out\\d.zip", Arg.Any<CancellationToken>(), false);
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
     }
 
     [Fact]

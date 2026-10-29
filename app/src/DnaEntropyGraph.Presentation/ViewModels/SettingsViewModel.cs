@@ -173,7 +173,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             var includeNotes = IncludeNotesAndTags;
             await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken, includeNotes), CancellationToken.None);
             // Cleared only once a file was really written: a cancelled picker, a failed write or a refused bundle leaves the choice as it was.
-            IncludeNotesAndTags = false;
+            // And only if the box still holds what this file used: a choice made while the file was being written is for the next one.
+            if (IncludeNotesAndTags == includeNotes)
+            {
+                IncludeNotesAndTags = false;
+            }
             _lastDiagnosticsPath = path;
             OpenDiagnosticsFolderCommand.NotifyCanExecuteChanged();
             Report("DiagnosticsSaved_Title", string.Format(_strings.GetString("DiagnosticsSaved_Body"), path), ToastSeverity.Success);

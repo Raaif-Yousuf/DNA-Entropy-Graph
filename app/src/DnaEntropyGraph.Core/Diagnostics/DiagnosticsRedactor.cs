@@ -138,7 +138,7 @@ internal sealed partial class DiagnosticsRedactor
 
     // The fixed markers this redactor and the bundle builder write. They carry no user text, so the backstop must not read their
     // words ("user", "path", "redacted") as the user's own.
-    [GeneratedRegex(@"<(?:redacted|user|path|token|email|sequence|file)>|<omitted: [a-z ]{3,40}>|<unparseable line omitted>")]
+    [GeneratedRegex(DiagnosticsMarkers.Pattern)]
     private static partial Regex MarkerWord();
 
     // DECISION (agent-made, reversible): words that are the bundle's own vocabulary are never scrubbed as "user text". The app never
@@ -151,14 +151,43 @@ internal sealed partial class DiagnosticsRedactor
     {
         var words = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "debug", "trace", "info", "information", "warn", "warning", "error", "errors", "fatal", "critical", "failed", "failure", "fail",
+            "debug", "trace", "info", "information", "notice", "warn", "warning", "error", "errors", "fatal", "critical", "failed", "failure", "fail",
             "ok", "done", "completed", "complete", "success", "succeeded", "running", "started", "stopped", "cancelled", "canceled",
             "pending", "queued", "none", "null", "true", "false", "unknown", "message", "detail", "details", "job", "run", "runs",
-            "redacted", "user", "path", "token", "email", "sequence", "file", "omitted", "withheld",
+            "omitted", "withheld", "gpu", "cpu", "spot", "nvidia", "tesla",
         };
+        foreach (var marker in DiagnosticsMarkers.Words)
+        {
+            words.Add(marker);
+        }
+
         foreach (var phase in Enum.GetNames<JobPhase>())
         {
             words.Add(phase);
+        }
+
+        // The values the bundle keeps in its allowlisted leaves, from the code's own lists (never a second hand-kept copy).
+        words.UnionWith(WorkerStages.All);
+        words.UnionWith(RunErrorCodes.All);
+        words.UnionWith(RunErrorCodes.WorkerErrorCodes);
+        foreach (var kind in Enum.GetNames<CloudErrorKind>())
+        {
+            words.Add(kind);
+            words.Add(string.Concat(kind.Select((c, i) => i > 0 && char.IsUpper(c) ? "_" + char.ToLowerInvariant(c) : char.ToLowerInvariant(c).ToString())));
+        }
+
+        foreach (var model in GpuCatalog.Shipped.Models)
+        {
+            words.Add(model.Id);
+        }
+
+        foreach (var gpu in GpuCatalog.Shipped.Gpus)
+        {
+            words.Add(gpu.MachineType);
+            words.Add(gpu.Accelerator);
+            words.Add(gpu.Tier.ToString());
+            words.UnionWith(gpu.Accelerator.Split('-'));
+            words.UnionWith(gpu.Tier.ToString().Split('_'));
         }
 
         foreach (var spec in new[] { KeySpec.Status, KeySpec.Progress, KeySpec.Result })
@@ -168,6 +197,9 @@ internal sealed partial class DiagnosticsRedactor
 
         return words;
     }
+
+    /// <summary>True when <paramref name="word"/> is one of the bundle's own words, which are never scrubbed as user text.</summary>
+    internal static bool IsLogVocabulary(string word) => LogVocabulary.Contains(word);
 
     private static Regex? WholeTokenRegex(IEnumerable<string>? values)
     {
@@ -551,7 +583,7 @@ public static partial class DiagnosticsLeakScan
 
     // The fixed words the redactor and builder write in place of removed text; they carry no user data, so they are blanked
     // before the identifier check (a user named "user" must not make every bundle fail on "<user>").
-    [GeneratedRegex(@"<(?:redacted|user|path|token|email|sequence|file)>|<omitted: [a-z ]{3,40}>|<unparseable line omitted>")]
+    [GeneratedRegex(DiagnosticsMarkers.Pattern)]
     private static partial Regex Placeholder();
 
     /// <summary>Support addresses that may appear in a bundle. None yet; an address added here needs a test.</summary>
