@@ -19,8 +19,7 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
     public async Task<T> CallAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
         var limit = timeout ?? settings.CallTimeout;
-        using var timer = new CancellationTokenSource(limit, settings.TimeProvider);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token);
+        using var deadline = new Audit.DeadlineSource(cancellationToken, limit, settings.TimeProvider);
         Task<T>? task = null;
         try
         {
@@ -33,13 +32,13 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // The caller's wait can unwind (and dispose the linked source) before the link has passed the cancel on, so the call would keep running unaware: tell it now.
-            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
+            // The caller's wait can unwind (and dispose the deadline source) before its registration has passed the cancel on, so the call would keep running unaware: tell it now.
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline.Source, task).ConfigureAwait(false);
             throw;
         }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            await Audit.CloudAuditContext.StopAbandonedAsync(deadline, task).ConfigureAwait(false);
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline.Source, task).ConfigureAwait(false);
             throw new CloudOperationException(new CloudError("TIMEOUT", null, "request timed out"), CloudErrorKind.Network);
         }
     }

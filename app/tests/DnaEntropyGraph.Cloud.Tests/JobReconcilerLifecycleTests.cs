@@ -306,8 +306,8 @@ public class JobReconcilerLifecycleTests
 
         var pass = reconciler.EnforceLifecycleAsync(cts.Token);
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        // MEASURED 2026-10-29: 0 of 200 runs (under a concurrent Presentation.Tests run) saw an AggregateException out of this CancelAsync, so it is not caught here.
-        await cts.CancelAsync();
+        // MEASURED 2026-10-29 (PR #944 CI, Release, twice): the callee's throwing callback used to surface out of THIS call. Synchronous Cancel runs every relay inline, so it is deterministic.
+        Should.NotThrow(() => cts.Cancel());
 
         IReadOnlyList<LifecycleOutcome> outcomes;
         try
