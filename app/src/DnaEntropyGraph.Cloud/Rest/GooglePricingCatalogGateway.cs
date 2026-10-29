@@ -33,7 +33,7 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
     {
         var skus = new List<CatalogSku>();
         string? pageToken = null;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var paging = new PageTokenGuard("the price catalog");
         do
         {
             var requested = pageToken;
@@ -50,17 +50,8 @@ internal sealed class GooglePricingCatalogGateway : IPricingCatalogGateway
 
             skus.AddRange((page.Skus ?? []).Select(s => ToSku(s, _time.GetUtcNow())).OfType<CatalogSku>());
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && !seen.Add(next))
-            {
-                // Any token seen earlier in this walk (A, then B, then A again too), not only the same one twice in a row. A partial catalog
-                // would read as "no such SKU", so the whole read fails instead, as a stuck listing and not as a network problem.
-                throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "The price catalog returned a page token it had already returned, so it may be incomplete."),
-                    CloudErrorKind.Other);
-            }
-
-            pageToken = next;
+            // A partial catalog would read as "no such SKU", so a repeated token (any seen earlier in the walk) fails the whole read, as a stuck listing and not as a network problem.
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 

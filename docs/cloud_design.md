@@ -281,6 +281,26 @@ the user-facing cards) on purpose: a classifier bucket is a stable, small enum a
 assert against; a user-facing message is copy that can be rewritten without touching the
 classifier at all.
 
+### Paging (issue #933)
+
+Every Google list loop in `DnaEntropyGraph.Cloud/Rest` (billing accounts, projects, price catalog, buckets, objects, region quotas, quota preferences,
+VMs, disks, accelerator zones, zone operations: 11 loops) reads the next page token through one helper, `PageTokenGuard.Advance`
+(`app/src/DnaEntropyGraph.Cloud/Rest/PageTokenGuard.cs`), one guard per walk. It remembers every token it was given, not only the last, so the same
+token for ever and a cycle (A, B, A) both fail on the first repeat, with `LIST_PAGINATION_STUCK`, one extra request after the first page (A, B, A: the third).
+A short list must never read as a complete one: an empty VM list reads as "no VM" (a duplicate or a leak), an empty quota table as "no quota".
+`Guards.Tests/PageTokenGuardWiringTests` fails if any `Rest/*Gateway.cs` reads a next page token outside `.Advance(` or compares one by hand.
+Before this, `GoogleStorageGateway.ListOursAsync` looped for ever on a repeated token, the billing and project listings had no guard, and the accelerator
+zone list returned a partial answer silently (MEASURED 2026-10-29, read in code; the new tests prove each now fails).
+
+DECISION (agent-made, reversible): the kind of `LIST_PAGINATION_STUCK` is `Other`, everywhere (it was `Network` in compute, quota and storage, `Other` in
+the price catalog). Read of every consumer of the kind (MEASURED 2026-10-29, code and tests): (1) `CloudCallPipeline.IsTransient` retries a status-less
+`Network` error, so a stuck listing was replayed `MaxRetryAttempts` more times against a server that repeats itself; `Other` is not retried (the
+test counts the requests: 2, not 8). (2) `JobReconciler.IsNoAnswer` is `Kind == Network` and parks "no answer" as Deferred, which keeps the reconnect probe
+alive and re-asks on every reconnect for ever; `Other` makes the look Unknown evidence, so the runner judges the run and names the failure (the
+same path as billing or permission), and `HasDeferred` stays false (`JobReconcilerTests.A_stuck_listing_looking_for_the_VM_is_not_no_answer...`).
+(3) `VmProvisioner` treats `Network` as "outcome unknown: adopt a VM by label": not applicable to a listing. (4) `VmProvisioner` zone planning catches any
+`CloudOperationException` from the accelerator-zone list and falls back to the requested zones, so failing that list is safe. To reverse: change
+`CloudErrorKind.Other` in `PageTokenGuard` and the expectations in `ListPagingGuardTests`, `JobReconcilerTests` and the compute and quota gateway tests.
 ## 6. Quota reading
 
 Two distinct quota reads matter, and conflating them is a real bug shape:
@@ -1340,7 +1360,7 @@ the running app calls this class yet.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
   (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
-  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  with `LIST_PAGINATION_STUCK`, `other`, never a silent truncation; see Paging in section 5); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;

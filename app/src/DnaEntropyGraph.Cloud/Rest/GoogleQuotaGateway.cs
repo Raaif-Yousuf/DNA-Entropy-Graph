@@ -177,6 +177,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     /// <summary>The project's preference for this quota and these dimensions, under whatever id; null when there is none. Pages with a stuck-token guard (a short list would read as "none" and create a conflicting one).</summary>
     private async Task<ExistingPreference?> FindPreferenceAsync(string projectId, string parent, string quotaId, IReadOnlyDictionary<string, string> dimensions, CancellationToken cancellationToken)
     {
+        var paging = new PageTokenGuard("the quota request list");
         string? pageToken = null;
         do
         {
@@ -205,13 +206,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
                 }
             }
 
-            var next = document.RootElement.TryGetProperty("nextPageToken", out var token) && token.ValueKind == JsonValueKind.String && token.GetString() is { Length: > 0 } t ? t : null;
-            if (next is not null && next == pageToken)
-            {
-                throw new CloudOperationException(new CloudError("LIST_PAGINATION_STUCK", null, "The Cloud Quotas API returned the same page token twice, so the quota request list may be incomplete."), CloudErrorKind.Network);
-            }
-
-            pageToken = next;
+            pageToken = paging.Advance(document.RootElement);
         }
         while (pageToken is not null);
 
@@ -351,6 +346,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<QuotaMetric>>> ListRegionsAsync(string projectId, CancellationToken cancellationToken)
     {
         var table = new Dictionary<string, IReadOnlyList<QuotaMetric>>(StringComparer.OrdinalIgnoreCase);
+        var paging = new PageTokenGuard("the region quota list");
         string? pageToken = null;
         do
         {
@@ -373,16 +369,8 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
                 }
             }
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                // A partial table would read as "this region has no quota", so the whole read fails instead.
-                throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "Compute Engine returned the same page token twice, so the region quota list may be incomplete."),
-                    CloudErrorKind.Network);
-            }
-
-            pageToken = next;
+            // A partial table would read as "this region has no quota", so a repeated token fails the whole read instead.
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 

@@ -41,6 +41,7 @@ internal sealed partial class GoogleBillingGateway : IBillingGateway
     public async Task<IReadOnlyList<BillingAccountSummary>> ListOpenBillingAccountsAsync(CancellationToken cancellationToken)
     {
         var accounts = new List<BillingAccountSummary>();
+        var paging = new PageTokenGuard("the billing account list");
         string? pageToken = null;
         do
         {
@@ -63,7 +64,7 @@ internal sealed partial class GoogleBillingGateway : IBillingGateway
             accounts.AddRange((page.BillingAccounts ?? [])
                 .Where(a => a.Open == true && !string.IsNullOrEmpty(a.Name))
                 .Select(a => new BillingAccountSummary(a.Name, string.IsNullOrWhiteSpace(a.DisplayName) ? a.Name : a.DisplayName)));
-            pageToken = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 

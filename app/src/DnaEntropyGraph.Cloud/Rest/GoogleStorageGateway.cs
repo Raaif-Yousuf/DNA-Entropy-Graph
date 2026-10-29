@@ -200,6 +200,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// <summary>Every page of <c>objects.list</c> under <paramref name="prefix"/>. A repeated page token fails the listing (a short total must never read as complete).</summary>
     private async IAsyncEnumerable<StorageData.Objects> ListPagesAsync(string bucket, string prefix, string? delimiter, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        var paging = new PageTokenGuard("the object list");
         string? pageToken = null;
         do
         {
@@ -227,15 +228,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
             yield return page;
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "Cloud Storage returned the same page token twice, so the object list may be incomplete."),
-                    CloudErrorKind.Network);
-            }
-
-            pageToken = next;
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
     }
@@ -271,6 +264,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     private async Task<List<StorageData.Bucket>> ListOursAsync(string projectId, CancellationToken cancellationToken)
     {
         var ours = new List<StorageData.Bucket>();
+        var paging = new PageTokenGuard("the bucket list");
         string? pageToken = null;
         do
         {
@@ -294,9 +288,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 cancellationToken, singleRequest: true).ConfigureAwait(false);
 
             ours.AddRange((page.Items ?? []).Where(IsOurs));
-            pageToken = page.NextPageToken;
+            pageToken = paging.Advance(page.NextPageToken);
         }
-        while (!string.IsNullOrEmpty(pageToken));
+        while (pageToken is not null);
 
         return ours;
     }

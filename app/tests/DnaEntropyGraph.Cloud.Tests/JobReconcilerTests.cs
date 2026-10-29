@@ -614,6 +614,24 @@ public class JobReconcilerTests
         env.Repo.AllRecordedInOrder.Count.ShouldBe(before);
     }
 
+    [Fact]
+    public async Task A_stuck_listing_looking_for_the_VM_is_not_no_answer_so_it_is_not_deferred_for_the_reconnect_probe()
+    {
+        // Issue #933 DECISION: LIST_PAGINATION_STUCK is kind Other. Network would park the row as Deferred and the reconnect probe would
+        // re-ask a server that repeats the same token for ever; Other is an error of that row alone, recorded, and the next launch looks again.
+        var env = new Env();
+        await env.SeedAsync("job-st", JobPhase.Running, vm: true);
+        env.Gcp.WithFindByJobIdFailure(new CloudError("LIST_PAGINATION_STUCK", null, "Google returned a page token it had already returned, so the VM list may be incomplete."), 1);
+        var before = env.Repo.AllRecordedInOrder.Count;
+        var reconciler = env.Reconciler();
+
+        var outcome = await OneAsync(reconciler, "job-st");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed, "a look that is not 'no answer' is Unknown evidence: the runner judges the run and names the failure, as for billing or permission");
+        reconciler.HasDeferred.ShouldBeFalse("a stuck listing must not keep the reconnect probe alive");
+        env.Repo.AllRecordedInOrder.Count.ShouldBeGreaterThan(before, "the run is handed to the runner, which records its own outcome (a Deferred row writes nothing)");
+    }
+
     // ---- cold review: a failed look is not evidence, and a look never creates anything ----
 
     [Fact]
