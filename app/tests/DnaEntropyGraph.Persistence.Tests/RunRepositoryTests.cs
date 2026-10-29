@@ -221,11 +221,13 @@ public class RunRepositoryTests
         }
 
         var log = new CapturingLog();
-        var back = await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper, log).GetAllAsync(CancellationToken.None);
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper, log);
+        var back = await repository.GetAllAsync(CancellationToken.None);
+        await repository.GetAllAsync(CancellationToken.None); // a History refresh reads every row again
 
         back.Single().OutputDir.ShouldBeNull();
         // Ids and a fixed class name only: never the stored path text (CLAUDE.md "Logs").
-        log.Entries.ShouldBe([("run-repository", "job-x", "OutputDirOutsidePortableFolder")]);
+        log.Entries.ShouldBe([("run-repository", "job-x", "OutputDirOutsidePortableFolder")], "once per run id per process, not once per read");
     }
 
     private sealed class CapturingLog : IDiagnosticsLog

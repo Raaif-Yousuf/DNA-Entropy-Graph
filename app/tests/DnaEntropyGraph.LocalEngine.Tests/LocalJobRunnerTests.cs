@@ -601,6 +601,36 @@ public sealed class LocalJobRunnerTests : IDisposable
     private static string OptionsFor(string outputFolder)
         => RunOptionsJson.Serialize(new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor, OutputFolder = outputFolder });
 
+    [Fact]
+    public async Task On_launch_a_finished_row_whose_output_folder_is_a_drive_root_still_completes()
+    {
+        // Reconcile copies the run's own results into the folder the app made; it deletes nothing, so a drive-root output folder is fine.
+        var jobDir = Path.Combine(RunsDirectory, "old-5");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var outputDir = Path.Combine(OutputParent, "locus");
+        Directory.CreateDirectory(outputDir);
+        _runs.Seed(new RunRecord("old-5", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(Path.GetPathRoot(outputDir)!)));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        _runs.Latest("old-5").Phase.ShouldBe(JobPhase.Completed);
+        File.Exists(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("x\\..\\other")]
+    [InlineData("..")]
+    [InlineData(".")]
+    public async Task A_job_id_that_is_not_one_plain_name_is_refused_and_creates_nothing(string jobId)
+    {
+        var result = await Runner(HappyWorker()).RunAsync(Request(jobId), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.ErrorCode.ShouldBe(RunErrorCodes.ManifestInvalid);
+        Directory.Exists(Path.Combine(RunsDirectory, "other")).ShouldBeFalse();
+        Directory.Exists(Path.Combine(RunsDirectory, "x")).ShouldBeFalse();
+    }
     [Theory]
     [InlineData("..\\victim")]
     [InlineData("..\\out2\\victim")]

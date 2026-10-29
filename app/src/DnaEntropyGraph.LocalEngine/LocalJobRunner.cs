@@ -93,7 +93,7 @@ public sealed class LocalJobRunner
     {
         ArgumentNullException.ThrowIfNull(request);
         var jobDir = Path.Combine(_runsDirectory, request.JobId);
-        if (!RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory))
+        if (!RunOutputRoot.IsPlainJobId(request.JobId) || !RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory))
         {
             return await FailAsync(request.JobId, RunErrorCodes.ManifestInvalid, "The job id is not a plain name.").ConfigureAwait(false);
         }
@@ -218,7 +218,7 @@ public sealed class LocalJobRunner
     }
 
     /// <summary>
-    /// The finish step copies result files into <c>row.OutputDir</c>, and that text comes from the history database. It is only trusted
+    /// The finish step copies the run's own result files into <c>row.OutputDir</c> (it deletes nothing, so a drive-root output folder is fine), and that text comes from the history database. It is only trusted
     /// when it lies strictly inside the run's output root (the run's own choice, else <see cref="DefaultOutputParent"/>); with no root to
     /// check against it is not trusted (Hard Rule 14). A row that fails this is failed as interrupted and its files stay in the job folder.
     /// </summary>
@@ -227,7 +227,7 @@ public sealed class LocalJobRunner
         try
         {
             var root = RunOutputRoot.Resolve(row, () => DefaultOutputParent?.Invoke() ?? string.Empty);
-            return !string.IsNullOrWhiteSpace(root) && RunOutputRoot.IsSafelyInside(row.OutputDir!, root);
+            return !string.IsNullOrWhiteSpace(root) && RunOutputRoot.IsStrictlyInside(row.OutputDir!, root);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -244,7 +244,8 @@ public sealed class LocalJobRunner
         }
 
         var jobDir = Path.Combine(_runsDirectory, row.JobId);
-        var finished = RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory)
+        var finished = RunOutputRoot.IsPlainJobId(row.JobId)
+            && RunOutputRoot.IsStrictlyInside(jobDir, _runsDirectory)
             && File.Exists(Path.Combine(jobDir, "result.json"))
             && !string.IsNullOrEmpty(row.OutputDir)
             && Directory.Exists(row.OutputDir)
