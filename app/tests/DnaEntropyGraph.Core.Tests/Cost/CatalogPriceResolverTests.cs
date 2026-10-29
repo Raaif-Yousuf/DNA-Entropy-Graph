@@ -112,11 +112,66 @@ public sealed class CatalogPriceResolverTests
     }
 
     [Fact]
-    public void A_catalog_with_no_machine_or_no_disk_resolved_is_a_problem_so_the_caller_falls_back()
+    public void A_catalog_with_no_machine_resolved_is_a_problem_so_the_caller_falls_back()
     {
         CatalogPriceResolver.Resolve([], Shipped(), Today).Table.ShouldBeNull();
-        CatalogPriceResolver.Resolve(CatalogFixtures.G2AndDisk().Where(s => s.ResourceFamily != "Storage").ToList(), Shipped(), Today)
-            .Problem.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_missing_disk_price_keeps_the_shipped_disk_price_and_does_not_throw_the_machines_away()
+    {
+        // Issue #214 review M2: one piece the catalog cannot give must not cost the pieces it can.
+        var result = CatalogPriceResolver.Resolve(CatalogFixtures.G2AndDisk().Where(s => s.ResourceFamily != "Storage").ToList(), Shipped(), Today);
+
+        result.Table!.DiskUsdPerGbMonth.ShouldBe(Shipped().DiskUsdPerGbMonth);
+        result.Table.Find("g2-standard-8")!.OnDemandUsdPerHour.ShouldBe(CatalogFixtures.G2OnDemand, 1e-9);
+        result.Table.Source.ShouldContain("disk");
+    }
+
+    [Fact]
+    public void Two_in_region_disk_skus_at_different_prices_keep_the_shipped_disk_price_only()
+    {
+        var skus = CatalogFixtures.G2AndDisk();
+        skus.Add(CatalogFixtures.Sku("Balanced PD Capacity", "Storage", "SSD", "OnDemand", 0.99, "GBy.mo"));
+
+        var result = CatalogPriceResolver.Resolve(skus, Shipped(), Today);
+
+        result.Table!.DiskUsdPerGbMonth.ShouldBe(Shipped().DiskUsdPerGbMonth);
+        result.Table.Find("g2-standard-8")!.OnDemandUsdPerHour.ShouldBe(CatalogFixtures.G2OnDemand, 1e-9);
+        result.Table.Source.ShouldContain("disk");
+    }
+
+    [Fact]
+    public void An_ambiguous_core_sku_for_one_family_loses_only_that_family_and_the_other_still_comes_from_the_catalog()
+    {
+        // g2 is priced; the A2 core has two SKUs at different prices, so a2-highgpu keeps its shipped row and the source names it.
+        var skus = CatalogFixtures.G2AndDisk();
+        skus.AddRange(CatalogFixtures.A2Parts());
+        skus.Add(CatalogFixtures.Sku("A2 Instance Core running in Americas", "Compute", "CPU", "OnDemand", 0.77));
+
+        var table = CatalogPriceResolver.Resolve(skus, Shipped(), Today).Table!;
+
+        table.Find("g2-standard-8")!.OnDemandUsdPerHour.ShouldBe(CatalogFixtures.G2OnDemand, 1e-9);
+        table.Find("a2-highgpu-1g")!.OnDemandUsdPerHour.ShouldBe(Shipped().Find("a2-highgpu-1g")!.OnDemandUsdPerHour);
+        table.Source.ShouldContain("a2-highgpu-1g");
+    }
+
+    [Fact]
+    public void An_a2_ultra_is_never_priced_from_the_catalog_while_its_shape_is_only_a_theory()
+    {
+        // Issue #214 review M3: a2-highgpu-1g is priced from the A2 SKUs; a2-ultragpu-1g (80GB, THEORY) keeps the shipped row.
+        var skus = CatalogFixtures.G2AndDisk();
+        skus.AddRange(CatalogFixtures.A2Parts());
+
+        var shipped = PricingTable.Parse(PricingTableTests.Good.Replace(
+            "\"a2-highgpu-1g\"",
+            "\"a2-ultragpu-1g\": { \"accelerator\": \"1x NVIDIA A100 80GB\", \"onDemandUsdPerHour\": 5.05, \"spotUsdPerHour\": null }, \"a2-highgpu-1g\"")).Table!;
+
+        var table = CatalogPriceResolver.Resolve(skus, shipped, Today).Table!;
+
+        table.Find("a2-highgpu-1g")!.OnDemandUsdPerHour.ShouldBe(CatalogFixtures.A2HighOnDemand, 1e-9);
+        table.Find("a2-ultragpu-1g")!.OnDemandUsdPerHour.ShouldBe(5.05);
+        table.Source.ShouldContain("a2-ultragpu-1g");
     }
 
     [Fact]

@@ -40,6 +40,22 @@ internal static class CatalogFixtures
         Sku("Spot Preemptible G2 Custom Instance Ram running in Americas", "Compute", "RAM", "Preemptible", 9.99, "GBy.h"),
     ];
 
+    public const double A2Core = 0.05;
+    public const double A2Ram = 0.006;
+    public const double A100 = 2.9;
+    public const double A100Of80 = 4.0;
+
+    /// <summary>The A2 core, memory and both A100 GPU SKUs (descriptions as measured for the A2 family; the 80GB one is a theory, see the resolver).</summary>
+    public static List<CatalogSku> A2Parts() =>
+    [
+        Sku("A2 Instance Core running in Americas", "Compute", "CPU", "OnDemand", A2Core),
+        Sku("A2 Instance Ram running in Americas", "Compute", "RAM", "OnDemand", A2Ram, "GBy.h"),
+        Sku("Nvidia Tesla A100 GPU running in Americas", "Compute", "A100", "OnDemand", A100),
+        Sku("Nvidia Tesla A100 80GB GPU running in Americas", "Compute", "A100", "OnDemand", A100Of80),
+    ];
+
+    public static double A2HighOnDemand => (12 * A2Core) + (85 * A2Ram) + A100;
+
     public static double G2OnDemand => (8 * G2Core) + (32 * G2Ram) + L4;
 
     public static double G2Spot => (8 * G2CoreSpot) + (32 * G2RamSpot) + L4Spot;
