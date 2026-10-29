@@ -225,6 +225,28 @@ public class CloudAuditTests
         }
     }
 
+    [Fact]
+    public void Every_interface_method_including_default_ones_is_forwarded_by_its_decorator_itself()
+    {
+        // A default interface method the decorator does not override compiles silently and BYPASSES the inner gateway's real override.
+        var decorators = typeof(AuditedComputeGateway).Assembly.GetTypes()
+            .Where(t => t.IsClass && !t.IsAbstract && typeof(IAuditedGateway).IsAssignableFrom(t)).ToList();
+        decorators.Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must find the decorators, or this guard is vacuous");
+        var checkedMethods = 0;
+        foreach (var type in Classified.Keys)
+        {
+            var decorator = decorators.Single(d => type.IsAssignableFrom(d));
+            var map = decorator.GetInterfaceMap(type);
+            for (var i = 0; i < map.InterfaceMethods.Length; i++)
+            {
+                map.TargetMethods[i].DeclaringType.ShouldBe(decorator, decorator.Name + " must override " + map.InterfaceMethods[i].Name + " itself and forward it");
+                checkedMethods++;
+            }
+        }
+
+        checkedMethods.ShouldBeGreaterThan(30);
+    }
+
     private static object? ArgFor(Type type) => type switch
     {
         _ when type == typeof(CancellationToken) => CancellationToken.None,
