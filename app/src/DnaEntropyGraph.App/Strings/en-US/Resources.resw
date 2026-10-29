@@ -2120,6 +2120,18 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
+    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
+    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
+    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
+  </data>
   <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
     <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
   </data>
@@ -2167,9 +2179,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="CloudPage_NoProject" xml:space="preserve">
     <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
-  </data>
-  <data name="CloudPage_ProjectChanged" xml:space="preserve">
-    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
   <data name="CloudPage_ListFailed" xml:space="preserve">
     <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
@@ -2933,6 +2942,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="PageTitle_Results" xml:space="preserve">
     <value>Results</value>
+  </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
   <data name="RunError_proxy_blocked" xml:space="preserve">
     <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
