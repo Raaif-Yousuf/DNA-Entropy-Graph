@@ -6,7 +6,7 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// The one writer of <c>&lt;root&gt;\logs\app.log</c> (UTF-8, LF, one event per line), shared by <see cref="Inputs.FileDiagnosticsLog"/> and
 /// <see cref="DiagnosticsTraceListener"/> (issue #923) so the two never interleave a half line: every writer of the same path takes the same lock.
 /// Never throws (except for a fatal error the process cannot go on after): a log that cannot be written must not take the work it describes down.
-/// The file is capped (issue #575): once it holds <c>maxBytes</c>, it is renamed to <c>app.log.1</c> (replacing the previous one) and a new
+/// The file is capped (issue #575): once it holds <c>maxBytes</c>, it is renamed to <c>app.1.log</c> (a name the diagnostics bundle accepts, issue #923: the previous log travels with the zip) (replacing the previous one) and a new
 /// <c>app.log</c> starts, so a row that fails on every launch, or a storm of Trace lines, costs at most about twice the cap on disk.
 /// </summary>
 public sealed class AppLogFile
@@ -67,13 +67,13 @@ public sealed class AppLogFile
         {
             try
             {
-                File.Move(_path, _path + ".1", overwrite: true);
+                File.Move(_path, Path.Combine(Path.GetDirectoryName(_path)!, "app.1.log"), overwrite: true);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // The rotated copy is held open (the diagnostics zip reads it) or locked: append anyway, up to twice the cap. A brief overshoot
                 // of the cap beats dropping every line until the lock goes away; the next write tries the rotation again. Past twice the cap the
-                // rotation is not coming back soon (a read-only app.log.1), so the line is dropped rather than the file left to grow for good.
+                // rotation is not coming back soon (a read-only app.1.log), so the line is dropped rather than the file left to grow for good.
                 return info.Length < 2 * _maxBytes;
             }
         }

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace DnaEntropyGraph.Core.Diagnostics;
 
@@ -9,11 +8,14 @@ namespace DnaEntropyGraph.Core.Diagnostics;
 /// Routes <see cref="Trace"/> output (the app's <c>Trace.TraceWarning/TraceError/TraceInformation</c> calls, issue #923) into
 /// <c>&lt;root&gt;\logs\app.log</c>, the same file <see cref="Inputs.FileDiagnosticsLog"/> writes and the diagnostics zip collects.
 /// Every call site in <c>app/src</c> passes only constant text plus an exception type name (a Guards test holds that), and every line is
-/// redacted again here because third-party code can also write to Trace: absolute paths, email addresses and long nucleotide runs become
+/// redacted again here (by <see cref="DiagnosticsRedactor"/>, the zip's own rules) because third-party code can also write to Trace: absolute paths, email addresses, tokens and long nucleotide runs become
 /// placeholders. Never throws into the caller.
 /// </summary>
-public sealed partial class DiagnosticsTraceListener : TraceListener
+public sealed class DiagnosticsTraceListener : TraceListener
 {
+    // One source of truth for what a log may not hold (paths, emails, tokens, sequences, sequence file names): the same rules the diagnostics zip applies.
+    private static readonly DiagnosticsRedactor Redactor = new(string.Empty, []);
+
     private readonly AppLogFile _file;
     private readonly TimeProvider _time;
     private readonly StringBuilder _pending = new();
@@ -48,9 +50,7 @@ public sealed partial class DiagnosticsTraceListener : TraceListener
     /// <summary>The line hygiene and redaction every Trace line gets, exposed so the rules are testable on their own.</summary>
     public static string Redact(string text)
     {
-        var result = EmailPattern().Replace(text, "<email>");
-        result = PathPattern().Replace(result, "<path>");
-        return SequencePattern().Replace(result, "<sequence>");
+        return Redactor.RedactText(text);
     }
 
     public override void Write(string? message)
@@ -128,23 +128,11 @@ public sealed partial class DiagnosticsTraceListener : TraceListener
         {
             var line = string.Create(
                 CultureInfo.InvariantCulture,
-                $"{_time.GetUtcNow():yyyy-MM-ddTHH:mm:ss.fffZ} {level} trace {AppLogFile.Clean(Redact(text))}");
+                $"{_time.GetUtcNow():yyyy-MM-ddTHH:mm:ss.fffZ} {level} trace {Redact(AppLogFile.Clean(text))}");
             _file.AppendLine(line);
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
         {
         }
     }
-
-    [GeneratedRegex(@"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")]
-    private static partial Regex EmailPattern();
-
-    // A drive path (either slash) or a UNC path, up to a quote, a character no path holds, or the colon that ends a clause. Greedy on purpose:
-    // a path with spaces ("My Documents") must not leave its tail behind, and a lost word after a path costs less than a leaked folder name.
-    [GeneratedRegex(@"(?:[A-Za-z]:[\\/]|\\\\)[^""'<>|*?:\r\n]*")]
-    private static partial Regex PathPattern();
-
-    // 20 or more IUPAC nucleotide letters in a row, as a whole word. A job id (yyyymmdd-hhmmss-xxxxxx) breaks on its digits and hyphens.
-    [GeneratedRegex(@"\b[ACGTUNRYKMSWBDHV]{20,}\b", RegexOptions.IgnoreCase)]
-    private static partial Regex SequencePattern();
 }
