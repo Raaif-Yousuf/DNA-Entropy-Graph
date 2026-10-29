@@ -287,7 +287,7 @@ def check_fragments(root: Path) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--root", type=Path, default=_repo_root(), help="repo root (default: this script's parent repo)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="report what folding would do without writing")

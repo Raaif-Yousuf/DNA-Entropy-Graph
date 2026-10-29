@@ -236,6 +236,20 @@ left as unnecessary caution.
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
+`NewRunViewModel` is a singleton (issue #527): a new page instance resolves the same ViewModel, so the files,
+the selection, the paste box and the RNA choice survive a trip to Runs and back (MEASURED 2026-10-03: it was
+transient and the list was empty after returning). It empties itself only when a run starts successfully
+(`StartRunAsync`): Items, selection, PasteText and IsTreatingAsRna. Pasted copies of the files that were NOT run
+are deleted as a Remove would; the copy behind the run that started stays (a retry restages from its recorded
+path). The paste box (closed), the status line and Treat as RNA also reset. A start that fails keeps everything.
+What stays across runs, on purpose: the preset, the ticked output files and the run target (they are the user's
+intent for runs in general and match Settings); `PresetPickerTests` pins it. Not persisted across app restarts.
+Back to the page never re-delivers its Open-with files: the page forwards `NavigationArrival` (parameter plus
+`NavigationMode` as a number) and only a New navigation's parameter is acted on. `NewRunPage.OnNavigatedFrom`
+calls `Bindings.StopTracking()`, so the long-lived ViewModel (its `PropertyChanged` and `Items`) does not keep a
+left page alive; the page is not cached, a new instance is made on every visit. THEORY (unverified): the
+memory effect itself was not measured, only that the release is explicit.
+
 - **Add files** is `BrowseCommand` with a Ctrl+O `KeyboardAccelerator` on the button itself (no handler).
   The picker (`FilePickerService`) needs the main window handle, which `App.OnLaunched` stores in the
   `WindowHandleProvider` singleton. The picker and a dropped folder share one extension list,
@@ -289,6 +303,17 @@ panel and keeps this one. The run-error strings say "Choose Save diagnostics in 
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
 
+### Share settings (issue #242)
+
+The last group on the page. **Export settings** and **Import settings** drive `SettingsTransferViewModel`; the import shows a
+preview (the plain name of each setting, its current value, its new value) and writes only on **Apply these changes**.
+What may travel is the allowlist `Core/SettingsPortability/SettingsCatalog`: every key is either `Exported` (with a validator, so
+an imported value is one the app itself would have written) or `Excluded` (with a reason). `Guards.Tests/SettingsKeyCatalogGuardTests`
+scans the source for settings keys and fails when one is in neither, so **a new setting must be added to the catalog in the
+same commit** (decide: share it, or say why not; a path, an id, a secret or a developer switch is always excluded). The file
+carries `format` and `schema`; a newer schema is refused with its own message. An applied import sends `SettingsResetMessage`,
+which every settings group already treats as "re-read the store".
+
 ## 11. The setup wizard (issue #99)
 
 One page (`WizardPage`, route `Wizard`, opened from the status pill in the title bar), not a stepper: welcome, sign in, then OK/Fix rows. `WizardViewModel` owns sign-in, the project step (a `SetupStepRow`, the list of projects, Create) and Finish; `SetupStepsViewModel` owns the rows for billing, services, storage and identity, and the GPU allowance, which are also the Settings health report ("Run setup check again"). All Google calls are `SetupCheckService` (`Core/Setup`), which never throws a Google failure: a failure is a `SetupStepResult` with a code (`SetupErrorCodes` or `AuthErrorCodes.ProjectInvalid`) and one `SetupAction` whose kind decides the button: Retry, OpenLink (a `HyperlinkButton`, plus **Check again**), CopyText (clipboard, with the billing request naming the account that was refused), PickProject, PickBillingAccount (a list of buttons, each linking that account), CreateProject.
@@ -326,7 +351,7 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Runs: `RunListItem.Sparkline` (48 points, `TrackResampler`) is filled after the list shows, one finished run at a time, by
   `HistoryViewModel.LoadSparklinesAsync`; `Controls/EntropySparkline` is a plain `Polyline` (a ScottPlot control per card would
   own one GPU surface each). `EntropyOverviewSource` remembers the last 64 tracks by path, size and write time.
-- Not done: drag-select on the strip to jump the viewer (the Viewer page has no locus parameter yet), and a contig picker for a
+- Drag-select (#699): dragging a span on the strip opens the embedded viewer at that range (`OverviewSelection` clamps it and ignores a click; the Viewer page key takes a `ViewerRunTarget` with a locus, a plain folder string still works). Not done: a contig picker for a
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).

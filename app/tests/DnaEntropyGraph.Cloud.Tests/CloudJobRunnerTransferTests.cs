@@ -33,11 +33,17 @@ public class CloudJobRunnerTransferTests
     private static string Bucket => FakeGcp.BucketName(Project);
 
     private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<string, JobPhase>? onPhase = null)
-        => new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
+    {
+        // Test time (#567): the result wait runs on a clock that moves only as the runner polls.
+        var clocks = new RunnerClocks();
+        return new(gcp, gcp, gcp, gcp, gcp, repo, onPhase)
         {
             ResultPollInterval = TimeSpan.FromMilliseconds(1),
             ResultTimeout = TimeSpan.FromMilliseconds(60),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
         };
+    }
 
     private static RunRecord LastRow(InMemoryRunRepository repo, string jobId) => repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 

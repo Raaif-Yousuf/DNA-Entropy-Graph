@@ -47,9 +47,17 @@ public class ZoneLadderTests
     private static CloudJobRequest Request(string jobId, VmSpec spec) => TestInputs.Request(jobId, spec, zones: ["us-central1-a"]);
 
     /// <summary>The fake behind a gateway that records what the ladder asked and how many creates were in flight together.</summary>
-    private sealed class Recording(FakeGcp inner, TimeSpan createTime) : IComputeGateway
+    /// <summary>
+    /// Records how many creates were in flight when each started. <paramref name="batches"/> (#567) replaces a real-time create duration: when set, a create holds
+    /// until the batch it belongs to (the run of creates that started with none in flight) has reached its expected size, so the batches overlap by construction
+    /// and not because 60 ms of real time was long enough on this machine. A ladder that starts fewer creates than expected leaves them waiting: the caller's watchdog fails the test.
+    /// </summary>
+    private sealed class Recording(FakeGcp inner, int[]? batches = null) : IComputeGateway
     {
         private int _inflight;
+        private int _batch = -1;
+        private int _batchStarted;
+        private TaskCompletionSource _batchFull = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public List<string> OfferReads { get; } = [];
 
@@ -72,16 +80,37 @@ public class ZoneLadderTests
         public async Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
         {
             int before;
+            Task? full = null;
             lock (InflightBeforeEachCreate)
             {
                 before = _inflight++;
                 InflightBeforeEachCreate.Add(before);
                 PeakInflight = Math.Max(PeakInflight, _inflight);
+                if (batches is not null)
+                {
+                    if (before == 0)
+                    {
+                        _batch++;
+                        _batchStarted = 0;
+                        _batchFull = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+
+                    _batchStarted++;
+                    full = _batchFull.Task;
+                    if (_batch < batches.Length && _batchStarted >= batches[_batch])
+                    {
+                        _batchFull.TrySetResult();
+                    }
+                }
             }
 
             try
             {
-                await Task.Delay(createTime, cancellationToken).ConfigureAwait(false);
+                if (full is not null)
+                {
+                    await full.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken).ConfigureAwait(false);
+                }
+
                 return await inner.CreateVmAsync(spec, zone, cancellationToken).ConfigureAwait(false);
             }
             finally
@@ -139,7 +168,7 @@ public class ZoneLadderTests
             gcp.WithZoneStockout(zone);
         }
 
-        var recording = new Recording(gcp, TimeSpan.FromMilliseconds(60));
+        var recording = new Recording(gcp, [1, 1, 1, 3, 5, 7, 2]);
         var spec = Spec("job-z2");
 
         var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z2", spec), spec, new RunProgress(), CancellationToken.None);
@@ -229,7 +258,7 @@ public class ZoneLadderTests
     public async Task Only_the_accelerator_of_the_requested_machine_is_asked_for_and_no_other_tier_is_tried()
     {
         var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", "us-central1-a").WithAcceleratorZones("nvidia-tesla-a100", "us-central1-b", "us-central1-c").WithZoneStockout("us-central1-a");
-        var recording = new Recording(gcp, TimeSpan.Zero);
+        var recording = new Recording(gcp);
         var spec = Spec("job-z7");
 
         var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z7", spec), spec, new RunProgress(), CancellationToken.None);
@@ -244,7 +273,7 @@ public class ZoneLadderTests
     public async Task An_offer_read_that_fails_falls_back_to_the_requested_zones_instead_of_failing_the_run()
     {
         var gcp = new FakeGcp();
-        var recording = new Recording(gcp, TimeSpan.Zero)
+        var recording = new Recording(gcp)
         {
             OfferFailure = new CloudOperationException(new CloudError("TIMEOUT", null, "request timed out"), CloudErrorKind.Network),
         };
@@ -260,7 +289,7 @@ public class ZoneLadderTests
     public async Task A_machine_with_no_GPU_never_reads_an_accelerator_offer()
     {
         var gcp = new FakeGcp();
-        var recording = new Recording(gcp, TimeSpan.Zero);
+        var recording = new Recording(gcp);
         var spec = Spec("job-z9", "e2-standard-4");
 
         var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z9", spec), spec, new RunProgress(), CancellationToken.None);

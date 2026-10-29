@@ -85,6 +85,16 @@ Google Cloud call.
 | `DnaEntropyGraph.LocalEngine` | `LocalEngineManager` (health of the local `uv`-managed venv, with `NvidiaSmiGpuDetector` for the GPU), `LocalEngineInstaller` (install/repair/remove with the bundled `uv`), `LocalJobRunner` (launches the worker as a child process over `--store localdir`), `RunTargetResolver` (Cloud / This PC / Auto). Details: [local_engine.md](local_engine.md). |
 | `DnaEntropyGraph.CloudCli` (tool) | A console host for scripts: `resources list`, `bucket describe`, `vm create` - used by `scripts/cloud_gpu_test.ps1` and by nothing user-facing. |
 
+**Migrations (issue #842).** Files under `Persistence/Migrations/` are named `NNNN_snake.sql`
+and must be exactly `0001..N` with no gap and no repeated number; `SqliteMigrations.LoadEmbedded`
+throws naming the gap or the duplicate, and `SqliteMigrationSetTests` fails the build the same way.
+Numbers are claimed at landing, not at branch time: when two branches both add `0004`, the one that
+lands second renumbers (and updates its tests). A database whose `user_version` is higher than the
+newest embedded migration (a downgrade) is refused with "update the app" and left untouched, never
+opened with a newer schema than the code knows.
+
+At launch, after the single-instance hand-off, `StartupDataRoot.CheckDatabase` runs `DatabaseStartupCheck` (read-only, reads `user_version` only, never migrates). Exit codes are defined once in `StartupExitCodes` (2 data folder, 3 database newer than the app, 4 database in use, 5 database unusable). A busy or locked database is never treated as corrupt, and a damaged file that cannot be renamed aside is left in place, never deleted.
+
 `JobEngine` (in `App`, singleton) owns the active runs, survives navigation, and
 publishes `RunProgressChanged`/`RunPhaseChanged` over `WeakReferenceMessenger` so any page
 can subscribe without the runner needing a reference back to the UI.

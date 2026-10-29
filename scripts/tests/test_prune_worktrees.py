@@ -522,7 +522,7 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     _git(world.clone, "branch", "release/1.0", "origin/main")
     kept_wt = world.add_worktree("co", branch="checked-out-merged-wt", commit=True)  # unmerged, stays
     _git(kept_wt, "branch", "unmerged-extra")  # same commit as the unmerged worktree head: not an ancestor
-    lane = world.add_worktree("lane-x")  # landed and removed: its branch becomes free
+    world.add_worktree("lane-x")  # landed and removed: its branch becomes free
     world.merged_branch("feat-merged")  # a real merged feature branch checked out nowhere
     dirty = world.add_worktree("lane-dirty")
     (dirty / "z.txt").write_bytes(b"z\n")  # dirty: stays, so its branch stays
@@ -531,7 +531,7 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
     report = _run(world, apply=False, delete_merged_branches=True)
     assert "feat-merged" in world.branches()  # dry run
     assert sorted(b.branch for b in report.branches_deleted) == sorted(["feat-merged", "lane-x"])
-    report = _run(world, apply=True, delete_merged_branches=True)
+    _run(world, apply=True, delete_merged_branches=True)
     left = world.branches()
     for gone in ("feat-merged", "lane-x"):
         assert gone not in left
@@ -546,7 +546,6 @@ def test_delete_merged_branches_deletes_only_merged_unchecked_out_branches(world
         "release/1.0",
     ):
         assert kept in left
-    del lane
 
 
 def test_delete_merged_branches_also_takes_a_branch_whose_pr_merged_when_gh_is_used(world):

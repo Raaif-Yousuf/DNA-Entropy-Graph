@@ -277,6 +277,8 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
             _runGroups.Add(watched);
         }
 
+        RunGroupsChanged?.Invoke();
+
         // Dropped as soon as its runs end, so a laptop that reconnects all day while one long run goes on holds one task, not a chain of them (#575).
         _ = watched.ContinueWith(
             done =>
@@ -285,11 +287,16 @@ public sealed class ReconcileOnReconnect : ICloudCallObserver, IDisposable
                 {
                     _runGroups.Remove(done);
                 }
+
+                RunGroupsChanged?.Invoke();
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
     }
+
+    /// <summary>Raised after a pass's run group is tracked and after it is dropped (for tests: a signal to wait on instead of polling <see cref="TrackedRunGroups"/>).</summary>
+    internal event Action? RunGroupsChanged;
 
     /// <summary>How many passes' reattached-run groups are still going (for tests).</summary>
     internal int TrackedRunGroups

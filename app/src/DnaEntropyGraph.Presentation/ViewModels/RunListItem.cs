@@ -57,7 +57,8 @@ public sealed partial class RunListItem : ObservableObject
         IAsyncRelayCommand deleteCloudCommand,
         IAsyncRelayCommand deleteLocalCommand,
         IAsyncRelayCommand removeCommand,
-        IRelayCommand? copyOwnerRequestCommand = null)
+        IRelayCommand? copyOwnerRequestCommand = null,
+        IAsyncRelayCommand? waitForGpuCommand = null)
     {
         Run = run;
         Title = title;
@@ -78,6 +79,7 @@ public sealed partial class RunListItem : ObservableObject
         DeleteLocalCommand = deleteLocalCommand;
         RemoveCommand = removeCommand;
         CopyOwnerRequestCommand = copyOwnerRequestCommand;
+        WaitForGpuCommand = waitForGpuCommand;
     }
 
     public RunRecord Run { get; }
@@ -115,6 +117,13 @@ public sealed partial class RunListItem : ObservableObject
     /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
     public string? PresetText { get; init; }
 
+    /// <summary>Issue #111: the run was found in the results bucket (made on another computer); only Download again and Remove from list act on it.</summary>
+    public bool IsImported { get; init; }
+
+    public string? ImportedText { get; init; }
+
+    public bool HasImportedText => ImportedText is not null;
+
     /// <summary>"Download again", or "Download partial results" for a cancelled run (issue #717: what the worker uploaded before it stopped).</summary>
     public string RedownloadLabel { get; init; } = string.Empty;
 
@@ -139,4 +148,12 @@ public sealed partial class RunListItem : ObservableObject
     public IRelayCommand? CopyOwnerRequestCommand { get; }
 
     public bool HasOwnerRequest => CopyOwnerRequestCommand is not null;
+
+    /// <summary>
+    /// Issue #92: "Wait for a graphics card", the action of a run that failed because Google had none free: starts the same run again, queued by Google until a card is free.
+    /// Null (and <see cref="HasWaitForGpu"/> false) for every other run, and for one that already waited.
+    /// </summary>
+    public IAsyncRelayCommand? WaitForGpuCommand { get; }
+
+    public bool HasWaitForGpu => WaitForGpuCommand is not null;
 }
