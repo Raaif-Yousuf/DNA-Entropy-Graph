@@ -17,7 +17,17 @@ internal enum LocationVerdict
 }
 
 /// <summary>The verdict, and for <see cref="LocationVerdict.Dropped" /> the text Biopython quotes in its warning (what the worker's notice shows).</summary>
-internal readonly record struct LocationReading(LocationVerdict Verdict, string QuotedText = "");
+internal readonly record struct LocationReading(LocationVerdict Verdict, string QuotedText = "", LocationExtent? Extent = null);
+
+/// <summary>
+/// Where a readable location lies, as <c>_features_of</c> in the worker's <c>readers/genbank.py</c> measures it (#847): each part's 0-based start
+/// and end (Biopython's <c>int(part.start)</c> and <c>int(part.end)</c>), and whether a single, non-compound location ends in a <c>&gt;</c> position.
+/// </summary>
+internal sealed record LocationExtent(IReadOnlyList<(BigInteger Start, BigInteger End)> Parts, bool PartialEnd)
+{
+    /// <summary>A <c>CompoundLocation</c>: more than one part (a join of several parts, or an origin wrap).</summary>
+    public bool IsCompound => Parts.Count > 1;
+}
 
 /// <summary>
 /// C# port of the part of Biopython's location parsing (<c>Bio.GenBank._FeatureConsumer.location</c>, <c>Bio.SeqFeature.Location.fromstring</c>,
@@ -76,8 +86,9 @@ internal static class GenBankLocation
 
         try
         {
-            FromString(line, length, circular);
-            return new LocationReading(LocationVerdict.Readable);
+            var sink = new ExtentSink();
+            FromString(line, length, circular, sink);
+            return new LocationReading(LocationVerdict.Readable, string.Empty, new LocationExtent(sink.Parts, sink.PartialEnd));
         }
         catch (LocationParserError e)
         {
@@ -90,8 +101,16 @@ internal static class GenBankLocation
         }
     }
 
+    // What reading a location learns about where it lies; only the verdict and this reach the callers.
+    private sealed class ExtentSink
+    {
+        public List<(BigInteger Start, BigInteger End)> Parts { get; } = [];
+
+        public bool PartialEnd { get; set; }
+    }
+
     // Location.fromstring. Returns nothing: a location that comes back is Readable.
-    private static void FromString(string text, long? length, bool circular)
+    private static void FromString(string text, long? length, bool circular, ExtentSink sink)
     {
         var complement = false;
         if (text.StartsWith("complement(", StringComparison.Ordinal))
@@ -111,14 +130,14 @@ internal static class GenBankLocation
             : 0;
         if (prefix == 0)
         {
-            SimpleFromString(text, length, circular);
+            SimpleFromString(text, length, circular, sink);
             return;
         }
 
         var parts = AnyLocation.Matches(PythonText.Slice(text, prefix, text.Length - 1)).Select(m => m.Groups[1].Value).ToList();
         foreach (var part in parts)
         {
-            if (SimpleFromString(part, length, circular) && complement)
+            if (SimpleFromString(part, length, circular, sink) && complement)
             {
                 // Note the literal {text}: Biopython forgot the f prefix, so its warning quotes "{text}".
                 throw new LocationParserError("double complement in '{text}'?");
@@ -132,7 +151,7 @@ internal static class GenBankLocation
     }
 
     // SimpleLocation.fromstring. Returns whether the location is on the reverse strand.
-    private static bool SimpleFromString(string text, long? length, bool circular)
+    private static bool SimpleFromString(string text, long? length, bool circular, ExtentSink sink)
     {
         var reverse = false;
         if (text.StartsWith("complement(", StringComparison.Ordinal))
@@ -148,6 +167,8 @@ internal static class GenBankLocation
             var simpleStart = first - 1;
             if (simpleStart >= 0 && simpleStart < last)
             {
+                sink.Parts.Add((simpleStart, last));
+                sink.PartialEnd = false;
                 return reverse;
             }
         }
@@ -173,16 +194,19 @@ internal static class GenBankLocation
 
         BigInteger startPosition;
         BigInteger endPosition;
+        var endText = string.Empty; // the text of the end position, whose leading ">" marks a partial end
         switch (key)
         {
             case "bond":
                 text = PythonText.Slice(text, 5, text.Length - 1);
                 startPosition = PositionFromString(text, -1);
                 endPosition = PositionFromString(text, 0);
+                endText = text;
                 break;
             case "solo":
                 startPosition = PositionFromString(text, -1);
                 endPosition = PositionFromString(text, 0);
+                endText = text;
                 break;
             case "between":
                 var ends = text.Split('^');
@@ -205,6 +229,7 @@ internal static class GenBankLocation
 
                 startPosition = PositionFromString(halves[0], -1);
                 endPosition = PositionFromString(halves[1], 0);
+                endText = halves[1];
                 if (endPosition <= startPosition && length is > 0 && startPosition < length)
                 {
                     // Looks like origin wrapping.
@@ -218,6 +243,10 @@ internal static class GenBankLocation
                         throw new PythonError("End location must be greater than or equal to start location"); // SimpleLocation(0, end)
                     }
 
+                    // CompoundLocation([SimpleLocation(start, length), SimpleLocation(0, end)]): a gene across the origin.
+                    sink.Parts.Add((startPosition, length.Value));
+                    sink.Parts.Add((0, endPosition));
+                    sink.PartialEnd = false;
                     return reverse;
                 }
 
@@ -234,6 +263,8 @@ internal static class GenBankLocation
             throw new PythonError("End location must be greater than or equal to start location"); // SimpleLocation.__init__
         }
 
+        sink.Parts.Add((startPosition, endPosition));
+        sink.PartialEnd = endText.StartsWith('>');
         return reverse;
     }
 

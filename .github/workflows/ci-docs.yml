@@ -140,7 +140,7 @@ jobs:
       - name: ruff format --check scripts
         run: uvx ruff format --check scripts
       - name: pytest scripts/tests
-        run: uv run --with pytest --with pyyaml python -m pytest scripts/tests -q
+        run: uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts/tests -q -n auto
 
   links:
     name: markdown links

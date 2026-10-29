@@ -1091,7 +1091,9 @@ def test_hung_check_reads_still_reach_the_deadline(world, capsys):
 
 def test_a_hung_gh_pr_merge_is_a_failure_that_names_the_pr(world, capsys):
     (world.root / "gh.log.hang").write_text("pr merge", encoding="utf-8")
-    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    # 4 s, not 1 s: every NON-hanging gh call in the flow shares this timeout, and a stub gh python start-up took >1 s under
+    # 8 xdist workers (MEASURED 2026-10-29 #959: 1 failure in 3 runs). The hang sleeps 60 s, so the timeout still fires.
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=4.0)
     assert rc == lw.EXIT_FAILED
     assert "timed out" in capsys.readouterr().out
 
@@ -1143,7 +1145,9 @@ def test_a_pr_head_that_moved_since_the_push_is_never_merged(world, capsys):
 
 def test_an_unreadable_pr_head_is_never_merged_blind(world):
     (world.root / "gh.log.hang").write_text("pr view", encoding="utf-8")
-    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=1.0)
+    # 4 s, not 1 s: every NON-hanging gh call in the flow shares this timeout, and a stub gh python start-up took >1 s under
+    # 8 xdist workers (MEASURED 2026-10-29 #959: 1 failure in 3 runs). The hang sleeps 60 s, so the timeout still fires.
+    rc, _ = _land_green(world, [[_check("a", "pass")]], gh_timeout=4.0)
     assert rc == lw.EXIT_CHECKS_PENDING
     assert _calls(world, "merge") == []
 
