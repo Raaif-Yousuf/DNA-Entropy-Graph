@@ -132,11 +132,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             }
 
             var wasLocked = _accountsFileLocked;
-            var loaded = Reconcile(_registry.Load());
-            _accountsFileSetAside = _registry.QuarantinedTo is not null;
+            var outcome = _registry.LoadWithOutcome();
+            var loaded = Reconcile(outcome.File);
+            _accountsFileSetAside = outcome.QuarantinedTo is not null;
             // An unreadable file (locked) gives an empty list that is not the truth: do not keep it as the state, read the file again after the window.
-            _accountsFileLocked = _registry.Unreadable;
-            _accountsFileFolderProblem = _registry.QuarantineFailed;
+            _accountsFileLocked = outcome.Unreadable;
+            _accountsFileFolderProblem = outcome.QuarantineFailed;
             if (_accountsFileLocked)
             {
                 _retryLoadAfter = now + LockedRetryWindow;
@@ -308,14 +309,10 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
                 throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
             }
 
-            await UpdateAsync(file =>
-            {
-                // The file lost this account (deleted by hand): put it back, then the token file decides whether it still counts as signed in.
-                var listed = file.Accounts.Any(a => a.Sub == active.Sub) ? file : Reconcile(file with { Accounts = [.. file.Accounts, active] });
-                return listed.Accounts.Any(a => a.Sub == active.Sub && !a.NeedsSignIn)
-                    ? listed with { Accounts = [.. listed.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }
-                    : throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account was signed out in another copy of the app");
-            }).ConfigureAwait(false);
+            // An account the file no longer lists is not put back: it may be one another copy is signing out right now (list entry gone, revoke pending, token file not yet deleted).
+            await UpdateAsync(file => file.Accounts.Any(a => a.Sub == active.Sub && !a.NeedsSignIn)
+                ? file with { Accounts = [.. file.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }
+                : throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account is no longer signed in (signed out in another copy of the app, or the list lost it)")).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -526,8 +523,14 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
 
     private async Task MarkExpiredAsync(AccountRecord account)
     {
-        await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
+        // The list first, then the token, and the token only if it is still the one this copy found dead: another copy may have signed this account in
+        // again meanwhile (it stores the new token before it lists it), and deleting that one would sign it out. Its write time is the stamp.
+        var stamp = File.GetLastWriteTimeUtc(_store.PathFor(account.Sub));
         await UpdateAsync(file => file with { Accounts = [.. file.Accounts.Select(a => a.Sub == account.Sub ? a with { NeedsSignIn = true } : a)] }).ConfigureAwait(false);
+        if (File.GetLastWriteTimeUtc(_store.PathFor(account.Sub)) == stamp)
+        {
+            await _store.DeleteAsync<TokenResponse>(account.Sub).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -538,10 +541,46 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     /// </summary>
     private async Task UpdateAsync(Func<AccountsFile, AccountsFile> change)
     {
-        var written = await Task.Run(() => _registry.Update(file => change(Reconcile(file)))).ConfigureAwait(false);
+        // Filled under the registry's lock, on the pool thread; only read after the task is done. It must not take _loadLock there (a load holds that and waits on the registry's lock).
+        string? setAside = null;
+        AccountsFile written;
+        try
+        {
+            written = await Task.Run(() => _registry.Update(file => change(Reconcile(file)), where => setAside = where)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (setAside is not null)
+            {
+                // This update found the file damaged and set it aside (issue #616): the list this copy cached is gone, and the user is told now if the change gave up.
+                lock (_loadLock)
+                {
+                    _state = null;
+                }
+
+                if (ex is AccountAuthException)
+                {
+                    throw new AccountAuthException(AuthErrorCodes.AccountsFileUnreadable, "accounts.json could not be parsed and was set aside as accounts.json.bad", ex);
+                }
+
+                NoteSetAside();
+            }
+
+            throw;
+        }
+
         lock (_loadLock)
         {
             _state = written;
+            _accountsFileSetAside |= setAside is not null;
+        }
+    }
+
+    private void NoteSetAside()
+    {
+        lock (_loadLock)
+        {
+            _accountsFileSetAside = true;
         }
     }
 

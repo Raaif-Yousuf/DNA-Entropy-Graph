@@ -78,12 +78,45 @@ public class AccountRegistryUpdateTests : IDisposable
         using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Should.Throw<AccountsFileLockedException>(() => registry.Update(f => Add(f, "2002")));
-            registry.Unreadable.ShouldBeTrue();
         }
 
         File.ReadAllBytes(FilePath).ShouldBe(before);
-        registry.Update(f => Add(f, "2002")).Accounts.Count.ShouldBe(2);
-        registry.Unreadable.ShouldBeFalse("a successful update read the file");
+        registry.Update(f => Add(f, "2002")).Accounts.Count.ShouldBe(2, "the lock is gone: the update reads the real file");
+    }
+
+    [Fact]
+    public void An_update_that_finds_a_damaged_file_sets_it_aside_and_says_where_before_the_change_runs()
+    {
+        Directory.CreateDirectory(_dir);
+        var damaged = System.Text.Encoding.UTF8.GetBytes("{\"activeSub\":");
+        File.WriteAllBytes(FilePath, damaged);
+        var registry = new AccountRegistry(_dir);
+        string? told = null;
+        string? toldBeforeChange = null;
+
+        registry.Update(f => { toldBeforeChange = told; return Add(f, "1001"); }, where => told = where);
+
+        told.ShouldBe(FilePath + ".bad");
+        toldBeforeChange.ShouldBe(told);
+        File.ReadAllBytes(FilePath + ".bad").ShouldBe(damaged);
+        new AccountRegistry(_dir).Load().Accounts.Count.ShouldBe(1);
+        registry.Update(f => f, where => throw new InvalidOperationException("nothing was set aside this time"));
+    }
+
+    [Fact]
+    public void LoadWithOutcome_hands_back_the_whole_answer_without_touching_the_properties()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
+        var registry = new AccountRegistry(_dir);
+
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            registry.LoadWithOutcome().Unreadable.ShouldBeTrue();
+        }
+
+        registry.Unreadable.ShouldBeFalse("only Load publishes the properties");
+        registry.LoadWithOutcome().Unreadable.ShouldBeFalse();
     }
 
     [Fact]

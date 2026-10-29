@@ -1072,7 +1072,7 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `.bad.2`, never over an earlier one) before anything can overwrite it, and the first sign-in, project choice or switch afterwards fails
   once with `ACCOUNTS_FILE_UNREADABLE` (action Sign in again) before a browser opens. `Load` reads under the same mutex and retries a failed read
   (3 tries, 40 ms steps; a load blocks at most `AccountRegistry.WorstCaseLoadBudget`, about 270 ms). A file that still cannot be read (held open by another program or copy) is not empty and not set aside: the registry
-  is `Unreadable`, `Save` refuses to replace it, the service does not cache the empty list, and the sign-in, project choice or switch fails with
+  is `Unreadable`, an `Update` refuses to replace it, the service does not cache the empty list, and the sign-in, project choice or switch fails with
   `ACCOUNTS_FILE_LOCKED` (action Try again); a read is not retried more often than every 2 s while it is locked (the result is remembered, so a UI read never waits on the file each time), and a token request or sign-out in that state fails with the same code instead of reading as signed out; the next call after the window reads the file again and succeeds once the hold is gone. A save that cannot take the lock in time, or whose mutex the system refuses to open, is `AccountsFileLockedException` (not a disk failure) and reaches the user as `ACCOUNTS_FILE_LOCKED` from sign-in, switch and project choice; a disk failure keeps `SIGNIN_STORAGE` or `PROJECT_SAVE_FAILED`. The save runs on a pool thread (`UpdateAsync`) so a 10 s lock wait never blocks a dispatcher, and a load's worst case is about 270 ms (150 ms lock wait plus two read-retry sleeps), because the state getter can run on the UI thread. A damaged file the folder will not let the app move aside reports `SIGNIN_STORAGE` (the folder is the problem, Try again would never help). A save also deletes leftover `accounts.json.<guid>.tmp` files older than 5 minutes (including the old fixed `accounts.json.tmp`), best effort.
   THEORY (unverified): a virus scanner or a second app instance is what damaged the file in the field. Two processes changing the list at once
   no longer lose an update (next paragraph, issue #620).
@@ -1083,8 +1083,14 @@ per-account choice). `IGcpAccessTokenSource` is registered with no consumer yet;
   `activeSub`; expiry sets only `needsSignIn`; a sign-in replaces its own record (keeping the `projectId` the file has now) and makes it current;
   a sign-out removes its own record and keeps another copy's current account. **Same account, same field: the later writer wins** (the later one
   to take the lock; two project choices end with the second). A project choice for an account another copy signed out fails with `SIGNIN_EXPIRED`
-  and writes nothing (the record is put back only when the file lost it and the token file still exists). A copy's cached list is refreshed from
-  what it wrote, not from other copies' later changes: another copy's change shows here after a restart or the next change made here.
+  and writes nothing. The account is never put back when the file does not list it, because that can be one another copy is signing out right now
+  (entry removed, revoke pending, token file not yet deleted); a list that lost the account by hand therefore also reads "sign in again". A copy's
+  cached list is refreshed from what it wrote, not from other copies' later changes: another copy's change shows here after a restart or the next
+  change made here. `Save` no longer exists: `Update` is the only writer, and the registry's `Unreadable`, `QuarantineFailed` and `QuarantinedTo`
+  properties are set by `Load` alone (a test reads them); the service acts on the outcome `LoadWithOutcome` and `Update` hand back, never on shared
+  flags. An update that is the first to find the file damaged sets it aside (`.bad`) and, if its change then gives up, fails with
+  `ACCOUNTS_FILE_UNREADABLE` itself; if the change went through, the next change says it once. Marking an account expired lists it first and deletes
+  the token file only if its write time is still the one seen before the list changed, so a fresh sign-in of the same account in another copy keeps its new token.
   **Locked at launch (issue #624).** A list that cannot be read is not shown as signed out: `IGcpAccount.IsAccountsFileLocked` is true, the setup
   page's sign-in card shows `ACCOUNTS_FILE_LOCKED` with a Try again button (it calls `RecheckAccountsFile()`, which re-reads the file at once and does not
   open the browser, so a user who is already signed in is never sent to Google), and the service raises `AccountChanged` when the file turns readable, whether

@@ -47,7 +47,7 @@ public class AccountRegistryTests : IDisposable
 
         registry.Load().ShouldBe(AccountsFile.Empty);
         registry.QuarantinedTo.ShouldBe(FilePath + ".bad");
-        registry.Save(One("2002"));
+        registry.Update(_ => One("2002"));
 
         File.ReadAllBytes(FilePath + ".bad").ShouldBe(original);
         registry.Load().ActiveSub.ShouldBe("2002");
@@ -93,15 +93,14 @@ public class AccountRegistryTests : IDisposable
             registry.Load().ShouldBe(AccountsFile.Empty);
             registry.Unreadable.ShouldBeTrue();
             registry.QuarantinedTo.ShouldBeNull("a locked file is not a damaged one");
-            Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
+            Should.Throw<TokenStorageException>(() => registry.Update(_ => One("2002")));
         }
 
-        Should.Throw<TokenStorageException>(() => registry.Save(One("2002")), "the lock is gone but the file was never read, so Save still refuses");
+        registry.Load().ActiveSub.ShouldBe("1001", "the lock is gone and the real file reads");
         File.ReadAllBytes(FilePath).ShouldBe(original);
         File.Exists(FilePath + ".bad").ShouldBeFalse();
-        registry.Load().ActiveSub.ShouldBe("1001", "after the lock clears the real file is read");
         registry.Unreadable.ShouldBeFalse();
-        registry.Save(One("2002"));
+        registry.Update(_ => One("2002"));
     }
 
     [Fact]
@@ -115,7 +114,7 @@ public class AccountRegistryTests : IDisposable
         registry.Load().ShouldBe(AccountsFile.Empty);
 
         registry.Unreadable.ShouldBeTrue();
-        Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+        Should.Throw<AccountsFileLockedException>(() => registry.Update(_ => One("2002")));
     }
 
     [Fact]
@@ -128,32 +127,32 @@ public class AccountRegistryTests : IDisposable
         registry.Load().ShouldBe(AccountsFile.Empty);
 
         registry.Unreadable.ShouldBeTrue();
-        Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+        Should.Throw<AccountsFileLockedException>(() => registry.Update(_ => One("2002")));
     }
 
     [Fact]
-    public void A_save_that_cannot_take_the_lock_in_time_is_a_lock_failure_and_writes_nothing()
+    public void An_update_that_cannot_take_the_lock_in_time_is_a_lock_failure_and_writes_nothing()
     {
         var registry = new AccountRegistry(_dir, name => new Mutex(false, name), saveLockWait: TimeSpan.FromMilliseconds(200));
-        registry.Save(One("1001"));
+        registry.Update(_ => One("1001"));
         var before = File.ReadAllBytes(FilePath);
 
         using (new MutexHolder(_dir))
         {
-            Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
+            Should.Throw<AccountsFileLockedException>(() => registry.Update(_ => One("2002")));
         }
 
         File.ReadAllBytes(FilePath).ShouldBe(before);
-        registry.Save(One("2002"));
+        registry.Update(_ => One("2002"));
     }
 
     [Fact]
-    public void A_disk_failure_in_a_save_is_a_storage_failure_not_a_lock_failure()
+    public void A_disk_failure_in_an_update_is_a_storage_failure_not_a_lock_failure()
     {
         Directory.CreateDirectory(FilePath);
         var registry = new AccountRegistry(_dir);
 
-        var failure = Should.Throw<TokenStorageException>(() => registry.Save(One("1001")));
+        var failure = Should.Throw<TokenStorageException>(() => registry.Update(_ => One("1001")));
 
         failure.GetType().ShouldBe(typeof(TokenStorageException));
     }
@@ -169,13 +168,13 @@ public class AccountRegistryTests : IDisposable
         using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
             registry.Load().ShouldBe(AccountsFile.Empty);
+            Should.Throw<TokenStorageException>(() => registry.Update(_ => One("2002")), "the damaged file cannot be set aside, so it is not replaced");
         }
 
         registry.QuarantineFailed.ShouldBeTrue();
-        registry.Unreadable.ShouldBeTrue("Save refuses");
+        registry.Unreadable.ShouldBeTrue("the last load could not read it");
         registry.QuarantinedTo.ShouldBeNull();
         File.ReadAllBytes(FilePath).ShouldBe(original);
-        Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
     }
 
     [Fact]
@@ -203,50 +202,7 @@ public class AccountRegistryTests : IDisposable
     }
 
     [Fact]
-    public void A_save_refused_because_the_file_was_never_read_is_a_lock_style_failure_not_a_disk_one()
-    {
-        Directory.CreateDirectory(_dir);
-        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
-        var registry = new AccountRegistry(_dir);
-        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
-        {
-            registry.Load();
-        }
-
-        var failure = Should.Throw<TokenStorageException>(() => registry.Save(One("2002")));
-
-        failure.GetType().ShouldBe(typeof(AccountsFileLockedException));
-    }
-
-    [Fact]
-    public void A_load_that_is_still_waiting_for_the_lock_does_not_clear_the_unreadable_answer_a_save_relies_on()
-    {
-        Directory.CreateDirectory(_dir);
-        File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
-        var registry = new AccountRegistry(_dir);
-        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
-        {
-            registry.Load();
-        }
-
-        registry.Unreadable.ShouldBeTrue();
-        using var holder = new MutexHolder(_dir);
-        var observed = new List<bool>();
-        var loader = new Thread(() => registry.Load());
-        loader.Start();
-        for (var i = 0; i < 5; i++)
-        {
-            Thread.Sleep(20);
-            observed.Add(registry.Unreadable);
-        }
-
-        loader.Join();
-
-        observed.ShouldAllBe(u => u, "the lock wait lasts 150 ms; the old answer stands until the new one is known");
-    }
-
-    [Fact]
-    public void A_save_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
+    public void An_update_removes_old_orphan_temp_files_and_keeps_fresh_ones_and_everything_else()
     {
         Directory.CreateDirectory(_dir);
         var oldFixedName = Path.Combine(_dir, "accounts.json.tmp");
@@ -263,7 +219,7 @@ public class AccountRegistryTests : IDisposable
 
         File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddMinutes(-30));
 
-        new AccountRegistry(_dir).Save(One("1001"));
+        new AccountRegistry(_dir).Update(_ => One("1001"));
 
         File.Exists(old).ShouldBeFalse();
         File.Exists(oldFixedName).ShouldBeFalse("the name an earlier version always wrote through");
@@ -311,7 +267,7 @@ public class AccountRegistryTests : IDisposable
             {
                 try
                 {
-                    registry.Save(One(sub));
+                    registry.Update(_ => One(sub));
                 }
                 catch (Exception ex)
                 {
