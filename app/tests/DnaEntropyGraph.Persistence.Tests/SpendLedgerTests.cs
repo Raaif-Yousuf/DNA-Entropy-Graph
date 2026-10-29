@@ -510,7 +510,7 @@ public class SpendLedgerTests
     }
 
     [Fact]
-    public void A_row_that_finished_before_its_VM_was_ready_quotes_a_zero_span_not_a_negative_one()
+    public async Task A_row_that_finished_before_its_VM_was_ready_quotes_a_zero_span_not_a_negative_one()
     {
         var (ledger, _, _, paths) = Make();
         using (paths)
@@ -522,17 +522,21 @@ public class SpendLedgerTests
             try
             {
                 var quote = ledger.Quote(row);
+                ledger.Quote(row);
 
                 quote.ShouldNotBeNull();
                 quote.EndedUtc.ShouldBe(Now, "the end is never before the start");
                 quote.UsdEst.ShouldBe(0.0);
+
+                (await ledger.RecordRunAsync(row, CancellationToken.None)).ShouldNotBeNull();
+                (await ledger.RecordRunAsync(row, CancellationToken.None)).ShouldBeNull("the second upsert of the same run is a duplicate");
             }
             finally
             {
                 System.Diagnostics.Trace.Listeners.Remove(listener);
             }
 
-            listener.Lines.ShouldContain(l => l.Contains("vm-span-inverted job=r1"), "the inversion is traced by id and state only, never a message");
+            listener.Lines.Count(l => l.Contains("vm-span-inverted job=r1")).ShouldBe(1, "traced once per run when booked, by id only, never on a Quote or a duplicate upsert");
         }
     }
 

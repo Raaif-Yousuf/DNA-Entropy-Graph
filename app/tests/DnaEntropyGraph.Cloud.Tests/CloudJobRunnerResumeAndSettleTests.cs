@@ -464,4 +464,5 @@ public class CloudJobRunnerResumeAndSettleTests
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
         var row = LastRow(repo, "job-s8");
         (DateTimeOffset.UtcNow - row.FinishedAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(1), "a running VM bills until the run ends: the end is the finish");
-    }}
+    }
+}

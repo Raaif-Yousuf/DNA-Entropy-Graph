@@ -274,7 +274,7 @@ public class RunCostRepairStartupTests : IDisposable
                 }
             }
 
-            row!.Phase.ShouldBe(JobPhase.Failed, "the reconcile waited for the repair");
+            row!.Phase.ShouldBe(JobPhase.Failed, "the reconcile ran while the repair was still blocked");
             launch.IsCompleted.ShouldBeFalse();
         }
         finally

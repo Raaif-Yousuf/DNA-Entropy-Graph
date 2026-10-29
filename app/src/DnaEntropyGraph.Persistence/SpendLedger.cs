@@ -67,18 +67,24 @@ public sealed class SpendLedger : ISpendCapGate, IRunCostRepair
         }
 
         // A span is never negative: a row whose end is before its start (a clock step, a bad stamp) books a zero span with its $0, so every reader of the entry agrees.
-        // Traced by job id only (never a message), so a clock step shows up in the diagnostics zip.
-        if (finished < vmStart)
-        {
-            System.Diagnostics.Trace.TraceWarning($"vm-span-inverted job={run.JobId}");
-        }
-
         return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : BookedVmSpan.ClampEnd(run, vmStart, finished), UsdEst: usd);
     }
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
-        => Quote(run) is { } entry ? await _ledger.TryAppendAsync(entry, cancellationToken).ConfigureAwait(false) : null;
+        => Quote(run) is { } entry ? TraceIfInverted(run, await _ledger.TryAppendAsync(entry, cancellationToken).ConfigureAwait(false)) : null;
+
+    // A span booked as zero because the end was before the start (a clock step) is traced once per run, when the append is accepted (not on every Quote or duplicate upsert), by job id only,
+    // never a message. It goes to the trace listeners; it reaches app.log and the support zip only once the listener #923 adds is on main.
+    private static CostLedgerEntry? TraceIfInverted(RunRecord run, CostLedgerEntry? written)
+    {
+        if (written is not null && run.FinishedAt < run.VmReadyAt)
+        {
+            System.Diagnostics.Trace.TraceWarning($"vm-span-inverted job={run.JobId}");
+        }
+
+        return written;
+    }
 
     public async Task<SpendSummary> MonthToDateAsync(CancellationToken cancellationToken)
     {
