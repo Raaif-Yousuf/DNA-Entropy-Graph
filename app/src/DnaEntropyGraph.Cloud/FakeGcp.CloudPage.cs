@@ -118,7 +118,10 @@ public sealed partial class FakeGcp
 
         if (vm.Status is "STOPPED" or "TERMINATED")
         {
-            _vms[key] = vm with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null };
+            BeforeStartWrite?.Invoke();
+            // Re-checked on the row as it is NOW: a delete that landed is a 404 (as on real Compute), a concurrent change of state is not overwritten (#875).
+            _ = UpdateVm(key, v => v.Status is "STOPPED" or "TERMINATED" ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v)
+                ?? throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{vmName}' is gone.");
         }
 
         return Task.CompletedTask;
