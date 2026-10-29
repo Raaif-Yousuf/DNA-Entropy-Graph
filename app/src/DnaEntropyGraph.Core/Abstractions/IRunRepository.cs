@@ -117,4 +117,13 @@ public sealed record RunRecord(
 
         return true;
     }
+
+    /// <summary>
+    /// <see cref="Imported"/> means two things; this is the earlier command-line version's run (issue #243): a local record
+    /// (<see cref="Target"/> is <c>local</c>) whose folder the user already owned. No installation id, bucket or cloud copy.
+    /// </summary>
+    public bool IsPrototypeImport => Imported && Core.LocalEngine.RunTargets.IsLocalRecord(Target);
+
+    /// <summary>A run found in the bucket that another computer made (issue #111): <see cref="Imported"/> but not a prototype run.</summary>
+    public bool IsCloudImport => Imported && !IsPrototypeImport;
 }

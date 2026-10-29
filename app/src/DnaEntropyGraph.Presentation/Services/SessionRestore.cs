@@ -72,6 +72,7 @@ public sealed class RecordingNavigator(INavigator inner, SessionStore session) :
 {
     public bool CanGoBack => inner.CanGoBack;
 
+    // Forwarded, not swallowed (issues #499, #807): the shell subscribes to this decorator, which is what DI hands out.
     public string? CurrentPageKey => inner.CurrentPageKey;
 
     public event EventHandler? CurrentPageChanged
