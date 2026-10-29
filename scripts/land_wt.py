@@ -629,6 +629,10 @@ def resw_driver_flags(repo: Path) -> tuple[list[str], Path]:
     return ["-c", f"merge.resw.driver={driver}", "-c", f"core.attributesFile={attrs.as_posix()}"], attrs
 
 
+def _prefix(row: ctf.Row) -> str:
+    return repr(row.cells[3][:40]) if len(row.cells) > 3 else ""
+
+
 def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str]]:
     """After the union: close `## Queue` table rows missing their trailing `|`, then drop a row that duplicates a row
     main carries. A row is dropped ONLY when its cells (stripped) equal the kept row's; the kept copy is main's (the
@@ -659,8 +663,8 @@ def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str
         if keep is None:
             first = group[0]
             problems.append(
-                f"{TOTEST} rows {first.cells[0]} at lines {', '.join(str(r.line_no) for r in group)} repeat the same issue and 'Do this' "
-                "and main does not carry them: reconcile the rows (keep one) before landing"
+                f"{TOTEST} has {len(group)} rows for {first.cells[0]} ({_prefix(first)}) and main does not carry them: "
+                "reconcile the rows (keep one) before landing"
             )
             continue
         for other in group:
@@ -671,11 +675,27 @@ def normalize_totest(text: str, main_text: str) -> tuple[str, int, int, list[str
                 continue
             differing = [name for name, a, b in zip(ctf.COLUMNS, keep.cells, other.cells, strict=False) if a != b]
             problems.append(
-                f"{TOTEST} row {keep.cells[0]} (line {other.line_no}) differs from main's copy (line {keep.line_no}) in: "
+                f"{TOTEST} row {keep.cells[0]} ({_prefix(keep)}) differs from main's copy in: "
                 f"{', '.join(differing)}: reconcile the row (keep one) before landing"
             )
     kept = "".join(ln for i, ln in enumerate(lines) if i not in drop)
     return kept, len(drop), closed, problems
+
+
+def _normalise_union_totest(ctx: Ctx, name: str, merged: bytes, main: bytes) -> bytes:
+    """Normalise the union-resolved ToTest.md (see normalize_totest); a file that is not UTF-8 is returned untouched."""
+    try:
+        text, main_text = merged.decode("utf-8"), main.decode("utf-8")
+    except UnicodeDecodeError:
+        ctx.say(f"- {name} is not UTF-8: ToTest normalisation skipped, the union is left as git made it")
+        return merged
+    fixed, dropped, closed, unresolved = normalize_totest(text, main_text)
+    for message in unresolved:
+        ctx.say(f"WARNING: {message}")
+    if not (dropped or closed):
+        return merged
+    ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")
+    return fixed.encode("utf-8")
 
 
 def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
@@ -714,15 +734,7 @@ def _merge_origin_main(ctx: Ctx, wt: Path) -> None:
             git(wt, "merge-file", "--union", str(ours), str(base), str(theirs), check=False)
             merged_bytes = ours.read_bytes()
         if name == TOTEST:
-            try:
-                fixed, dropped, closed, unresolved = normalize_totest(merged_bytes.decode("utf-8"), parts[2].decode("utf-8"))
-            except UnicodeDecodeError:  # not text we can reason about: leave the union as git made it
-                fixed, dropped, closed, unresolved = "", 0, 0, []
-            for message in unresolved:
-                ctx.say(f"WARNING: {message}")
-            if dropped or closed:
-                merged_bytes = fixed.encode("utf-8")
-                ctx.say(f"- normalised {name}: dropped {dropped} duplicate row(s), closed {closed} row(s) missing a trailing pipe")
+            merged_bytes = _normalise_union_totest(ctx, name, merged_bytes, parts[2])
         (wt / name).write_bytes(merged_bytes)
         git(wt, "add", "--", name)
         ctx.say(f"- union-resolved {name}")

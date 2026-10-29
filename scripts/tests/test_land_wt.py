@@ -80,6 +80,12 @@ def _git(cwd: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8", errors="replace").strip()
 
 
+def _git_bytes(cwd: Path, *args: str) -> bytes:
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    return proc.stdout
+
+
 @dataclass
 class World:
     root: Path
@@ -318,7 +324,8 @@ def test_a_row_with_the_same_key_but_a_different_cell_is_kept_and_named_for_the_
     lines = _land_totest(world, lane, _tt(5, "do x") + _tt(91, "do a"))
     out = capsys.readouterr().out
     assert _tt(91, "do a", sha="def5678").strip() in lines and _tt(91, "do a").strip() in lines  # the lane's edit survives
-    assert "#91" in out and "Closed by (commit sha)" in out and "reconcile" in out
+    assert "#91" in out and "do a" in out and "Closed by (commit sha)" in out and "reconcile" in out
+    assert "line " not in out.split("reconcile")[0].split("WARNING")[-1]  # no worktree line numbers: the file is deleted after the land
     assert len(ctf.find_duplicate_rows(ctf.parse_rows("\n".join(lines) + "\n"))) == 1  # premerge will refuse it
 
 
@@ -326,7 +333,7 @@ def test_a_lane_only_duplicate_is_left_and_named_not_collapsed(world, capsys):
     lines = _land_totest(world, _tt(93, "do c") + _tt(93, "do c"), _tt(5, "do x"))
     out = capsys.readouterr().out
     assert [ln for ln in lines if ln.startswith("| #93")] == [_tt(93, "do c").strip()] * 2
-    assert "#93" in out and "reconcile" in out
+    assert "#93" in out and "do c" in out and "reconcile" in out
 
 
 def test_identical_copies_of_a_row_main_carries_collapse_to_mains_copy(world):
@@ -334,14 +341,27 @@ def test_identical_copies_of_a_row_main_carries_collapse_to_mains_copy(world):
     assert [ln for ln in lines if ln.startswith("| #91")] == [_tt(91).strip()]
 
 
-def test_mains_copy_wins_even_when_main_lacks_the_closing_pipe():
+def test_a_copy_that_differs_from_mains_in_the_sha_cell_is_not_dropped():
     text = TT_HEAD + _tt(91, sha="def5678") + _tt(5, "do x") + _tt(91)
-    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
-    assert dropped == 0 and conflicts  # different sha cell: not identical, so nothing is dropped
+    out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91))
+    assert dropped == 0 and out == text
+    assert len(conflicts) == 1 and "#91" in conflicts[0] and "Closed by (commit sha)" in conflicts[0]
+
+
+def test_a_main_copy_lacking_the_closing_pipe_still_wins_over_the_lane_copy():
     text = TT_HEAD + _tt(91) + _tt(5, "do x") + _tt(91)
     out, dropped, _closed, conflicts = lw.normalize_totest(text, TT_HEAD + _tt(5, "do x") + _tt(91).rstrip(" |\n") + "\n")
     assert dropped == 1 and not conflicts
     assert out == TT_HEAD + _tt(5, "do x") + _tt(91)
+
+
+def test_a_totest_that_is_not_utf8_is_left_as_the_union_made_it_and_says_so(world, capsys):
+    sha = world.commit_on_branch("feat/1-x", {"docs/ToTest.md": b"| header |\n| row0 |\n| lane \xff |\n"})
+    world.advance_main({"docs/ToTest.md": b"| header |\n| row0 |\n| main |\n"})
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_OK
+    out = capsys.readouterr().out
+    assert "not UTF-8" in out and "skipped" in out
+    assert b"| lane \xff |" in _git_bytes(world.origin, "show", "feat/1-x:docs/ToTest.md")
 
 
 def test_a_row_missing_its_closing_pipe_is_closed(world):

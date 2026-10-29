@@ -138,9 +138,11 @@ a moment after the PR opens). Console output is ASCII. Without the flag nothing 
 
 In order: fetch; the sha must be the branch tip (a stale sha refuses); a control-byte scan of the changed text files
 (MEASURED 2026-10-02: an agent's `scripts\v` became `\x0b`); a detached worktree under `%TEMP%\landwt` at the sha; origin/main
-merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine, then normalised: a `## Queue` row that repeats an
-earlier row's issue + "Do this" (the key `check_totest_format.py` uses) is dropped keeping main's copy, and a row missing its closing `|`
-is closed, so a stacked chain whose bottom just landed no longer fails premerge (#892); **any other
+merged in if the branch is behind (`docs/ToTest.md` is union-resolved, since two lanes appending rows is routine, then normalised: a `## Queue` row whose cells are identical to main's copy is dropped (a stacked chain whose bottom just landed no
+longer fails premerge, #892); a row with the same issue and "Do this" (the key `check_totest_format.py` uses) but different cells, or a
+duplicate main does not carry, is left and named in a `WARNING` (issue, "Do this" prefix, differing columns), and premerge refuses it
+until the lane reconciles it; a row missing its closing `|` is closed; a ToTest.md that is not UTF-8 is left as the union made it, with
+one line saying so; **any other
 conflict aborts the merge and refuses with the file list**, so the lane resolves it); premerge inside the worktree with
 `worker\.venv` reached through a junction and `PYTHONPATH=<wt>\worker\src`; on green, `HEAD` is pushed to
 `refs/heads/<branch>` (`--land-branch` to rename) and `gh pr create` runs. The sha recorded for the `gh pr merge` hook (`landed-prs.json`) is the pushed `HEAD` (the PR head, a merge
