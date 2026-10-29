@@ -158,7 +158,10 @@ public static partial class CloudErrorClassifier
         // machine type answers 404 "The resource 'projects/<p>/zones/<z>/machineTypes/<type>' was not found". That is one zone's availability, so it is a stockout
         // (the ladder moves on), decided here and not left to the substring stage, which would read a project id containing "iam" as a permission error.
         // Only a MACHINE TYPE that is not found counts: any other missing resource stays what it was.
-        if (status is null or 404 && lower.Contains("/machinetypes/", StringComparison.Ordinal) && lower.Contains("was not found", StringComparison.Ordinal))
+        // A real HTTP 404 only: a status-less message is the substring stage's to judge. And only when nothing else in the message is a project-wide refusal: the quoted resource
+        // name (which carries the user's project id) is cut out first, then the rest must read as no more than "not found" to the substring stage.
+        if (status == 404 && lower.Contains("/machinetypes/", StringComparison.Ordinal) && lower.Contains("was not found", StringComparison.Ordinal)
+            && ClassifyBySubstring(QuotedName().Replace(lower, " ")) == CloudErrorKind.Other)
         {
             return CloudErrorKind.Stockout;
         }
@@ -204,6 +207,10 @@ public static partial class CloudErrorClassifier
             || lower.Contains("iam_permission_denied", StringComparison.Ordinal)
             || lower.Contains("does not have permission", StringComparison.Ordinal)
             || PermissionNamedDenied().IsMatch(lower);
+
+    /// <summary>A single-quoted name inside a message ('projects/p/zones/z/machineTypes/t'), which can carry words (a project id with "iam" in it) that are not the error's own.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"'[^']*'")]
+    private static partial System.Text.RegularExpressions.Regex QuotedName();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"permission\s+'[a-z0-9_.]+'\s+denied")]
     private static partial System.Text.RegularExpressions.Regex PermissionNamedDenied();

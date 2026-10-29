@@ -238,6 +238,21 @@ public class ZoneLadderTests
         recording.InflightBeforeEachCreate.Count.ShouldBe(Offered.Length, "every candidate zone is tried before the ladder gives up");
     }
     [Fact]
+    public async Task A_zone_without_the_machine_type_is_skipped_even_when_the_project_id_contains_iam()
+    {
+        // Issue #772. A project called williams-lab holds "iam": the substring stage would read the 404 as a permission error and abort the whole ladder.
+        var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered);
+        var recording = new Recording(gcp);
+        recording.CreateErrorByZone["us-central1-a"] = new CloudError("NOT_FOUND", 404, "The resource 'projects/williams-lab/zones/us-central1-a/machineTypes/g2-standard-8' was not found");
+        var spec = Spec("job-z774");
+
+        var result = await Provisioner(recording, gcp).ProvisionAsync(Request("job-z774", spec), spec, new RunProgress(), CancellationToken.None);
+
+        result.Success.ShouldBeTrue(result.FailureMessage);
+        result.Zone.ShouldNotBe("us-central1-a");
+    }
+
+    [Fact]
     public async Task A_project_wide_error_aborts_the_whole_ladder_at_its_first_sighting()
     {
         var gcp = new FakeGcp().WithAcceleratorZones("nvidia-l4", Offered).WithBillingOff("my-project");
