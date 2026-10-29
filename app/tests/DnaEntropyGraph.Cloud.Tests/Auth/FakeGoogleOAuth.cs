@@ -38,6 +38,11 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
     /// <summary>When true the revoke endpoint answers 500, as Google does when it is unreachable or failing.</summary>
     public bool RevokeFails { get; set; }
 
+    /// <summary>When set, a revoke request waits here until the test completes it (a sign-out stalled mid-revoke); <see cref="RevokeStarted"/> completes when one is waiting.</summary>
+    public TaskCompletionSource? RevokeGate { get; set; }
+
+    public TaskCompletionSource RevokeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     /// <summary>When true every token request fails at the transport level (no network).</summary>
     public bool NetworkDown { get; set; }
 
@@ -250,6 +255,12 @@ internal sealed class FakeGoogleOAuth : HttpMessageHandler, IBrowserLauncher
 
         if (url.StartsWith(RevokeUrl, StringComparison.Ordinal))
         {
+            if (RevokeGate is { } gate)
+            {
+                RevokeStarted.TrySetResult();
+                await gate.Task.ConfigureAwait(false);
+            }
+
             lock (_gate)
             {
                 if (RevokeFails)

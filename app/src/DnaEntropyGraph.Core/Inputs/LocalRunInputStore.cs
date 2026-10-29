@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Inputs;
 
@@ -11,7 +12,6 @@ namespace DnaEntropyGraph.Core.Inputs;
 /// </summary>
 public sealed class LocalRunInputStore : IRunInputStore
 {
-    private static readonly char[] NotInAJobId = ['/', '\\', ':'];
 
     private readonly string _root;
 
@@ -22,8 +22,7 @@ public sealed class LocalRunInputStore : IRunInputStore
         _root = root;
     }
 
-    private static bool IsPlainName(string jobId)
-        => !string.IsNullOrWhiteSpace(jobId) && jobId.IndexOfAny(NotInAJobId) < 0 && !jobId.Contains("..", StringComparison.Ordinal);
+    private static bool IsPlainName(string jobId) => RunOutputRoot.IsPlainJobId(jobId);
 
     public Task<StagedInput?> FindAsync(string jobId, CancellationToken cancellationToken)
     {
@@ -87,7 +86,7 @@ public sealed class LocalRunInputStore : IRunInputStore
 
     public string? TryFindStagedInput(string jobId)
     {
-        if (string.IsNullOrWhiteSpace(jobId) || jobId.IndexOfAny(NotInAJobId) >= 0 || jobId.Contains("..", StringComparison.Ordinal))
+        if (!IsPlainName(jobId))
         {
             return null;
         }

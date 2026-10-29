@@ -17,6 +17,11 @@ public static class ResultsCopy
 
     // Issue #118: the entropy overview strip.
     public const string ExportPngFailed = "Results_ExportPngFailed";
+    public const string ExportPngNoFolder = "Results_ExportPngNoFolder";
+    public const string ExportPngFailedInExports = "Results_ExportPngFailedInExports";
+    public const string ExportPngTitle = "Results_ExportPng_Title";
+    public const string ExportPngXAxis = "Results_ExportPng_XAxis";
+    public const string ExportPngYAxis = "Results_ExportPng_YAxis";
 
     // Issue #552: the gene table.
     public const string GenesTruncated = "Results_GenesTruncated";
@@ -72,6 +77,12 @@ public static class ResultsCopy
     public const string GeneiousNotFound = "Results_GeneiousNotFound";
     public const string GeneiousLaunchFailed = "Results_GeneiousLaunchFailed";
 
+    // Issue #141: notes and tags on the run.
+    public const string NotesSaved = "Results_NotesSaved";
+    public const string NotesSaveFailed = "Results_NotesSaveFailed";
+    public const string NotesRunGone = "Results_NotesRunGone";
+    public const string NotesEditedDuringSave = "Results_NotesEditedDuringSave";
+
     // The worker's direction tokens (DirectionKey maps a token to one of these).
     public const string DirectionBothCombined = "Results_Direction_BothCombined";
     public const string DirectionBothAveraged = "Results_Direction_BothAveraged";
@@ -114,17 +125,17 @@ public static class ResultsCopy
     /// <summary>Every key above, for the guard that proves each one exists in the .resw.</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
     [
-        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed,
+        NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed, ExportPngNoFolder, ExportPngFailedInExports,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
-        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed,
+        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed, NotesRunGone, NotesEditedDuringSave,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
-        GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
+        ExportPngTitle, ExportPngXAxis, ExportPngYAxis, GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
         CostEstimate, CostEstimateSpot, CostNoCloud, CostShort, CostShortSpot, CostShortNoCloud,
         .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, CostEstimate, CostEstimateSpot, CostShort, CostShortSpot];
+    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, CostEstimate, CostEstimateSpot, CostShort, CostShortSpot];
 }
 

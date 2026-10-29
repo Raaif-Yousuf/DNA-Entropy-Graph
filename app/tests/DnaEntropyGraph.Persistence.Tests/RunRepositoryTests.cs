@@ -220,6 +220,41 @@ public class RunRepositoryTests
         (await repository.GetAllAsync(CancellationToken.None)).Single().OutputDir.ShouldBe(@"D:\stick\outputs\x");
     }
 
+    [Theory]
+    [InlineData(@"portable:..\..\x")]
+    [InlineData(@"portable:C:\Windows\x")]
+    public async Task A_poisoned_portable_output_folder_reads_back_as_no_output_folder(string poisoned)
+    {
+        using var paths = new TempPaths();
+        var mapper = new DataPathMapper(@"D:\stick");
+        await new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper)
+            .UpsertAsync(new RunRecord("job-x", JobPhase.Completed, DateTimeOffset.UtcNow) { OutputDir = @"D:\stick\outputs\ok" }, CancellationToken.None);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={paths.DatabasePath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE Runs SET OutputDir = $v;";
+            command.Parameters.AddWithValue("$v", poisoned);
+            command.ExecuteNonQuery();
+        }
+
+        var log = new CapturingLog();
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath), mapper, log);
+        var back = await repository.GetAllAsync(CancellationToken.None);
+        await repository.GetAllAsync(CancellationToken.None); // a History refresh reads every row again
+
+        back.Single().OutputDir.ShouldBeNull();
+        // Ids and a fixed class name only: never the stored path text (CLAUDE.md "Logs").
+        log.Entries.ShouldBe([("run-repository", "job-x", "OutputDirOutsidePortableFolder")], "once per run id per process, not once per read");
+    }
+
+    private sealed class CapturingLog : IDiagnosticsLog
+    {
+        public List<(string Source, string? JobId, string ErrorClass)> Entries { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Entries.Add((source, jobId, errorClass));
+    }
+
     private static string RawOutputDir(string databasePath)
     {
         using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={databasePath}");

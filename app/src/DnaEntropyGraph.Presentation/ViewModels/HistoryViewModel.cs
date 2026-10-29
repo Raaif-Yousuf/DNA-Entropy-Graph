@@ -294,7 +294,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         var wanted = SelectedStatusFilter?.Value ?? RunStatusFilter.All;
         var visible = _items
             .Where(i => wanted == RunStatusFilter.All || i.Status == wanted)
-            .Where(i => text.Length == 0 || Matches(i.Run, text))
+            .Where(i => text.Length == 0 || Matches(i, text))
             .ToList();
 
         var today = DayOf(_time.GetUtcNow());
@@ -308,13 +308,15 @@ public sealed partial class HistoryViewModel : ObservableObject
         EmptyText = !IsEmpty ? string.Empty : _strings.GetString(_items.Count == 0 ? RunsCopy.EmptyNone : RunsCopy.EmptyNoMatch);
     }
 
-    private static bool Matches(RunRecord run, string text)
+    private static bool Matches(RunListItem item, string text)
     {
+        var run = item.Run;
         var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
         var inputName = options?.InputPath;
         return Contains(run.Name, text) || Contains(run.JobId, text) || Contains(run.Notes, text)
                || Contains(string.IsNullOrWhiteSpace(inputName) ? null : Path.GetFileName(inputName), text)
-               || Contains(options?.Accession, text) || Contains(options?.AccessionRange, text);
+               || Contains(options?.Accession, text) || Contains(options?.AccessionRange, text)
+               || item.Tags.Any(tag => Contains(tag, text));
 
         static bool Contains(string? haystack, string needle) => haystack?.Contains(needle, StringComparison.OrdinalIgnoreCase) == true;
     }
@@ -352,6 +354,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             PresetText = PresetLine(run),
             CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
+            Tags = RunTags.Parse(run.TagsJson),
+            NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
             DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
             IsImported = run.IsCloudImport,
             ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,

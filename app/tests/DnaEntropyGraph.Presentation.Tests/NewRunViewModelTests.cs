@@ -135,6 +135,89 @@ public sealed class NewRunViewModelTests : IDisposable
         _navigator.Received(1).NavigateTo("RunProgress", "job-1");
     }
 
+    // ---- Run name (issue #514) ----
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    }
+
+    private static readonly DateTimeOffset NameClock = new(2026, 10, 29, 14, 5, 0, TimeSpan.Zero);
+
+    private NewRunViewModel NamedViewModel() => new(
+        _picker,
+        _jobEngine,
+        _navigator,
+        _strings,
+        new LocalPastedInputStore(_appData),
+        _estimates,
+        new OutputSelectionStore(Substitute.For<ISettingsStore>()),
+        _log,
+        TestGpu.Plan(),
+        clock: new FixedClock(NameClock));
+
+    [Fact]
+    public async Task The_run_name_preview_follows_the_template_and_the_selected_file()
+    {
+        _viewModel = NamedViewModel();
+        var a = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
+        var b = Write("Other.fasta", ">y\n" + Dna + "\n");
+        _viewModel.RunNamePreview.ShouldBe(string.Empty, "nothing selected, nothing to name");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(a, b));
+        var changed = new List<string?>();
+        _viewModel.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        _viewModel.NameTemplate.ShouldBe("{file}");
+        _viewModel.RunNamePreview.ShouldBe("SetTnpB");
+        _viewModel.NameTemplate = "{file}_{model}_{date}";
+
+        changed.ShouldContain(nameof(NewRunViewModel.RunNamePreview));
+        _viewModel.RunNamePreview.ShouldBe("SetTnpB_evo2_7b_2026-10-29");
+        _viewModel.SelectedItem = _viewModel.Items[1];
+        _viewModel.RunNamePreview.ShouldBe("Other_evo2_7b_2026-10-29");
+    }
+
+    [Fact]
+    public async Task Starting_a_run_refreshes_the_preview_so_the_time_shown_is_the_time_taken()
+    {
+        _viewModel = NamedViewModel();
+        var path = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.NameTemplate = "{file}_{time}";
+        var raised = 0;
+        var raisedWhenTheEngineWasCalled = -1;
+        _viewModel.PropertyChanged += (_, e) => raised += e.PropertyName == nameof(NewRunViewModel.RunNamePreview) ? 1 : 0;
+        _jobEngine.StartRunAsync(Arg.Any<RunOptions>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            raisedWhenTheEngineWasCalled = raised;
+            return Task.FromResult("job-1");
+        });
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        raisedWhenTheEngineWasCalled.ShouldBeGreaterThan(0, "the preview is raised before the options are built, so the page shows the time the run takes");
+    }
+
+    [Fact]
+    public async Task Run_sends_the_typed_template_and_the_preview_is_the_name_the_runner_will_use()
+    {
+        _viewModel = NamedViewModel();
+        var path = Write("SetTnpB.fasta", ">x\n" + Dna + "\n");
+        await _viewModel.AddDroppedCommand.ExecuteAsync(Drop(path));
+        _viewModel.NameTemplate = "{file}_{model}";
+        var preview = _viewModel.RunNamePreview;
+
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+
+        var sent = (RunOptions)_jobEngine.ReceivedCalls().Single(c => c.GetMethodInfo().Name == nameof(IJobEngine.StartRunAsync)).GetArguments()[0]!;
+        sent.NameTemplate.ShouldBe("{file}_{model}");
+        // The runner names the folder with this function over the staged copy, which keeps the file name.
+        RunOutputFolders.RunFolderName(sent, new DnaEntropyGraph.Core.Contract.StagedInput(path, Path.GetFileName(path)), NameClock.DateTime).ShouldBe(preview);
+        preview.ShouldBe("SetTnpB_evo2_7b");
+    }
+
     [Fact]
     public async Task After_a_run_starts_the_page_is_empty_for_the_next_one()
     {

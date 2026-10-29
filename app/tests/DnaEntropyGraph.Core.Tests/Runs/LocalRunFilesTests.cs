@@ -58,6 +58,28 @@ public sealed class LocalRunFilesTests : IDisposable
         => new("job-1", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: outputDir,
             OptionsJson: RunOptionsJson.Serialize(new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", OutputFolder = outputFolderOption }));
 
+    [Fact]
+    public void A_drive_root_output_folder_never_makes_a_folder_below_it_deletable()
+    {
+        // Hard Rule 14: OutputFolder "C:\" with a row naming C:\...\x must stay Refused, not become eligible for a recursive delete.
+        var driveRoot = Path.GetPathRoot(_base)!;
+        var folder = MakeRunFolder();
+
+        var result = Make().DeleteOutputFolder(Run(folder, outputFolderOption: driveRoot));
+
+        result.Status.ShouldBe(LocalDeleteStatus.Refused);
+        Directory.Exists(folder).ShouldBeTrue();
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void An_ordinary_subfolder_output_root_still_deletes_its_run_folder()
+    {
+        var folder = MakeRunFolder();
+
+        Make().DeleteOutputFolder(Run(folder, outputFolderOption: _root)).Status.ShouldNotBe(LocalDeleteStatus.Refused);
+        Directory.Exists(folder).ShouldBeFalse();
+    }
     private string MakeRunFolder(string name = "sample")
     {
         var folder = Path.Combine(_root, name);

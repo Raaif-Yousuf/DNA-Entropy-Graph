@@ -39,8 +39,12 @@ A run that failed shows, under its status, a short plain explanation of why and 
 to do about it. A run that finished but needs your attention (for example, your results are
 saved but we could not confirm the rented computer shut down) shows the same kind of note.
 
-Use the search box to find a run by its name, its input file name or its id, and the status
+Use the search box to find a run by its name, its input file name, its id, its note or its tags (capitals do not matter), and the status
 box to show only running, completed, failed or cancelled runs.
+
+## Notes and tags
+
+Open a run's results and use **Your notes** to write a note (for example, "the clone that failed sequencing") and tags separated by commas (for example, "clone7, redo"). Press **Save notes**; the page says **Saved.** when it is stored with the run on this computer. If you keep typing while it is saving, the page says what was saved and asks you to press **Save notes** again for the rest. Tags show as small chips on the run's row on the Runs page, with the start of the note under them, and typing a word of a note or a tag into the search box shows only the runs that carry it. A note stays on this computer; it is never sent to Google Cloud. A note holds at most 2000 characters and a tag at most 40; a note that would not fit is cut at the limit when you press Save notes. If the run was removed from the list while you typed, the page says so instead of **Saved.** The diagnostics file you save from Settings leaves your notes and tags out, and hides them in the log files it copies, unless you tick **Include my run notes and tags in the file** before pressing Save diagnostics. When you do, a path, an email address or a sequence inside a note or tag is replaced by a marker such as `<path>` first, and a note that still looks like private data is replaced by `<omitted: note withheld>`; the file is always made. The box clears itself once a file has been saved (if you cancel or the save fails, it stays ticked). The hiding in logs matches whole words and each line of a note separately; a tag of one character, or one made only of digits, is not hidden because it would match ordinary text and numbers, and neither is a tag that is one of the log's own words (such as info, error, failed, completed or status), because the app never writes your tags into its logs and hiding those words would blank ordinary log lines, and a log file that still holds one of your words after that is left out of the file whole.
 
 ### Messages from the app
 

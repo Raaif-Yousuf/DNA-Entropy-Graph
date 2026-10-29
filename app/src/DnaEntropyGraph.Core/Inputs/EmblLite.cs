@@ -26,11 +26,10 @@ public static class EmblLite
 
         var open = false;
         RecordIdentity? identity = null; // Biopython's record id, fed the ID line and the AC / SV lines (#847)
-        var inSeq = false;
-        var tableChecked = false; // Biopython reads the feature table once per record
+        var phase = Phase.Header;
         long? idLength = null; // the ID line's length and topology decide how an origin-wrapping location reads
         var idCircular = false;
-        var tableFeatures = new List<(string Key, string? DroppedText)>();
+        var tableFeatures = new List<TableFeature>();
         var recordIndex = 0;
         var seq = new StringBuilder();
 
@@ -47,35 +46,30 @@ public static class EmblLite
             else
             {
                 // #796: the same dropped-location rule and counts as a GenBank record (the worker shares records_from_parsed).
-                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, notices, coded);
+                var (genes, cds, mapped) = GenBankLite.ReadTableFeatures("EMBL", recordIndex, tableFeatures, recSeq.Length, identity!.Id, notices, coded);
                 records.Add(new GenBankLiteRecord(string.Empty, recSeq, genes, cds, recordIndex) { MappedCount = mapped });
             }
             identity = null;
             open = false;
-            inSeq = false;
-            tableChecked = false;
+            phase = Phase.Header;
             idLength = null;
             idCircular = false;
             tableFeatures.Clear();
             seq.Clear();
         }
 
-        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        // The "" after a final newline is the end of the file, not a blank line (the worker's readline() returns "" there).
+        var lineCount = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
+        for (var lineIndex = 0; lineIndex < lineCount; lineIndex++)
         {
             var line = lines[lineIndex];
-            if (line.StartsWith("//", StringComparison.Ordinal))
-            {
-                if (open)
-                {
-                    Flush();
-                }
-                continue;
-            }
             if (!open)
             {
-                open = IsIdLine(line);
-                if (open)
+                // Biopython's find_start skips everything before a line that opens a record ("ID   "); a stray "//" there is skipped too.
+                if (IsIdLine(line))
                 {
+                    open = true;
+                    RefuseUnrecognisedIdLine(line, recordIndex + 1);
                     (idLength, idCircular) = ReadIdLine(line);
                     var rest = line.Length > 5 ? line[5..] : string.Empty;
                     var name = rest.Count(c => c == ';') == 6 ? rest.Trim().Split(';')[0].Trim() : rest.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
@@ -84,71 +78,106 @@ public static class EmblLite
                 }
                 continue;
             }
-            if (IsIdLine(line))
+
+            switch (phase)
             {
-                // THEORY (unverified): Biopython's EMBL scanner refuses a record with no "//" before the next ID, as it does at
-                // the end of the file; this does the same, so a truncated or hand-joined file is caught before a VM exists.
-                throw new GenBankReadException("An EMBL record is missing its closing // line, so the file looks truncated or edited by hand.");
-            }
-            if (!inSeq && !tableChecked)
-            {
-                if (GenBankFeatureTable.IsStartMarker(line, FeatureTableFormat.Embl))
-                {
-                    // The worker's parser refuses a bad feature table (#548) and a location it cannot recover from (#788, #796), and it drops a
-                    // feature whose location it cannot read (#543): the same walk and the same location verdict as a GenBank record.
-                    var walked = GenBankFeatureTable.Walk(FeatureTableFormat.Embl, lines, lineIndex, recordIndex + 1, out var end);
-                    foreach (var feature in walked)
+                case Phase.Header:
+                    if (PythonText.TrimEnd(line) == "//")
                     {
-                        var reading = GenBankLocation.Read(feature.Location, idLength, idCircular);
-                        if (reading.Verdict == LocationVerdict.Refused)
+                        // Scanner.parse_header: a record terminator before the feature table or the sequence block. Only a line that is exactly
+                        // "//" once trailing white space is cut counts; "//x" is header text (MEASURED 2026-10-29, fixture embl_header_line_starting_with_two_slashes_is_header_text).
+                        throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Premature end of sequence data marker '//' found", FeatureTableFormat.Embl);
+                    }
+
+                    if (GenBankFeatureTable.IsStartMarker(line, FeatureTableFormat.Embl))
+                    {
+                        // The worker's parser refuses a bad feature table (#548) and a location it cannot recover from (#788, #796), and it drops a
+                        // feature whose location it cannot read (#543): the same walk and the same location verdict as a GenBank record.
+                        var walked = GenBankFeatureTable.Walk(FeatureTableFormat.Embl, lines, lineIndex, recordIndex + 1, out var end);
+                        foreach (var feature in walked)
                         {
-                            throw GenBankFeatureTable.RefuseLocation(recordIndex + 1, FeatureTableFormat.Embl);
+                            var reading = GenBankLocation.Read(feature.Location, idLength, idCircular);
+                            if (reading.Verdict == LocationVerdict.Refused)
+                            {
+                                throw GenBankFeatureTable.RefuseLocation(recordIndex + 1, FeatureTableFormat.Embl);
+                            }
+
+                            tableFeatures.Add(new TableFeature(feature.Key, feature.Id, reading));
                         }
 
-                        tableFeatures.Add((feature.Key, reading.Verdict == LocationVerdict.Dropped ? reading.QuotedText : null));
+                        phase = Phase.AfterTable;
+                        lineIndex = end - 1; // resume at the line that ended the table
                     }
-
-                    tableChecked = true;
-                    lineIndex = end - 1; // resume at the line that ended the table
-                    continue;
-                }
-
-                if (GenBankFeatureTable.IsSequenceHeader(line, FeatureTableFormat.Embl))
-                {
-                    tableChecked = true; // no feature table in this record
-                }
-                else
-                {
-                    identity?.FeedEmblHeader(line);
-                }
-            }
-            if (line.StartsWith("SQ", StringComparison.Ordinal))
-            {
-                inSeq = true;
-            }
-            else if (inSeq && line.Length > 0 && char.IsWhiteSpace(line[0]))
-            {
-                // readers/embl.py::_refuse_non_ascii_sequence skips spaces, tabs and ASCII digits (the layout and the
-                // trailing position counts); only the real letters are left. ASCII lower case is raised by hand so a
-                // non-ASCII letter that .NET or Python would fold into a valid base reaches the validator untouched.
-                foreach (var c in line)
-                {
-                    if (c is ' ' or '\t' or (>= '0' and <= '9'))
+                    else if (GenBankFeatureTable.IsSequenceHeader(line, FeatureTableFormat.Embl))
                     {
-                        continue;
+                        phase = Phase.SequenceHeader;
                     }
-                    seq.Append(c is >= 'a' and <= 'z' ? (char)(c - 32) : c);
-                }
-            }
-            else if (inSeq)
-            {
-                inSeq = false;
+                    else
+                    {
+                        identity?.FeedEmblHeader(line); // any other line is header text, an ID line among them
+                    }
+
+                    break;
+
+                case Phase.AfterTable:
+                    // Walk has checked the line after the table's end marker is the sequence header; the end marker itself is header text.
+                    if (GenBankFeatureTable.IsSequenceHeader(line, FeatureTableFormat.Embl))
+                    {
+                        phase = Phase.SequenceHeader;
+                    }
+                    else
+                    {
+                        identity?.FeedEmblHeader(line);
+                    }
+
+                    break;
+
+                case Phase.SequenceHeader:
+                    // Scanner.parse_footer: SQ / CO lines, then a line that is indented (five spaces) or is the terminator.
+                    if (GenBankFeatureTable.IsSequenceHeader(line, FeatureTableFormat.Embl))
+                    {
+                        break;
+                    }
+
+                    var trimmed = PythonText.TrimEnd(line);
+                    if (!(trimmed.StartsWith("     ", StringComparison.Ordinal) || PythonText.Trim(trimmed) == "//"))
+                    {
+                        throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Unexpected content after SQ or CO line", FeatureTableFormat.Embl);
+                    }
+
+                    phase = Phase.Sequence;
+                    goto case Phase.Sequence;
+
+                case Phase.Sequence:
+                    // Scanner.parse_footer's sequence loop: "//" ends the record; a blank line is refused; a line is its text
+                    // minus the whitespace-separated number that ends it (the position count), with its spaces removed.
+                    var seqLine = PythonText.Trim(line);
+                    if (seqLine.Length == 0)
+                    {
+                        throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, "Blank line in sequence data", FeatureTableFormat.Embl);
+                    }
+
+                    if (seqLine == "//")
+                    {
+                        Flush();
+                        break;
+                    }
+
+                    AppendSequenceLine(seq, seqLine);
+                    break;
             }
         }
 
         if (open)
         {
-            throw new GenBankReadException("The EMBL file ends before its closing // line, so it looks truncated.");
+            // The scanner reads to the end of the file and raises, worded by where it stood (MEASURED 2026-10-29, the embl_file_ends_* cases).
+            var reason = phase switch
+            {
+                Phase.SequenceHeader => "Premature end of file",
+                Phase.Sequence => "Premature end of file in sequence data",
+                _ => "Premature end of line during sequence data", // the header, or the table and its end marker
+            };
+            throw GenBankFeatureTable.RefuseLikeWorker(recordIndex + 1, reason, FeatureTableFormat.Embl);
         }
         if (records.Count == 0)
         {
@@ -167,6 +196,68 @@ public static class EmblLite
         return new GenBankLiteResult(records, notices) { NoticeCodes = coded };
     }
 
+    private enum Phase
+    {
+        Header, // after the ID line, before the feature table or the sequence block
+        AfterTable, // the feature table has been walked; its end marker and the sequence header follow
+        SequenceHeader, // SQ / CO lines
+        Sequence, // the sequence lines, up to "//"
+    }
+
+    /// <summary>
+    /// EmblScanner._feed_first_line: an ID line with six semicolons (2006 layout), three (older layout, or the patent layout ending SQ) or two
+    /// (KIPO patent layout) is read; any other count is refused, named by record number (the worker echoes the line, which is user text).
+    /// </summary>
+    private static void RefuseUnrecognisedIdLine(string line, int recordNumber)
+    {
+        var semicolons = (line.Length > 5 ? line[5..] : string.Empty).Count(c => c == ';');
+        if (semicolons is not (2 or 3 or 6))
+        {
+            throw GenBankFeatureTable.RefuseLikeWorker(recordNumber, "Did not recognise the ID line layout", FeatureTableFormat.Embl);
+        }
+    }
+
+    /// <summary>
+    /// Scanner.parse_footer, one sequence line (already stripped): <c>line.rsplit(None, 1)</c>, and when the last word is all digits it is the
+    /// position count and is dropped; a line of digits only adds nothing; otherwise the whole line is sequence. Spaces (only) are removed; ASCII
+    /// lower case is raised by hand so a non-ASCII letter that .NET or Python would fold into a valid base reaches the validator untouched.
+    /// </summary>
+    private static void AppendSequenceLine(StringBuilder seq, string line)
+    {
+        var cut = -1;
+        for (var i = line.Length - 1; i >= 0; i--)
+        {
+            if (PythonText.IsSpace(line[i]))
+            {
+                cut = i;
+                break;
+            }
+        }
+
+        var text = line;
+        if (cut >= 0)
+        {
+            var last = line[(cut + 1)..];
+            if (IsAsciiDigits(last))
+            {
+                text = PythonText.TrimEnd(line[..cut]);
+            }
+        }
+        else if (IsAsciiDigits(line))
+        {
+            return; // the final line with no bases: just the sequence coordinate
+        }
+
+        foreach (var c in text)
+        {
+            if (c != ' ')
+            {
+                seq.Append(c is >= 'a' and <= 'z' ? (char)(c - 32) : c);
+            }
+        }
+    }
+
+    private static bool IsAsciiDigits(string s) => s.Length > 0 && s.All(c => c is >= '0' and <= '9');
     /// <summary>
     /// The length and topology Biopython takes from an ID line (<c>EmblScanner._feed_first_line</c>): the 2006 layout has six semicolons
     /// (<c>ID   X56734; SV 1; linear; mRNA; STD; PLN; 1859 BP.</c>), the older one three

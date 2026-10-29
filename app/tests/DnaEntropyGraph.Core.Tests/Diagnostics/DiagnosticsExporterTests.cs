@@ -45,6 +45,20 @@ public class DiagnosticsExporterTests : IDisposable
         Directory.GetFiles(_folder).ShouldBe([path]);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_tagged_with_a_word_the_history_itself_uses_still_exports_through_the_real_exporter(bool includeNotesAndTags)
+    {
+        var path = Path.Combine(_folder, "out.zip");
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Notes: "completed", TagsJson: """["completed","phase"]""");
+
+        await new DiagnosticsExporter(new EmptySource(), History(run), () => Info).ExportAsync(path, CancellationToken.None, includeNotesAndTags);
+
+        using var archive = ZipFile.OpenRead(path);
+        archive.Entries.Select(e => e.FullName).ShouldContain("run-history.json");
+    }
+
     [Fact]
     public async Task The_exported_history_carries_the_figure_the_ledger_booked_for_a_completed_cloud_run()
     {

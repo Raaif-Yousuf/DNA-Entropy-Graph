@@ -189,7 +189,7 @@ public static class ServiceRegistration
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
         services.AddSingleton(_ => new SqliteDatabase(databasePath, portable: root.IsPortable));
-        services.AddSingleton<RunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper));
+        services.AddSingleton<RunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper, sp.GetRequiredService<IDiagnosticsLog>()));
         // Issue #109: every writer of a run row (runner, reconciler, cleanup) goes through this decorator, which writes the run's
         // CostLedger row the first time the row reaches an ended phase. The same SpendLedger is the cap gate the run start and the
         // New run page ask, so the number that is written is the number that is checked.
@@ -227,6 +227,7 @@ public static class ServiceRegistration
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
         services.AddSingleton<TimeProvider>(TimeProvider.System);
         services.AddSingleton<IRunHistoryRemover>(sp => sp.GetRequiredService<RunRepository>());
+        services.AddSingleton<IRunAnnotations>(sp => sp.GetRequiredService<RunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
@@ -313,7 +314,10 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 sp.GetRequiredService<LocalEngineLayout>(),
                 sp.GetRequiredService<AppDataRoot>().RunsDirectory,
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+            {
+                DefaultOutputParent = () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
+            };
         });
         services.AddSingleton<LocalRunDriver>();
 
