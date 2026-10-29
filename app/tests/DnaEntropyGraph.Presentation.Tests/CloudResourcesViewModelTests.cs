@@ -538,6 +538,70 @@ public class CloudResourcesViewModelTests
         viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
     }
 
+    /// <summary>Like the real dispatcher adapter: every action is posted, none runs until the UI thread gets to it (here, until <see cref="Drain"/>).</summary>
+    private sealed class DeferredDispatcher : IDispatcher
+    {
+        private readonly Queue<Action> _queue = new();
+
+        public int Pending => _queue.Count;
+
+        public void Enqueue(Action action) => _queue.Enqueue(action);
+
+        public void Drain()
+        {
+            while (_queue.Count > 0)
+            {
+                _queue.Dequeue()();
+            }
+        }
+    }
+
+    private CloudResourcesViewModel NewDeferredViewModel(DeferredDispatcher dispatcher)
+        => new(_account, _dialogs, _strings, _compute, new InstallationCleanup(_compute, _storage), _settings, _pricing, dispatcher);
+
+    [Fact]
+    public async Task With_a_posting_dispatcher_a_switch_away_and_back_before_the_handlers_run_still_discards_the_listing()
+    {
+        var dispatcher = new DeferredDispatcher();
+        var viewModel = NewDeferredViewModel(dispatcher);
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            _account.SelectedProjectId.Returns(NewProject);
+            _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+            _account.SelectedProjectId.Returns(Project);
+            _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+            dispatcher.Pending.ShouldBe(2, "vacuity: neither handler has run yet");
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+        dispatcher.Drain();
+    }
+
+    [Fact]
+    public async Task With_a_posting_dispatcher_a_listing_started_after_a_switch_is_not_discarded_when_the_queued_handler_runs()
+    {
+        var dispatcher = new DeferredDispatcher();
+        var viewModel = NewDeferredViewModel(dispatcher);
+        _account.SelectedProjectId.Returns(NewProject);
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+        dispatcher.Pending.ShouldBe(1, "vacuity: the handler is queued, not run");
+        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            dispatcher.Drain();
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
+        });
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        viewModel.ErrorText.ShouldBeEmpty();
+        viewModel.Vms.Count.ShouldBe(2);
+    }
+
     [Fact]
     public async Task A_switch_cancels_every_stale_listing_even_after_another_refresh_finished()
     {

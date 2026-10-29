@@ -59,7 +59,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         _pricing = pricing;
         _dispatcher = dispatcher;
         // Issue #828: a project switch while this page is open must not leave the old project's rows on screen with live buttons.
-        _lastSeenProject = account.SelectedProjectId;
+        _lastRaisedProject = account.SelectedProjectId;
         _account.AccountChanged += OnAccountChangedEvent;
     }
 
@@ -69,7 +69,24 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     /// </summary>
     public void Detach() => _account.AccountChanged -= OnAccountChangedEvent;
 
-    private void OnAccountChangedEvent(object? sender, EventArgs e) => OnUiThread(OnAccountChanged);
+    /// <summary>
+    /// Runs on the thread that raised the event, NOT the UI queue: the project is read and the generation counted here, because the queued handler may run long after
+    /// (A to B to A before either runs would otherwise count nothing), and a listing started after the switch must not see the queued handler as a change during it.
+    /// </summary>
+    private void OnAccountChangedEvent(object? sender, EventArgs e)
+    {
+        var project = _account.SelectedProjectId;
+        lock (_generationGate)
+        {
+            if (!string.Equals(project, _lastRaisedProject, StringComparison.Ordinal))
+            {
+                _lastRaisedProject = project;
+                Interlocked.Increment(ref _projectGeneration);
+            }
+        }
+
+        OnUiThread(() => OnAccountChanged(project));
+    }
 
     /// <summary>The project the rows on screen were listed for; null while nothing is listed (first load in flight, last listing discarded). Every action compares it with the project chosen NOW (#828).</summary>
     private string? _listedProject;
@@ -82,20 +99,17 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     /// <summary>Counts every real change of the chosen project (A to B, and B back to A, are two). A listing compares it with the value it started at, because the gateway reads the project at call time and "same id at the end" does not mean "same project all along".</summary>
     private int _projectGeneration;
 
-    private string? _lastSeenProject;
+    private readonly object _generationGate = new();
 
-    private void OnAccountChanged()
+    private string? _lastRaisedProject;
+
+    /// <summary>The queued half of an account change; <paramref name="project"/> is the project chosen when the event was raised.</summary>
+    private void OnAccountChanged(string? project)
     {
-        if (!string.Equals(_account.SelectedProjectId, _lastSeenProject, StringComparison.Ordinal))
-        {
-            _projectGeneration++;
-            _lastSeenProject = _account.SelectedProjectId;
-        }
-
         // Every in-flight listing for another project is stale: cancel it so Refresh is available again. The same project (token refresh, sign-in) leaves it alone.
         foreach (var listing in _inFlight.ToArray())
         {
-            if (!string.Equals(_account.SelectedProjectId, listing.Project, StringComparison.Ordinal))
+            if (!string.Equals(project, listing.Project, StringComparison.Ordinal))
             {
                 try
                 {
@@ -109,7 +123,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
 
         // Nothing was listed, so there is nothing stale to clear and nothing to announce.
-        if (_listedProject is null || string.Equals(_account.SelectedProjectId, _listedProject, StringComparison.Ordinal))
+        if (_listedProject is null || string.Equals(project, _listedProject, StringComparison.Ordinal))
         {
             return;
         }
@@ -179,7 +193,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
 
         IsBusy = true;
-        var generation = _projectGeneration;
+        var generation = Volatile.Read(ref _projectGeneration);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var listing = new InFlightListing(project, cts);
         _inFlight.Add(listing);
@@ -193,7 +207,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             // The project changed while Google was answering: these lists belong to the old one. Show nothing of them and say why here (the account-changed
             // handler stays quiet when no listing was on screen); Refresh lists the new project.
             // Also when it changed and changed back (the generation moved): the gateway reads the chosen project per call, so the answer may be for the other one.
-            if (generation != _projectGeneration || !string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
+            if (generation != Volatile.Read(ref _projectGeneration) || !string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
             {
                 ForgetListing();
                 ErrorText = Format("CloudPage_ProjectChanged");
