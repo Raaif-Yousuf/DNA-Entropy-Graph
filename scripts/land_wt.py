@@ -299,11 +299,20 @@ def run_bounded(
 
 
 def git(
-    cwd: Path, *args: str, check: bool = True, stdin: bytes | None = None, timeout: float | None = GIT_TIMEOUT_SECONDS
+    cwd: Path,
+    *args: str,
+    check: bool = True,
+    stdin: bytes | None = None,
+    timeout: float | None = GIT_TIMEOUT_SECONDS,
+    c_locale: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Bytes in, bytes out (never text=True on Windows: it re-encodes). Module-level so tests can spy on it. Bounded by `timeout`."""
+    """Bytes in, bytes out (never text=True on Windows: it re-encodes). Module-level so tests can spy on it. Bounded by `timeout`.
+    `c_locale` runs git with LC_ALL=C and no LANGUAGE, for a call whose message text is matched (a translated git would not match)."""
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if c_locale:
+        env["LC_ALL"] = "C"
+        env.pop("LANGUAGE", None)
     try:
         proc = run_bounded(["git", "-c", "core.quotepath=off", *args], cwd=cwd, env=env, stdin=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -797,7 +806,7 @@ def _push(ctx: Ctx, wt: Path, land_branch: str, sha: str) -> str | None:
     """Push HEAD; returns the sha of this tool's own earlier landing push it replaced (the open PR is then reused), else None. A
     timed-out push is not a verdict: ask origin whether the branch arrived (a killed git can have finished remotely)."""
     try:
-        git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}", timeout=ctx.git_timeout)
+        git(wt, "push", REMOTE, f"HEAD:refs/heads/{land_branch}", timeout=ctx.git_timeout, c_locale=True)  # NON_FAST_FORWARD matches its text
         return None
     except LandTimeout as err:
         pushed_err = err
@@ -838,25 +847,30 @@ def _create_pr(ctx: Ctx, wt: Path, land_branch: str, title: str, body_file: Path
     return _text(proc.stdout).splitlines()[-1] if proc.stdout.strip() else "(no url printed)"
 
 
-def _open_pr_url(ctx: Ctx, wt: Path, land_branch: str, heads: Sequence[str]) -> str | None:
+def _open_pr_url(ctx: Ctx, wt: Path, land_branch: str, heads: Sequence[str]) -> tuple[str | None, str | None]:
     """The URL of the open PR whose head branch is `land_branch`, whose head repository belongs to the same owner as the PR's base
     repository (`--head` matches by name only, so a fork's branch of the same name must not be taken) and whose head commit is one of
-    `heads` (the tip this tool replaced, or the one it pushed: gh may lag). None when none qualifies or gh could not say. Never raises."""
+    `heads` (the tip this tool replaced, or the one it pushed: gh may lag). Returns (reusable url or None, the first open PR's url or
+    None): the second is only for naming a PR that blocks a new one. gh failing gives (None, None). Never raises."""
     fields = "url,headRefOid,headRepositoryOwner"
     argv = [*ctx.gh, "pr", "list", "--head", land_branch, "--base", BASE, "--state", "open", "--json", fields]
     try:
         proc = run_bounded(argv, cwd=wt, timeout=ctx.gh_timeout)
         rows = json.loads(_text(proc.stdout)) if proc.returncode == 0 else []
     except (subprocess.TimeoutExpired, OSError, ValueError):
-        return None
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict) or not row.get("url") or row.get("headRefOid") not in heads:
-            continue
+        return None, None
+    listed = [r for r in rows if isinstance(r, dict) and r.get("url")] if isinstance(rows, list) else []
+    for row in listed:
         owner = row.get("headRepositoryOwner")
         match = re.match(r"https?://[^/]+/([^/]+)/[^/]+/pull/\d+", str(row["url"]))
-        if isinstance(owner, dict) and match and str(owner.get("login", "")).lower() == match.group(1).lower():
-            return str(row["url"])
-    return None
+        if (
+            row.get("headRefOid") in heads
+            and isinstance(owner, dict)
+            and match
+            and str(owner.get("login", "")).lower() == match.group(1).lower()
+        ):
+            return str(row["url"]), str(row["url"])
+    return None, (str(listed[0]["url"]) if listed else None)
 
 
 def _read_checks(ctx: Ctx, pr: str) -> list[dict[str, str]] | None:
@@ -1214,11 +1228,20 @@ def land(
         pushed_head = _text(git(wt, "rev-parse", "HEAD").stdout)
         replaced_tip = _push(ctx, wt, land_branch, pushed_head)
         pushed = True
-        url = _open_pr_url(ctx, wt, land_branch, (replaced_tip, pushed_head)) if replaced_tip else None
+        url, blocking = _open_pr_url(ctx, wt, land_branch, (replaced_tip, pushed_head)) if replaced_tip else (None, None)
         if url:
             ctx.say(f"- reusing the open PR {url} for the re-landed {land_branch}")
         else:
-            url = _create_pr(ctx, wt, land_branch, title, body_file)
+            try:
+                url = _create_pr(ctx, wt, land_branch, title, body_file)
+            except LandError as err:
+                if not blocking:
+                    raise
+                raise LandError(
+                    f"{err}. An open PR for {land_branch} already exists ({blocking}) but its head is neither the replaced tip nor the "
+                    "pushed commit. Check it, then close it or merge it by hand",
+                    err.code,
+                ) from None
         _record_landed(ctx, url, pushed_head)  # the PR head the hook must allow, not the pre-merge lane tip (#904)
         if merge_when_green:
             ctx.say(f"OK: pushed {land_branch} and opened {url}; waiting for its checks")

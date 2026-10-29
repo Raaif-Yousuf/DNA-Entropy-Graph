@@ -90,6 +90,9 @@ if sys.argv[2:4] == ["run", "rerun"]:
 if sys.argv[2:4] == ["pr", "merge"]:
     rc_file = Path(str(log) + ".mergerc")
     sys.exit(int(rc_file.read_text()) if rc_file.exists() else 0)
+if sys.argv[2:4] == ["pr", "create"] and Path(str(log) + ".createrc").exists():
+    sys.stderr.write("gh: could not create the pull request")
+    sys.exit(int(Path(str(log) + ".createrc").read_text()))
 print("https://github.com/o/r/pull/7")
 """
 
@@ -2026,3 +2029,35 @@ def test_a_push_that_fails_for_another_reason_never_takes_the_lease_path(world, 
     assert not [a for a in seen if any("--force-with-lease" in x for x in a)]
     assert not [a for a in seen if a[:1] == ("ls-remote",)]
     assert _origin_sha(world, "feat/945-s") == old
+
+
+# --- re-review fixes: push locale, and naming a PR that blocks the re-land ------------------------------------
+
+
+def test_the_landing_push_runs_in_the_c_locale_so_git_s_rejection_text_can_be_matched(world, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "de")
+    envs: list[dict] = []
+    real = lw.run_bounded
+
+    def spy(argv, *args, **kw):
+        if "push" in argv:
+            envs.append(dict(kw.get("env") or {}))
+        return real(argv, *args, **kw)
+
+    monkeypatch.setattr(lw, "run_bounded", spy)
+    sha = world.commit_on_branch("feat/945-loc", {"b.txt": b"new\n"})
+    assert _land(world, "feat/945-loc", sha) == lw.EXIT_OK
+    assert envs, "no push was observed"
+    assert all(e.get("LC_ALL") == "C" and "LANGUAGE" not in e for e in envs), envs
+
+
+def test_an_open_pr_that_blocks_the_reland_is_named_in_the_refusal(world, capsys):
+    lane, old = _reland_setup(world, "feat/945-r")
+    _prlist(world, [_pr_row("0" * 40)])  # open, but its head is neither the replaced tip nor the pushed commit
+    (world.root / "gh.log.createrc").write_text("1", encoding="utf-8")
+    capsys.readouterr()  # the setup landing printed this PR's url too
+    rc = _land(world, "feat/945-r", lane)
+    out = capsys.readouterr().out
+    assert rc == lw.EXIT_FAILED
+    assert "https://github.com/o/r/pull/7" in out and "already exists" in out and out.isascii()
