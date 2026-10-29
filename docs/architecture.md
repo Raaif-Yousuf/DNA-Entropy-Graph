@@ -224,7 +224,7 @@ app.db  app.db-wal            SQLite (run history, cloud resource inventory, set
 settings.json                  RunOptions defaults + UI prefs + theme
 auth\<sub>.tok                 DPAPI (CurrentUser) encrypted OAuth token; accounts.json lists known accounts
 installation_id                write-once installation id (#558); never in settings.json
-logs\app-YYYYMMDD.log          Serilog, 14-day retention
+logs\app.log                   FileDiagnosticsLog + DiagnosticsTraceListener (Trace.Trace*, #923), 1 MB then app.log.1; Serilog pending #164
 cache\inputs\<jobId>\          exact copy of every input as uploaded, so a re-run works even if the original moved
 runs\<jobId>\                  local-run manifest copy, status history, worker.log
 engine\                        local engine (uv-managed venv, hf-cache, engine.json, install.log)

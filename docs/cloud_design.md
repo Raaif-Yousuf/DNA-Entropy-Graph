@@ -930,8 +930,8 @@ it); a non-seekable stream gets one attempt and no 401 replay.
 
 Every retry is reported to `ICloudCallObserver` (operation, attempt, delay, status, kind,
 the API error text, never a sequence, file name or email). `CloudRetryLog` keeps the last
-200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
-not in the diagnostics zip; when it is, forward `OnRetry` there.
+200 in memory. MEASURED 2026-10-29: Serilog is not wired into the app; the
+log is not in the diagnostics zip. `logs\app.log` (`FileDiagnosticsLog`, `DiagnosticsTraceListener`) is; forward `OnRetry` there when wanted.
 
 The pipeline's kind is kept end to end: `VmProvisioner.ProvisionAsync` uses the kind the
 gateway threw instead of re-classifying the error text (which turned `network` into `other`,
