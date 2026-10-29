@@ -318,4 +318,120 @@ public sealed class BudgetSettingsTests
         vm.SaveCommand.CanExecute(null).ShouldBeFalse();
         await _budgets.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Failing_to_switch_the_budget_API_on_names_a_project_owner_and_links_the_API_page_not_a_billing_administrator()
+    {
+        // Issue #148 review M1: the missing right is on the project, so the billing-administrator request is the wrong action.
+        _budgets.SaveAsync(Project, 50m, Arg.Any<CancellationToken>()).Returns<Task<BudgetInfo>>(_ => throw Failure(CloudErrorKind.Permission, BudgetErrorCodes.ApiEnablePermission));
+        var vm = Open();
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_ApiEnablePermission");
+        vm.ConsoleLink!.ToString().ShouldBe(BudgetLinks.ForApi(Project));
+        vm.ShowCopyRequest.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_refused_remove_says_it_could_not_remove_and_does_not_offer_the_create_request()
+    {
+        // Issue #148 review L5.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(50m));
+        _budgets.RemoveAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<bool>>(_ => throw Failure(CloudErrorKind.Permission));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        await vm.RemoveCommand.ExecuteAsync(null);
+
+        vm.ErrorText.ShouldBe("BudgetError_PermissionRemove");
+        vm.ShowCopyRequest.ShouldBeFalse();
+        vm.ConsoleLink!.ToString().ShouldBe("https://console.cloud.google.com/billing/AAA/budgets");
+        vm.HasBudget.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_remove_that_found_nothing_to_remove_says_so_instead_of_removed()
+    {
+        // Issue #148 review L6.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(50m));
+        _budgets.RemoveAsync(Project, Arg.Any<CancellationToken>()).Returns(false);
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        await vm.RemoveCommand.ExecuteAsync(null);
+
+        vm.StatusText.ShouldBe("BudgetRemovedNone");
+        vm.HasBudget.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("abc", "50")]
+    [InlineData("", "50")]
+    [InlineData("75", "75")]
+    [InlineData(" $12.5 ", "12.5")]
+    public void The_copied_request_names_the_parsed_amount_or_the_default_never_the_raw_text(string typed, string expected)
+    {
+        // Issue #148 review L4. Invariant culture so "12.5" reads as 12.5 whatever the machine's culture.
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            _strings.GetString("BudgetRequestText").Returns("{0}|{1}");
+            _shell.CopyText(Arg.Any<string>()).Returns(true);
+            var vm = Open();
+            vm.AmountText = typed;
+
+            vm.CopyRequestCommand.Execute(null);
+
+            _shell.Received(1).CopyText(Project + "|" + expected);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public async Task A_budget_whose_amount_follows_last_months_spend_is_shown_without_an_amount_and_leaves_the_box_alone()
+    {
+        // Issue #148 review L3.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(0m) with { AmountKnown = false });
+        var vm = Open();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.HasBudget.ShouldBeTrue();
+        vm.StatusText.ShouldBe("BudgetStatusExistsNoAmount");
+        vm.AmountText.ShouldBe("50");
+    }
+
+    [Fact]
+    public async Task Switching_to_another_project_shows_that_projects_budget_even_after_typing_in_the_box()
+    {
+        // Issue #148 review L7: the "typed, so Google's late answer must not overwrite it" guard belongs to one project.
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns((BudgetInfo?)null);
+        _budgets.GetAsync("other-lab", Arg.Any<CancellationToken>()).Returns(Existing(20m));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText = "99";
+
+        _account.SelectedProjectId.Returns("other-lab");
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBe(20m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture));
+    }
+
+    [Fact]
+    public async Task Refreshing_the_same_project_keeps_what_the_user_typed()
+    {
+        _budgets.GetAsync(Project, Arg.Any<CancellationToken>()).Returns(Existing(20m));
+        var vm = Open();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.AmountText = "99";
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.AmountText.ShouldBe("99");
+    }
 }

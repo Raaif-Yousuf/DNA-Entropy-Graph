@@ -69,7 +69,18 @@ public sealed class BudgetService : IBudgetService
 
         if (!await _services.IsServiceEnabledAsync(projectId, RequiredServices.BillingBudgets, cancellationToken).ConfigureAwait(false))
         {
-            await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _services.EnableServicesAsync(projectId, [RequiredServices.BillingBudgets], cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex) when (ex.Kind == CloudErrorKind.Permission)
+            {
+                // Not being allowed to switch an API on is a right on the project; the budget's own refusal (a billing role) is a different
+                // problem with a different person to ask, so it gets its own code.
+                throw new CloudOperationException(
+                    new CloudError(BudgetErrorCodes.ApiEnablePermission, ex.Error.HttpStatus, "Switching on the Cloud Billing Budget API was refused for this project."),
+                    CloudErrorKind.Permission);
+            }
         }
 
         var spec = new BudgetSpec(account, projectId, InstallationId.GetOrCreate(_settings), BudgetNaming.RoundToCents(amountUsd));

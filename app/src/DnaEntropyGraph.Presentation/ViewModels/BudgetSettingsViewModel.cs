@@ -29,6 +29,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     // True once the user typed in the box: a late read from Google must never overwrite it.
     private bool _amountEdited;
     private bool _settingAmount;
+    private string? _shownProject;
 
     /// <summary>One plain line about the current state or the last success. Empty when there is nothing to say.</summary>
     [ObservableProperty]
@@ -106,6 +107,13 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
             return;
         }
 
+        // What was typed was typed for one project: another project's budget is shown (and the box is Google's again) when it is chosen.
+        if (!string.Equals(project, _shownProject, StringComparison.Ordinal))
+        {
+            _shownProject = project;
+            _amountEdited = false;
+        }
+
         IsBusy = true;
         try
         {
@@ -170,10 +178,11 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
         await RunAsync(async () =>
         {
-            await _budgets.RemoveAsync(project, cancellationToken);
+            // False means Google held none (already gone): say that, not "removed".
+            var removed = await _budgets.RemoveAsync(project, cancellationToken);
             HasBudget = false;
-            StatusText = _strings.GetString("BudgetRemoved");
-        }, project, cancellationToken);
+            StatusText = _strings.GetString(removed ? "BudgetRemoved" : "BudgetRemovedNone");
+        }, project, cancellationToken, removing: true);
     }
 
     private bool CanRemove() => HasBudget && HasProject && !IsBusy;
@@ -182,11 +191,13 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
     [RelayCommand]
     private void CopyRequest()
     {
-        var text = string.Format(CultureInfo.CurrentCulture, _strings.GetString(_requestKey), ProjectId() ?? string.Empty, AmountText.Trim());
+        // The parsed amount (or the default offered), never the raw box text: "abc" must not become "a monthly budget of abc".
+        var amount = BudgetAmountParser.TryParse(AmountText, CultureInfo.CurrentCulture, out var parsed) && BudgetNaming.IsValidAmount(parsed) ? parsed : BudgetNaming.DefaultAmountUsd;
+        var text = string.Format(CultureInfo.CurrentCulture, _strings.GetString(_requestKey), ProjectId() ?? string.Empty, Format(amount));
         StatusText = _strings.GetString(_shell.CopyText(text) ? "BudgetRequestCopied" : "BudgetRequestCopyFailed");
     }
 
-    private async Task RunAsync(Func<Task> action, string project, CancellationToken cancellationToken)
+    private async Task RunAsync(Func<Task> action, string project, CancellationToken cancellationToken, bool removing = false)
     {
         IsBusy = true;
         try
@@ -199,7 +210,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
         catch (CloudOperationException ex)
         {
-            await ReportAsync(ex, project, cancellationToken);
+            await ReportAsync(ex, project, cancellationToken, removing);
         }
         catch (Exception ex)
         {
@@ -213,7 +224,7 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         }
     }
 
-    private async Task ReportAsync(CloudOperationException ex, string project, CancellationToken cancellationToken)
+    private async Task ReportAsync(CloudOperationException ex, string project, CancellationToken cancellationToken, bool removing)
     {
         // The raw Google text goes to the diagnostics log by class only; the screen gets one sentence and one action (Hard Rule 13).
         System.Diagnostics.Trace.TraceWarning($"Budget call refused: {ex.Kind}");
@@ -225,6 +236,16 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
 
         switch (ex.Kind)
         {
+            case CloudErrorKind.Permission when ex.Error.Code == BudgetErrorCodes.ApiEnablePermission:
+                // The right that is missing is on the project, not a billing role: the action is a project owner, or the API's own page.
+                ErrorText = _strings.GetString("BudgetError_ApiEnablePermission");
+                ConsoleLink = new Uri(BudgetLinks.ForApi(project));
+                break;
+            case CloudErrorKind.Permission when removing:
+                // The create request would ask for the wrong thing; the budget is removed on Google's own page.
+                ErrorText = _strings.GetString("BudgetError_PermissionRemove");
+                await OfferConsoleAsync(project, cancellationToken);
+                break;
             case CloudErrorKind.Permission:
                 ErrorText = _strings.GetString("BudgetError_Permission");
                 _requestKey = "BudgetRequestText";
@@ -271,6 +292,13 @@ public sealed partial class BudgetSettingsViewModel : ObservableObject
         if (budget is null)
         {
             StatusText = _strings.GetString("BudgetStatusNone");
+            return;
+        }
+
+        if (!budget.AmountKnown)
+        {
+            // A budget that follows last month's spend has no amount to show, and "0 a month" would be wrong; the box keeps what it had.
+            StatusText = _strings.GetString("BudgetStatusExistsNoAmount");
             return;
         }
 

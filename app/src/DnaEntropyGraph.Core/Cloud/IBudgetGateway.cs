@@ -26,7 +26,8 @@ public interface IBudgetGateway
 public sealed record BudgetSpec(string BillingAccountId, string ProjectId, string InstallationId, decimal AmountUsd);
 
 /// <param name="Name">Google's resource name, <c>billingAccounts/AAA/budgets/GUID</c>.</param>
-public sealed record BudgetInfo(string Name, string DisplayName, string BillingAccountId, decimal AmountUsd, IReadOnlyList<double> ThresholdPercents);
+/// <param name="AmountKnown">False for a budget made in the console that follows last period's spend: it has no fixed amount, so <see cref="AmountUsd"/> is not a figure to show.</param>
+public sealed record BudgetInfo(string Name, string DisplayName, string BillingAccountId, decimal AmountUsd, IReadOnlyList<double> ThresholdPercents, bool AmountKnown = true);
 
 /// <summary>Where a budget is found and how it is warned about: one place, so the gateway, the fake and the tests agree.</summary>
 public static class BudgetNaming
@@ -92,6 +93,12 @@ public static class BudgetErrorCodes
 
     /// <summary>The project's billing account is linked but switched off or suspended. Action: open Google's billing page and turn it back on.</summary>
     public const string BillingDisabled = "BUDGET_BILLING_DISABLED";
+
+    /// <summary>
+    /// Switching the Cloud Billing Budget API on was refused for lack of a right on the PROJECT (not a billing role). Action: ask a project owner to
+    /// switch the API on, or open the API's page. A <see cref="CloudErrorKind.Permission"/> kind, so a caller that only knows kinds still reads it as a refusal.
+    /// </summary>
+    public const string ApiEnablePermission = "BUDGET_API_ENABLE_PERMISSION";
 
     /// <summary>The amount is not a usable number. Action: type an amount.</summary>
     public const string InvalidAmount = "BUDGET_INVALID_AMOUNT";

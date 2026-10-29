@@ -56,6 +56,29 @@ public class GoogleBudgetGatewayTests
     }
 
     [Fact]
+    public async Task A_budget_that_follows_last_months_spend_has_no_amount_and_says_so_instead_of_reading_as_zero()
+    {
+        // Issue #148 review L3: a lastPeriodAmount budget has no specifiedAmount.
+        var rig = new GoogleGatewayHarness();
+        var lastPeriod = "{\"name\":\"" + Account + "/budgets/b-1\",\"displayName\":\"DNA Entropy Graph inst-a my-lab\",\"budgetFilter\":{\"projects\":[\"projects/555\"]},\"amount\":{\"lastPeriodAmount\":{}},\"thresholdRules\":[{\"thresholdPercent\":0.5}]}";
+        rig.Handler.Returns(Get, ListPath, 200, ListJson(lastPeriod));
+
+        var found = await rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None);
+
+        found.ShouldNotBeNull();
+        found.AmountKnown.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_budget_with_a_specified_amount_reports_the_amount_as_known()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, ListPath, 200, ListJson(BudgetJson(Account + "/budgets/b-1", "DNA Entropy Graph inst-a my-lab", "50")));
+
+        (await rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None))!.AmountKnown.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Finding_follows_the_page_token_and_answers_none_when_no_budget_is_ours()
     {
         var rig = new GoogleGatewayHarness();

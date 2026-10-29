@@ -217,6 +217,8 @@ public class BudgetServiceTests
         var ex = await Should.ThrowAsync<CloudOperationException>(() => Service(gcp).SaveAsync(Project, 50m, CancellationToken.None));
 
         ex.Kind.ShouldBe(CloudErrorKind.Permission);
+        // Issue #148 review M1: the missing right is on the PROJECT (switch the API on), not a billing role, so it has its own code.
+        ex.Error.Code.ShouldBe(BudgetErrorCodes.ApiEnablePermission);
         gcp.BudgetUpsertCalls.ShouldBe(0);
     }
 

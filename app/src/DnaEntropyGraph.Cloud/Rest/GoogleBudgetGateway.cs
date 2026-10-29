@@ -185,7 +185,9 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
             budget.DisplayName ?? string.Empty,
             billingAccountId,
             amount,
-            percents);
+            percents,
+            // A lastPeriodAmount budget (made in the console) has no specifiedAmount: the zero above is "not a figure", never "0 a month".
+            AmountKnown: money is not null);
     }
 
     private static void UseQuotaProject<T>(Google.Apis.Requests.ClientServiceRequest<T> request, string? projectId)

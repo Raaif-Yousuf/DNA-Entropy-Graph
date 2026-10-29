@@ -22,7 +22,9 @@ public static class BudgetAmountParser
             return true;
         }
 
-        // A plain "12.5" in a comma-decimal culture is fine only when the text holds nothing that this culture reads as a group separator.
+        // The culture could not read it. A plain invariant "12.5" is accepted only when the text holds nothing this culture reads as a group
+        // separator: in de-DE the group separator IS ".", so "12.5" (and "1.000") is refused as ambiguous; in fr-FR (a narrow space) "12.5" is accepted.
+        // A text with a comma is never taken through the invariant path.
         var group = culture.NumberFormat.NumberGroupSeparator;
         if (group.Length > 0 && trimmed.Contains(group, StringComparison.Ordinal))
         {
