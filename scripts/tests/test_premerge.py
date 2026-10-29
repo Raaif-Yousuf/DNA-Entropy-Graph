@@ -352,16 +352,16 @@ def test_a_timeout_kills_the_grandchild_too_and_returns_promptly(tmp_path):
     marker = tmp_path / "grandchild.pid"
     code = (
         "import subprocess, sys, time\n"
-        f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
         f"open(r'{marker}', 'w').write(str(p.pid))\n"
         "time.sleep(120)\n"
     )
-    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=3.0)
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=8.0)
     started = time.monotonic()
     result = pm.run_gate(gate)
-    assert time.monotonic() - started < 30
+    assert time.monotonic() - started < 40
     assert result.status == pm.ERROR
-    pid = int(marker.read_text())
+    pid = int(_wait_for_file(marker, seconds=5.0))
     assert not pm._pid_alive(pid)
 
 
@@ -370,3 +370,96 @@ def test_the_real_scripts_tests_gate_has_a_timeout_that_fits_the_measured_suite_
     gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
     assert gates["scripts-tests"].timeout >= 1800.0
     assert gates["scripts-tests"].timeout >= 1.5 * 1086.0
+
+
+# --- review follow-ups on the timeout path (issue #925) -----------------------------------------
+
+
+def _wait_for_file(path: Path, seconds: float = 20.0) -> str:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text().strip():
+            return path.read_text().strip()
+        time.sleep(0.2)
+    pytest.fail(f"the stub never wrote {path}")
+
+
+def test_an_interrupted_gate_kills_its_tree_and_the_interrupt_propagates(monkeypatch):
+    killed: list[int] = []
+    real_popen = subprocess.Popen
+
+    class Interrupted(real_popen):  # type: ignore[type-arg, misc]
+        def communicate(self, input=None, timeout=None):
+            raise KeyboardInterrupt
+
+    def record_and_kill(proc):
+        killed.append(proc.pid)
+        proc.kill()
+        return True
+
+    monkeypatch.setattr(pm.subprocess, "Popen", Interrupted)
+    monkeypatch.setattr(pm, "_kill_tree", record_and_kill)
+    gate = pm.Gate("g", [sys.executable, "-c", "import time; time.sleep(30)"], Path.cwd())
+    with pytest.raises(KeyboardInterrupt):
+        pm.run_gate(gate)
+    assert len(killed) == 1
+
+
+def test_kill_tree_never_raises_and_reports_failure(monkeypatch):
+    class Dummy:
+        pid = 2**22 - 3
+
+        def kill(self):
+            raise OSError("gone")
+
+    def boom_timeout(*_a, **_k):
+        raise subprocess.TimeoutExpired("taskkill", 1)
+
+    def boom_missing(*_a, **_k):
+        raise FileNotFoundError("taskkill")
+
+    for boom in (boom_timeout, boom_missing):
+        monkeypatch.setattr(pm.subprocess, "run", boom)
+        monkeypatch.setattr(pm.os, "killpg", boom, raising=False)
+        assert pm._kill_tree(Dummy()) is False  # type: ignore[arg-type]
+
+
+def test_a_kill_that_did_not_work_says_the_tree_may_have_survived_and_output_was_lost(monkeypatch):
+    monkeypatch.setattr(pm, "_kill_tree", lambda _proc: False)
+    monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
+    code = "import time\nprint('....', flush=True)\ntime.sleep(8)\n"
+    gate = pm.Gate("pt", [sys.executable, "-c", code], Path.cwd(), timeout=2.0, pytest=True)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR
+    assert "may have survived" in result.detail
+    assert "unknown" in result.detail
+    assert "0 passed and 0 failed" not in result.detail
+
+
+def test_the_partial_output_is_not_duplicated_by_the_post_kill_read():
+    gate = pm.Gate("pt", [sys.executable, "-c", _STUB_SLEEPS_AFTER_PROGRESS], Path.cwd(), timeout=4.0, pytest=True)
+    result = pm.run_gate(gate)
+    assert result.output.count("....F..") == 1
+    assert "with 6 passed and 1 failed" in result.detail
+
+
+def test_a_child_that_exited_but_left_its_pipe_open_reports_its_exit_code(monkeypatch):
+    monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
+    code = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(6)'])\nsys.exit(0)\n"
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=2.0)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR
+    assert "child exited 0 but its pipe stayed open" in result.detail
+
+
+def test_pid_alive_refuses_to_say_dead_when_tasklist_itself_fails(monkeypatch):
+    if pm.os.name != "nt":
+        pytest.skip("tasklist is Windows only")
+
+    class Bad:
+        returncode = 1
+        stdout = b""
+
+    monkeypatch.setattr(pm.subprocess, "run", lambda *_a, **_k: Bad())
+    with pytest.raises(RuntimeError, match="tasklist"):
+        pm._pid_alive(4)

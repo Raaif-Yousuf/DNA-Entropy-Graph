@@ -433,10 +433,13 @@ def _dotnet_format_forgive(output: str, returncode: int, cwd: Path) -> str | Non
 
 
 def _pid_alive(pid: int) -> bool:
-    """True while a process with this pid exists (used to prove a timeout left no orphan)."""
+    """True while a process with this pid exists (used to prove a timeout left no orphan).
+    Raises rather than answering "dead" when the probe itself fails."""
     if os.name == "nt":
         proc = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, check=False, timeout=30)
-        return str(pid) in proc.stdout.decode("utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise RuntimeError(f"tasklist failed (exit {proc.returncode}); cannot tell whether pid {pid} is alive")
+        return re.search(rf"{pid}", proc.stdout.decode("utf-8", errors="replace")) is not None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -446,23 +449,41 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
     """Kill the gate's whole process tree. `uv run ... pytest` is uv -> python -> workers; killing
-    only the direct child leaves a grandchild holding the output pipe, so the gate would block."""
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
-    else:
-        import signal
+    only the direct child leaves a grandchild holding the output pipe, so the gate would block.
+    Never raises; returns False when the tree kill itself did not work."""
+    ok = True
+    try:
+        if os.name == "nt":
+            done = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
+            ok = done.returncode == 0
+        else:
+            import signal
 
-        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        ok = False
     with contextlib.suppress(OSError):
         proc.kill()
+    return ok
 
 
-def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]) -> tuple[int | None, bytes]:
-    """(returncode, stdout+stderr). returncode is None when the timeout hit; the output is then
-    whatever the tree had written before it was killed."""
+KILL_GRACE = 30.0  # seconds to wait for the output pipe to close after the tree kill
+
+
+@dataclass
+class Captured:
+    returncode: int | None  # None when the timeout hit
+    output: bytes
+    child_exit: int | None = None  # the direct child's exit code when it had already exited at the timeout
+    tree_may_survive: bool = False  # the kill failed or the pipe stayed open after it
+    output_lost: bool = False  # the post-kill read timed out, so only the pre-kill partial output is here
+
+
+def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]) -> Captured:
+    """Run argv, capture stdout+stderr. On timeout the whole tree is killed and the output the tree
+    wrote before then is returned. Any other exception (KeyboardInterrupt) also kills the tree."""
     proc = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -472,16 +493,23 @@ def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]
         start_new_session=os.name != "nt",
     )
     try:
-        out, _ = proc.communicate(timeout=timeout)
-        return proc.returncode, out or b""
-    except subprocess.TimeoutExpired as exc:
-        partial = exc.output if isinstance(exc.output, bytes) else b""
-        _kill_tree(proc)
         try:
-            tail, _ = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            tail = b""
-        return None, partial + (tail or b"")
+            out, _ = proc.communicate(timeout=timeout)
+            return Captured(proc.returncode, out or b"")
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.output if isinstance(exc.output, bytes) else b""
+            child_exit = proc.poll()
+            killed = _kill_tree(proc)
+            try:
+                # communicate() keeps its buffer across calls, so this result is the whole output:
+                # never concatenate it with the partial.
+                full, _ = proc.communicate(timeout=KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                return Captured(None, partial, child_exit, tree_may_survive=True, output_lost=True)
+            return Captured(None, full or b"", child_exit, tree_may_survive=not killed)
+    except BaseException:
+        _kill_tree(proc)
+        raise
 
 
 _PYTEST_PROGRESS_LINE = re.compile(r"^([.FEsxX]+)(?:\s+\[\s*\d+%\])?\s*$", re.MULTILINE)
@@ -494,6 +522,20 @@ def classify_pytest_timeout(timeout: float, output: str) -> str:
     failed = chars.count("F") + chars.count("E")
     note = "the suite did not finish" if failed == 0 else "the suite did not finish AND tests had already failed"
     return f"timed out after {timeout:.0f}s with {passed} passed and {failed} failed so far (NOT a pass; {note})"
+
+
+def _timeout_detail(gate: Gate, text: str, captured: Captured) -> str:
+    if captured.output_lost:
+        detail = f"timed out after {gate.timeout:.0f}s; output after the kill was lost, so pass/fail counts are unknown"
+    elif gate.pytest:
+        detail = classify_pytest_timeout(gate.timeout, text)
+    else:
+        detail = f"timed out after {gate.timeout:.0f}s"
+    if captured.child_exit is not None:
+        detail += f"; child exited {captured.child_exit} but its pipe stayed open"
+    if captured.tree_may_survive:
+        detail += "; the process tree may have survived the kill, look for orphan processes"
+    return detail
 
 
 def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path | None = None) -> Result:
@@ -514,14 +556,14 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
     if gate.pytest and basetemp_root is not None:
         argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:
-        returncode, raw = _run_capture(argv, gate.cwd, gate.timeout, child_env)
+        captured = _run_capture(argv, gate.cwd, gate.timeout, child_env)
     except OSError as exc:
         return Result(gate, ERROR, time.monotonic() - started, detail=f"could not start: {exc}")
-    text = raw.decode("utf-8", errors="replace")
+    returncode = captured.returncode
+    text = captured.output.decode("utf-8", errors="replace")
     seconds = time.monotonic() - started
     if returncode is None:
-        detail = classify_pytest_timeout(gate.timeout, text) if gate.pytest else f"timed out after {gate.timeout:.0f}s"
-        return Result(gate, ERROR, seconds, text, detail)
+        return Result(gate, ERROR, seconds, text, _timeout_detail(gate, text, captured))
     if gate.pytest:
         status, detail = classify_pytest(returncode, text)
         return Result(gate, status, seconds, text, detail)
