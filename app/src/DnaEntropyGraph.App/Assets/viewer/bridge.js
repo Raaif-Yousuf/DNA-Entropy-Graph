@@ -1,9 +1,9 @@
 // Bridge between the WinUI host (IgvViewerHost) and igv.js (issues #72, #73).
 // Commands in (window.chrome.webview 'message'): {cmd:"load", config}, {cmd:"goto", locus},
-//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
+//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"track", op:"add"|"remove", config|name}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
-//   {evt:"snapshot", svg}, {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
+//   {evt:"snapshot", svg}, {evt:"trackFailed", name, message} (an added track could not load), {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
 //   and {evt:"loaded", locus} carries the locus first shown. Commands in also include {cmd:"keys", enabled}.
 // Runs with no network: igv.js is vendored beside this file and every URL it fetches is
 // https://run.deg/... (the run's output folder, mapped by the host).
@@ -64,6 +64,21 @@
     if (regions.length > 0) { await browser.loadROI(regions); }
   }
 
+  // Issue #552: an optional track (a smoothed entropy track) is added or removed by name; the load config is untouched, so the raw
+  // track stays primary and a reload starts without them. Adding twice or removing one that is absent is a no-op.
+  async function changeTrack(cmd) {
+    if (cmd.op === 'add' && cmd.config) {
+      // A track that cannot be loaded (404, bad file) must not leave its switch ticked with nothing drawn: tell the host.
+      try {
+        if (browser.findTracks('name', cmd.config.name).length === 0) { await browser.loadTrack(cmd.config); }
+      } catch (err) {
+        post({ evt: 'trackFailed', name: cmd.config.name, message: describe(err) });
+      }
+    } else if (cmd.op === 'remove' && cmd.name) {
+      browser.removeTrackByName(cmd.name);
+    }
+  }
+
   async function handle(cmd) {
     switch (cmd && cmd.cmd) {
       case 'load':
@@ -73,6 +88,7 @@
           post({ evt: 'error', message: describe(err) });
         }
         break;
+      case 'track': if (browser) { await changeTrack(cmd); } break;
       case 'goto': if (browser) { await browser.search(cmd.locus); } break;
       case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label); } break;
       case 'theme': document.body.classList.toggle('dark', !!cmd.dark); break;

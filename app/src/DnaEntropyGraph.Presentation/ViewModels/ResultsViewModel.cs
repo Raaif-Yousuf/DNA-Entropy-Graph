@@ -35,6 +35,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly IExternalViewerOpener _viewers;
     private readonly IEntropyOverviewSource? _overviewSource;
     private readonly IOverviewImageExporter? _imageExporter;
+    private readonly IGeneTableSource? _geneTables;
     private IReadOnlyList<RunOutputFile> _outputFiles = [];
     private string? _folder;
     private RunRecord? _run;
@@ -68,8 +69,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IExternalViewerOpener viewers,
         IEntropyOverviewSource? overviewSource = null,
         IOverviewImageExporter? imageExporter = null,
+        IGeneTableSource? geneTables = null,
         ResultsExportRoot? exportRoot = null)
     {
+        _geneTables = geneTables;
         _exportRoot = exportRoot;
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
@@ -93,6 +96,18 @@ public sealed partial class ResultsViewModel : ObservableObject
     public string OverviewTitle => Overview?.Name ?? string.Empty;
 
     public ObservableCollection<ResultsStatsGroup> Groups { get; } = [];
+
+    /// <summary>Issue #552: one sortable table per <c>*.genes.tsv</c> in the run folder (only the readable ones).</summary>
+    public ObservableCollection<ResultsGeneTable> GeneTables { get; } = [];
+
+    public bool HasGeneTables => GeneTables.Count > 0;
+
+    // Why a gene table is missing while the rest of the page is fine: one reason, one action.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsGeneNoticeVisible))]
+    private string _geneNoticeText = string.Empty;
+
+    public bool IsGeneNoticeVisible => GeneNoticeText.Length > 0;
 
     public ObservableCollection<ResultsFileItem> Files { get; } = [];
 
@@ -148,6 +163,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Show(folder!, snapshot);
 
+            await ShowGeneTablesAsync(folder!, generation);
+
             // The strip fills in after the page: reading a big track is disk work and must not hold the stats back.
             if (_overviewSource is not null)
             {
@@ -183,12 +200,51 @@ public sealed partial class ResultsViewModel : ObservableObject
         StatsNoticeText = string.Empty;
         ActionNoticeText = string.Empty;
         Groups.Clear();
+        GeneTables.Clear();
+        GeneNoticeText = string.Empty;
+        OnPropertyChanged(nameof(HasGeneTables));
         Files.Clear();
         OnPropertyChanged(nameof(HasFiles));
         OpenFolderCommand.NotifyCanExecuteChanged();
         OpenInViewerCommand.NotifyCanExecuteChanged();
         OpenInIgvCommand.NotifyCanExecuteChanged();
         OpenInGeneiousCommand.NotifyCanExecuteChanged();
+    }
+
+    // The tables are disk work (a big genome has thousands of rows): off the UI thread, and only the newest load may show them.
+    private async Task ShowGeneTablesAsync(string folder, int generation)
+    {
+        if (_geneTables is null)
+        {
+            return;
+        }
+
+        var tables = await Task.Run(() => _geneTables.Load(folder), CancellationToken.None);
+        if (generation != Volatile.Read(ref _loadGeneration))
+        {
+            return;
+        }
+
+        var several = tables.Count > 1;
+        var notices = new List<string>();
+        foreach (var table in tables.Where(t => t.Content is not null))
+        {
+            GeneTables.Add(new ResultsGeneTable(several ? table.RelativePath : string.Empty, table.Content!.Rows, _strings));
+            if (table.Content.SkippedRows > 0)
+            {
+                notices.Add(Format(ResultsCopy.GenesRowsSkipped, table.Content.SkippedRows, table.RelativePath));
+            }
+        }
+
+        // Every unreadable table is reported, with how many there are, so none goes missing without a word.
+        var unreadable = tables.Where(t => t.Content is null).Select(t => t.RelativePath).ToList();
+        if (unreadable.Count > 0)
+        {
+            notices.Add(Format(ResultsCopy.GenesUnreadable, unreadable.Count, string.Join(", ", unreadable)));
+        }
+
+        GeneNoticeText = string.Join(" ", notices);
+        OnPropertyChanged(nameof(HasGeneTables));
     }
 
     private void Show(string folder, RunOutputSnapshot snapshot)
@@ -340,8 +396,9 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     /// <summary>
     /// Saves the overview as a PNG in the run's own folder (never next to the input, Hard Rule 14) and shows it in File Explorer. A run imported
-    /// from the earlier version has a folder that is the user's own: its PNG goes to a new folder under the default output folder instead.
-    /// A file that already exists is never overwritten; the new one gets a number.
+    /// from the earlier version has a folder that is the user's own: its pictures go to one exports folder per run under the default output
+    /// folder instead (made only when a picture is written). A downloaded cloud run's folder is the app's own and is used as it is.
+    /// A name that is already taken is never overwritten; the new one gets a number.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanExportOverviewPng))]
     private async Task ExportOverviewPngAsync()
@@ -351,13 +408,17 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
+        var labels = new OverviewImageLabels(Format(ResultsCopy.ExportPngTitle, Title, contig.Name), _strings.GetString(ResultsCopy.ExportPngXAxis), _strings.GetString(ResultsCopy.ExportPngYAxis));
         var run = _run;
         string? path = null;
         var written = false;
-        if (run is { Imported: true } && _exportRoot is null)
+
+        // Only an earlier-version import has a folder that is the user's own (Hard Rule 14); a cloud download's folder is the app's.
+        var ownFolder = run is { IsPrototypeImport: true };
+        if (ownFolder && _exportRoot is null)
         {
-            // No safe place to write: say so rather than fall back to the user's own folder.
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // No safe place to write, and the results folder is not the problem: say so rather than fall back to the user's own folder.
+            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngNoFolder);
             return;
         }
 
@@ -366,16 +427,46 @@ public sealed partial class ResultsViewModel : ObservableObject
             (path, written) = await Task.Run(
                 () =>
                 {
-                    var target = run is { Imported: true } && _exportRoot is not null
-                        ? RunOutputFolders.CreateUnique(_exportRoot.Parent(), (string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name) + " exports")
+                    var target = ownFolder && _exportRoot is not null && run is not null
+                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
                         : folder;
-                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy.overview", ".png");
-                    return (file, exporter.Export(contig, file));
+                    var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
+
+                    // A run's own folder must still be there (one the user deleted or moved is not brought back with a lone picture in it);
+                    // only the exports folder of an earlier-version run is made here, with whatever parents it lacks, and all of it is
+                    // taken away again if nothing was written.
+                    IReadOnlyList<string> made = [];
+                    if (ownFolder)
+                    {
+                        made = RunOutputFolders.CreateFolderChain(target);
+                    }
+                    else if (!Directory.Exists(target))
+                    {
+                        return (file, false);
+                    }
+
+                    var ok = false;
+                    try
+                    {
+                        ok = exporter.Export(contig, labels, file);
+                    }
+                    finally
+                    {
+                        if (!ok)
+                        {
+                            RunOutputFolders.RemoveCreated(made);
+                        }
+                    }
+
+                    return (file, ok);
                 },
                 CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
+            // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
+            // Only the class name is traced: a message can carry a path or a file name (Hard Rule 14, no names in logs).
+            System.Diagnostics.Trace.TraceWarning("Save picture failed: " + ex.GetType().Name);
             written = false;
         }
 
@@ -385,7 +476,8 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
         else
         {
-            ActionNoticeText = _strings.GetString(ResultsCopy.ExportPngFailed);
+            // Name the place that matters: the exports folder for an earlier-version run, the run's own results folder otherwise.
+            ActionNoticeText = _strings.GetString(ownFolder ? ResultsCopy.ExportPngFailedInExports : ResultsCopy.ExportPngFailed);
         }
     }
 

@@ -19,7 +19,6 @@ public sealed class StartupDatabaseNewerTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
         try
         {
             Directory.Delete(_dir, recursive: true);
@@ -34,7 +33,7 @@ public sealed class StartupDatabaseNewerTests : IDisposable
     public void A_newer_database_stops_startup_with_the_message_and_is_left_in_place()
     {
         var root = DnaEntropyGraph.Core.AppDataRoot.FromPath(_dir);
-        using (var seed = new SqliteConnection($"Data Source={root.DatabaseFile}"))
+        using (var seed = new SqliteConnection($"Data Source={root.DatabaseFile};Pooling=False"))
         {
             seed.Open();
             using var set = seed.CreateCommand();
@@ -42,7 +41,6 @@ public sealed class StartupDatabaseNewerTests : IDisposable
             set.ExecuteNonQuery();
         }
 
-        SqliteConnection.ClearAllPools();
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("DatabaseNewerThanApp").Returns("newer {0} app {1}");
         string? shown = null;
