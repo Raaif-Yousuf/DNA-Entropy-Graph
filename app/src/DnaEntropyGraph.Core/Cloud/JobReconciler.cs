@@ -991,14 +991,14 @@ public sealed class JobReconciler
     private Task<T> Lookup<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
         => WithDeadline(call, _lookupTimeout, cancellationToken);
 
-    private static async Task<T> WithDeadline<T>(Func<CancellationToken, Task<T>> call, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<T> WithDeadline<T>(Func<CancellationToken, Task<T>> call, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        using var deadline = new Audit.DeadlineSource(cancellationToken, timeout);
+        using var deadline = new Audit.DeadlineSource(cancellationToken, timeout, _time);
         Task<T>? task = null;
         try
         {
             task = Audit.CloudAuditContext.StartUnderDeadline(cancellationToken, deadline.Token, call);
-            return await task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            return await task.WaitAsync(timeout, _time, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

@@ -40,7 +40,7 @@ public static class CloudAuditContext
     /// REPLACES the cancellation or timeout the caller's filters look for. The scope is narrow: this protects the app's OWN abandon of a call. It does not make a throwing callee
     /// callback harmless to the callee's own thread, but the deadline tokens themselves are made by <see cref="DeadlineSource"/>, whose caller-cancel relay and timer both swallow what a callee callback throws.
     /// MEASURED 2026-10-29: with a raw linked source, a throwing callee callback surfaced out of the user's own Cancel() (PR #944 CI, Release, twice) and, on a 200 ms CallTimeout, ended the test host from the timer thread (3 of 3 runs).
-    /// DeadlineSourceTests forces both shapes deterministically (a cancel from inside the call, and a manually fired timer); GatewayDeadlineGuardTests forbids a raw CancelAfter or timed source in Core/Cloud.
+    /// DeadlineSourceTests forces both shapes deterministically (a cancel from inside the call, and a manually fired timer); GatewayDeadlineGuardTests scans every app/src file that names a gateway for the raw shapes.
     /// </summary>
     public static async Task StopAbandonedAsync(CancellationTokenSource deadline, Task? abandoned)
     {
@@ -50,8 +50,7 @@ public static class CloudAuditContext
         }
         catch (Exception ex)
         {
-            // Only the class is traced (a callee's message can carry a name).
-            System.Diagnostics.Trace.TraceWarning($"A cancellation callback of an abandoned cloud call threw: {ex.GetType().Name}");
+            TraceSwallowed(ex);
         }
 
         if (abandoned is not null)
@@ -59,6 +58,22 @@ public static class CloudAuditContext
             _ = abandoned.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
     }
+
+    /// <summary>The one swallow shared by every place that cancels a call's token on behalf of the app: never throws, traces only the exception class (a callee's message can carry a name).</summary>
+    internal static void CancelSwallowing(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (Exception ex)
+        {
+            TraceSwallowed(ex);
+        }
+    }
+
+    private static void TraceSwallowed(Exception ex)
+        => System.Diagnostics.Trace.TraceWarning($"A cancellation callback of a cloud call threw: {ex.GetType().Name}");
 
     internal static CancellationToken? CurrentCaller => Caller.Value;
 

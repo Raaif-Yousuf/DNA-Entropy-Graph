@@ -36,6 +36,28 @@ public class OperationPollerTests
     }
 
     [Fact]
+    public async Task A_zero_deadline_hands_the_first_read_a_token_that_is_already_cancelled()
+    {
+        // new CancellationTokenSource(TimeSpan.Zero) was cancelled at construction; DeadlineSource must be too, or a read that checks its token first answers where it used to time out.
+        var seen = new List<bool>();
+
+        var outcome = await OperationPoller.PollAsync<string>(
+            token =>
+            {
+                seen.Add(token.IsCancellationRequested);
+                token.ThrowIfCancellationRequested();
+                return Task.FromResult(new OperationPoll<string>(true, "ok", null));
+            },
+            deadline: TimeSpan.Zero,
+            CancellationToken.None,
+            RecordingInstantDelay([]));
+
+        seen.ShouldBe([true]);
+        outcome.Success.ShouldBeFalse();
+        outcome.Error!.Code.ShouldBe(OperationPoller.TimeoutCode);
+    }
+
+    [Fact]
     public async Task A_real_error_on_the_first_poll_surfaces_immediately_not_as_a_timeout()
     {
         // The issue's own observable: "An insert that fails with

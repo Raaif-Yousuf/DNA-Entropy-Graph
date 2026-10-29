@@ -17,21 +17,38 @@ public class DeadlineSourceTests
     {
         public List<TimerCallback> Callbacks { get; } = [];
 
+        public List<RecordingTimer> Timers { get; } = [];
+
+        public bool ThrowOnCreate { get; set; }
+
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            Callbacks.Add(_ => callback(state));
-            return new NoopTimer();
-        }
-
-        private sealed class NoopTimer : ITimer
-        {
-            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
-
-            public void Dispose()
+            if (ThrowOnCreate)
             {
+                throw new InvalidOperationException("no timer");
             }
 
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            Callbacks.Add(_ => callback(state));
+            var timer = new RecordingTimer(dueTime);
+            Timers.Add(timer);
+            return timer;
+        }
+    }
+
+    private sealed class RecordingTimer(TimeSpan due) : ITimer
+    {
+        public TimeSpan Due { get; } = due;
+
+        public bool Disposed { get; private set; }
+
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+        public void Dispose() => Disposed = true;
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
         }
     }
 
@@ -104,20 +121,70 @@ public class DeadlineSourceTests
     }
 
     [Fact]
-    public void A_deadline_source_cancels_on_the_caller_and_on_the_timer_and_disposes_both_registrations()
+    public void A_deadline_source_cancels_on_the_caller_and_on_the_timer()
+    {
+        var clock = new ManualTimeProvider();
+        using var cts = new CancellationTokenSource();
+        using var fromCaller = new DeadlineSource(cts.Token, TimeSpan.FromSeconds(5), clock);
+        fromCaller.Token.IsCancellationRequested.ShouldBeFalse();
+        cts.Cancel();
+        fromCaller.Token.IsCancellationRequested.ShouldBeTrue("the caller's cancel reaches the deadline token");
+
+        using var timed = new DeadlineSource(CancellationToken.None, TimeSpan.FromSeconds(5), clock);
+        clock.Timers[^1].Due.ShouldBe(TimeSpan.FromSeconds(5));
+        clock.Callbacks[^1](null);
+        timed.Token.IsCancellationRequested.ShouldBeTrue("the timer reaches the deadline token");
+    }
+
+    [Fact]
+    public void Dispose_stops_the_timer_and_the_callers_registration_and_a_late_timer_fire_is_harmless()
     {
         var clock = new ManualTimeProvider();
         using var cts = new CancellationTokenSource();
         var deadline = new DeadlineSource(cts.Token, TimeSpan.FromSeconds(5), clock);
-        deadline.Token.IsCancellationRequested.ShouldBeFalse();
+        var token = deadline.Token;
 
-        cts.Cancel();
-        deadline.Token.IsCancellationRequested.ShouldBeTrue("the caller's cancel reaches the deadline token");
         deadline.Dispose();
-        Should.NotThrow(() => clock.Callbacks.ForEach(c => c(null)), "a timer that fires after dispose is harmless");
 
-        using var timed = new DeadlineSource(CancellationToken.None, TimeSpan.FromSeconds(5), clock);
-        clock.Callbacks[^1](null);
-        timed.Token.IsCancellationRequested.ShouldBeTrue("the timer reaches the deadline token");
+        clock.Timers.Single().Disposed.ShouldBeTrue("the timer is released with the source");
+        Should.NotThrow(() => clock.Callbacks.Single()(null), "a timer callback already in flight when the source is disposed does nothing");
+
+        // THEORY (unverified): that the registration itself is gone is not observable from outside (the disposed flag makes a leaked relay a no-op too); what is observable is that nothing throws and the token is untouched.
+        Should.NotThrow(() => cts.Cancel());
+        token.IsCancellationRequested.ShouldBeFalse("a caller cancel after Dispose does not touch the disposed source");
+    }
+
+    [Fact]
+    public void A_zero_timeout_cancels_at_construction_and_never_arms_a_timer()
+    {
+        var clock = new ManualTimeProvider();
+        using var deadline = new DeadlineSource(CancellationToken.None, TimeSpan.Zero, clock);
+
+        deadline.Token.IsCancellationRequested.ShouldBeTrue();
+        clock.Timers.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void An_infinite_timeout_arms_no_timer_and_any_other_negative_one_is_refused()
+    {
+        var clock = new ManualTimeProvider();
+        using (var forever = new DeadlineSource(CancellationToken.None, Timeout.InfiniteTimeSpan, clock))
+        {
+            forever.Token.IsCancellationRequested.ShouldBeFalse();
+        }
+
+        clock.Timers.ShouldBeEmpty();
+        Should.Throw<ArgumentOutOfRangeException>(() => new DeadlineSource(CancellationToken.None, TimeSpan.FromSeconds(-2), clock));
+    }
+
+    [Fact]
+    public void A_constructor_that_fails_leaves_nothing_behind()
+    {
+        var clock = new ManualTimeProvider { ThrowOnCreate = true };
+        using var cts = new CancellationTokenSource();
+
+        Should.Throw<InvalidOperationException>(() => new DeadlineSource(cts.Token, TimeSpan.FromSeconds(5), clock));
+
+        Should.NotThrow(() => cts.Cancel(), "the caller's registration was released with the half-made source");
     }
 }
