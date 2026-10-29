@@ -227,6 +227,29 @@ public sealed class RunNotesTagsViewModelTests
     }
 
     [Fact]
+    public async Task A_second_save_started_while_one_is_in_flight_does_not_start_a_second_write()
+    {
+        // Cold review round 4: two overlapping saves could finish out of order and leave the older text stored.
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = "first";
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.SaveAnnotationsCommand.CanExecute(null).ShouldBeFalse();
+        vm.SaveAnnotationsCommand.Execute(null);
+        var second = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+        gate.SetResult(true);
+        await saving;
+        await second;
+
+        await _annotations.Received(1).UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        vm.SaveAnnotationsCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task A_box_left_untouched_during_the_save_is_still_tidied()
     {
         _rows = [Row("r")];

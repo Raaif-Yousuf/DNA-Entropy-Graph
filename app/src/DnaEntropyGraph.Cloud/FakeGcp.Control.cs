@@ -83,7 +83,7 @@ public sealed partial class FakeGcp
             return; // no worker with a heartbeat of its own to see the request
         }
 
-        _objects[statusKey] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, live.Seq + 1, "cancelled", cancelSeen: true));
+        _objects[statusKey] = Encoding.UTF8.GetBytes(WorkerStatusJson(live.JobId, live.Seq + 1, WorkerStages.Cancelled, cancelSeen: true));
         _objects[(bucket, prefix + "result.json")] = Encoding.UTF8.GetBytes($"{{\"schema\":1,\"jobId\":\"{live.JobId}\",\"status\":\"cancelled\",\"inputs\":[]}}");
     }
 }

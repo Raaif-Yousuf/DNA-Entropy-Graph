@@ -172,22 +172,56 @@ public sealed class DiagnosticsNotesTagsTests
         entries.Single(e => e.Key.EndsWith("result.json")).Value.ShouldContain("\"status\"");
     }
 
-    // A number leaf is copied as it is (the redactor scrubs strings), so a tag spelled like a number survives the primary scrub. That is
-    // the case only the whole-file backstop can see; a tag that RedactLine already removes cannot prove the backstop (cold review round 3).
+    // The one real path past the primary scrub: a withheld all-digit job id in a number leaf is rewritten to the string "withheldid<n>" AFTER
+    // the scrub (JobIdWithholder), so a tag spelled "withheldid1" survives into the copied file and only the whole-file backstop can see it.
     [Fact]
     public void A_distinctive_tag_that_survives_redaction_in_a_copied_file_withholds_that_file_whole()
     {
-        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: "[\"42.5\"]");
+        var run = new RunRecord("12", JobPhase.Completed, Created, Name: "n", ManifestJson: "{}", OptionsJson: "{}", TagsJson: "[\"withheldid1\"]");
         var files = new Dictionary<string, string>
         {
-            [$"runs/{JobId}/progress.jsonl"] = "{\"seq\":1,\"stage\":\"running\",\"percent\":42.5}\n",
-            [$"runs/{JobId}/status.json"] = "{\"stage\":\"running\",\"percent\":7}",
+            ["runs/12/result.json"] = """{"jobId":"12","status":"failed","inputs":[{"id":12,"status":"ok"}]}""",
+            ["runs/12/status.json"] = """{"stage":"running","percent":7}""",
         };
 
         var entries = BuildEntries(files, run);
 
-        entries.Single(e => e.Key.EndsWith("progress.jsonl")).Value.ShouldBe("<omitted: file withheld>");
+        entries.Single(e => e.Key.EndsWith("result.json")).Value.ShouldBe("<omitted: file withheld>");
         entries.Single(e => e.Key.EndsWith("status.json")).Value.ShouldContain("running");
+    }
+
+    // Cold review round 4: a tag spelled like a number ("1.0", "42.5") is a number leaf the same text can legitimately appear in, so it must
+    // not make the backstop withhold progress/status/result whole. The primary scrub still removes it from log text.
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("42.5")]
+    [InlineData("-3")]
+    [InlineData("1e3")]
+    public void A_number_shaped_tag_does_not_withhold_a_file_that_holds_the_same_number_in_a_number_leaf(string tag)
+    {
+        var run = new RunRecord(JobId, JobPhase.Completed, Created, TagsJson: $"[\"{tag}\"]");
+        var files = new Dictionary<string, string>
+        {
+            [$"runs/{JobId}/progress.jsonl"] = "{\"seq\":1,\"stage\":\"running\",\"percent\":" + tag + "}\n",
+            [$"runs/{JobId}/logs/app.log"] = $"INFO reading value {tag} now\n",
+        };
+
+        var entries = BuildEntries(files, run);
+
+        var progress = entries.Single(e => e.Key.EndsWith("progress.jsonl")).Value;
+        progress.ShouldContain("\"stage\":\"running\"");
+        progress.ShouldNotBe("<omitted: file withheld>");
+        entries.Single(e => e.Key.Contains("log-")).Value.ShouldNotContain(tag);
+    }
+
+    [Fact]
+    public void ContainsUserText_ignores_a_number_shaped_word_but_the_primary_scrub_still_removes_it()
+    {
+        var redactor = new DiagnosticsRedactor(Info.UserProfilePath, [], ["42.5", "clone7"]);
+
+        redactor.ContainsUserText("\"percent\": 42.5").ShouldBeFalse();
+        redactor.ContainsUserText("saw clone7 here").ShouldBeTrue();
+        redactor.RedactText("value 42.5 here").ShouldNotContain("42.5");
     }
 
     [Fact]

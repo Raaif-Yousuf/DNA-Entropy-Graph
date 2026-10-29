@@ -57,6 +57,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _includeNotesAndTags;
 
+    // True -> false -> true during a write ends with the value it started with, so equality cannot tell "untouched" from "re-ticked":
+    // any change while a file is being written is recorded here (cold review round 4).
+    private bool _exporting;
+    private bool _includeChangedDuringExport;
+
+    partial void OnIncludeNotesAndTagsChanged(bool value)
+    {
+        if (_exporting)
+        {
+            _includeChangedDuringExport = true;
+        }
+    }
+
     // Not an observable property: only OpenDiagnosticsFolderCommand's CanExecute depends on it.
     private string? _lastDiagnosticsPath;
 
@@ -171,10 +184,20 @@ public sealed partial class SettingsViewModel : ObservableObject
             // bound to an already-cancelled token never starts the delegate, and the exporter's cleanup of the picker's empty
             // file would be skipped. The exporter observes the token itself and throws OperationCanceledException.
             var includeNotes = IncludeNotesAndTags;
-            await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken, includeNotes), CancellationToken.None);
+            _includeChangedDuringExport = false;
+            _exporting = true;
+            try
+            {
+                await Task.Run(() => _diagnostics.ExportAsync(path, cancellationToken, includeNotes), CancellationToken.None);
+            }
+            finally
+            {
+                _exporting = false;
+            }
+
             // Cleared only once a file was really written: a cancelled picker, a failed write or a refused bundle leaves the choice as it was.
-            // And only if the box still holds what this file used: a choice made while the file was being written is for the next one.
-            if (IncludeNotesAndTags == includeNotes)
+            // And only if the box was not touched while the file was being written (any change, even back to the same value): that choice is for the next one.
+            if (!_includeChangedDuringExport)
             {
                 IncludeNotesAndTags = false;
             }

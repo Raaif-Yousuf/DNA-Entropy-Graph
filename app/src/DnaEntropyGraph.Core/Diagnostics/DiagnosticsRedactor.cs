@@ -130,11 +130,27 @@ internal sealed partial class DiagnosticsRedactor
     {
         _profilePath = userProfilePath.TrimEnd('\\', '/');
         _sensitive = SensitiveValue.Normalize(sensitiveValues);
-        _userText = WholeTokenRegex(userText);
+        var all = (userText ?? []).ToList();
+        _userText = WholeTokenRegex(all);
+        // DECISION (agent-made, reversible): the whole-file backstop ignores user text that parses as a number (invariant culture). A number
+        // leaf is copied as a number (kept data such as percent or windowsDone), so a tag "1.0" or "42.5" would withhold a whole status file
+        // whenever the same number appeared in it. The primary scrub (above) still removes such text from every log line.
+        _backstop = WholeTokenRegex(all.Where(v => !IsNumberShaped(v)));
     }
 
-    /// <summary>True when the text still holds one of the user's own words (see the <c>userText</c> argument) as a whole token.</summary>
-    public bool ContainsUserText(string text) => _userText?.IsMatch(MarkerWord().Replace(text, " ")) == true;
+    private readonly Regex? _backstop;
+
+    private static bool IsNumberShaped(string? value)
+        // "NaN" and "Infinity" parse as doubles but are words, not numbers a JSON leaf can hold: only a digit-led, signed or dotted text counts.
+        => value?.Trim() is { Length: > 0 } text
+            && (char.IsAsciiDigit(text[0]) || text[0] is '-' or '+' or '.')
+            && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
+
+    /// <summary>
+    /// True when the text still holds one of the user's own words (see the <c>userText</c> argument) as a whole token. A word that parses
+    /// as a number is not counted: the copied number leaves legitimately hold numbers (see the constructor).
+    /// </summary>
+    public bool ContainsUserText(string text) => _backstop?.IsMatch(MarkerWord().Replace(text, " ")) == true;
 
     // The fixed markers this redactor and the bundle builder write. They carry no user text, so the backstop must not read their
     // words ("user", "path", "redacted") as the user's own.

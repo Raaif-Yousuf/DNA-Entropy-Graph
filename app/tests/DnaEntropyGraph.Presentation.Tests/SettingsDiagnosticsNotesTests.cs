@@ -97,6 +97,30 @@ public sealed class SettingsDiagnosticsNotesTests
     }
 
     [Fact]
+    public async Task Unticking_and_re_ticking_the_box_during_the_write_keeps_it_ticked_for_the_next_file()
+    {
+        // Cold review round 4: true -> false -> true during the write ends equal to the captured value, so a value comparison cleared the re-tick.
+        var started = new TaskCompletionSource();
+        var gate = new TaskCompletionSource();
+        _exporter.ExportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>(), Arg.Any<bool>()).Returns(_ =>
+        {
+            started.TrySetResult();
+            return gate.Task;
+        });
+        _viewModel.IncludeNotesAndTags = true;
+
+        var saving = _viewModel.SaveDiagnosticsCommand.ExecuteAsync(null);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _viewModel.IncludeNotesAndTags = false;
+        _viewModel.IncludeNotesAndTags = true;
+        gate.SetResult();
+        await saving;
+
+        await _exporter.Received(1).ExportAsync("C:\\out\\d.zip", Arg.Any<CancellationToken>(), true);
+        _viewModel.IncludeNotesAndTags.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task A_cancelled_picker_keeps_the_box_ticked()
     {
         _picker.PickSaveZipAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((string?)null);

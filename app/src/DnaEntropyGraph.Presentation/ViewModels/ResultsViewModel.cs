@@ -403,7 +403,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     /// Issue #141: saves the note and tags of this run. Writes only those two columns (through <see cref="IRunAnnotations"/>), so a
     /// phase change landing at the same moment is never overwritten. A failure keeps what was typed and says so.
     /// </summary>
-    [RelayCommand(CanExecute = nameof(CanEditAnnotations))]
+    [RelayCommand(CanExecute = nameof(CanSaveAnnotations), AllowConcurrentExecutions = false)]
     private async Task SaveAnnotationsAsync(CancellationToken cancellationToken)
     {
         if (_annotations is null || _annotationsJobId is not { } jobId)
@@ -411,6 +411,32 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
+        // Not re-entrant (cold review round 4): two writes in flight could finish out of order and leave the older text stored. The command's
+        // own concurrency option is not relied on alone; this flag also refuses a call that arrives through Execute or ExecuteAsync directly.
+        if (Interlocked.Exchange(ref _saveInFlight, 1) == 1)
+        {
+            return;
+        }
+
+        SaveAnnotationsCommand.NotifyCanExecuteChanged();
+        try
+        {
+            await SaveAnnotationsCoreAsync(jobId, cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _saveInFlight, 0);
+            SaveAnnotationsCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private int _saveInFlight;
+
+    private bool CanSaveAnnotations() => CanEditAnnotations && Volatile.Read(ref _saveInFlight) == 0;
+
+    private async Task SaveAnnotationsCoreAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var annotations = _annotations!;
         var generation = Volatile.Read(ref _loadGeneration);
         var capturedNotesText = NotesText;
         var capturedTagsText = TagsText;
@@ -419,7 +445,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         bool found;
         try
         {
-            found = await _annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
+            found = await annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
