@@ -194,7 +194,7 @@ public class CloudAuditTests
     [Fact]
     public async Task A_user_cancel_through_GatewayCalls_reaches_the_call_it_abandoned_and_is_recorded_as_cancelled()
     {
-        // The inner call ends ONLY when the token it was handed (GatewayCalls' linked token) is cancelled, so the audit entry exists only if the user's cancel was relayed to it.
+        // The inner call ends ONLY when the token it was handed (GatewayCalls' linked token) is cancelled, so the audit entry exists only if the cancel reached it (by the link or by the abandon helper: both are tested below).
         var log = new SignallingLog();
         using var cts = new CancellationTokenSource();
         var inner = Substitute.For<IComputeGateway>();
@@ -223,7 +223,7 @@ public class CloudAuditTests
     [Fact]
     public async Task A_user_cancel_stays_a_cancel_when_a_callback_the_call_registered_throws()
     {
-        // CancelAsync runs the callee's callbacks; one that throws surfaces as an AggregateException that must not replace the cancellation (callers filter on it).
+        // The callee's throwing cancellation callback must not replace the cancellation CallAsync reports (callers filter on OperationCanceledException).
         var calls = new GatewayCalls(new CloudRunSettings { CallTimeout = TimeSpan.FromSeconds(30) }, new FakeGcp());
         using var cts = new CancellationTokenSource();
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -236,14 +236,8 @@ public class CloudAuditTests
                 return 0;
             }, cts.Token);
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        try
-        {
-            await cts.CancelAsync();
-        }
-        catch (AggregateException)
-        {
-            // The link may hand the throwing callback to the canceller; the test is about what CallAsync reports.
-        }
+        // MEASURED 2026-10-29: 13 of 13 runs, the user's own CancelAsync returns normally. THEORY (unverified): the wait unwinds first, so the helper (not the link) runs the callee's throwing callback.
+        await cts.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => pending);
     }

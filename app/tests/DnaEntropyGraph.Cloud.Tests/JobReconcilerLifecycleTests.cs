@@ -306,14 +306,7 @@ public class JobReconcilerLifecycleTests
 
         var pass = reconciler.EnforceLifecycleAsync(cts.Token);
         await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        try
-        {
-            await cts.CancelAsync();
-        }
-        catch (AggregateException)
-        {
-            // The link may hand the throwing callback to the canceller; the test is about what the pass reports.
-        }
+        await cts.CancelAsync();
 
         IReadOnlyList<LifecycleOutcome> outcomes;
         try
