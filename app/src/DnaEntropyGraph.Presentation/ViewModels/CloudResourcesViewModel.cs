@@ -59,15 +59,33 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         _pricing = pricing;
         _dispatcher = dispatcher;
         // Issue #828: a project switch while this page is open must not leave the old project's rows on screen with live buttons.
-        _account.AccountChanged += (_, _) => OnUiThread(OnAccountChanged);
+        _account.AccountChanged += OnAccountChangedEvent;
     }
 
-    /// <summary>The project the rows on screen were listed for. Every action compares it with the project chosen NOW (#828).</summary>
+    /// <summary>
+    /// Ends the subscription to the account's AccountChanged event. The account is a singleton and this view model is transient, so without it every visit to the Cloud page
+    /// would leave one more view model reachable and reacting (#828). The page calls it when it is navigated away from.
+    /// </summary>
+    public void Detach() => _account.AccountChanged -= OnAccountChangedEvent;
+
+    private void OnAccountChangedEvent(object? sender, EventArgs e) => OnUiThread(OnAccountChanged);
+
+    /// <summary>The project the rows on screen were listed for; null while nothing is listed (first load in flight, last listing discarded). Every action compares it with the project chosen NOW (#828).</summary>
     private string? _listedProject;
+
+    /// <summary>The project a listing is in flight for, so a switch can cancel that listing and a mere token refresh (same project) cannot.</summary>
+    private string? _refreshingProject;
 
     private void OnAccountChanged()
     {
-        if (string.Equals(_account.SelectedProjectId, _listedProject, StringComparison.Ordinal))
+        // An in-flight listing for another project is stale: cancel it so Refresh is available again. The same project (token refresh, sign-in) leaves it alone.
+        if (_refreshingProject is not null && !string.Equals(_account.SelectedProjectId, _refreshingProject, StringComparison.Ordinal))
+        {
+            RefreshCommand.Cancel();
+        }
+
+        // Nothing was listed, so there is nothing stale to clear and nothing to announce.
+        if (_listedProject is null || string.Equals(_account.SelectedProjectId, _listedProject, StringComparison.Ordinal))
         {
             return;
         }
@@ -132,6 +150,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
 
         IsBusy = true;
+        _refreshingProject = project;
         try
         {
             var installation = InstallationId.GetOrCreate(_settings);
@@ -139,12 +158,14 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             var everyone = await _compute.ListAppVmsAsync(cancellationToken);
             var pricing = LoadPricing();
 
-            // The project changed while Google was answering: these lists belong to the old one. Show nothing of them; the account-changed handler lists again.
+            // The project changed while Google was answering: these lists belong to the old one. Show nothing of them and say why here (the account-changed
+            // handler stays quiet when no listing was on screen); Refresh lists the new project.
             if (!string.Equals(_account.SelectedProjectId, project, StringComparison.Ordinal))
             {
                 Vms.Clear();
                 Disks.Clear();
                 _listedProject = null;
+                ErrorText = Format("CloudPage_ProjectChanged");
                 return;
             }
 
@@ -187,6 +208,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         }
         finally
         {
+            _refreshingProject = null;
             IsBusy = false;
         }
     }

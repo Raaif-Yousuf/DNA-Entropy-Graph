@@ -474,5 +474,120 @@ public class CloudResourcesViewModelTests
 
         viewModel.Vms.ShouldBeEmpty();
         viewModel.Disks.ShouldBeEmpty();
+        // The discard says why itself (not the generic list-failed text, which also leaves the rows empty).
+        viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
+        viewModel.ErrorText.ShouldNotContain("CloudPage_ListFailed");
+    }
+
+    [Fact]
+    public async Task After_Detach_an_account_change_no_longer_touches_the_view_model()
+    {
+        var viewModel = await LoadedAsync();
+        viewModel.Detach();
+        _account.SelectedProjectId.Returns(NewProject);
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        viewModel.Vms.Count.ShouldBe(2);
+        viewModel.ErrorText.ShouldBeEmpty();
+        viewModel.Detach();
+    }
+
+    [Fact]
+    public async Task An_account_change_with_the_same_project_leaves_rows_and_error_alone()
+    {
+        var viewModel = await LoadedAsync();
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        viewModel.Vms.Count.ShouldBe(2);
+        viewModel.ErrorText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void An_account_change_before_anything_was_listed_says_nothing()
+    {
+        var viewModel = NewViewModel();
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        viewModel.ErrorText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_account_change_during_the_first_load_of_the_same_project_says_nothing()
+    {
+        var viewModel = NewViewModel();
+        var gate = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        var load = viewModel.RefreshCommand.ExecuteAsync(null);
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+        viewModel.ErrorText.ShouldBeEmpty();
+        gate.SetResult(_all);
+        await load;
+
+        viewModel.ErrorText.ShouldBeEmpty();
+        viewModel.Vms.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task An_account_change_after_a_failed_first_listing_says_nothing()
+    {
+        var viewModel = NewViewModel();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new InvalidOperationException("boom"));
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+        viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
+        viewModel.ErrorText.ShouldNotContain("CloudPage_ProjectChanged");
+    }
+
+    [Fact]
+    public async Task A_project_switch_cancels_the_listing_still_in_flight_so_Refresh_is_available_again()
+    {
+        var viewModel = NewViewModel();
+        var seen = CancellationToken.None;
+        var started = new TaskCompletionSource();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            seen = call.Arg<CancellationToken>();
+            var pending = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
+            seen.Register(() => pending.TrySetCanceled(seen));
+            started.SetResult();
+            return pending.Task;
+        });
+        var load = viewModel.RefreshCommand.ExecuteAsync(null);
+        await started.Task;
+
+        _account.SelectedProjectId.Returns(NewProject);
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        seen.IsCancellationRequested.ShouldBeTrue();
+        await Should.ThrowAsync<OperationCanceledException>(load);
+        viewModel.RefreshCommand.CanExecute(null).ShouldBeTrue();
+        viewModel.IsBusy.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_account_change_for_the_same_project_does_not_cancel_the_listing_in_flight()
+    {
+        var viewModel = NewViewModel();
+        var seen = CancellationToken.None;
+        var gate = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
+        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            seen = call.Arg<CancellationToken>();
+            return gate.Task;
+        });
+        var load = viewModel.RefreshCommand.ExecuteAsync(null);
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        seen.IsCancellationRequested.ShouldBeFalse();
+        gate.SetResult(_all);
+        await load;
     }
 }
