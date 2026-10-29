@@ -49,10 +49,19 @@ public sealed partial class MainWindow : Window
     // Issue #490: Loaded fires after App.OnLaunched has handed RootFrame to NavigationService,
     // so selecting New run (the first menu item, ShellViewModel.InitialPageKey) here navigates the frame too.
     // Issue #108: only after that first navigation may an Open-with launch navigate (ShellReadiness), or it would be overwritten.
-    private void RootNavigationView_Loaded(object sender, RoutedEventArgs e)
+    // Issue #244: the item chosen is the one the user left on (their last page, or the page above their last run), read before the first navigation.
+    private async void RootNavigationView_Loaded(object sender, RoutedEventArgs e)
     {
-        RootNavigationView.SelectedItem = RootNavigationView.MenuItems[0];
-        _readiness.MarkReady();
+        try
+        {
+            // Bounded and never throwing inside the view model (a hung history falls back to New run after a short wait).
+            await ViewModel.PrepareSessionAsync(CancellationToken.None);
+            RootNavigationView.SelectedItem = NavSelection.Find(RootNavigationView, ViewModel.StartupNavKey);
+        }
+        finally
+        {
+            _readiness.MarkReady();
+        }
         // Issue #143: the first-launch tour opens once layout has run, so the nav items it points at have a size; the pane layout is told first.
         ViewModel.OnNavigationDisplayModeChanged((int)RootNavigationView.DisplayMode);
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => _ = ViewModel.OnWindowLoadedAsync());
