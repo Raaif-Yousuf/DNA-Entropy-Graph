@@ -240,8 +240,8 @@ public class SpendLedgerRound8Tests
 
         result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
         repo.GetTokens.ShouldContain(cts.Token, "the heartbeat write was handed the run's own cancellation token");
-        // The fake worker writes updatedAt from the real clock; the row holds that, not the runner's (test) clock.
-        (DateTimeOffset.UtcNow - LastRow(repo, "job-m6").LastHeartbeatAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(2));
+        // The fake worker writes updatedAt from the real clock, weeks ahead of the runner's (test) clock: the row holds the earlier, the app's own now.
+        LastRow(repo, "job-m6").LastHeartbeatAt!.Value.ShouldBeLessThanOrEqualTo(clocks.Run.GetUtcNow());
     }
     // ---- L: VmEndedAt is first-wins for the run ----
 
@@ -284,5 +284,98 @@ public class SpendLedgerRound8Tests
         LastRow(repo, "job-x5").LastHeartbeatAt.ShouldNotBeNull("without it a VM that deleted itself after the app closed is booked until the app came back");
         repo.AllRecordedInOrder.Where(r => r.JobId == "job-x5" && r.LastHeartbeatAt is not null).Select(r => r.LastHeartbeatAt).Distinct().Count()
             .ShouldBe(1, "the run is far shorter than a minute: one write, not one per poll");
+    }
+
+    // ---- round 10: clock skew, a missing updatedAt, negative spans, the token ----
+
+    private static readonly DateTimeOffset AppNow = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+
+    private static RunRecord Row(string jobId) => new(jobId, JobPhase.Running, AppNow, Target: "cloud");
+
+    [Fact]
+    public async Task A_heartbeat_from_a_VM_clock_ahead_of_the_app_is_recorded_as_the_apps_now()
+    {
+        var clocks = new RunnerClocks();
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.HeartbeatingThenDone);
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(30),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(30),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clocks.Run,
+            PollDelay = clocks.SleepAsync,
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-r10a", Spec("job-r10a")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        // The fake worker writes the real clock, weeks ahead of the run's test clock: the row must never hold a time later than the app's own now.
+        var recorded = repo.AllRecordedInOrder.Where(r => r.JobId == "job-r10a" && r.LastHeartbeatAt is not null).Select(r => r.LastHeartbeatAt!.Value).ToList();
+        recorded.ShouldNotBeEmpty();
+        recorded.ShouldAllBe(at => at <= clocks.Run.GetUtcNow(), "a future heartbeat rejects every later real one and is booked as the end");
+    }
+
+    [Fact]
+    public async Task A_later_heartbeat_records_after_an_earlier_one()
+    {
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(Row("job-r10b"), CancellationToken.None);
+        var store = new RunRowStore(repo, null);
+
+        await store.RecordHeartbeatAsync("job-r10b", AppNow, CancellationToken.None);
+        await store.RecordHeartbeatAsync("job-r10b", AppNow.AddMinutes(1), CancellationToken.None);
+
+        (await repo.GetAsync("job-r10b", CancellationToken.None))!.LastHeartbeatAt.ShouldBe(AppNow.AddMinutes(1));
+    }
+
+    [Fact]
+    public async Task The_heartbeat_write_is_one_keyed_read_and_that_read_carries_the_token()
+    {
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(Row("job-r10c"), CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+
+        await new RunRowStore(repo, null).RecordHeartbeatAsync("job-r10c", AppNow, cts.Token);
+
+        repo.GetTokens.Count.ShouldBe(1, "exactly one keyed read");
+        repo.GetTokens.Single().ShouldBe(cts.Token, "and that read is the call that carried the token");
+    }
+
+    [Fact]
+    public void A_new_heartbeat_with_no_readable_update_time_after_the_first_look_records_the_apps_clock()
+    {
+        var watch = new HeartbeatWatch(expectsGpu: false, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        static string Status(int seq) => $$"""{"schema":1,"jobId":"j","stage":"running","worker":{"version":"0.1.0"},"heartbeatSeq":{{seq}}}""";
+
+        watch.Observe(Status(3), null, TimeSpan.FromSeconds(1), AppNow);
+        watch.NewHeartbeatAt.ShouldBeNull("the first look at a (possibly resumed) status.json is not proof of life now");
+
+        watch.Observe(Status(4), null, TimeSpan.FromSeconds(2), AppNow.AddSeconds(1));
+        watch.NewHeartbeatAt.ShouldBe(AppNow.AddSeconds(1), "the sequence advanced while this watch was looking");
+
+        watch.Observe(Status(4), null, TimeSpan.FromSeconds(3), AppNow.AddSeconds(2));
+        watch.NewHeartbeatAt.ShouldBeNull("no change, no heartbeat");
+    }
+
+    [Fact]
+    public void A_gone_VM_never_ends_after_now_even_when_a_sign_of_life_is_in_the_future()
+    {
+        var future = AppNow.AddHours(1);
+
+        VmSpan.EndOfGone(AppNow.AddMinutes(-10), TimeSpan.FromHours(4), AppNow, null, future).ShouldBe(AppNow);
+        VmSpan.EndOfGone(AppNow.AddMinutes(-10), TimeSpan.FromHours(4), AppNow, Row("j") with { LastHeartbeatAt = future }).ShouldBe(AppNow);
+    }
+
+    [Fact]
+    public void A_gone_VM_whose_start_is_after_now_has_a_zero_span_not_a_negative_one()
+    {
+        var start = AppNow.AddMinutes(5);
+
+        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null).ShouldBe(start);
+        VmSpan.EndOfGone(start, TimeSpan.FromHours(4), AppNow, null, AppNow.AddMinutes(1)).ShouldBe(start);
     }
 }

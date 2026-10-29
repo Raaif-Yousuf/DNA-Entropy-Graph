@@ -63,7 +63,7 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
     public bool NeedsProgress => expectsGpu && _workerSeen && !_gpuVerified;
 
     /// <summary>Null while the worker looks healthy; otherwise why the run must end. <paramref name="statusJson"/>/<paramref name="progressJsonl"/> are null when not (yet) there.</summary>
-    public HeartbeatVerdict? Observe(string? statusJson, string? progressJsonl, TimeSpan elapsed)
+    public HeartbeatVerdict? Observe(string? statusJson, string? progressJsonl, TimeSpan elapsed, DateTimeOffset? appNow = null)
     {
         NewHeartbeatAt = null;
         var status = statusJson is null ? null : WorkerStatusReader.TryParseStatus(statusJson);
@@ -84,7 +84,11 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             if (!_workerSeen || status.HeartbeatSeq != _lastSeq || status.UpdatedAt != _lastUpdatedAt)
             {
                 _lastChange = elapsed;
-                NewHeartbeatAt = DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote) ? wrote : null;
+                // The worker's own write time when it has a readable one. With none, a heartbeat that advanced while THIS watch was looking is alive now by the app's
+                // clock; the first look at a status.json (a resume may find an old one) proves nothing about now and records nothing.
+                NewHeartbeatAt = DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
+                    ? wrote
+                    : _workerSeen ? appNow : null;
             }
 
             // Issue #723: the forward-progress signal (windowsDone, lastProgressAt) moves only when the compute thread does, unlike the heartbeat. Judged by CHANGE

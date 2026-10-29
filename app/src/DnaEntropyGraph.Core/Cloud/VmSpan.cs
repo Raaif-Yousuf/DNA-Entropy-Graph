@@ -54,7 +54,17 @@ internal static class VmSpan
     /// limit (<paramref name="limit"/>, the VM's maxRunDuration plus the grace: the one limit the ledger clamps to), because Compute cannot have run it longer, and never later than <paramref name="now"/> (a VM that died 5 minutes in, found 10 minutes later, books about 10 minutes, not the limit). Null only when the start is unknown too.
     /// </summary>
     public static DateTimeOffset? EndOfGone(DateTimeOffset? start, TimeSpan limit, DateTimeOffset now, RunRecord? row, params DateTimeOffset?[] signs)
-        => LastKnownAlive(row, signs) ?? (start is { } began && limit > TimeSpan.Zero ? Min(began + limit, now) : null);
+    {
+        var end = LastKnownAlive(row, signs) ?? (start is { } began && limit > TimeSpan.Zero ? began + limit : (DateTimeOffset?)null);
+        if (end is not { } known)
+        {
+            return null;
+        }
+
+        // Never later than now (a VM clock ahead of the app's would book the future), and never before the start (a start after now is a zero span, not a negative one).
+        var clamped = Min(known, now);
+        return start is { } from && clamped < from ? from : clamped;
+    }
 
     private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a <= b ? a : b;
 
