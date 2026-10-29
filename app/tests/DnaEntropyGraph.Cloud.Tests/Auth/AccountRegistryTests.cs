@@ -138,6 +138,7 @@ public class AccountRegistryTests : IDisposable
         registry.Save(One("1001"));
         var before = File.ReadAllBytes(FilePath);
 
+        // Real time, negative evidence: the 200 ms wait on a mutex another holder keeps can only run out, so load never turns a correct refusal into a pass or a failure (a real OS mutex cannot sit on a fake clock).
         using (new MutexHolder(_dir))
         {
             Should.Throw<AccountsFileLockedException>(() => registry.Save(One("2002")));
@@ -193,6 +194,7 @@ public class AccountRegistryTests : IDisposable
         File.WriteAllText(FilePath, "{\"activeSub\":null,\"accounts\":[]}");
         var registry = new AccountRegistry(_dir);
 
+        // Real time, negative evidence (as the save test above): the 150 ms lock wait can only run out while the holder keeps the mutex.
         using (new MutexHolder(_dir))
         {
             registry.Load().ShouldBe(AccountsFile.Empty);
@@ -242,6 +244,7 @@ public class AccountRegistryTests : IDisposable
 
         loader.Join();
 
+        // Real time, cannot fail correct code: a sample taken after the 150 ms wait ended still sees true (a timed-out load leaves the old answer), so load only reduces how many samples fall inside the wait.
         observed.ShouldAllBe(u => u, "the lock wait lasts 150 ms; the old answer stands until the new one is known");
     }
 
@@ -277,20 +280,20 @@ public class AccountRegistryTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         File.WriteAllText(FilePath, "{\"activeSub\":\"1001\",\"accounts\":[]}");
-        // MEASURED 2026-10-15 (CI, PR #663, twice): with the default 40 ms backoff the third read lands at ~120 ms and the old release was at 120 ms, so a loaded runner
-        // exhausted the retries (Unreadable, correctly) and the test failed. The product behaved; the test had no margin. Now: reads at 0 and 400 ms, release at 150 ms.
-        var registry = new AccountRegistry(_dir, name => new Mutex(false, name), readBackoffMs: 400);
+        // MEASURED 2026-10-15 (CI, PR #663, twice): a release on a wall-clock timer (120 ms, then 150 ms) raced the product's own backoff and lost on a loaded runner.
+        // Now no clock is involved: the file is held until the product's first retry pause, which releases it, so the second read must succeed.
         var hold = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None);
-        var release = new Thread(() =>
+        var pauses = new List<TimeSpan>();
+        var registry = new AccountRegistry(_dir, name => new Mutex(false, name), pause: pause =>
         {
-            Thread.Sleep(150);
+            pauses.Add(pause);
             hold.Dispose();
         });
-        release.Start();
 
         var loaded = registry.Load();
-        release.Join();
 
+        pauses.Count.ShouldBe(1, "the first read failed on the held file and the product paused once before the retry");
+        pauses[0].ShouldBe(TimeSpan.FromMilliseconds(40), "the first retry waits 40 ms times attempt 1");
         loaded.ActiveSub.ShouldBe("1001");
         registry.Unreadable.ShouldBeFalse();
     }

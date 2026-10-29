@@ -28,6 +28,12 @@ public enum InputNoticeCode
     /// <summary>Genes (or CDS features, in a record with no gene features) whose location text cannot be read were left out, as the worker leaves them out (issues #543, #788). Count is how many, <see cref="InputNotice.Other"/> the 1-based record number.</summary>
     GenBankFeaturesDropped,
 
+    /// <summary>Genes (or CDS features, in a record with no gene features) whose positions do not fit the record's own sequence were left out, as the worker leaves them out (issues #331, #694, #847). Count is how many, <see cref="InputNotice.Other"/> the 1-based record number.</summary>
+    GenBankFeaturesOutOfRange,
+
+    /// <summary>A gene that was left out was replaced by the CDS feature with the same gene id, as the worker does (issues #694, #847). Count is how many, <see cref="InputNotice.Other"/> the 1-based record number.</summary>
+    GenBankGeneStoodInByCds,
+
     /// <summary>U was read as T because the run treats input as RNA. Count is how many.</summary>
     RnaConverted,
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -312,3 +313,336 @@ def test_scripts_are_ruff_formatted_now():
     """Vacuity guard: the tree the gate checks is clean today, via the same command."""
     proc = subprocess.run(["uvx", "ruff", "format", "--check", "scripts"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout[-800:]
+
+
+# --- a pytest gate that times out (issue #925) --------------------------------------------------
+
+
+def test_classify_pytest_timeout_counts_progress_characters_and_names_failures():
+    detail = pm.classify_pytest_timeout(900.0, "...s..  [ 10%]\n..F.E.  [ 20%]\n")
+    assert detail == (
+        "timed out after 900s with 9 passed and 2 failed so far (NOT a pass; the suite did not finish AND tests had already failed)"
+    )
+
+
+def test_classify_pytest_timeout_with_no_output_says_zero_passed_and_zero_failed():
+    detail = pm.classify_pytest_timeout(5.0, "")
+    assert "timed out after 5s with 0 passed and 0 failed so far" in detail
+
+
+def test_a_timed_out_non_pytest_gate_keeps_the_plain_message():
+    gate = pm.Gate("g", [sys.executable, "-c", "import time; time.sleep(60)"], Path.cwd(), timeout=2.0)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR and result.detail == "timed out after 2s"
+
+
+# --- review follow-ups on the timeout path (issue #925) -----------------------------------------
+
+
+def test_an_interrupted_gate_kills_its_tree_and_the_interrupt_propagates(monkeypatch):
+    killed: list[int] = []
+    real_popen = subprocess.Popen
+
+    class Interrupted(real_popen):  # type: ignore[type-arg, misc]
+        def communicate(self, input=None, timeout=None):
+            raise KeyboardInterrupt
+
+    def record_and_kill(proc):
+        killed.append(proc.pid)
+        proc.kill()
+        return True
+
+    monkeypatch.setattr(pm.subprocess, "Popen", Interrupted)
+    monkeypatch.setattr(pm, "_kill_tree", record_and_kill)
+    gate = pm.Gate("g", [sys.executable, "-c", "import time; time.sleep(30)"], Path.cwd())
+    with pytest.raises(KeyboardInterrupt):
+        pm.run_gate(gate)
+    assert len(killed) == 1
+
+
+def test_kill_tree_never_raises_and_reports_failure(monkeypatch):
+    class Dummy:
+        pid = 2**22 - 3
+
+        def kill(self):
+            raise OSError("gone")
+
+    def boom_timeout(*_a, **_k):
+        raise subprocess.TimeoutExpired("taskkill", 1)
+
+    def boom_missing(*_a, **_k):
+        raise FileNotFoundError("taskkill")
+
+    for boom in (boom_timeout, boom_missing):
+        monkeypatch.setattr(pm.subprocess, "run", boom)
+        monkeypatch.setattr(pm.os, "killpg", boom, raising=False)
+        assert pm._kill_tree(Dummy()) is False  # type: ignore[arg-type]
+
+
+def test_a_kill_that_did_not_work_says_the_tree_may_have_survived_and_output_was_lost(monkeypatch):
+    monkeypatch.setattr(pm, "_kill_tree", lambda _proc: False)
+    monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
+    code = "import time\nprint('....', flush=True)\ntime.sleep(8)\n"
+    gate = pm.Gate("pt", [sys.executable, "-c", code], Path.cwd(), timeout=2.0, pytest=True)
+    result = pm.run_gate(gate)
+    assert result.status == pm.ERROR
+    assert "may have survived" in result.detail
+    assert "unknown" in result.detail
+    assert "0 passed and 0 failed" not in result.detail
+
+
+def test_pid_alive_refuses_to_say_dead_when_tasklist_itself_fails(monkeypatch):
+    if pm.os.name != "nt":
+        pytest.skip("tasklist is Windows only")
+
+    class Bad:
+        returncode = 1
+        stdout = b""
+
+    monkeypatch.setattr(pm.subprocess, "run", lambda *_a, **_k: Bad())
+    with pytest.raises(RuntimeError, match="tasklist"):
+        pm._pid_alive(4)
+
+
+# --- round 3 of the timeout path: load-proof stubs, signals, zombies, separate pipes (#925) ------
+
+SLOW_START_TIMEOUT = 12.0  # a stub must write its ready file inside this; the stubs sleep forever so the timeout still fires
+
+
+def _stub_code(ready: Path, progress: str = "", spawn_sleeper_pid_file: Path | None = None, sleeper_seconds: int = 600) -> str:
+    """Python source for a gate stub: optionally spawns a sleeper holding the pipe, prints progress, writes a ready
+    file, then sleeps. Nothing here depends on the interpreter starting quickly: the tests wait for the ready file."""
+    lines = ["import subprocess, sys, time"]
+    if spawn_sleeper_pid_file is not None:
+        lines.append(f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({sleeper_seconds})'])")
+        lines.append(f"open({str(spawn_sleeper_pid_file)!r}, 'w').write(str(p.pid))")
+    if progress:
+        lines.append(f"sys.stdout.write({progress!r} + chr(10)); sys.stdout.flush()")
+    lines.append(f"open({str(ready)!r}, 'w').write('ready')")
+    lines.append("time.sleep(600)")
+    return "\n".join(lines) + "\n"
+
+
+def _wait_until(predicate, seconds: float = 5.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return predicate()
+
+
+def test_a_timed_out_pytest_gate_is_error_with_partial_counts_exactly_once(tmp_path):
+    ready = tmp_path / "ready"
+    gate = pm.Gate("pt", [sys.executable, "-c", _stub_code(ready, "....F..  [ 50%]")], Path.cwd(), timeout=SLOW_START_TIMEOUT, pytest=True)
+    result = pm.run_gate(gate)
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    assert result.status == pm.ERROR
+    assert "timed out after 12s with 6 passed and 1 failed so far" in result.detail
+    assert result.output.count("....F..") == 1
+
+
+def test_a_timeout_kills_the_grandchild_too_and_returns_promptly(tmp_path):
+    ready, marker = tmp_path / "ready", tmp_path / "grandchild.pid"
+    gate = pm.Gate("g", [sys.executable, "-c", _stub_code(ready, spawn_sleeper_pid_file=marker)], Path.cwd(), timeout=SLOW_START_TIMEOUT)
+    started = time.monotonic()
+    result = pm.run_gate(gate)
+    assert time.monotonic() - started < 120
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    assert result.status == pm.ERROR
+    pid = int(marker.read_text())
+    assert _wait_until(lambda: not pm._pid_alive(pid), seconds=5.0), f"grandchild {pid} survived the timeout"
+
+
+def test_a_child_that_exited_but_left_its_pipe_open_reports_its_exit_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
+    ready, marker = tmp_path / "ready", tmp_path / "sleeper.pid"
+    code = (
+        "import subprocess, sys\n"
+        f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(25)'])\n"
+        f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+        f"open({str(ready)!r}, 'w').write('ready')\n"
+        "sys.exit(0)\n"
+    )
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=SLOW_START_TIMEOUT)
+    result = pm.run_gate(gate)
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    assert result.status == pm.ERROR
+    assert "child exited 0 but its pipe stayed open" in result.detail
+
+
+def test_the_real_scripts_tests_gate_gets_the_long_timeout_not_the_default():
+    gates = {g.name: g for g in pm.build_gates(REPO_ROOT)}
+    assert gates["scripts-tests"].timeout == pm.LONG_TIMEOUT
+    assert pm.LONG_TIMEOUT > pm.DEFAULT_TIMEOUT
+
+
+def test_kill_tree_still_kills_the_direct_child_when_interrupted_during_taskkill(monkeypatch):
+    killed: list[bool] = []
+
+    class Dummy:
+        pid = 2**22 - 5
+
+        def kill(self):
+            killed.append(True)
+
+    def interrupt(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pm.subprocess, "run", interrupt)
+    monkeypatch.setattr(pm.os, "killpg", interrupt, raising=False)
+    with pytest.raises(KeyboardInterrupt):
+        pm._kill_tree(Dummy())  # type: ignore[arg-type]
+    assert killed == [True]
+
+
+def test_a_sigterm_handler_turns_the_signal_into_the_interrupt_the_gate_runner_cleans_up_on():
+    with pytest.raises(KeyboardInterrupt):
+        pm._raise_keyboard_interrupt(15, None)
+
+
+def test_install_termination_handlers_registers_sigterm_and_sighup_where_present(monkeypatch):
+    import signal
+
+    registered: dict[int, object] = {}
+    monkeypatch.setattr(pm.signal, "signal", lambda sig, handler: registered.__setitem__(sig, handler))
+    pm.install_termination_handlers()
+    assert registered[signal.SIGTERM] is pm._raise_keyboard_interrupt
+    if hasattr(signal, "SIGHUP"):
+        assert registered[signal.SIGHUP] is pm._raise_keyboard_interrupt
+
+
+def test_main_installs_the_termination_handlers(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(pm, "install_termination_handlers", lambda: calls.append("installed"))
+    pm.main(["--root", str(REPO_ROOT), "--list"])
+    assert calls == ["installed"]
+
+
+def test_a_lost_output_run_still_waits_for_the_child_so_it_is_not_left_a_zombie(monkeypatch):
+    waits: list[object] = []
+    real_popen = subprocess.Popen
+
+    class Recording(real_popen):  # type: ignore[type-arg, misc]
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return super().wait(timeout=timeout)
+
+    monkeypatch.setattr(pm.subprocess, "Popen", Recording)
+    monkeypatch.setattr(pm, "_kill_tree", lambda _proc: False)
+    monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
+    gate = pm.Gate("g", [sys.executable, "-c", "import time; time.sleep(6)"], Path.cwd(), timeout=1.0)
+    result = pm.run_gate(gate)
+    assert "unknown" in result.detail
+    assert any(isinstance(t, float) for t in waits)
+
+
+def test_pid_alive_treats_a_zombie_as_dead_on_posix(monkeypatch, tmp_path):
+    if pm.os.name == "nt":
+        pytest.skip("the /proc zombie check is POSIX only")
+    stat = "123 (my (weird) name) Z 1 123 123 0 -1 0"
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if str(path) == "/proc/123/stat":
+            f = tmp_path / "stat"
+            f.write_text(stat)
+            return real_open(f, *a, **k)
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(pm.os, "kill", lambda *_a: None)
+    assert pm._pid_alive(123) is False
+
+
+def test_stdout_and_stderr_stay_separate_pipes_joined_stdout_then_stderr():
+    code = "import sys; sys.stderr.write('ERRTEXT'); sys.stderr.flush(); sys.stdout.write('OUTTEXT'); sys.stdout.flush()"
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd())
+    result = pm.run_gate(gate)
+    assert result.output == "OUTTEXTERRTEXT"
+
+
+def test_a_timeout_keeps_partial_output_from_both_streams(tmp_path):
+    ready = tmp_path / "ready"
+    code = (
+        "import sys, time\n"
+        "sys.stdout.write('FROMOUT\\n'); sys.stdout.flush()\n"
+        "sys.stderr.write('FROMERR\\n'); sys.stderr.flush()\n"
+        f"open({str(ready)!r}, 'w').write('ready')\n"
+        "time.sleep(600)\n"
+    )
+    result = pm.run_gate(pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=SLOW_START_TIMEOUT))
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    assert "FROMOUT" in result.output and "FROMERR" in result.output
+
+
+def _snapshot_termination_handlers():
+    """Return a callable that puts SIGTERM/SIGHUP back as they are now."""
+    import signal
+
+    names = [n for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n)]
+    saved = {n: signal.getsignal(getattr(signal, n)) for n in names}
+
+    def restore() -> None:
+        for n, handler in saved.items():
+            signal.signal(getattr(signal, n), handler)
+
+    return restore
+
+
+@pytest.fixture(autouse=True)
+def _restore_termination_handlers():
+    """pm.main() installs SIGTERM/SIGHUP handlers; never let them leak into the rest of the pytest session."""
+    restore = _snapshot_termination_handlers()
+    yield
+    restore()
+
+
+def test_a_main_call_installs_the_handlers_and_the_restore_puts_them_back():
+    """One test, not an order-dependent pair: under xdist the second half could land on another worker and pass vacuously (#959)."""
+    import signal
+
+    restore = _snapshot_termination_handlers()
+    pm.main(["--root", str(REPO_ROOT), "--list"])
+    assert signal.getsignal(signal.SIGTERM) is pm._raise_keyboard_interrupt
+    restore()
+    assert signal.getsignal(signal.SIGTERM) is not pm._raise_keyboard_interrupt
+
+
+# --- #959: the scripts-tests gate runs in parallel (pytest-xdist) --------------------------------------------
+
+
+def test_scripts_test_workers_scale_with_cpus_and_stay_capped():
+    assert pm.scripts_test_workers(cpus=16) == pm.SCRIPTS_TESTS_MAX_WORKERS
+    assert pm.scripts_test_workers(cpus=4) == 2
+    assert pm.scripts_test_workers(cpus=1) == 2  # never fewer than two, or xdist is only overhead
+    assert pm.scripts_test_workers(cpus=None) == 2
+
+
+def test_the_real_scripts_tests_gate_is_parallel_and_installs_xdist():
+    gate = {g.name: g for g in pm.build_gates(REPO_ROOT)}["scripts-tests"]
+    cmd = gate.argv
+    assert "pytest-xdist" in cmd and cmd[cmd.index("-n") + 1] == str(pm.scripts_test_workers())
+    assert cmd[cmd.index("--with") + 1] == "pytest"  # the non-xdist `--with`s are untouched
+
+
+def test_the_scripts_tests_ci_job_uses_the_same_parallel_command_as_premerge():
+    text = (REPO_ROOT / ".github" / "workflows" / "ci-docs.yml").read_text(encoding="utf-8")
+    assert "--with pytest-xdist" in text and "pytest scripts/tests -q -n " in text
+
+
+@pytest.mark.parametrize(
+    ("rc", "output", "status"),
+    [
+        (0, "created: 8/8 workers\n8 workers [1874 items]\n1874 passed, 19 skipped in 190.02s (0:03:10)", pm.PASS),
+        (1, "[gw3] FAILED scripts/tests/test_x.py::test_y\n1 failed, 1873 passed in 190.02s", pm.FAIL),
+        (1, "worker 'gw2' crashed while running 'scripts/tests/test_x.py::test_y'\n....  [ 40%]", pm.ERROR),
+    ],
+)
+def test_classify_pytest_reads_xdist_output(rc, output, status):
+    assert pm.classify_pytest(rc, output)[0] == status
+
+
+def test_a_timed_out_xdist_gate_still_counts_progress():
+    out = "......F...  [ 12%]\n..........  [ 24%]\n"
+    assert "timed out after 600s with 19 passed and 1 failed" in pm.classify_pytest_timeout(600, out)
