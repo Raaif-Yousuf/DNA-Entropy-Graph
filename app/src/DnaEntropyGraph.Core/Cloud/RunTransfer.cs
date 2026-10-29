@@ -125,14 +125,11 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 }
 
                 // Hard Rule 14: a junction or symlink below the run folder would send the temp file, the rename and the final move somewhere else.
-                if (!RunOutputRoot.NoReparseBetween(runFolderFull, Path.GetDirectoryName(destination)!))
-                {
-                    throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
-                }
+                EnsureNoLinkedFolder(runFolderFull, destination, label);
 
                 try
                 {
-                    await DownloadFileAsync(bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
+                    await DownloadFileAsync(runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
                 {
@@ -158,12 +155,22 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         }
     }
 
-    private async Task DownloadFileAsync(string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
+    /// <summary>Throws when any folder from the run folder down to the file's folder is a junction or symlink. Called again just before the temp file is created, after it is streamed and before the final move, because a link can appear in between.</summary>
+    private static void EnsureNoLinkedFolder(string runFolderFull, string destination, string label)
+    {
+        if (!RunOutputRoot.NoReparseBetween(runFolderFull, Path.GetDirectoryName(destination)!))
+        {
+            throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
+        }
+    }
+
+    private async Task DownloadFileAsync(string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            EnsureNoLinkedFolder(runFolderFull, destination, label);
 
             // Issue #588: the gateway streams the object straight into a unique .part file (memory stays flat for a result of any size) under a stall deadline, then the file is verified below.
             var found = await StreamedDownload.RunAsync(storage, settings.TimeProvider, bucket, objectKey, partial, file.Bytes, settings.DownloadStallTimeout, cancellationToken).ConfigureAwait(false);
@@ -171,6 +178,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             {
                 throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} is listed by the worker but is not in the bucket.");
             }
+            EnsureNoLinkedFolder(runFolderFull, destination, label);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long written = 0;
             await using (var downloaded = new FileStream(partial, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
@@ -197,6 +205,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
             // Hard Rule 14: a resumed run finds its earlier files here, and the user may have edited one. Identical bytes are kept as they are; anything else is
             // renamed aside ("name (changed time).ext") before the verified download takes its place, never overwritten.
+            EnsureNoLinkedFolder(runFolderFull, destination, label);
             string? aside = null;
             if (File.Exists(destination))
             {
@@ -311,13 +320,17 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         return folder;
     }
 
-    private static bool IsInsideOutputFolder(string folder, string outputFolder)
+    /// <summary>
+    /// Whether a recorded run folder may be reused: inside the output folder and a real folder with no link below it (a whole-drive output folder is fine, reuse only writes the
+    /// run's own files). A check that fails on the disk or the path means "not reusable", never an exception out of resume. <paramref name="containment"/> is a test seam.
+    /// </summary>
+    internal static bool IsInsideOutputFolder(string folder, string outputFolder, Func<string, string, bool>? containment = null)
     {
         try
         {
-            return RunOutputRoot.IsContained(folder, outputFolder);
+            return (containment ?? RunOutputRoot.IsUnderRootWithoutLinks)(folder, outputFolder);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
         {
             return false;
         }

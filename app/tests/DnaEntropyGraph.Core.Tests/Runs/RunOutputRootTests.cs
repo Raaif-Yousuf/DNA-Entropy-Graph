@@ -38,6 +38,12 @@ public class RunOutputRootTests
     [InlineData(@"\\server\share\", false)]
     [InlineData(@"\\server\share\x", false)]
     [InlineData(@"C:\x", false)]
+    [InlineData(@"\\?\C:\", true)]
+    [InlineData(@"\\.\C:\", true)]
+    [InlineData(@"\\?\C:\x", false)]
+    [InlineData(@"\\?\UNC\server\share", false)]
+    [InlineData(@"\\.\UNC\server\share\x", false)]
+    [InlineData("Q:", true)]
     public void IsDriveRoot_names_drive_roots_and_not_share_roots(string path, bool expected)
     {
         RunOutputRoot.IsDriveRoot(path).ShouldBe(expected);
@@ -112,6 +118,21 @@ public class RunOutputRootTests
         {
             Directory.Delete(root, true);
             Directory.Delete(outside, true);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"Q:\stem", @"Q:\", true)]
+    [InlineData(@"Q:\a\b", @"Q:\", true)]
+    [InlineData(@"Q:\", @"Q:\", false)]
+    [InlineData(@"R:\stem", @"Q:\", false)]
+    public void IsUnderRootWithoutLinks_accepts_a_drive_root_as_the_output_folder_for_resume(string path, string root, bool expected)
+    {
+        // A resumed run reuses its recorded folder, and a user who picked a whole drive must keep that; only History-row deletes refuse a drive root.
+        RunOutputRoot.IsUnderRootWithoutLinks(path, root).ShouldBe(expected);
+        if (expected)
+        {
+            RunOutputRoot.IsContained(path, root).ShouldBeFalse("the History-row gate still refuses a drive root");
         }
     }
 }

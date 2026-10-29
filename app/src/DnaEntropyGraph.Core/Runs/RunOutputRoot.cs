@@ -54,13 +54,27 @@ public static class RunOutputRoot
         return true;
     }
 
-    /// <summary>The one containment test for a recorded run folder: strictly inside <paramref name="root"/> (a drive root is never accepted as the root, see <see cref="IsSafelyInside"/>) AND no junction or symlink on any component below it.</summary>
+    /// <summary>
+    /// The containment test for REUSING a recorded run folder on resume: strictly inside <paramref name="root"/> AND no junction or symlink below it. Unlike <see cref="IsContained"/>
+    /// it accepts a drive root as the output folder, because reuse only writes the run's own result files there; a user who picked a whole drive keeps resume.
+    /// </summary>
+    public static bool IsUnderRootWithoutLinks(string path, string root) => IsStrictlyInside(path, root) && NoReparseBetween(root, path);
+
+    /// <summary>The containment test for a History row that is deleted or re-downloaded through: strictly inside <paramref name="root"/> (a drive root is never accepted as the root, see <see cref="IsSafelyInside"/>) AND no junction or symlink on any component below it.</summary>
     public static bool IsContained(string path, string root) => IsSafelyInside(path, root) && NoReparseBetween(root, path);
 
     /// <summary>True when <paramref name="path"/> is a drive root such as <c>C:\</c>, once resolved. A UNC share root (<c>\\server\share</c>) is not: a lab NAS share is a normal output folder.</summary>
     public static bool IsDriveRoot(string path)
     {
-        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var full = Path.GetFullPath(path);
+
+        // A device-path spelling of a drive (\\?\C:\ or \\.\C:\) is the drive, not a UNC share; \\?\UNC\server\share keeps its UNC root.
+        if (full.Length >= 6 && (full.StartsWith(@"\\?\", StringComparison.Ordinal) || full.StartsWith(@"\\.\", StringComparison.Ordinal)) && char.IsAsciiLetter(full[4]) && full[5] == ':')
+        {
+            full = full[4..];
+        }
+
+        full = Path.TrimEndingDirectorySeparator(full);
         var root = Path.GetPathRoot(full) ?? string.Empty;
         return !root.StartsWith(@"\\", StringComparison.Ordinal)
                && string.Equals(full, Path.TrimEndingDirectorySeparator(root), StringComparison.OrdinalIgnoreCase);
