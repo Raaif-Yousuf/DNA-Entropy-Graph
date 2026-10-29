@@ -281,6 +281,34 @@ the user-facing cards) on purpose: a classifier bucket is a stable, small enum a
 assert against; a user-facing message is copy that can be rewritten without touching the
 classifier at all.
 
+### Paging (issue #933)
+
+Every Google list loop in `DnaEntropyGraph.Cloud/Rest` (billing accounts, projects, price catalog, buckets, objects, region quotas, quota preferences,
+VMs, disks, accelerator zones, zone operations: 11 loops) reads the next page token through one helper, `PageTokenGuard.Advance`
+(`app/src/DnaEntropyGraph.Cloud/Rest/PageTokenGuard.cs`), one guard per walk. It remembers every token it was given, not only the last, so the same
+token for ever and a cycle (A, B, A) both fail on the first repeat, with `LIST_PAGINATION_STUCK`, one extra request after the first page (A, B, A: the third).
+A short list must never read as a complete one: an empty VM list reads as "no VM" (a duplicate or a leak), an empty quota table as "no quota".
+`Guards.Tests/PageTokenGuardWiringTests` scans every `Rest/*.cs` (comments removed, strings blanked) and fails on a next page token read outside `.Advance(`, a string that names the JSON member, a hand comparison of a token, or a `PageTokenGuard` built inside a loop.
+Before this, `GoogleStorageGateway.ListOursAsync` looped for ever on a repeated token, the billing and project listings had no guard, and the accelerator
+zone list returned a partial answer silently (MEASURED 2026-10-29, read in code; the new tests prove each now fails).
+
+DECISION (agent-made, reversible): the kind of `LIST_PAGINATION_STUCK` is `Network`, everywhere (what compute, quota and storage already used; the price
+catalog's `Other` is changed to match). A first draft of this decision chose `Other`; a cold review disproved it (MEASURED 2026-10-29, code read of
+`JobReconciler`). `IsNoAnswer` is `Kind == Network`: with `Other` the look for a Running row's VM returns Unknown instead of Deferred, the run is handed to
+`CloudJobRunner`, whose own `FindByJobIdAsync` fails the same way, the runner records the row terminal Failed, and `EndVmAfterFailureAsync` cannot list the
+VM to end it: a live, billing VM orphaned and its result never downloaded. A repeated token is not definitive like billing or permission, so the reconciler
+must defer. Locked by `JobReconcilerTests.A_stuck_listing_looking_for_a_live_VM_defers_the_run_and_leaves_the_row_and_the_VM_alone` (outcome Deferred, row
+still Running, nothing written, VM still there; the exception it throws is the real `PageTokenGuard`'s). Consumers of the kind, all read: the reconciler
+defers (wanted); `VmProvisioner` treats a Network failure of a create as "adopt by label", not applicable to a listing; `CatalogPricingSource` maps Network to
+fallback reason `Network` instead of `Other` (the same one-hour back-off and the same shipped-prices fallback; only the reason label differs, which is not harmful).
+Retry (a side effect, kept): `CloudCallPipeline.IsTransient` retries a status-less Network error, but only a gateway wrapped whole in the pipeline is replayed:
+in `GoogleCloudGateways.Create` that is the billing gateway alone (compute, storage, quota, projects and pricing route each HTTP request through the pipeline instead,
+so a stuck token, which is found after a page's request has completed, is never replayed there; MEASURED 2026-10-29, scripted handler: the compute listing makes 2
+requests whatever the retry setting). For billing, a token repeated once that then recovers succeeds on the replayed walk (a fresh walk, a fresh guard: 3 requests), and a
+token repeated for ever fails after 8 requests (1 attempt + 3 replays, 2 requests each) with `LIST_PAGINATION_STUCK`, kind Network. THEORY (unverified, no live project):
+that a real server's repeated token is ever transient, i.e. that a replay is useful; the bound is what makes it harmless. The guard's message names no list on purpose:
+`IsTransient` also reads `CloudErrorClassifier.Classify` over the text, and "the billing account list" classified as Billing and "the quota list" as Quota (permanent: the
+replay was silently switched off; MEASURED 2026-10-29, the billing replay test was red with a list-naming message), so a test pins the message to `Other`.To reverse: change the kind in `PageTokenGuard` and the expectations in `ListPagingGuardTests`, `JobReconcilerTests` and the compute and quota gateway tests.
 ## 6. Quota reading
 
 Two distinct quota reads matter, and conflating them is a real bug shape:
@@ -1363,7 +1391,7 @@ the running app calls this class yet.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
   (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
-  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation; see Paging in section 5); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
