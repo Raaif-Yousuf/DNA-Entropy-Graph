@@ -414,7 +414,16 @@ def test_a_body_over_the_size_cap_is_refused_with_its_own_action(
     monkeypatch.setattr(entrez, "_MAX_BODY_BYTES", 10_000)
     with pytest.raises(entrez.EntrezError, match="larger than") as exc:
         entrez.fetch_genbank("NC_045512.2", cache_dir=tmp_path / "c", sleep=lambda s: None)
-    assert "--accession-range" in str(exc.value)
+    message = str(exc.value)
+    # Issue #948: the app user has no command line, so the first action named is the From base and
+    # To base boxes; the CLI flag stays as the command-line route.
+    assert "From base" in message
+    assert "To base" in message
+    # The range is only captured by choosing Fetch record again; Run alone re-sends the same item.
+    assert "Fetch record" in message
+    assert "--accession-range" in message
+    assert message.index("From base") < message.index("--accession-range")
+    assert "\u2014" not in message
     assert not list((tmp_path / "c").glob("*"))
 
 
