@@ -1417,7 +1417,10 @@ the running app calls this class yet.
   falls through to the create ladder, while billing, API-off, permission, org-policy and network failures abort like the ladder's. Only one VM is tried.
   **One rule for what a run deletes (#999, #938 round 6):** a run deletes only a VM it CREATED (named `deg-<its job id>`). A VM it borrowed by reuse keeps its owner's
   name, and every failure path (`VmTerminator.EndVmAfterFailureAsync`, the cancel's `DeleteOwnedVmsAndVerifyAsync`, the late watch) STOPS it and never deletes it, even
-  when the delete was forced. A user's own after-run Delete choice on the success path is unchanged. Code read 2026-10-30: the other forced-delete sites that can meet a borrowed
+  when the delete was forced. THE ONE EXCEPTION is the user's own after-run Delete choice on a reused VM on the success path (`RunOutcomeRecorder`, `ownOnly` false): it deletes the VM, by the user's choice.
+  Round 7: the same rule covers the extras sweeps (`EndExtrasAsync`, so `DeleteOtherZonesAsync` and `KeepOneOwnedVmAsync`), a resume never adopts a STOPPED VM that is not the job's own `deg-<job>` (a donor a failed reuse left relabelled; it
+  is treated as absent and a new VM is provisioned; label restore stays #970), and a borrowed VM that is still booting gets no stop until it reads RUNNING (a stop on a non-RUNNING instance may be refused, THEORY unverified), bounded by `LifecycleTimeout`.
+  `JobReconciler` leaves a borrowed non-RUNNING VM under a cancelled row (Code read 2026-10-30): the row stays Cancelled, so the next launch's pass reads it RUNNING and stops it, and `maxRunDuration` (Hard Rule 10) is the backstop. Code read 2026-10-30: the other forced-delete sites that can meet a borrowed
   VM (a boot timeout, a heartbeat verdict, a preemption) go through the same `EndVmAfterFailureAsync`, so they stop it too; a booting borrowed VM is not force-deleted.
   A reuse is watched like a create after a cancel: a task that ended Canceled or by a lost answer has answered nothing (the real gateway passes the token to every call, so Compute
   may still run a start POST that was on the wire), so a stopped donor carrying the cancelled job's labels is judged only after the same `LateCreateGrace` counted from the task's end, and

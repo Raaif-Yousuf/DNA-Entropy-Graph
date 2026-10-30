@@ -144,23 +144,19 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     },
                     cancellationToken).ConfigureAwait(false);
             }
-            else if (!VmFacts.IsStopped(vm) && vm.Status != "STOPPING")
+            var stopSent = true;
+            if (action != AfterTaskAction.Delete && !VmFacts.IsStopped(vm) && vm.Status != "STOPPING")
             {
-                await calls.CallAsync(
-                    async token =>
-                    {
-                        try
-                        {
-                            await compute.StopVmAsync(name, zone, token).ConfigureAwait(false);
-                        }
-                        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
-                        {
-                            // Already gone (404): the wanted end state, nothing to report.
-                        }
-
-                        return true;
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                if (borrowed && VmFacts.IsBooting(vm))
+                {
+                    // Round 7 M3: a borrowed VM is never deleted, and a stop on a VM that is not RUNNING may be refused (THEORY, unverified), so no stop is sent while it boots: the poll below sends it
+                    // once the VM reads RUNNING, bounded by LifecycleTimeout.
+                    stopSent = false;
+                }
+                else
+                {
+                    await StopQuietlyAsync(name, zone, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             var clockStart = settings.StartClock();
@@ -170,6 +166,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 if (vm is null || (action != AfterTaskAction.Delete && VmFacts.IsStopped(vm)))
                 {
                     return null;
+                }
+
+                if (!stopSent && vm.Status == "RUNNING")
+                {
+                    await StopQuietlyAsync(name, zone, cancellationToken).ConfigureAwait(false);
+                    stopSent = true;
                 }
 
                 if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
@@ -191,6 +193,24 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             hold?.Dispose();
         }
     }
+
+    /// <summary>Sends a stop; a 404 is "already gone" (the wanted end state).</summary>
+    private Task<bool> StopQuietlyAsync(string name, string zone, CancellationToken cancellationToken)
+        => calls.CallAsync(
+            async token =>
+            {
+                try
+                {
+                    await compute.StopVmAsync(name, zone, token).ConfigureAwait(false);
+                }
+                catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+                {
+                    // Already gone (404): the wanted end state, nothing to report.
+                }
+
+                return true;
+            },
+            cancellationToken);
 
     /// <summary>
     /// Deletes every VM this job's label finds (a 404 means it is already gone: the worker or the platform got there first),
@@ -239,7 +259,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             }
             catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
-                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted ({ErrorClassOf(ex)}).";
+                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted ({ErrorClassOf(ex)}). Delete it from the Cloud page.";
             }
         }
 
@@ -247,7 +267,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     internal static string ErrorClassOf(Exception ex)
-        => (ex as CloudOperationException)?.Kind.ToString().ToLowerInvariant() ?? "other";
+        => ex is CloudOperationException cloud ? RunErrorCodes.For(cloud.Kind) : "other"; // the shared roster (api_disabled, org_policy), never Kind.ToString()
 
     /// <summary>The name a VM THIS run created carries (<see cref="VmSpec.VmName"/> without an existing VM). A VM reused from another run keeps that run's name, so a different name means "borrowed".</summary>
     internal static string OwnVmName(string jobId) => $"deg-{jobId}";
@@ -808,6 +828,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
 
         var clockStart = settings.StartClock();
+        var seen = new HashSet<(string Name, string Zone)>();
         while (true)
         {
             HashSet<(string Name, string Zone)> stillThere;
@@ -826,6 +847,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 listUnreadable = true;
             }
 
+            seen.UnionWith(stillThere);
+            var unreadable = false;
             foreach (var create in sent)
             {
                 // Read back by name too: a lagging listing says "none" for a VM that is still there. A VM seen both ways is counted once.
@@ -833,22 +856,31 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 if (state == NameLook.Present)
                 {
                     stillThere.Add((create.Name, create.Zone));
+                    seen.Add((create.Name, create.Zone));
                 }
                 else if (state == NameLook.Unknown)
                 {
                     // Round 5 M1: unreadable is not gone, and a delete proves nothing either way (the real gateway answers a delete of a missing VM with a silent success, so it never says "already gone").
                     // Gone is decided only by a look that READ; until one does, the loop keeps looking (bounded by LifecycleTimeout below). The delete was already sent above.
                     stillThere.Add((create.Name, create.Zone));
+                    unreadable = true;
                 }
             }
 
-            if (stillThere.Count == 0 && !listUnreadable)
+            unreadable |= listUnreadable;
+            if (stillThere.Count == 0 && !unreadable)
             {
                 break;
             }
 
             if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
             {
+                if (seen.Count == 0)
+                {
+                    // Round 7 L1: nothing was ever SEEN there; the looks only failed. Say that, not "still there".
+                    return "The app could not check whether the VMs for this job are gone. Check the Cloud page and delete any VM left for this job.";
+                }
+
                 return $"{Math.Max(1, stillThere.Count)} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
             }
 

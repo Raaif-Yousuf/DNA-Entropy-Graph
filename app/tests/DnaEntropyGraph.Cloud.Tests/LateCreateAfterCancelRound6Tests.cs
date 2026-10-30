@@ -13,9 +13,13 @@ namespace DnaEntropyGraph.Cloud.Tests;
 public partial class LateCreateAfterCancelTests
 {
     /// <summary>A gateway whose reuse runs the real fake and then fails (the start ran, the poll or the answer failed), or whose label listing fails on a chosen call.</summary>
-    private sealed class ScriptedCompute(FakeGcp inner, Func<Task>? afterReuse = null, Func<int, bool>? failFind = null) : IComputeGateway
+    private sealed class ScriptedCompute(FakeGcp inner, Func<Task>? afterReuse = null, Func<int, bool>? failFind = null, Func<bool>? rejectStop = null, bool rejectStopWhileBooting = false) : IComputeGateway
     {
         private int _finds;
+        private int _rejectedStops;
+
+        /// <summary>How many stops this gateway refused (round 7: while the VM was booting, or while <c>rejectStop</c> said so).</summary>
+        public int RejectedStops => Volatile.Read(ref _rejectedStops);
 
         public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
 
@@ -32,7 +36,17 @@ public partial class LateCreateAfterCancelTests
             return started;
         }
 
-        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+        public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            var booting = rejectStopWhileBooting && await inner.GetVmAsync(vmName, zone, cancellationToken) is { } vm && VmFacts.IsBooting(vm);
+            if (booting || rejectStop?.Invoke() == true)
+            {
+                Interlocked.Increment(ref _rejectedStops);
+                throw new CloudOperationException(new CloudError("INVALID_STATE", 400, "The instance is not running."), CloudErrorKind.Other);
+            }
+
+            await inner.StopVmAsync(vmName, zone, cancellationToken);
+        }
 
         public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
 

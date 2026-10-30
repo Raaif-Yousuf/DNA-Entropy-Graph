@@ -150,6 +150,10 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     private async Task<ProvisionResult> ProvisionCoreAsync(CloudJobRequest request, Func<CancellationToken, Task<VmSpec>> completeSpec, RunProgress progress, long generation, CancellationToken cancellationToken)
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+
+        // Round 7 M2: a STOPPED VM that is not this job's own (deg-<job>) is a donor a failed reuse left relabelled for this job (restoring its labels is #970). A run that waits on it
+        // waits on a stopped VM and fails vm_unhealthy, so it is treated as absent: provision new. It is left stopped, and never deleted.
+        existing = existing.Where(v => !(VmFacts.IsStopped(v) && v.Name != VmTerminator.OwnVmName(request.JobId))).ToList();
         progress.VmAdopted = false;
         if (existing.Count > 0)
         {
@@ -654,7 +658,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             else
             {
                 // Another attempt that landed, or one that failed (and cleaned its own zone) or never started: look once, by zone.
-                var error = await terminator.EnsureVmEndedAsync(request, other.Zone, AfterTaskAction.Delete, CancellationToken.None).ConfigureAwait(false);
+                var error = await terminator.EnsureVmEndedAsync(request, other.Zone, AfterTaskAction.Delete, CancellationToken.None, ownOnly: true).ConfigureAwait(false);
                 note = error is null ? null : " (VM end not confirmed: " + error + ")";
             }
 
@@ -721,7 +725,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     }
 
     /// <summary>Deletes every VM carrying this job's label outside <paramref name="keepZone"/> and verifies each is gone. Null when none is left, else why one is (every one that is not gone is named).</summary>
-    private async Task<string?> DeleteOtherZonesAsync(CloudJobRequest request, string keepZone, CancellationToken cancellationToken)
+    internal async Task<string?> DeleteOtherZonesAsync(CloudJobRequest request, string keepZone, CancellationToken cancellationToken)
     {
         IReadOnlyList<VmDescriptor> owned;
         try
@@ -742,7 +746,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         var notes = new List<string>();
         foreach (var vm in extras)
         {
-            var error = await terminator.EnsureVmEndedAsync(request, vm.Zone, AfterTaskAction.Delete, cancellationToken, vm.Name).ConfigureAwait(false);
+            // Round 7 M1: a VM this job did not create (a donor a failed reuse left labelled for it) is stopped, never deleted (ownOnly).
+            var error = await terminator.EnsureVmEndedAsync(request, vm.Zone, AfterTaskAction.Delete, cancellationToken, vm.Name, ownOnly: true).ConfigureAwait(false);
             if (error is not null)
             {
                 notes.Add(" (VM end not confirmed: " + error + ")");
