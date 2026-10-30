@@ -95,10 +95,14 @@ public static class RunOutputFolders
     /// <param name="folder">The folder to make.</param>
     /// <param name="requiredRoot">When given, a folder that must already exist (a Downloads the user deleted is not brought back):
     /// <see cref="DirectoryNotFoundException"/> when it is not there, and nothing is made.</param>
-    public static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot = null) => CreateFolderChain(folder, requiredRoot, p => FolderExists(p, File.GetAttributes), d => Directory.CreateDirectory(d));
+    public static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot = null) => CreateFolderChain(folder, requiredRoot, File.GetAttributes);
+
+    /// <summary>The same with the attribute read supplied, so a test can refuse it for a folder that is really there.</summary>
+    internal static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot, Func<string, FileAttributes> getAttributes)
+        => CreateFolderChain(folder, requiredRoot, p => FolderExists(p, getAttributes), d => Directory.CreateDirectory(d));
 
     /// <summary>
-    /// Whether anything is at <paramref name="path"/>. Unlike <c>Directory.Exists</c> (false on an access error, which would put a folder that was
+    /// Whether a folder is at <paramref name="path"/>. Unlike <c>Directory.Exists</c> (false on an access error, which would put a folder that was
     /// already there in the "made" list and let <see cref="RemoveCreated"/> take it away), only "not found" answers false; a folder that cannot be
     /// probed counts as there.
     /// </summary>
@@ -106,8 +110,8 @@ public static class RunOutputFolders
     {
         try
         {
-            _ = getAttributes(path);
-            return true;
+            // A file at the path is not a folder (CreateDirectory would refuse it); anything else that answers is.
+            return getAttributes(path).HasFlag(FileAttributes.Directory);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -155,7 +159,14 @@ public static class RunOutputFolders
         return made;
     }
 
-    /// <summary>Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive.</summary>
+    /// <summary>
+    /// Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive. Best effort: a folder that
+    /// cannot be removed (not empty, already gone, refused) is skipped and the rest are still tried, and nothing is thrown, so this is safe in a
+    /// failure path.
+    /// DECISION (agent-made, reversible): only an EMPTY folder is ever deleted, so a folder another process made between the probe and the create
+    /// (and listed as made here) is removed only while still empty. That worst case (an empty folder somebody just made goes away, and they can
+    /// make it again) is accepted over a lock or a second probe that could not close the race anyway; it never loses a file.
+    /// </summary>
     public static void RemoveCreated(IReadOnlyList<string> created)
     {
         for (var i = created.Count - 1; i >= 0; i--)
@@ -164,9 +175,9 @@ public static class RunOutputFolders
             {
                 Directory.Delete(created[i]);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception)
             {
-                return;
+                // Skipped: see the summary.
             }
         }
     }

@@ -3031,7 +3031,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
   </data>
   <data name="Results_NotesShortened" xml:space="preserve">
-    <value>Saved, but the note was longer than {0} characters, so the end was cut off. To choose what stays, shorten the note yourself and press Save notes again.</value>
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
   </data>
   <data name="Results_NotesEditedDuringSave" xml:space="preserve">
     <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>

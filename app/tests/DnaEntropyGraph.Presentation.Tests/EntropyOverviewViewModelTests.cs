@@ -90,12 +90,12 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         vm.ActionNoticeText.ShouldBeEmpty();
     }
 
-    private async Task<ResultsViewModel> ResultsFor(RunRecord run, string exportParent, IOverviewImageExporter exporter)
+    private async Task<ResultsViewModel> ResultsFor(RunRecord run, string exportParent, IOverviewImageExporter exporter, bool appOwnedRoot = false)
     {
         var repository = Substitute.For<IRunRepository>();
         repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { run });
         _source.Load(run.OutputDir!).Returns(Overview("chr1"));
-        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent));
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent, appOwnedRoot));
         await vm.LoadAsync(run.JobId, TestContext.Current.CancellationToken);
         return vm;
     }
@@ -226,6 +226,37 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         Directory.Exists(Path.Combine(_dir, "deep")).ShouldBeFalse();
         vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
         exporter.DidNotReceiveWithAnyArgs().Export(default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task An_export_root_the_app_owns_is_made_on_first_use_so_a_fresh_portable_install_can_save_a_picture()
+    {
+        // Portable mode: <stick>\outputs is the app's own folder and nothing creates it at startup.
+        var own = Path.Combine(_dir, "proto6");
+        Directory.CreateDirectory(own);
+        var root = Path.Combine(_dir, "stick", "outputs");
+        var vm = await ResultsFor(Row("legacy-6", own) with { Imported = true, Target = "local" }, root, WritingExporter(), appOwnedRoot: true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.EnumerateFiles(root, "*.png", SearchOption.AllDirectories).ShouldHaveSingleItem();
+        vm.ActionNoticeText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_app_owned_export_root_made_for_a_failed_picture_is_taken_away_again()
+    {
+        var own = Path.Combine(_dir, "proto7");
+        Directory.CreateDirectory(own);
+        var root = Path.Combine(_dir, "stick7", "outputs");
+        var failing = Substitute.For<IOverviewImageExporter>();
+        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
+        var vm = await ResultsFor(Row("legacy-7", own) with { Imported = true, Target = "local" }, root, failing, appOwnedRoot: true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(Path.Combine(_dir, "stick7")).ShouldBeFalse();
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
     }
 
     [Theory]

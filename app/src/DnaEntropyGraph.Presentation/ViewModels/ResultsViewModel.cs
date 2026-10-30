@@ -478,8 +478,9 @@ public sealed partial class ResultsViewModel : ObservableObject
                     IReadOnlyList<string> made = [];
                     if (ownFolder)
                     {
-                        // The export root (usually Downloads) must still be there: a deleted one is not brought back; only the exports folder is made.
-                        made = RunOutputFolders.CreateFolderChain(target, _exportRoot!.Parent());
+                        // The user's own export root (Downloads) must still be there: a deleted one is not brought back; only the exports folder is
+                        // made. A root the app owns (portable outputs) is made on first use, since nothing makes it at startup.
+                        made = RunOutputFolders.CreateFolderChain(target, _exportRoot!.AppOwned ? null : _exportRoot.Parent());
                     }
                     else if (!Directory.Exists(target))
                     {
@@ -617,10 +618,17 @@ public sealed partial class ResultsViewModel : ObservableObject
             TagsText = RunTags.Format(tags);
         }
 
-        // Issue #916: "Saved." must not hide that the end of a note was cut off. Typing during the save is the more urgent message.
-        AnnotationsStatusText = notesUnchanged && tagsUnchanged
-            ? (notesShortened ? Format(ResultsCopy.NotesShortened, RunTags.MaxNotesLength) : _strings.GetString(ResultsCopy.NotesSaved))
-            : _strings.GetString(ResultsCopy.NotesEditedDuringSave);
+        // Issue #916: "Saved." must not hide that the end of a note was cut off.
+        // A cut is mentioned whenever the box was tidied to the stored text, also when tags were typed meanwhile (both messages, one line).
+        var edited = !(notesUnchanged && tagsUnchanged);
+        var cutNote = notesShortened && notesUnchanged ? Format(ResultsCopy.NotesShortened, RunTags.MaxNotesLength) : null;
+        AnnotationsStatusText = (cutNote, edited) switch
+        {
+            (null, false) => _strings.GetString(ResultsCopy.NotesSaved),
+            (null, true) => _strings.GetString(ResultsCopy.NotesEditedDuringSave),
+            (_, false) => cutNote,
+            _ => cutNote + " " + _strings.GetString(ResultsCopy.NotesEditedDuringSave),
+        };
     }
 
     private bool IsStillShowing(string jobId, int generation)

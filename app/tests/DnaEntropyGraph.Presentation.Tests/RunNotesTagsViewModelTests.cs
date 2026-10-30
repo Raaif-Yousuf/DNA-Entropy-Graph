@@ -155,6 +155,27 @@ public sealed class RunNotesTagsViewModelTests
         vm.NotesText.Length.ShouldBe(RunTags.MaxNotesLength, "the box shows what was stored");
     }
 
+    [Fact]
+    public async Task A_cut_note_is_still_mentioned_when_only_the_tags_were_edited_during_the_save()
+    {
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        _strings.GetString(ResultsCopy.NotesShortened).Returns("shortened {0}");
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = new string('x', RunTags.MaxNotesLength + 10);
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.TagsText = "typed-while-saving";
+        gate.SetResult(true);
+        await saving;
+
+        vm.NotesText.Length.ShouldBe(RunTags.MaxNotesLength);
+        vm.AnnotationsStatusText.ShouldContain($"shortened {RunTags.MaxNotesLength}");
+        vm.AnnotationsStatusText.ShouldContain(ResultsCopy.NotesEditedDuringSave);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(2)]

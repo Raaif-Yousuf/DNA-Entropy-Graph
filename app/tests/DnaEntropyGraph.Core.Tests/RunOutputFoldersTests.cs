@@ -147,12 +147,61 @@ public sealed class RunOutputFoldersTests : IDisposable
         RunOutputFolders.FolderExists(@"C:\none", _ => throw new FileNotFoundException()).ShouldBeFalse();
         RunOutputFolders.FolderExists(@"C:\there", _ => FileAttributes.Directory).ShouldBeTrue();
 
-        var existing = new HashSet<string>(StringComparer.Ordinal) { Path.GetFullPath(_parent) };
-        var created = new List<string>();
-        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "locked"), null, dir => existing.Contains(dir) || dir.EndsWith("locked", StringComparison.Ordinal), created.Add);
+        // Through the chain itself: the folder is really there, but the attribute read is refused for it.
+        Directory.CreateDirectory(Path.Combine(_parent, "locked"));
+        var made = RunOutputFolders.CreateFolderChain(
+            Path.Combine(_parent, "locked"),
+            null,
+            path => path.EndsWith("locked", StringComparison.Ordinal) ? throw new UnauthorizedAccessException() : File.GetAttributes(path));
 
-        made.ShouldBeEmpty("the probe says it is there, so nothing is claimed");
-        created.ShouldBeEmpty();
+        made.ShouldBeEmpty("the probe could not say it is missing, so nothing is claimed");
+        RunOutputFolders.RemoveCreated(made);
+        Directory.Exists(Path.Combine(_parent, "locked")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_file_at_the_path_is_not_a_folder()
+    {
+        RunOutputFolders.FolderExists(@"C:\a-file", _ => FileAttributes.Normal).ShouldBeFalse();
+        RunOutputFolders.FolderExists(@"C:\a-link", _ => FileAttributes.Directory | FileAttributes.ReparsePoint).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void RemoveCreated_goes_on_past_a_folder_it_cannot_remove_and_never_throws()
+    {
+        // Innermost first: the busy folder is tried before the empty one, and must not stop the cleanup.
+        var empty = Path.Combine(_parent, "empty");
+        var busy = Path.Combine(_parent, "busy");
+        Directory.CreateDirectory(empty);
+        Directory.CreateDirectory(busy);
+        File.WriteAllText(Path.Combine(busy, "keep.txt"), "k");
+
+        RunOutputFolders.RemoveCreated([empty, busy, Path.Combine(_parent, "gone"), "bad\0name"]);
+
+        Directory.Exists(empty).ShouldBeFalse("an empty folder is removed even though a later one could not be");
+        Directory.Exists(busy).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_cleanup_problem_in_the_failure_path_does_not_hide_the_original_exception()
+    {
+        Directory.CreateDirectory(_parent);
+        var calls = 0;
+
+        var ex = Should.Throw<InvalidOperationException>(() => RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "p", "q"), null, Directory.Exists, dir =>
+        {
+            if (++calls == 2)
+            {
+                // Make the folder made first impossible to remove, then fail.
+                File.WriteAllText(Path.Combine(_parent, "p", "keep.txt"), "k");
+                throw new InvalidOperationException("original");
+            }
+
+            Directory.CreateDirectory(dir);
+        }));
+
+        ex.Message.ShouldBe("original");
+        File.Exists(Path.Combine(_parent, "p", "keep.txt")).ShouldBeTrue("the folder with something in it is left");
     }
 
     [Fact]
