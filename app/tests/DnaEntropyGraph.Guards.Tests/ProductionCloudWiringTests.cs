@@ -286,7 +286,7 @@ public class ProductionCloudWiringTests : IDisposable
             services.AddSingleton(account);
         });
 
-        var found = await provider.GetRequiredService<IComputeGateway>().ListAppVmsAsync(CancellationToken.None);
+        var found = await provider.GetRequiredService<IComputeGateway>().ListAppVmsAsync(new CloudScope("chosen-project"), CancellationToken.None);
 
         found.ShouldBeEmpty();
         handler.Requests.ShouldNotBeEmpty("the observable: a request was made at all");
