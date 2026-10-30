@@ -308,6 +308,102 @@ public class JobReconcilerLifecycleTests
         rig.Gcp.DeleteAttempts.ShouldBeEmpty("the row's own VM is a different one");
         (await rig.Gcp.GetVmAsync("deg-job-donor9b", Zone, CancellationToken.None)).ShouldNotBeNull();
     }
+    /// <summary>A gateway whose label listing answers, and then (once) relabels the VM to another job before anyone can delete it: the race of round 10 M1.</summary>
+    private sealed class RelabelAfterListingCompute(FakeGcp inner, string vmName, string zone, IReadOnlyDictionary<string, string> labels) : IComputeGateway
+    {
+        private bool _done;
+
+        public Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => inner.GetVmAsync(n, z, ct);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+
+        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+
+        public Task DeleteVmAsync(string n, string z, CancellationToken ct) => inner.DeleteVmAsync(n, z, ct);
+
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct)
+        {
+            var found = await inner.FindByJobIdAsync(jobId, ct);
+            if (!_done && found.Any(v => v.Name == vmName))
+            {
+                _done = true;
+                inner.SimulateExternalRelabel(vmName, zone, labels); // another run's reuse claims the VM after the listing
+            }
+
+            return found;
+        }
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+
+        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+
+        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+    }
+
+    [Fact]
+    public async Task A_VM_relabelled_to_another_job_between_the_listing_and_the_delete_survives()
+    {
+        // Round 10 M1: the reconciler lists by label, decides Delete, and must re-read the VM right before the delete.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-race10", AfterTaskAction.Delete);
+        await rig.StopAsync("job-race10");
+        var vm = (await rig.VmsAsync("job-race10")).Single();
+        var otherLabels = new Dictionary<string, string>(vm.Labels!) { ["job-id"] = "job-someone-else", ["lifecycle"] = "stop" };
+        var compute = new RelabelAfterListingCompute(rig.Gcp, vm.Name, vm.Zone, otherLabels);
+
+        await rig.Reconciler(compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.DeleteAttempts.ShouldBeEmpty("the VM now belongs to another run");
+        (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None)).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_partially_completed_run_on_a_reused_VM_with_lifecycle_delete_has_that_VM_deleted_on_the_next_launch()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor10p", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor10p");
+        var request = await rig.Env.SeedAsync("job-part10", JobPhase.PartiallyCompleted, vm: false, after: AfterTaskAction.Delete, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-donor10p", Zone = Zone, VmReused = true });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor10p", Zone, CancellationToken.None);
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.Gcp.GetVmAsync("deg-job-donor10p", Zone, CancellationToken.None)).ShouldBeNull("the user chose Delete and the run finished on that VM");
+    }
+
+    [Theory]
+    [InlineData(21, true)]
+    [InlineData(5, false)]
+    public async Task A_completed_run_on_a_reused_VM_with_keep_alive_then_Delete_is_deleted_only_after_the_expiry(int advanceMinutes, bool deleted)
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor10k", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor10k");
+        var request = await rig.Env.SeedAsync("job-keep10", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, afterKeepAlive: AfterKeepAliveAction.Delete, keepAliveMinutes: 30, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-donor10k", Zone = Zone, VmReused = true });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor10k", Zone, CancellationToken.None);
+        rig.Clock.Advance(TimeSpan.FromMinutes(advanceMinutes));
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        var vm = await rig.Gcp.GetVmAsync("deg-job-donor10k", Zone, CancellationToken.None);
+        if (deleted)
+        {
+            vm.ShouldBeNull();
+        }
+        else
+        {
+            vm.ShouldNotBeNull();
+            vm.Status.ShouldBe("RUNNING", "keep-alive has not expired: left running");
+        }
+    }
     [Theory]
     [InlineData(RunErrorCodes.StoppedByCleanup)]
     [InlineData(RunErrorCodes.DeletedByCleanup)]

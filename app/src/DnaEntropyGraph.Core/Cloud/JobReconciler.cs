@@ -401,6 +401,24 @@ public sealed class JobReconciler
                         continue;
                     }
 
+                    if (want == VmWant.Delete)
+                    {
+                        // Round 10 M1: the listing is a snapshot, and another run's reuse may have relabelled this VM since: read it again right before the delete, and skip it unless it still carries this row's job id.
+                        try
+                        {
+                            var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                            if (fresh is null || fresh.Labels is null || !fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId)
+                            {
+                                continue;
+                            }
+                        }
+                        catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                        {
+                            Record(outcomes, row.JobId, vm.Name, ex);
+                            continue;
+                        }
+                    }
+
                     await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
                 }
             });
@@ -429,9 +447,9 @@ public sealed class JobReconciler
         var want = WantedByLifecycleCore(row, vm, options, installation, now);
 
         // Round 8 M3: a VM that is not the row's own deg-<job> is another run's (a failed or cancelled reuse relabelled it), whatever the row's state or the lifecycle label says:
-        // stopped at most, never deleted. Round 9 M2 (DECISION, reversible): the one exception is the user's own after-run Delete (or keep-alive-then-Delete) of a run that COMPLETED on that VM,
+        // stopped at most, never deleted. Round 9 M2 (DECISION, reversible): the one exception is the user's own after-run Delete (or keep-alive-then-Delete) of a run that COMPLETED (or partially completed, as RunOutcomeRecorder also applies it live) on that VM,
         // the VM the row records as its own (VmName); the app died before the live delete, so the launch finishes it.
-        var completedOnIt = row.Phase == JobPhase.Completed && row.VmName is not null && row.VmName == vm.Name;
+        var completedOnIt = row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted && row.VmName is not null && row.VmName == vm.Name;
         return want == VmWant.Delete && !completedOnIt && vm.Name != VmTerminator.OwnVmName(row.JobId) ? (vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave) : want;
     }
 

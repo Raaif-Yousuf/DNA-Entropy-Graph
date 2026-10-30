@@ -112,4 +112,26 @@ public partial class LateCreateAfterCancelTests
         gcp.DeleteAttempts.ShouldBeEmpty();
         (await gcp.GetVmAsync(donor.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
     }
+
+    [Fact]
+    public async Task R10_M1_a_stopped_VM_whose_lifecycle_label_says_delete_is_never_a_reuse_donor()
+    {
+        // The reconciler may be about to delete it (it lists by label and deletes by name): relabelling and starting it for another run would lose that run's VM.
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var oldSpec = Spec("job-oldr10") with { Lifecycle = "delete" };
+        await gcp.CreateVmAsync(oldSpec, ZoneA, CancellationToken.None);
+        await gcp.StopVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None);
+        await rig.Repo.UpsertAsync(new RunRecord("job-oldr10", JobPhase.Completed, DateTimeOffset.UtcNow), CancellationToken.None);
+        await rig.SeedRowAsync("job-r10");
+        var spec = Spec("job-r10");
+        var progress = new RunProgress();
+
+        var result = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-r10", spec), spec, progress, CancellationToken.None);
+
+        result.Success.ShouldBeTrue();
+        (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Labels!["job-id"].ShouldBe("job-oldr10", "the donor was not relabelled");
+        progress.VmName.ShouldBe("deg-job-r10", "a new VM was created instead");
+    }
 }
