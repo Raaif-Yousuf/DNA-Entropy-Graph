@@ -603,3 +603,80 @@ def test_a_non_positive_timeout_is_refused(monkeypatch, world, bad, capsys):
     r = Runner(wt)
     assert pmw.main(["--venv", str(venv), "--timeout", bad], runner=r) == pmw.EXIT_REFUSED
     assert r.calls == [] and "--timeout" in capsys.readouterr().out
+
+
+# ---- fix round 4 ------------------------------------------------------------
+
+
+def _record_popen(monkeypatch) -> list[subprocess.Popen[bytes]]:
+    made: list[subprocess.Popen[bytes]] = []
+    real = subprocess.Popen
+
+    def recording(*a: object, **k: object) -> subprocess.Popen[bytes]:
+        proc = real(*a, **k)  # type: ignore[call-overload]
+        made.append(proc)
+        return proc
+
+    monkeypatch.setattr(wt_venv.subprocess, "Popen", recording)
+    return made
+
+
+@needs_windows
+def test_the_child_does_not_run_until_it_is_in_the_job_and_runs_after(tmp_path: Path):
+    import time
+
+    f = tmp_path / "pid.txt"
+    seen: dict[str, bool] = {}
+
+    class SlowJob:
+        def assign(self, proc: object) -> bool:
+            time.sleep(1.5)  # far longer than python start-up: an unsuspended child would have written its pid by now
+            seen["file_during_assign"] = f.exists()
+            return True
+
+    proc, assigned = wt_venv.spawn_in_job([sys.executable, "-c", PID_SCRIPT, str(f)], dict(os.environ), Path.cwd(), SlowJob())  # type: ignore[arg-type]
+    try:
+        assert assigned is True
+        assert seen == {"file_during_assign": False}
+        assert _alive(_wait_for_pid_file(f))  # and it runs once resumed
+    finally:
+        wt_venv.kill_tree(proc)
+
+
+@needs_windows
+def test_zero_threads_resumed_kills_the_child_and_raises(monkeypatch, tmp_path: Path):
+    made = _record_popen(monkeypatch)
+    monkeypatch.setattr(wt_venv, "resume_process_threads", lambda pid: 0)
+    with pytest.raises(OSError):
+        wt_venv.spawn_in_job([sys.executable, "-c", PID_SCRIPT, str(tmp_path / "p.txt")], dict(os.environ), Path.cwd(), None)
+    assert len(made) == 1 and _wait_dead(made[0].pid)
+    assert not (tmp_path / "p.txt").exists()
+
+
+@needs_windows
+@pytest.mark.parametrize("where", ["assign", "resume"])
+def test_an_interrupt_between_popen_and_the_end_of_spawn_kills_the_child(monkeypatch, tmp_path: Path, where):
+    made = _record_popen(monkeypatch)
+
+    class Job:
+        def assign(self, proc: object) -> bool:
+            if where == "assign":
+                raise KeyboardInterrupt
+            return True
+
+    def resume(pid: int) -> int:
+        raise KeyboardInterrupt
+
+    if where == "resume":
+        monkeypatch.setattr(wt_venv, "resume_process_threads", resume)
+    with pytest.raises(KeyboardInterrupt):
+        wt_venv.spawn_in_job([sys.executable, "-c", PID_SCRIPT, str(tmp_path / "p.txt")], dict(os.environ), Path.cwd(), Job())  # type: ignore[arg-type]
+    assert len(made) == 1 and _wait_dead(made[0].pid)
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_a_non_finite_timeout_is_refused(monkeypatch, world, bad, capsys):
+    wt, venv = _main_world(monkeypatch, world)
+    r = Runner(wt)
+    assert pmw.main(["--venv", str(venv), "--timeout", bad], runner=r) == pmw.EXIT_REFUSED
+    assert r.calls == [] and "--timeout" in capsys.readouterr().out

@@ -190,12 +190,11 @@ def spawn_in_job(argv: Sequence[str], env: dict[str, str], cwd: Path, job: KillJ
     proc = subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4)  # CREATE_SUSPENDED
     try:
         assigned = job.assign(proc) if job is not None else False
+        if resume_process_threads(proc.pid) == 0:
+            raise OSError(f"could not resume the suspended process {proc.pid}")  # it would sit suspended forever
     except BaseException:
-        proc.kill()
+        proc.kill()  # any failure, Ctrl-C included, leaves no suspended or orphaned child
         raise
-    if resume_process_threads(proc.pid) == 0:
-        proc.kill()  # it would sit suspended forever
-        raise OSError(f"could not resume the suspended process {proc.pid}")
     return proc, assigned
 
 

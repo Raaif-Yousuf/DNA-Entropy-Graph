@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import math
 import os
 import subprocess
 import sys
@@ -193,8 +194,8 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = default_runner) 
     ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS, help="seconds before the gate tree is killed (default 7200)")
     ap.add_argument("extra", nargs="*", help="further premerge.py arguments, after --")
     args = ap.parse_args(argv)
-    if args.timeout <= 0:
-        print("ERROR: --timeout must be a positive number of seconds")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        print("ERROR: --timeout must be a positive, finite number of seconds")
         return EXIT_REFUSED
     wt = Path.cwd().resolve()
     if not (wt / "scripts" / "premerge.py").is_file():
