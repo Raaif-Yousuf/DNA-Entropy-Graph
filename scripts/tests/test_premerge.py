@@ -646,3 +646,57 @@ def test_classify_pytest_reads_xdist_output(rc, output, status):
 def test_a_timed_out_xdist_gate_still_counts_progress():
     out = "......F...  [ 12%]\n..........  [ 24%]\n"
     assert "timed out after 600s with 19 passed and 1 failed" in pm.classify_pytest_timeout(600, out)
+
+
+# --- #840: a hung test in scripts/tests fails fast with a traceback (pytest-timeout) ------------------------
+
+
+def test_the_scripts_tests_gate_installs_pytest_timeout_and_bounds_every_test():
+    cmd = {g.name: g for g in pm.build_gates(REPO_ROOT)}["scripts-tests"].argv
+    assert "pytest-timeout" in cmd
+    assert f"--timeout={pm.SCRIPTS_TEST_TIMEOUT}" in cmd
+    assert pm.SCRIPTS_TEST_TIMEOUT >= 120, "tighter than the slowest legitimate test under load (MEASURED 2026-10-29: 34 s)"
+    assert pm.SCRIPTS_TEST_TIMEOUT < pm.LONG_TIMEOUT, "a per-test bound looser than the whole gate would never fire first"
+
+
+def test_the_scripts_tests_ci_job_has_the_same_per_test_timeout_as_premerge():
+    text = (REPO_ROOT / ".github" / "workflows" / "ci-docs.yml").read_text(encoding="utf-8")
+    assert "--with pytest-timeout" in text and f"--timeout={pm.SCRIPTS_TEST_TIMEOUT}" in text
+    assert "pytest scripts/tests -q -n " in text, "the xdist assertion above must keep matching"
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
+def test_a_hung_test_under_the_gates_flags_fails_fast_and_names_the_test(tmp_path):
+    """The behaviour the flags exist for, not just their spelling: a test that sleeps forever is killed with a traceback."""
+    (tmp_path / "test_hang.py").write_text(
+        "import time\n\n\ndef test_it_hangs_forever():\n    time.sleep(600)\n", encoding="utf-8", newline="\n"
+    )
+    started = time.monotonic()
+    proc = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "--with",
+            "pytest-timeout",
+            "python",
+            "-m",
+            "pytest",
+            "test_hang.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--timeout=3",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    elapsed = time.monotonic() - started
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0
+    assert elapsed < 100, f"did not fail fast: {elapsed:.0f}s"
+    assert "Timeout" in out and "test_it_hangs_forever" in out and "time.sleep" in out, out[-1500:]

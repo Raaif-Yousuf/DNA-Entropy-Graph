@@ -649,6 +649,56 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken);
 
     /// <summary>
+    /// Issue #588: the object streamed from the network into <paramref name="destinationPath"/> (the Google client copies the one response body to the file as it arrives), so memory
+    /// stays flat however large the object is. A 404 is false with nothing on disk. Every failed attempt, a retry included, and a cancel deletes the file; a retry starts the
+    /// file again from byte zero. Integrity is the caller's: it verifies the file's size and SHA-256 against <c>result.json</c>.
+    /// </summary>
+    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync(
+            "Storage.Download",
+            async ct =>
+            {
+                try
+                {
+                    IDownloadProgress progress;
+                    await using (var target = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                    {
+                        progress = await _service.Objects.Get(bucket, objectKey).DownloadAsync(target, ct).ConfigureAwait(false);
+                    }
+
+                    if (progress.Status != DownloadStatus.Failed)
+                    {
+                        return true;
+                    }
+
+                    DeleteQuietly(destinationPath);
+                    if (progress.Exception is GoogleApiException { HttpStatusCode: HttpStatusCode.NotFound })
+                    {
+                        return false;
+                    }
+
+                    throw Translate(progress.Exception);
+                }
+                catch (Exception)
+                {
+                    DeleteQuietly(destinationPath);
+                    throw;
+                }
+            },
+            cancellationToken);
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // Nothing more to do for a leftover partial; it never carries a final name.
+        }
+    }
+    /// <summary>
     /// A 412 that positively looks like a failed precondition (the shared rule, <see cref="CloudErrorClassifier.IsPreconditionConflict"/>)
     /// is the app's own <c>PRECONDITION_FAILED</c>; every other 412 is classified as everywhere else, which makes it an
     /// organization-policy refusal. THEORY (unverified): Cloud Storage answers an org-policy violation with 412 as well.
