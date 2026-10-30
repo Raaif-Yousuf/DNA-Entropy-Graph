@@ -1,0 +1,1 @@
+- Worker: every manifest field is now type-checked (whole numbers, text, booleans, objects, the outputs list); a wrong-typed value raises a ManifestError naming the field instead of a raw ValueError or TypeError, and text fields are no longer coerced with str() (#878).
