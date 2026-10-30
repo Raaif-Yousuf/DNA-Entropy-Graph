@@ -6,7 +6,8 @@ namespace DnaEntropyGraph.Core.Runs;
 /// Issue #111: the job ids of imported runs the user removed from the list, so the next "Find runs from other computers" does not
 /// bring them back. Kept in settings (comma separated, newest last) rather than the history database: it needs no schema
 /// migration, and "Reset all settings" is the one way to bring dismissed runs back. A job id is a short date-and-hex string,
-/// never a name or a path, so it is safe to keep here.
+/// never a name or a path, so it is safe to keep here. Issue #915: an earlier-version (prototype) row the user removed is kept here too,
+/// under its folder-derived <c>legacy-</c> id, so the Settings scan does not offer that folder again.
 /// </summary>
 public sealed class ImportedRunDismissals(ISettingsStore settings)
 {

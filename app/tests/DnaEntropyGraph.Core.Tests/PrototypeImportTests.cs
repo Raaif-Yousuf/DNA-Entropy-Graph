@@ -189,6 +189,42 @@ public sealed class PrototypeImportTests : IDisposable
         runs.Rows.Count.ShouldBe(1);
     }
 
+    private sealed class MemorySettings : ISettingsStore
+    {
+        private readonly Dictionary<string, string> _values = [];
+
+        public string? GetString(string key) => _values.GetValueOrDefault(key);
+
+        public void SetString(string key, string value) => _values[key] = value;
+    }
+
+    /// <summary>Issue #915: a prototype row the user removed is not offered again by a later scan, while a different folder still is.</summary>
+    [Fact]
+    public async Task A_dismissed_folder_is_not_offered_or_imported_again_but_its_neighbour_still_is()
+    {
+        var removed = Run("removed");
+        Run("kept");
+        var runs = new MemoryRuns();
+        var dismissals = new DnaEntropyGraph.Core.Runs.ImportedRunDismissals(new MemorySettings());
+        var importer = new PrototypeImporter(runs, dismissals);
+        var scan = PrototypeScanner.Scan(_config, _downloads);
+        (await importer.NewRunsAsync(scan, CancellationToken.None)).Select(r => r.Name).Order().ShouldBe(["kept", "removed"]);
+
+        dismissals.Add(PrototypeImporter.JobIdFor(removed));
+
+        (await importer.NewRunsAsync(scan, CancellationToken.None)).Select(r => r.Name).ShouldBe(["kept"]);
+        (await importer.ImportAsync(scan, CancellationToken.None)).ShouldBe(1);
+        runs.Rows.Select(r => r.Name).ShouldBe(["kept"]);
+    }
+
+    [Fact]
+    public async Task Without_a_dismissal_list_every_new_folder_is_still_offered()
+    {
+        Run("a");
+
+        (await new PrototypeImporter(new MemoryRuns()).NewRunsAsync(PrototypeScanner.Scan(_config, _downloads), CancellationToken.None)).Count.ShouldBe(1);
+    }
+
     [Fact]
     public async Task A_folder_already_in_history_under_any_id_is_not_added_again()
     {

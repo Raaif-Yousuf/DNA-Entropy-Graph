@@ -2686,7 +2686,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
   <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+    <value>This run was made on another computer, so this app does not delete its cloud copy. Choose Open storage page to delete it in Google Cloud.</value>
   </data>
   <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
     <value>Drag along the strip to open the viewer at that part of the sequence.</value>
@@ -2933,6 +2933,12 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
     <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_ImportedNoLink" xml:space="preserve">
+    <value>This run was made on another computer, so this app cannot delete its cloud copy. To take it off this list, choose Remove from list.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_PrototypeNoFolder" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete, and its folder is no longer here. To take it off this list, choose Remove from list.</value>
   </data>
   <data name="PageTitle_RunProgress" xml:space="preserve">
     <value>Run progress</value>

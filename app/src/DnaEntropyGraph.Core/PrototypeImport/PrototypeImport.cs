@@ -132,7 +132,7 @@ public static partial class PrototypeScanner
 }
 
 /// <summary>Adds a history row for each prototype run (issue #243). The row is finished, flagged <see cref="RunRecord.Imported"/>, and has no bucket, VM or cost, so every cloud action is off for it; Open uses the folder in Downloads where it already is.</summary>
-public sealed class PrototypeImporter(IRunRepository runs)
+public sealed class PrototypeImporter(IRunRepository runs, Runs.ImportedRunDismissals? dismissals = null)
 {
     /// <summary>The same folder always gets the same id, so importing twice cannot add a run twice.</summary>
     public static string JobIdFor(string folder)
@@ -141,13 +141,15 @@ public sealed class PrototypeImporter(IRunRepository runs)
         return "legacy-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..12].ToLowerInvariant();
     }
 
-    /// <summary>The scanned runs that are not in history yet: not under their own id, and not under another id whose output folder is the same.</summary>
+    /// <summary>The scanned runs that are not in history yet and were not removed by the user: not under their own id, and not under another id whose output folder is the same.</summary>
     public async Task<IReadOnlyList<LegacyRun>> NewRunsAsync(PrototypeScan scan, CancellationToken cancellationToken)
     {
         var existing = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var ids = existing.Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
         var folders = existing.Where(r => !string.IsNullOrWhiteSpace(r.OutputDir)).Select(r => Normalize(r.OutputDir!)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return scan.Runs.Where(run => !ids.Contains(JobIdFor(run.Folder)) && !folders.Contains(Normalize(run.Folder))).ToList();
+        // Issue #915: a row the user removed is remembered by its folder-derived id (the same setting a removed bucket row uses; the "legacy-" ids cannot collide with a job id).
+        var dismissed = dismissals?.Load() ?? new HashSet<string>();
+        return scan.Runs.Where(run => !ids.Contains(JobIdFor(run.Folder)) && !dismissed.Contains(JobIdFor(run.Folder)) && !folders.Contains(Normalize(run.Folder))).ToList();
     }
 
     /// <summary>Returns how many rows were added. A folder already in history, under any id, is left as it is.</summary>

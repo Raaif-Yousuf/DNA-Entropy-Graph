@@ -475,7 +475,7 @@ public static class ServiceRegistration
         services.AddSingleton(new DnaEntropyGraph.Core.PrototypeImport.PrototypeSearchPaths(
             DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.ConfigPath(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
             DnaEntropyGraph.Core.PrototypeImport.PrototypeLocations.Downloads(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))));
-        services.AddSingleton<DnaEntropyGraph.Core.PrototypeImport.PrototypeImporter>();
+        services.AddSingleton(sp => new DnaEntropyGraph.Core.PrototypeImport.PrototypeImporter(sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<ImportedRunDismissals>()));
         services.AddSingleton<PrototypeImportViewModel>();
 
         if (cloud == CloudBackend.Developer)
