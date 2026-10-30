@@ -132,6 +132,6 @@ public partial class LateCreateAfterCancelTests
         result.Success.ShouldBeTrue();
         (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Labels!["job-id"].ShouldBe("job-oldr10", "the donor was not relabelled");
-        progress.VmName.ShouldBe("deg-job-r10", "a new VM was created instead");
+        (await gcp.GetVmAsync("deg-job-r10", ZoneA, CancellationToken.None)).ShouldNotBeNull("a new VM was created instead");
     }
 }
