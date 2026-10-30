@@ -92,7 +92,8 @@ public sealed record RunRecord(
     bool Imported = false,
     string? Notes = null,
     string? TagsJson = null,
-    int PreemptionCount = 0)
+    int PreemptionCount = 0,
+    string? AccountSub = null)
 {
     // Issue #141: a whole record can reach a log line or a failure message ($"{run}"), and the compiler's ToString prints every member.
     // The user's own free text prints as a fixed marker instead; every other member prints as before (a null as "null").
@@ -109,6 +110,7 @@ public sealed record RunRecord(
             {
                 nameof(Notes) when value is not null => "<notes withheld>",
                 nameof(TagsJson) when value is not null => "<tags withheld>",
+            nameof(AccountSub) when value is not null => "<account withheld>",
                 _ => value is null ? "null" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
             };
             builder.Append(first ? string.Empty : ", ").Append(member.Name).Append(" = ").Append(text);

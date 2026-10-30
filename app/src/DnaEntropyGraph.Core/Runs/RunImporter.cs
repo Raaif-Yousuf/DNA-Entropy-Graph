@@ -108,6 +108,7 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
                 ErrorCode: phase == JobPhase.Failed ? result.ErrorCode ?? RunErrorCodes.WorkerFailed : null,
                 ManifestJson: manifestJson,
                 ProjectId: scope.ProjectId,
+                AccountSub: scope.AccountSub,
                 Bucket: bucket,
                 JobPrefix: prefix,
                 AppVersion: Str(createdBy, "appVersion"),

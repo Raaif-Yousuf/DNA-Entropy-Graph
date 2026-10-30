@@ -19,7 +19,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
                IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
                EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
                AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-               Notes, TagsJson, PreemptionCount
+               Notes, TagsJson, PreemptionCount, AccountSub
         FROM Runs;
         """;
 
@@ -40,14 +40,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
             IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
             EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
             AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-            Notes, TagsJson, PreemptionCount)
+            Notes, TagsJson, PreemptionCount, AccountSub)
         VALUES (
             @Id, @Name, @IsBatch, @Target, @Phase, @ErrorCode, @ErrorDetail, @CreatedAt, @StartedAt, @VmReadyAt, @FinishedAt,
             @OptionsJson, @ManifestJson, @ProjectId, @Bucket, @JobPrefix, @VmName, @Zone, @MachineType, @GpuType,
             @IsSpot, @VmReused, @LastProgressSeq, @LastHeartbeatAt, @StatusGeneration, @OutputDir,
             @EstimatedCostUsd, @ActualCostUsd, @VmSeconds, @CloudResultsExpireAt, @CloudResultsDeleted,
             @AppVersion, @WorkerVersion, @WorkerImageDigest, @ContractVersion, @InstallationId, @Imported,
-            @Notes, @TagsJson, @PreemptionCount)
+            @Notes, @TagsJson, @PreemptionCount, @AccountSub)
         ON CONFLICT(Id) DO UPDATE SET
             Name = excluded.Name, IsBatch = excluded.IsBatch, Target = excluded.Target, Phase = excluded.Phase,
             ErrorCode = excluded.ErrorCode, ErrorDetail = excluded.ErrorDetail,
@@ -62,7 +62,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
             CloudResultsExpireAt = excluded.CloudResultsExpireAt, CloudResultsDeleted = excluded.CloudResultsDeleted,
             AppVersion = excluded.AppVersion, WorkerVersion = excluded.WorkerVersion, WorkerImageDigest = excluded.WorkerImageDigest,
             ContractVersion = excluded.ContractVersion, InstallationId = excluded.InstallationId, Imported = excluded.Imported,
-            PreemptionCount = excluded.PreemptionCount;
+            PreemptionCount = excluded.PreemptionCount,
+            AccountSub = COALESCE(excluded.AccountSub, Runs.AccountSub);
         """;
 
     private readonly SqliteDatabase _database;
@@ -211,7 +212,8 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         Imported: row.Imported != 0,
         Notes: row.Notes,
         TagsJson: row.TagsJson,
-        PreemptionCount: (int)row.PreemptionCount);
+        PreemptionCount: (int)row.PreemptionCount,
+        AccountSub: row.AccountSub);
 
     private RunRow ToRow(RunRecord run) => new()
     {
@@ -255,6 +257,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         Notes = run.Notes,
         TagsJson = run.TagsJson,
         PreemptionCount = run.PreemptionCount,
+        AccountSub = run.AccountSub,
     };
 
     private sealed class RunRow
@@ -297,6 +300,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         public string? InstallationId { get; set; }
         public long Imported { get; set; }
         public long PreemptionCount { get; set; }
+    public string? AccountSub { get; set; }
         public string? Notes { get; set; }
         public string? TagsJson { get; set; }
     }

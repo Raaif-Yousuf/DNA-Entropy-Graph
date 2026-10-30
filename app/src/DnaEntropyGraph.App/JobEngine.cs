@@ -233,7 +233,8 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 VmName: request.Spec.VmName,
                 MachineType: request.Spec.MachineType,
                 AppVersion: request.Spec.AppVersion,
-                InstallationId: installationId),
+                InstallationId: installationId,
+                AccountSub: scope.AccountSub),
             cancellationToken).ConfigureAwait(false);
 
         // Registered before the body runs (see ActiveRuns), so a cancel can never find a run that is not there yet. The runner

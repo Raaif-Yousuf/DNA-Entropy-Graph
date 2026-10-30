@@ -296,6 +296,20 @@ public class JobEngineTests
     }
 
     [Fact]
+    public async Task The_run_row_records_the_account_the_run_was_made_as_and_every_call_is_made_in_that_scope()
+    {
+        // Issue #830 stage 3: the observable that differs if the account is wired to nothing is the row (what a later stop reads) and the account on the calls.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.AccountSub.ShouldBe(FakeGcp.DefaultAccountSub);
+        h.Gcp.CallsTo("CreateVm").ShouldAllBe(c => c.AccountSub == row.AccountSub && c.ProjectId == Project);
+    }
+
+    [Fact]
     public async Task A_run_with_no_selected_project_fails_with_a_recorded_reason_and_creates_nothing()
     {
         var h = new Harness(new FakeGcp().WithSignedOut());
