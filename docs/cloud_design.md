@@ -617,7 +617,7 @@ exercise.
  cancellation token, and only when newer than the one recorded, so a stale status.json found on a resume does not move it), so a run killed with
  the app has a sign of life to book to. The time recorded is the earlier of the worker's `updatedAt` and the app's own now (a VM clock ahead of the app's would
  otherwise store a future time, refuse every later heartbeat and book the future); a heartbeat that advanced with no readable `updatedAt` while the app was
- watching records the app's now (the first look at a status.json records nothing). A gone VM's end is never after now, even when its start is (the app clock is behind the platform's): the span then books zero and the ledger traces `vm-span-inverted` with the job id; and a ledger entry whose row ends before it starts books a zero span at $0. END is first-wins
+ watching records the app's now (the first look at a status.json records nothing). A gone VM's end is never after now, even when its start is (the app clock is behind the platform's): the span then books zero and the ledger traces `vm-span-inverted` (no id: a job id can come from a bucket prefix, so it is not proven opaque); and a ledger entry whose row ends before it starts books a zero span at $0. END is first-wins
  for a run: a stopped VM the run adopted and restarted keeps the stop first observed; a cancel that finds several VMs books the earliest
  start to the latest end. A VM that self-deleted at +20 min and is resumed 10 h later books about 20 min, not 10 h.
  A create answered `AlreadyExists` adopts the VM and books its start. A cancel books the VMs its label lookup found.

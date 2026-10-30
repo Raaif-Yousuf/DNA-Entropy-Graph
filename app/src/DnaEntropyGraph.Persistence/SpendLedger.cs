@@ -74,13 +74,13 @@ public sealed class SpendLedger : ISpendCapGate
     public async Task<CostLedgerEntry?> RecordRunAsync(RunRecord run, CancellationToken cancellationToken)
         => Quote(run) is { } entry ? TraceIfInverted(run, await _ledger.TryAppendAsync(entry, cancellationToken).ConfigureAwait(false)) : null;
 
-    // A span booked as zero because the end was before the start (a clock step) is traced once per run, when the append is accepted (not on every Quote or duplicate upsert), by job id only,
-    // never a message. It goes to the trace listeners; it reaches app.log and the support zip only once the listener #923 adds is on main.
+    // A span booked as zero because the end was before the start (a clock step) is traced once per run, when the append is accepted (not on every Quote or duplicate upsert), with a constant message
+    // and no id (a job id can come from a bucket prefix, so it is not proven opaque). It goes to the trace listeners; it reaches app.log and the support zip only once the listener #923 adds is on main.
     private static CostLedgerEntry? TraceIfInverted(RunRecord run, CostLedgerEntry? written)
     {
         if (written is not null && run.FinishedAt < run.VmReadyAt)
         {
-            System.Diagnostics.Trace.TraceWarning($"vm-span-inverted job={run.JobId}");
+            System.Diagnostics.Trace.TraceWarning("vm-span-inverted");
         }
 
         return written;

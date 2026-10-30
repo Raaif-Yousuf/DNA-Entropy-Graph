@@ -538,7 +538,8 @@ public class SpendLedgerTests
                 System.Diagnostics.Trace.Listeners.Remove(listener);
             }
 
-            listener.Lines.Count(l => l.Contains("vm-span-inverted job=r1")).ShouldBe(1, "traced once per run when booked, by id only, never on a Quote or a duplicate upsert");
+            listener.Lines.Count(l => l.Contains("vm-span-inverted")).ShouldBe(1, "traced once per run when booked, never on a Quote or a duplicate upsert");
+            listener.Lines.ShouldNotContain(l => l.Contains("r1"), "a job id can come from a bucket prefix (RunImporter), so it is not a proven opaque id; the line carries no id (CLAUDE.md logging rule, #923 guard)");
         }
     }
 
