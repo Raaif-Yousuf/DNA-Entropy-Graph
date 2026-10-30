@@ -25,6 +25,7 @@ public class TraceCallSiteGuardTests
     {
         ["refused.Reason"] = "FileAssociationRefusal enum member (FileAssociationSettingsViewModel)",
         ["ex.Rule"] = "the name of a diagnostics redaction rule, a constant (SettingsViewModel)",
+        ["ex.Kind"] = "the CloudErrorKind enum member of a CloudOperationException, never Google text (BudgetSettingsViewModel)",
         ["what"] = "CloudResourcesViewModel.LogFailure's parameter; every caller passes a literal phrase",
     };
 

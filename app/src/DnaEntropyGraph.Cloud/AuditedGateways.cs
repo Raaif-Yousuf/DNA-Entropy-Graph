@@ -109,6 +109,9 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
     public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
 
+    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        => inner.TryDownloadToFileAsync(bucket, objectKey, destinationPath, cancellationToken);
+
     public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
         => inner.ListBucketsAsync(projectId, cancellationToken);
 }
@@ -211,4 +214,19 @@ public sealed class AuditedPricingCatalogGateway : IPricingCatalogGateway, IAudi
 
     public Task<IReadOnlyList<CatalogSku>> ListComputeSkusAsync(CancellationToken cancellationToken)
         => _inner.ListComputeSkusAsync(cancellationToken);
+}
+
+public sealed class AuditedBudgetGateway(IBudgetGateway inner, CloudAuditor auditor) : IBudgetGateway, IAuditedGateway
+{
+    public object Inner => inner;
+
+    public Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, string projectId, CancellationToken cancellationToken)
+        => inner.FindAsync(billingAccountId, installationId, projectId, cancellationToken);
+
+    // The billing account id is not logged: an upsert names the project the budget watches, a delete just says "budget" (its name carries the account id).
+    public Task<BudgetInfo> UpsertAsync(BudgetSpec spec, CancellationToken cancellationToken)
+        => auditor.RunAsync("Billing.UpsertBudget", () => ($"projects/{spec.ProjectId}", null), () => inner.UpsertAsync(spec, cancellationToken), cancellationToken: cancellationToken);
+
+    public Task DeleteAsync(string budgetName, CancellationToken cancellationToken)
+        => auditor.RunAsync("Billing.DeleteBudget", () => ("budget", null), () => inner.DeleteAsync(budgetName, cancellationToken), cancellationToken: cancellationToken);
 }

@@ -5,11 +5,20 @@ using Xunit;
 
 namespace DnaEntropyGraph.Core.Tests;
 
+/// <summary>Classes that install or count lines of the process-global Trace listener join this collection; it runs alone (#994).</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ProcessGlobalTraceCollection
+{
+    public const string Name = "process-global-trace-listener";
+}
+
 /// <summary>
 /// Issue #923: Trace.Trace* output reaches logs\app.log (the folder the diagnostics zip reads), with every line redacted.
 /// Trace listeners are process-global, so a parallel test class can hit a real Trace call site and that line lands in this log too:
-/// every assertion here looks only at the lines carrying this test's own marker, never at the line count or the whole file.
+/// most assertions look only at the lines carrying this test's own marker.
+/// The blank-message test cannot (a blank message has no marker), so the class lives in a collection that runs with no other test class in parallel (#994).
 /// </summary>
+[Collection(ProcessGlobalTraceCollection.Name)]
 public sealed class DiagnosticsTraceListenerTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "deg-trace-" + Guid.NewGuid().ToString("N"));

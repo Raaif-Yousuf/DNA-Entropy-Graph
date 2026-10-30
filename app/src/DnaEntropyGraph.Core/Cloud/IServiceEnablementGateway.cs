@@ -22,6 +22,12 @@ public static class RequiredServices
     public const string Storage = "storage.googleapis.com";
     public const string CloudQuotas = "cloudquotas.googleapis.com";
 
+    /// <summary>
+    /// The Cloud Billing Budget API (issue #148). Deliberately NOT in <see cref="Ids"/>: only a user who asks for a budget alert needs
+    /// it, so <see cref="BudgetService"/> switches it on at that moment and the wizard never fails over an optional extra.
+    /// </summary>
+    public const string BillingBudgets = "billingbudgets.googleapis.com";
+
     /// <summary>Compute first: it is the one a stockout-shaped failure hides behind (CLAUDE.md Critical Pitfalls).</summary>
     public static IReadOnlyList<string> Ids { get; } = [Compute, Storage, CloudQuotas];
 }
