@@ -1708,6 +1708,45 @@ Every call that changes something in the user's Google Cloud project leaves one 
   WITHOUT rotating, so the audit never holds a caller up (the next write rotates).
 - **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
   like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
+
+## 23. The Cloud Billing budget (issues #148, #222)
+
+#222 is the standing-costs-card half of #148 ("merges with the earlier budget issue; keep one"): one budget, one
+implementation, and the card (#219, not built) binds the same view model (`BudgetSettingsViewModel`: `SaveCommand`,
+`HasBudget`, `StatusText`, `ErrorText`, `ConsoleLink`, `CopyRequestCommand`) or hosts it.
+
+- **Interface.** `Core/Cloud/IBudgetGateway` (`FindAsync`, `UpsertAsync`, `DeleteAsync`); the policy is `BudgetService`
+  (`IBudgetService`: look, save, remove, console link) over it, `IBillingGateway` (the project's linked account) and
+  `IServiceEnablementGateway`. `FakeGcp.Budgets.cs` implements the gateway with `WithBudgetPermissionDenied()`; the Budgets
+  API off, not-project-owner and billing-off scenarios come from the existing fake switches.
+- **Write only after a successful read (round 9).** `BudgetSettingsViewModel.StateKnown` is true only while the last read of the budget state succeeded, and `_knownProject` records the project that read was FOR; `SaveCommand` and `RemoveCommand` need both, with `_knownProject` equal to the project selected now (the selection can change without a Refresh; the method bodies check too, because `ExecuteAsync` does not consult `CanExecute`). Every look starts with no budget shown (`HasBudget` false) and the default request text, so a failed read never leaves the previous project's budget or request behind. Any failed read disables both buttons and the status line names the one action for its kind: a billing administrator (budget list refused, `BudgetStatusNoAccess`), a project owner (refused read of the API state, `BudgetStatusApiReadNoAccess` plus the copy request, or refused read of the project's billing link, `BudgetErrorCodes.BillingReadPermission`, `BudgetStatusBillingReadNoAccess`), Google's billing page (`BudgetStatusBilling`), the organization's administrator with the copy request (`BudgetStatusOrgPolicy`), the API's page (`BudgetStatusApiDisabled`), the internet check then Settings again (`BudgetStatusNetwork`), or open Settings again (anything else, and a cancelled look: `BudgetStatusCouldNotCheck`). THEORY (unverified): `BudgetService.GetAsync` can raise every kind except `AlreadyExists` and `Stockout` (the billing, API-state and budget-list reads all go through the call pipeline's classifier); only Permission, Network and Other were seen from a real project, and the API page the ApiDisabled link opens is the Budget API's even when another API is the one switched off. `BudgetService` tags a refused billing-link read on Save too, so Save names a project owner rather than a billing role. `BudgetService.GetAsync` and therefore `RemoveAsync` raise `ApiReadPermission` for a refused API-state read, exactly like Save. The copy confirmation follows the request copied (`BudgetRequestCopied`, `_ApiRead`, `_OrgPolicy`). A box the user cleared is not refilled with the default.
+- **Real gateway.** `Cloud/Rest/GoogleBudgetGateway` over `Google.Apis.CloudBillingBudget.v1` (the DECISION #535 family,
+  Apache-2.0): `billingAccounts.budgets.list`, `create`, `patch` (`updateMask=amount,budgetFilter,thresholdRules`), `delete`.
+  Every HTTP call goes through the pipeline; the create is never replayed (`replayable: false`), and `UpsertAsync` lists
+  first, so a budget whose create response was lost is patched, not doubled. Never wrapped in a `Resilient*` decorator.
+- **Discovery (Hard Rule 9).** Budgets carry no labels, so this installation's budget is the one whose display name is
+  `DNA Entropy Graph <first 8 characters of the installation id> <project id>` on the account (`BudgetNaming.DisplayName`; at most 57 of Google's 60 characters). Two users on one billing account get two budgets, one project of one user gets one, and
+  each sees only its own. A budget of another name is never touched.
+- **Shape.** One project in `budgetFilter.projects` (the project NUMBER, read from Resource Manager), `amount.specifiedAmount`
+  with no currency (the account's own is used), threshold rules 0.5, 0.9 and 1.0 on `CURRENT_SPEND`, and NO
+  `notificationsRule`, so billing administrators and users are emailed by default. Default amount 50.
+- **Quota project.** Each request carries `x-goog-user-project: <the user's project>`; without it Google bills the call to the
+  OAuth client's own project, where the Budget API is not on. The API is switched on lazily at the first save
+  (`RequiredServices.BillingBudgets`, deliberately not in `RequiredServices.Ids`: an optional extra must never fail the wizard).
+- **Permission is the common case.** The user needs `billing.budgets.create` on the BILLING ACCOUNT (Billing Account Costs
+  Manager or Administrator); a project owner often lacks it. The view model turns `CloudErrorKind.Permission` into one sentence,
+  a link to the account's console budgets page and a copyable request for the billing administrator; `Billing` (no account)
+  links to the billing home. No new `SetupErrorCodes`: the group maps kinds itself, so the three-way code guard is untouched.
+  Three refinements (review): a refusal to switch the Budget API on is a right on the PROJECT, so `BudgetService` rethrows it as `Permission` with
+  `BudgetErrorCodes.ApiEnablePermission` and the group offers the API's own page as its one action (no billing-administrator request); a refused READ of the API's state while saving (no `serviceusage.services.get`) stops the save before any budget call, as `Permission` with `BudgetErrorCodes.ApiReadPermission`: saving blind would patch a budget the page could not show (a 500 budget would become the 50 in the box) and would name the wrong person to ask. The group's one action is a copyable request to a project owner for the Service Usage Viewer role (`BudgetRequestText_ApiRead`); the original error is kept as the inner exception and the diagnostic says the read was refused (a refused enable says "Switching on" and has its own code); a
+  refused Remove says so and links the budgets page (no create request); and a budget that follows last period's spend (`BudgetInfo.AmountKnown`
+  false) is shown without an amount and leaves the amount box EMPTY (Save with an empty box asks for an amount and changes nothing, so a follow-last-month budget is never turned into a fixed default by accident). The project-change reset of the box runs only on a real change of project, never on the first open. The threshold phrase ("50%, 90% and 100%") is built from resw keys (`BudgetThresholdItem`, `BudgetThresholdsJoiner`, `BudgetThresholdsAnd`); `BudgetCopyTests` reads the real resw and checks every Budget key's placeholders against the arguments the code passes. `GoogleBudgetGateway` patches `thresholdRules` (update mask `amount,budgetFilter,thresholdRules`) to 50/90/100 on every Save, so the "no email thresholds" status is expected not to repeat after a Save. When a budget has no thresholds and no known amount the box is empty, so that status (`BudgetStatusNoThresholdsNoAmount`) tells the user to type an amount first. After a missing budget is found or a Remove succeeds, an empty amount box gets the default amount back (typed text is never overwritten).
+- **Already exists.** Google allows two budgets with one display name, so there is no 409 to handle; idempotence is the
+  find-then-patch above.
+- **THEORY (unverified, no live billing account):** that an unset currency and an absent `notificationsRule` behave as documented,
+  that `projects/{number}` is the filter form, and that `x-goog-user-project` is honoured with a user token. `docs/ToTest.md`
+  carries the real-account row.
+
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

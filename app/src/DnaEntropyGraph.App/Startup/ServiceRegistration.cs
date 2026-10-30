@@ -472,6 +472,9 @@ public static class ServiceRegistration
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
+        // Issues #148 and #222: the Settings "Budget alert" group. The service is the policy (account, API, installation id); the gateway is Google or the fake.
+        services.AddSingleton<IBudgetService, BudgetService>();
+        services.AddTransient<BudgetSettingsViewModel>();
         // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
         services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
         services.AddTransient<SettingsTransferViewModel>();
@@ -536,6 +539,7 @@ public static class ServiceRegistration
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Billing);
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
         services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Budget);
         services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().PricingCatalog);
 
     }
@@ -559,6 +563,7 @@ public static class ServiceRegistration
         services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
     }
 }
@@ -597,6 +602,7 @@ internal static class CloudAuditRegistration
         Decorate<IProjectCatalogGateway>(services, (inner, auditor) => new AuditedProjectCatalogGateway(inner, auditor));
         Decorate<IQuotaGateway>(services, (inner, auditor) => new AuditedQuotaGateway(inner, auditor));
         Decorate<IPricingCatalogGateway>(services, (inner, auditor) => new AuditedPricingCatalogGateway(inner, auditor));
+        Decorate<IBudgetGateway>(services, (inner, auditor) => new AuditedBudgetGateway(inner, auditor));
     }
 
     private static void Decorate<T>(IServiceCollection services, Func<T, CloudAuditor, T> wrap)

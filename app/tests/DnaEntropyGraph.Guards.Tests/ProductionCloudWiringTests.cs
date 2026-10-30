@@ -56,6 +56,7 @@ public class ProductionCloudWiringTests : IDisposable
         typeof(IProjectCatalogGateway),
         typeof(IBillingGateway),
         typeof(IServiceEnablementGateway),
+        typeof(IBudgetGateway),
     };
 
     [Fact]
@@ -102,10 +103,24 @@ public class ProductionCloudWiringTests : IDisposable
         { typeof(IWorkerIdentityGateway), "DnaEntropyGraph.Cloud.Rest.GoogleIamGateway" },
         { typeof(IProjectCatalogGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectCatalogGateway" },
         { typeof(IServiceEnablementGateway), "DnaEntropyGraph.Cloud.Rest.GoogleServiceUsageGateway" },
+        { typeof(IBudgetGateway), "DnaEntropyGraph.Cloud.Rest.GoogleBudgetGateway" },
         { typeof(IProjectSetupGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectSetupGateway" },
         { typeof(IQuotaGateway), "DnaEntropyGraph.Cloud.Rest.GoogleQuotaGateway" },
         { typeof(IBillingGateway), "DnaEntropyGraph.Cloud.ResilientBillingGateway" },
     };
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void The_Settings_budget_group_resolves_with_its_whole_chain_in_every_backend(CloudBackend backend)
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: backend);
+        using var provider = services.BuildServiceProvider();
+
+        // The ViewModel only reads the project when the page opens; resolving it proves the service, the gateway and the settings store are all registered.
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.BudgetSettingsViewModel>().ShouldNotBeNull();
+        provider.GetRequiredService<IBudgetService>().ShouldBeOfType<BudgetService>();
+    }
 
     [Theory]
     [MemberData(nameof(UnwrappedGateways))]
