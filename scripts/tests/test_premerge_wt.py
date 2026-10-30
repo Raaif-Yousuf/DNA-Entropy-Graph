@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -608,12 +609,12 @@ def test_a_non_positive_timeout_is_refused(monkeypatch, world, bad, capsys):
 # ---- fix round 4 ------------------------------------------------------------
 
 
-def _record_popen(monkeypatch) -> list[subprocess.Popen[bytes]]:
-    made: list[subprocess.Popen[bytes]] = []
-    real = subprocess.Popen
+def _record_popen(monkeypatch) -> list[Any]:
+    made: list[Any] = []
+    real: Any = subprocess.Popen
 
-    def recording(*a: object, **k: object) -> subprocess.Popen[bytes]:
-        proc = real(*a, **k)  # type: ignore[call-overload]
+    def recording(*a: object, **k: object) -> Any:  # noqa: ANN401
+        proc = real(*a, **k)
         made.append(proc)
         return proc
 
@@ -678,5 +679,5 @@ def test_an_interrupt_between_popen_and_the_end_of_spawn_kills_the_child(monkeyp
 def test_a_non_finite_timeout_is_refused(monkeypatch, world, bad, capsys):
     wt, venv = _main_world(monkeypatch, world)
     r = Runner(wt)
-    assert pmw.main(["--venv", str(venv), "--timeout", bad], runner=r) == pmw.EXIT_REFUSED
+    assert pmw.main(["--venv", str(venv), f"--timeout={bad}"], runner=r) == pmw.EXIT_REFUSED
     assert r.calls == [] and "--timeout" in capsys.readouterr().out
