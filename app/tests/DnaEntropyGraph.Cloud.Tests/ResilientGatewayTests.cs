@@ -342,6 +342,11 @@ public class ResilientGatewayTests
             return false;
         }
 
+        if (type == typeof(CloudScope))
+        {
+            return new CloudScope(FakeGcp.AnyProject);
+        }
+
         if (type == typeof(Action))
         {
             return null; // EndVmAsync's optional acceptance callback

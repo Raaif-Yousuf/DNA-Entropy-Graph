@@ -465,7 +465,7 @@ public sealed class RunCloudResultsTests : IDisposable
         var status = await Make().DeleteAsync(run, CancellationToken.None);
 
         status.ShouldBe(CloudResultsStatus.Done);
-        await _deleter.Received(1).DeleteJobObjectsAsync(Bucket, Prefix, Arg.Any<CancellationToken>());
+        await _deleter.Received(1).DeleteJobObjectsAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>());
         _runs.AllRecordedInOrder.Last().CloudResultsDeleted.ShouldBeTrue();
     }
 

@@ -117,7 +117,7 @@ public sealed partial class FakeGcp
     /// <summary>A scope naming this project sees every project, like the unscoped overloads (test call sites that do not care which project they act in).</summary>
     public const string AnyProject = "*";
 
-    private static bool InProject(VmDescriptor vm, CloudScope scope) => scope.ProjectId == AnyProject || vm.Scope is null || string.Equals(vm.Scope.ProjectId, scope.ProjectId, StringComparison.Ordinal);
+    private static bool InProject(VmDescriptor vm, CloudScope scope) => scope.ProjectId is AnyProject or "" || vm.Scope is null || string.Equals(vm.Scope.ProjectId, scope.ProjectId, StringComparison.Ordinal);
 
     private static IReadOnlyList<VmDescriptor> InProject(IReadOnlyList<VmDescriptor> vms, CloudScope scope) => [.. vms.Where(vm => InProject(vm, scope))];
 
@@ -129,7 +129,7 @@ public sealed partial class FakeGcp
     public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         using var _ = EnterCall(scope, "CreateVm");
-        if (!string.Equals(scope.ProjectId, spec.ProjectId, StringComparison.Ordinal))
+        if (scope.ProjectId != AnyProject && !string.Equals(scope.ProjectId, spec.ProjectId, StringComparison.Ordinal))
         {
             throw Build(CloudErrorKind.Other, "PROJECT_MISMATCH", null, "The VM spec names a different Google Cloud project from the scope, so no VM was created.");
         }

@@ -137,7 +137,7 @@ public class NothingLeftRunningTests
         public Rig()
         {
             Clock = new ManualClock();
-            Gcp = new FakeGcp(Clock);
+            Gcp = new FakeGcp(Clock).WithSelectedProject("my-project");
             Settings = new MemorySettingsStore();
             Installation = InstallationId.GetOrCreate(Settings);
             var pricing = Substitute.For<IPricingSource>();

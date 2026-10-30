@@ -479,6 +479,7 @@ public class CloudAuditTests
         _ when type == typeof(Action) => null,
         _ when type == typeof(string) => "jobs/job-9/in/x.gb",
         _ when type == typeof(Stream) => new MemoryStream(),
+        _ when type == typeof(CloudScope) => new CloudScope(FakeGcp.AnyProject),
         _ when type == typeof(VmSpec) => Spec("job-9"),
         _ when type == typeof(VmIncarnation) => new VmIncarnation(1UL, null),
         _ when type == typeof(QuotaIncreaseRequest) => new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret),
