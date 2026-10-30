@@ -37,8 +37,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     {
         // forceDelete wins; forceStop (the user chose Stop at a stall, #675) overrides the run's own end choice.
         var action = forceDelete ? AfterTaskAction.Delete : forceStop ? AfterTaskAction.Stop : FailureEndAction(request);
+
+        // Issue #999: a failed run deletes only a VM it CREATED (OwnVmName). One it borrowed by reuse keeps its owner's name and is stopped instead, whichever way the delete was asked for.
         var error = zone is not null
-            ? await EnsureVmEndedAsync(request, zone, action, CancellationToken.None).ConfigureAwait(false)
+            ? await EnsureVmEndedAsync(request, zone, action, CancellationToken.None, ownOnly: true).ConfigureAwait(false)
             : await EnsureVmsEndedByLabelAsync(request, action).ConfigureAwait(false);
         return error is null ? null : " (VM end not confirmed: " + error + ")";
     }
@@ -73,7 +75,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         foreach (var vm in owned)
         {
             // Every VM is ended even when an earlier one could not be: the first failure is what is reported.
-            var thisError = await EnsureVmEndedAsync(request, vm.Zone, action, CancellationToken.None, vm.Name).ConfigureAwait(false);
+            var thisError = await EnsureVmEndedAsync(request, vm.Zone, action, CancellationToken.None, vm.Name, ownOnly: true).ConfigureAwait(false);
             error ??= thisError;
         }
 
@@ -88,7 +90,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Returns null when the terminal state is confirmed, else why it is not. Never throws for a cloud
     /// failure: the caller decides what an unconfirmed VM means for the run.
     /// </summary>
-    public async Task<string?> EnsureVmEndedAsync(CloudJobRequest request, string? zone, AfterTaskAction action, CancellationToken cancellationToken, string? vmName = null)
+    public async Task<string?> EnsureVmEndedAsync(CloudJobRequest request, string? zone, AfterTaskAction action, CancellationToken cancellationToken, string? vmName = null, bool ownOnly = false)
     {
         if (zone is null)
         {
@@ -97,6 +99,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
         // A VM found by label is ended under its own name and zone, never the spec's.
         var name = vmName ?? request.Spec.VmName;
+
+        // Issue #999 (ownOnly, the failure paths): a delete of a VM this run did not create (a reuse relabelled it to this job) becomes a stop. A user's own after-run Delete choice (ownOnly false) is unchanged.
+        var borrowed = ownOnly && name != OwnVmName(request.JobId);
+        if (borrowed && action == AfterTaskAction.Delete)
+        {
+            action = AfterTaskAction.Stop;
+        }
 
         // Round 4 M2: a delete of the job's VM holds the barrier a new attempt waits behind, from before the read to the verified end.
         var hold = action == AfterTaskAction.Delete ? Ledger.HoldDelete(request.JobId) : null;
@@ -108,7 +117,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 return null;
             }
 
-            if (action != AfterTaskAction.Delete && VmFacts.IsBooting(vm))
+            if (action != AfterTaskAction.Delete && !borrowed && VmFacts.IsBooting(vm))
             {
                 // THEORY (unverified): instances.stop on an instance that is not RUNNING is rejected, and a VM that never
                 // reached RUNNING has no disk worth keeping: a failure that lands while it boots deletes it, as the boot
@@ -230,7 +239,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             }
             catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
-                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted: {ex.Message}";
+                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted ({ErrorClassOf(ex)}).";
             }
         }
 
@@ -558,9 +567,11 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
                     break;
                 case ReapStep.Superseded:
-                case ReapStep.Deferred:
-                    // Round 5 L1: a newer attempt is pending (it may adopt this VM) or owns it: the VM is handed over, nothing failed.
+                    // A newer attempt OWNS the VM now: it is handed over, nothing failed.
                     return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
+                case ReapStep.Deferred:
+                    // Round 6 L2: a newer attempt that is only PENDING has adopted nothing (it may yet fail elsewhere, leaving this VM billing): keep waiting for it, bounded by the reap window, as the main switch does.
+                    return settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
                 default:
                     return sent.Landed
                         ? new LateCreateOutcome(sent.JobId, LateCreateState.DeleteFailed, watch.LastError ?? "other")
@@ -661,17 +672,26 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
         }
 
-        sent.Landed = true;
         if (VmFacts.IsStopped(vm!) || vm!.Status == "STOPPING")
         {
-            if (sent.Create is { IsCompleted: true })
+            // Round 6 H1: a stopped donor that carries this job's labels says nothing until the start has been ANSWERED, and a task that ended Canceled (or by a lost answer) answered nothing: the real
+            // gateway honours the token, so Compute may still run the start POST that was on the wire. Seen running and stopped by this watch, or a start that answered, there is nothing more to wait for;
+            // otherwise the VM is judged only after the same grace a create gets, counted from the task's end.
+            if (sent.Landed || sent.Answered)
             {
                 return new LateCreateOutcome(sent.JobId, LateCreateState.ReuseStopped);
+            }
+
+            if (sent.Create is { IsCompleted: true })
+            {
+                watch.EndedAt ??= settings.StartClock();
+                return settings.ElapsedSince(watch.EndedAt.Value) >= settings.LateCreateGrace || windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.ReuseStopped) : null;
             }
 
             return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
         }
 
+        sent.Landed = true; // seen running: the start landed
         var (ok, stopError) = await StopByNameAsync(sent.Name, sent.Zone).ConfigureAwait(false);
         watch.StopStart ??= settings.StartClock();
         watch.LastError = ok ? null : stopError;
@@ -746,9 +766,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     deleteError ??= await StopBorrowedAsync(listed, cancellationToken).ConfigureAwait(false);
                     foreach (var reuse in allSent.Where(c => c.IsReuse && c.Name == name && c.Zone == zone))
                     {
-                        // Round 5 H1: a reuse relabels FIRST and starts LAST, so a stopped donor that already carries this job's labels says nothing until the start has answered: while the reuse
-                        // task is still running, the watch keeps it (it stops the VM if the start lands). Only a reuse whose task has ended has nothing further to find.
-                        if (reuse.Create is { IsCompleted: true })
+                        // Rounds 5 and 6 H1: a reuse relabels FIRST and starts LAST, so a stopped donor that already carries this job's labels says nothing until the start has ANSWERED. A task still running, ended
+                        // Canceled or ended by a lost answer has not answered (the real gateway honours the token: Compute may still run a start POST that was on the wire), so the watch keeps it
+                        // (it stops the VM if the start lands). Only a start that answered successfully has been seen, and the stop above ended it.
+                        if (reuse.Answered)
                         {
                             reuse.Landed = true;
                         }
@@ -789,10 +810,22 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         var clockStart = settings.StartClock();
         while (true)
         {
-            var stillThere = (await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false))
-                .Where(v => v.Name == ownName)
-                .Select(v => (v.Name, v.Zone))
-                .ToHashSet();
+            HashSet<(string Name, string Zone)> stillThere;
+            var listUnreadable = false;
+            try
+            {
+                stillThere = (await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false))
+                    .Where(v => v.Name == ownName)
+                    .Select(v => (v.Name, v.Zone))
+                    .ToHashSet();
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                // Round 6 L3: a listing that fails is an unreadable look, never "none" and never an unexpected failure: keep looping, bounded by LifecycleTimeout below.
+                stillThere = [];
+                listUnreadable = true;
+            }
+
             foreach (var create in sent)
             {
                 // Read back by name too: a lagging listing says "none" for a VM that is still there. A VM seen both ways is counted once.
@@ -809,14 +842,14 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 }
             }
 
-            if (stillThere.Count == 0)
+            if (stillThere.Count == 0 && !listUnreadable)
             {
                 break;
             }
 
             if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
             {
-                return $"{stillThere.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
+                return $"{Math.Max(1, stillThere.Count)} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
             }
 
             await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);

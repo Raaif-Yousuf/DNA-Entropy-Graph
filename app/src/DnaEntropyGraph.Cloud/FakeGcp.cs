@@ -1458,6 +1458,64 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>Lets a parked reuse go on to its start.</summary>
     public void ReleaseParkedReuse() => _reuseParkGate?.TrySetResult();
 
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(VmSpec Reuse, string Name, string Zone, VmDescriptor Claimed)> _acceptedReuseStarts = new();
+    private bool _reuseParkHonoursCancel;
+
+    /// <summary>
+    /// Issue #938 round 6 H1: the production shape of <see cref="WithReuseParkedAfterClaim"/>. The reuse parks after its claim (labels moved, VM still stopped) and HONOURS its token: the caller's cancel
+    /// ends the task Canceled at once, as the real gateway's calls do, while Compute has already accepted <c>instances.start</c>: the VM runs when a test calls <see cref="LandAcceptedReuseStartsAsync"/>.
+    /// </summary>
+    public FakeGcp WithReuseStartThatTheClientCancels()
+    {
+        _reuseParkHonoursCancel = true;
+        return WithReuseParkedAfterClaim();
+    }
+
+    /// <summary>Makes every reuse start the client cancelled after the server accepted it (<see cref="WithReuseStartThatTheClientCancels"/>) run now: the VM reads RUNNING, with its worker.</summary>
+    public Task LandAcceptedReuseStartsAsync()
+    {
+        while (_acceptedReuseStarts.TryDequeue(out var accepted))
+        {
+            try
+            {
+                StartClaimedVm(accepted.Reuse, (accepted.Name, accepted.Zone), accepted.Name, accepted.Zone, accepted.Claimed);
+            }
+            catch (CloudOperationException)
+            {
+                // A VM deleted since the claim: the start is a 404, as on real Compute.
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The start itself: the worker's files first, then the VM reads RUNNING (#784), bound to the claimed incarnation. Throws VM_NOT_FOUND when the VM is gone (#875).</summary>
+    private VmDescriptor StartClaimedVm(VmSpec reuse, (string Name, string Zone) key, string existingVmName, string zone, VmDescriptor vm)
+    {
+        var undoWorker = RunWorkerUndoably(reuse, zone, vm.InstanceId);
+        VmDescriptor? started;
+        try
+        {
+            BeforeStartWrite?.Invoke();
+            // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
+            started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
+        }
+        catch
+        {
+            // A hook or a swap that threw between the worker's return and the start landing (#918): the start never happened, so the worker's files and deferred end go back.
+            undoWorker();
+            throw;
+        }
+
+        if (started is null || started.InstanceId != vm.InstanceId)
+        {
+            undoWorker(); // the start never happened: its worker never existed
+            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+        }
+
+        return started;
+    }
+
     private bool _reuseResponseLost;
     private Func<VmSpec, Task>? _reuseBarrier;
 
@@ -1607,32 +1665,27 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         if (_reuseParkGate is { } park)
         {
             _reuseParked.TrySetResult();
-            await park.Task.ConfigureAwait(false);
+            if (_reuseParkHonoursCancel)
+            {
+                try
+                {
+                    await park.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The client gave up while instances.start was on the wire; Compute had accepted it, so the start lands later (LandAcceptedReuseStartsAsync).
+                    _acceptedReuseStarts.Enqueue((reuse, existingVmName, zone, vm));
+                    throw;
+                }
+            }
+            else
+            {
+                await park.Task.ConfigureAwait(false);
+            }
         }
 
         ThrowIfProjectWide(spec.ProjectId);
-        // The worker's files first, then the VM reads RUNNING (#784); bound to this incarnation. A worker that fails leaves the VM stopped (RunWorkerUndoably).
-        var undoWorker = RunWorkerUndoably(reuse, zone, vm.InstanceId);
-        VmDescriptor? started;
-        try
-        {
-            BeforeStartWrite?.Invoke();
-            // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
-            started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
-        }
-        catch
-        {
-            // A hook or a swap that threw between the worker's return and the start landing (#918): the start never happened, so the worker's files and deferred end go back.
-            undoWorker();
-            throw;
-        }
-
-        if (started is null || started.InstanceId != vm.InstanceId)
-        {
-            undoWorker(); // the start never happened: its worker never existed
-            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
-        }
-
+        var started = StartClaimedVm(reuse, key, existingVmName, zone, vm);
         vm = started;
         if (_reuseResponseLost)
         {

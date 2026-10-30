@@ -851,9 +851,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         {
             // Round 5 L3: an answer that says the start was never sent (Compute refused, or the donor was gone, not stopped or unlabellable BEFORE anything was written) leaves nothing for a
             // later cancel to watch. Any other failure (a lost answer, a poll that timed out after the start POST) stays held: the start may have run.
-            if (StartNeverSent(ex))
+            if (SentCreate.ReuseNeverSent(ex))
             {
-                _sent.TryRemove(sentReuse, out _);
+                ReleaseSent(sentReuse); // round 6 L1: ReleaseSent, not a bare remove, so the ledger and the job's bookkeeping are pruned too
             }
 
             // A Network failure is an UNKNOWN outcome (the composite is never replayed, and its last answer may have been lost after the
@@ -875,10 +875,6 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
     }
 
-    /// <summary>Code read 2026-10-30 (the real gateway's ReuseVmAsync): these codes are thrown before the claim or any write; a refusal kind is Compute's own "no".</summary>
-    private static bool StartNeverSent(CloudOperationException ex)
-        => ex.Kind is CloudErrorKind.Billing or CloudErrorKind.ApiDisabled or CloudErrorKind.Quota or CloudErrorKind.Stockout or CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.AlreadyExists
-           || ex.Error.Code is "VM_NOT_FOUND" or "VM_NOT_STOPPED" or "VM_NO_BOOT_DISK" or "PROJECT_MISMATCH";
 
     /// <summary>The one VM the job's label finds, when it is booting or running (the reuse's start worked and only its answer was lost); else null. A failure of the look is "not found".</summary>
     private async Task<VmDescriptor?> TryAdoptReusedAsync(CloudJobRequest request, CancellationToken cancellationToken)

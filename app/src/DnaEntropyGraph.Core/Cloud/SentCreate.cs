@@ -55,8 +55,16 @@ internal sealed class SentCreate(string jobId, string name, string zone, long ge
     /// Compute refused the create (billing, API, quota, stockout, permission, org policy, already exists): no VM of this create exists. A cancelled or timed-out create and a
     /// network or unclassified failure are NOT refused (the server may have accepted the insert), and neither is one still in flight.
     /// </summary>
-    public bool Refused => Create is { IsFaulted: true } task && task.Exception?.GetBaseException() is CloudOperationException
-    {
-        Kind: CloudErrorKind.Billing or CloudErrorKind.ApiDisabled or CloudErrorKind.Quota or CloudErrorKind.Stockout or CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.AlreadyExists,
-    };
+    public bool Refused => Create is { IsFaulted: true } task && task.Exception?.GetBaseException() is CloudOperationException ex
+        && (IsReuse
+            ? ReuseNeverSent(ex)
+            : ex.Kind is CloudErrorKind.Billing or CloudErrorKind.ApiDisabled or CloudErrorKind.Quota or CloudErrorKind.Stockout or CloudErrorKind.Permission or CloudErrorKind.OrgPolicy or CloudErrorKind.AlreadyExists);
+
+    /// <summary>
+    /// Round 6 L1. Code read 2026-10-30 (<c>GoogleComputeGateway.ReuseVmAsync</c>): these codes are thrown before any write (the project check, the instance read, the not-stopped check, the boot-disk parse), and a
+    /// stockout can only be the answer of a FAILED start operation (the VM did not start). Every other class (permission, billing, API off, org policy, quota, a network failure) can also be the answer of an
+    /// <c>operations.get</c> poll AFTER the start POST went out, so it says nothing about whether the VM runs: the reuse stays watched.
+    /// </summary>
+    internal static bool ReuseNeverSent(CloudOperationException ex)
+        => ex.Kind == CloudErrorKind.Stockout || ex.Error.Code is "VM_NOT_FOUND" or "VM_NOT_STOPPED" or "VM_NO_BOOT_DISK" or "PROJECT_MISMATCH";
 }

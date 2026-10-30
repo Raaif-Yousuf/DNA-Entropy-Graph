@@ -52,8 +52,10 @@ public partial class LateCreateAfterCancelTests
     [Fact]
     public async Task R5_H1_a_reuse_relabelled_but_not_yet_started_is_watched_and_stopped_when_its_start_lands()
     {
-        var gcp = new FakeGcp().WithReuseParkedAfterClaim();
+        // Round 6 H1: the production shape. The real gateway honours the token, so the cancel ends the reuse task Canceled (IsCompleted) within milliseconds although Compute already accepted instances.start.
+        var gcp = new FakeGcp().WithReuseStartThatTheClientCancels();
         var rig = new Rig(gcp);
+        rig.Settings.LateCreateGrace = TimeSpan.FromSeconds(10); // only bounds a start that never lands: this one does
         var oldSpec = await SeedStoppedDonorAsync(gcp, rig, "job-oldh1");
         await rig.SeedRowAsync("job-r5h1");
         var spec = Spec("job-r5h1");
@@ -65,16 +67,17 @@ public partial class LateCreateAfterCancelTests
         await Should.ThrowAsync<OperationCanceledException>(() => ladder);
 
         await rig.Canceller.CancelAsync("job-r5h1", CancellationToken.None);
-        gcp.ReleaseParkedReuse(); // the start POST lands after the cancel's last look
-        var outcome = await rig.NextOutcomeAsync();
+        await gcp.LandAcceptedReuseStartsAsync(); // the start POST lands after the cancel's last look
+        await rig.Canceller.WhenReapsEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        rig.Outcomes.Reader.TryRead(out var outcome).ShouldBeTrue("the cancel released the relabelled donor unwatched (its task ended Canceled): nothing stopped the VM its start then ran");
 
-        outcome.State.ShouldBe(LateCreateState.ReuseStopped, "the cancel saw a stopped, relabelled donor and released it unwatched: its start then ran a GPU VM under a Cancelled row");
+        outcome!.State.ShouldBe(LateCreateState.ReuseStopped, "the cancel saw a stopped, relabelled donor and released it unwatched: its start then ran a GPU VM under a Cancelled row");
         (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         gcp.DeleteAttempts.ShouldBeEmpty("the VM is another run's: stopped, never deleted");
     }
 
     [Fact]
-    public async Task R5_L1_a_final_look_deferred_to_a_newer_attempt_is_a_hand_over_not_a_failed_delete()
+    public async Task R5_L1_a_final_look_that_finds_a_newer_attempt_owning_the_VM_is_a_hand_over_not_a_failed_delete()
     {
         var gcp = new FakeGcp();
         var spec = Spec("job-r5l1");
@@ -90,7 +93,9 @@ public partial class LateCreateAfterCancelTests
                 if (Interlocked.Increment(ref calls) == 1)
                 {
                     rigRef!.Terminator.Ledger.EndDelete(sent!);
-                    await rigRef.Terminator.Ledger.BeginAttemptAsync("job-r5l1", CancellationToken.None);
+                    // Round 6 L2: the newer attempt ADOPTS the VM (it owns the name now): only that is a hand-over. A newer attempt that is merely pending is waited for.
+                    var newer = await rigRef.Terminator.Ledger.BeginAttemptAsync("job-r5l1", CancellationToken.None);
+                    rigRef.Terminator.Ledger.NoteOwned("job-r5l1", sent!.Name, ZoneA, newer);
                 }
             });
         var rig = new Rig(gcp, compute);
@@ -107,7 +112,6 @@ public partial class LateCreateAfterCancelTests
 
     [Theory]
     [InlineData("stockout")]
-    [InlineData("billing")]
     [InlineData("gone")]
     public async Task R5_L3_a_reuse_that_answered_a_definitive_error_before_its_start_is_not_kept_for_a_later_cancel_to_watch(string how)
     {
@@ -118,9 +122,6 @@ public partial class LateCreateAfterCancelTests
         {
             case "stockout":
                 gcp.WithReuseStartFailure(CloudErrorKind.Stockout);
-                break;
-            case "billing":
-                gcp.WithReuseStartFailure(CloudErrorKind.Billing);
                 break;
             default:
                 gcp.WithReuseBarrier(_ => gcp.DeleteVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None)); // VM_NOT_FOUND (404, kind Other) before anything was written
