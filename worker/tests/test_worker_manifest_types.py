@@ -123,8 +123,14 @@ def _set(d: dict, path: tuple, key, value) -> None:
     node[key] = value
 
 
-def _name_of(key) -> str:
-    return "inputs" if isinstance(key, int) else str(key)
+def _label_of(path: tuple, key) -> str:
+    """The full dotted field path the ManifestError must carry (what `_label` renders)."""
+    if isinstance(key, int):
+        return "manifest.json 'inputs' entries"
+    if not path:
+        return f"manifest.json '{key}'"
+    where = "inputs[]" if path == ("inputs", 0) else str(path[0])
+    return f"manifest.json {where}.{key}"
 
 
 @pytest.mark.parametrize(("path", "key", "bad"), _cases())
@@ -133,7 +139,7 @@ def test_a_wrong_typed_field_is_a_manifest_error_naming_the_field(path, key, bad
     _set(d, path, key, bad)
     with pytest.raises(ManifestError) as info:
         JobManifest.parse(json.dumps(d))
-    assert _name_of(key) in str(info.value)
+    assert _label_of(path, key) in str(info.value)
 
 
 def test_the_good_manifest_parses() -> None:
@@ -156,6 +162,50 @@ def test_every_optional_section_may_still_be_absent() -> None:
     assert m.outputs == []
 
 
-def test_the_field_matrix_covers_every_manifest_field_the_worker_reads() -> None:
-    """Vacuity guard: the matrix is not a hand list that silently shrinks."""
-    assert len(_cases()) > 150
+# Keys read by the parser that are type-checked by their own tests (test_worker_manifest*.py), not here.
+_COVERED_ELSEWHERE = {
+    "schema",
+    "preset",
+    "annotation",
+    "accession",
+    "accessionRange",
+    "gcWindow",
+    "regionThreshold",
+    "regionMinLength",
+    "regionMergeGap",
+    "root",
+}
+
+
+class _Spy(dict):
+    """A dict that records every key the parser asks for (get, [], in)."""
+
+    seen: set[str] = set()
+
+    def get(self, key, default=None):
+        _Spy.seen.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        _Spy.seen.add(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key) -> bool:
+        _Spy.seen.add(key)
+        return super().__contains__(key)
+
+
+def test_every_key_the_parser_reads_has_a_type_case(monkeypatch) -> None:
+    """A new manifest field read by a from_dict with no FIELDS entry fails here, not silently."""
+    import dna_entropy.worker.manifest as manifest_module
+
+    _Spy.seen = set()
+    real_loads = json.loads
+    monkeypatch.setattr(manifest_module.json, "loads", lambda text: real_loads(text, object_pairs_hook=_Spy))
+    JobManifest.parse(json.dumps(GOOD))
+    covered = {k for _, k, _ in FIELDS if isinstance(k, str)} | _COVERED_ELSEWHERE
+    assert len(_Spy.seen) > 40  # vacuity: the spy really saw the reads
+    assert _Spy.seen - covered == set(), "manifest keys read with no wrong-type case in FIELDS"
+    assert {k for _, k, _ in FIELDS if isinstance(k, str)} - _Spy.seen == set(), (
+        "FIELDS names a key never read"
+    )
