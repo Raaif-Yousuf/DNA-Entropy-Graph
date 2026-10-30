@@ -15,6 +15,8 @@ public class CloudJobRunnerProgressStallTests
 {
     private const string Project = "my-project";
     private const string Zone = "us-central1-a";
+    private static readonly TimeSpan ResultPoll = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StallBound = TimeSpan.FromMinutes(20);
 
     private static VmSpec Spec(string jobId) => new(
         ProjectId: Project,
@@ -27,22 +29,24 @@ public class CloudJobRunnerProgressStallTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, VirtualTimeProvider clock, StallDecision? onStall, TimeSpan? bound = null, Func<Task>? gate = null) => new(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+    private static CloudJobRunner Runner(FakeGcp gcp, VirtualTimeProvider clock, StallDecision? onStall, TimeSpan? bound = null, Func<TimeSpan, Task<bool>>? gate = null) => new(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
     {
-        ResultPollInterval = TimeSpan.FromSeconds(10),
+        ResultPollInterval = ResultPoll,
         ResultTimeout = TimeSpan.FromHours(3),
         FirstHeartbeatTimeout = TimeSpan.FromHours(1),
         HeartbeatStaleTimeout = TimeSpan.FromHours(1),
-        ProgressStallTimeout = bound ?? TimeSpan.FromMinutes(20),
+        ProgressStallTimeout = bound ?? StallBound,
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         LifecycleTimeout = TimeSpan.FromMilliseconds(200),
         TimeProvider = clock,
         PollDelay = async (span, token) =>
         {
             token.ThrowIfCancellationRequested();
-            if (gate is not null)
+            if (gate is not null && !await gate(span).ConfigureAwait(false))
             {
-                await gate().ConfigureAwait(false);
+                // Time holds still; the yield lets the handler's task and the runner's next look run.
+                await Task.Yield();
+                return;
             }
 
             clock.Advance(span);
@@ -77,14 +81,37 @@ public class CloudJobRunnerProgressStallTests
         var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // The prompt handler runs on its own task while the poll loop advances VIRTUAL time, and the answer timeout is virtual too: on a starved thread pool the clock
-        // can pass the answer timeout before the handler ever starts (MEASURED 2026-10-30: 0 prompts). So time does not move on once the stall bound has passed until
-        // the handler has acted, the same gate CloudJobRunnerStallTests uses.
+        // can pass the answer timeout before the handler ever starts (MEASURED 2026-10-30: 0 prompts). So the clock is gated on the handler itself, never on a value
+        // that duplicates the stall bound: the stall opens at (clock of the first running look) + 20 minutes, so the gate takes the first result look as that origin, and
+        // from the look that opens the question it waits for the handler to start, then holds virtual time still until the runner has applied the answer (the run ends).
+        TimeSpan? origin = null;
         var result = await Runner(gcp, clock, (prompt, _) =>
         {
             prompts.Enqueue(prompt);
             asked.TrySetResult();
             return Task.FromResult(StallChoice.Delete);
-        }, gate: () => TimeSpan.FromTicks(clock.GetTimestamp()) >= TimeSpan.FromMinutes(20) ? asked.Task.WaitAsync(TimeSpan.FromSeconds(30)) : Task.CompletedTask).RunAsync(TestInputs.Request("job-ask", Spec("job-ask")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }, gate: async span =>
+        {
+            if (span != ResultPoll)
+            {
+                return true; // the lifecycle polls after the run has decided must keep moving
+            }
+
+            var now = TimeSpan.FromTicks(clock.GetTimestamp());
+            origin ??= now;
+            if (asked.Task.IsCompleted)
+            {
+                return false;
+            }
+
+            if (now >= origin + StallBound)
+            {
+                await asked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                return false;
+            }
+
+            return true;
+        }).RunAsync(TestInputs.Request("job-ask", Spec("job-ask")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var seen = prompts.ShouldHaveSingleItem();
         seen.Code.ShouldBe(RunErrorCodes.WorkerProgressStalled);
