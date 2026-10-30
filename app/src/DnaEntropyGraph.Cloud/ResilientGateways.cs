@@ -110,6 +110,9 @@ public sealed class ResilientStorageGateway : IStorageGateway
     public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Storage.TryDownload", token => _inner.TryDownloadAsync(bucket, objectKey, token), cancellationToken);
 
+    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Storage.TryDownloadToFile", token => _inner.TryDownloadToFileAsync(bucket, objectKey, destinationPath, token), cancellationToken);
+
     public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Storage.ListBuckets", token => _inner.ListBucketsAsync(projectId, token), cancellationToken);
 

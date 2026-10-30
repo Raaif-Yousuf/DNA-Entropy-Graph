@@ -122,6 +122,8 @@ KNOWN_DYNAMIC: dict[str, int] = {
     "app/src/DnaEntropyGraph.Core/Diagnostics/DiagnosticsTraceListener.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/LeftRunningGuard.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/RunStallCoordinator.cs": 1,
+    # _requestKey picks one of three request texts; each takes {0} (and some {1}).
+    "app/src/DnaEntropyGraph.Presentation/ViewModels/BudgetSettingsViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/CloudResourcesViewModel.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/HistoryViewModel.cs": 2,
     "app/src/DnaEntropyGraph.Presentation/ViewModels/InputPillItem.cs": 1,

@@ -114,7 +114,27 @@ public interface IRunFileMover
 
 public sealed class DiskRunFileMover : IRunFileMover
 {
-    public void Move(string source, string destination) => File.Move(source, destination, overwrite: false);
+    private const int Attempts = 5;
+
+    /// <summary>
+    /// A virus scanner or indexer can hold a just-written file for a moment, which reads as a sharing violation (IOException). That is retried a bounded number of times with a
+    /// growing pause (issue #588); a destination that already exists is a real conflict and fails at once.
+    /// </summary>
+    public void Move(string source, string destination)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(source, destination, overwrite: false);
+                return;
+            }
+            catch (IOException) when (attempt < Attempts && !File.Exists(destination) && File.Exists(source))
+            {
+                Thread.Sleep(50 * (1 << (attempt - 1)));
+            }
+        }
+    }
 }
 
 public sealed class RunCloudResults : IRunCloudResults
@@ -125,9 +145,11 @@ public sealed class RunCloudResults : IRunCloudResults
     private readonly Func<string> _defaultOutputParent;
     private readonly TimeProvider _time;
     private readonly IRunFileMover _mover;
+    private readonly TimeSpan _downloadStall;
 
-    public RunCloudResults(IStorageGateway storage, IJobObjectDeleter deleter, IRunRepository runs, Func<string> defaultOutputParent, TimeProvider time, IRunFileMover? mover = null)
+    public RunCloudResults(IStorageGateway storage, IJobObjectDeleter deleter, IRunRepository runs, Func<string> defaultOutputParent, TimeProvider time, IRunFileMover? mover = null, TimeSpan? downloadStall = null)
     {
+        _downloadStall = downloadStall ?? StreamedDownload.DefaultStall;
         _mover = mover ?? new DiskRunFileMover();
         _storage = storage;
         _deleter = deleter;
@@ -175,6 +197,7 @@ public sealed class RunCloudResults : IRunCloudResults
                 return CloudResultsStatus.Refused;
             }
 
+            StalePartSweeper.Sweep(folder, result.Inputs.SelectMany(i => i.Files).Select(f => RunTransfer.ResultSubDirectory(f.Path)));
             foreach (var file in result.Inputs.SelectMany(i => i.Files))
             {
                 await DownloadFileAsync(run, folder, file, tally, cancellationToken).ConfigureAwait(false);
@@ -289,7 +312,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsSafelyInside(folder, root) ? folder : null;
+        return RunOutputRoot.IsContained(folder, root) ? folder : null;
     }
 
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>
@@ -298,41 +321,11 @@ public sealed class RunCloudResults : IRunCloudResults
         public int Count { get; set; }
     }
 
-    private const int MaxAsideTries = 50;
-
-    private string AsideCandidate(string path, int attempt)
-    {
-        var stamp = _time.GetLocalNow().ToString("yyyy-MM-dd HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        var stem = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + " (changed " + stamp);
-        return (attempt == 1 ? stem + ")" : $"{stem} {attempt})") + Path.GetExtension(path);
-    }
-
     /// <summary>
     /// Renames <paramref name="path"/> to a free <c>name (changed time).ext</c> and returns that name. A name that turns out taken
     /// between the check and the move (another program, another re-download) is not an error: the next counter is tried, a bounded number of times.
     /// </summary>
-    private string MoveAside(string path)
-    {
-        for (var attempt = 1; attempt <= MaxAsideTries; attempt++)
-        {
-            var candidate = AsideCandidate(path, attempt);
-            if (File.Exists(candidate))
-            {
-                continue;
-            }
-
-            try
-            {
-                _mover.Move(path, candidate);
-                return candidate;
-            }
-            catch (IOException) when (attempt < MaxAsideTries)
-            {
-            }
-        }
-
-        throw new IOException("No free name was found to keep the changed file under.");
-    }
+    private string MoveAside(string path) => ChangedFileAside.Move(path, _time, _mover);
 
     /// <summary>
     /// True when the file already on disk is the one the worker uploaded: same size, and same SHA-256 where <c>result.json</c> lists one.
@@ -365,28 +358,37 @@ public sealed class RunCloudResults : IRunCloudResults
             throw new InvalidDataException("A result file leaves the output folder.");
         }
 
+        // Hard Rule 14: never write, rename or move through a junction or symlink below the run folder.
+        if (!RunOutputRoot.NoReparseBetween(folder, Path.GetDirectoryName(destination)!))
+        {
+            throw new InvalidDataException("A result file would be written through a linked folder.");
+        }
+
         var exists = File.Exists(destination);
         if (exists && await IsKeptFileIntactAsync(destination, file, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        await using var source = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + file.Path, cancellationToken).ConfigureAwait(false)
-                                 ?? throw new InvalidDataException("A result file is listed but is not in the bucket.");
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        var partial = destination + ".part";
+        var partial = StreamedDownload.TempPathFor(destination);
         try
         {
+            // Issue #588: streamed from the bucket straight into a unique .part file under a stall deadline, then verified; memory stays flat for a result of any size.
+            if (!await StreamedDownload.RunAsync(_storage, _time, run.Bucket!, run.JobPrefix + file.Path, partial, file.Bytes, _downloadStall, cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidDataException("A result file is listed but is not in the bucket.");
+            }
+
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             long written = 0;
-            await using (var target = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            await using (var downloaded = new FileStream(partial, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
             {
                 var buffer = new byte[81920];
                 int read;
-                while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await downloaded.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
                     hash.AppendData(buffer, 0, read);
-                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                     written += read;
                 }
             }
@@ -422,7 +424,7 @@ public sealed class RunCloudResults : IRunCloudResults
                     _mover.Move(aside, destination);
                     tally.Count--;
                 }
-                catch (IOException)
+                catch (Exception restoreFailure) when (restoreFailure is IOException or UnauthorizedAccessException)
                 {
                     // Could not put it back; it is still safe under its changed name, which the tally keeps reporting.
                 }

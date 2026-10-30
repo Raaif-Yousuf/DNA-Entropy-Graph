@@ -92,20 +92,81 @@ public static class RunOutputFolders
     /// Creates <paramref name="folder"/> and any missing parents and returns exactly the folders it made, outermost first (empty when it was
     /// already there), so a caller that then has nothing to write can <see cref="RemoveCreated"/> them and leave no trace.
     /// </summary>
-    public static IReadOnlyList<string> CreateFolderChain(string folder)
+    /// <param name="folder">The folder to make.</param>
+    /// <param name="requiredRoot">When given, a folder that must already exist (a Downloads the user deleted is not brought back):
+    /// <see cref="DirectoryNotFoundException"/> when it is not there, and nothing is made.</param>
+    public static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot = null) => CreateFolderChain(folder, requiredRoot, File.GetAttributes);
+
+    /// <summary>The same with the attribute read supplied, so a test can refuse it for a folder that is really there.</summary>
+    internal static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot, Func<string, FileAttributes> getAttributes)
+        => CreateFolderChain(folder, requiredRoot, p => FolderExists(p, getAttributes), d => Directory.CreateDirectory(d));
+
+    /// <summary>
+    /// Whether a folder is at <paramref name="path"/>. Unlike <c>Directory.Exists</c> (false on an access error, which would put a folder that was
+    /// already there in the "made" list and let <see cref="RemoveCreated"/> take it away), only "not found" answers false; a folder that cannot be
+    /// probed counts as there.
+    /// </summary>
+    internal static bool FolderExists(string path, Func<string, FileAttributes> getAttributes)
     {
+        try
+        {
+            // A file at the path is not a folder (CreateDirectory would refuse it); anything else that answers is.
+            return getAttributes(path).HasFlag(FileAttributes.Directory);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>The same with the probe and the one-folder maker supplied, so a test can fail the maker part-way.</summary>
+    internal static IReadOnlyList<string> CreateFolderChain(string folder, string? requiredRoot, Func<string, bool> exists, Action<string> create)
+    {
+        // A trailing separator would name the same folder twice (with and without it).
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        if (requiredRoot is not null && !exists(Path.TrimEndingDirectorySeparator(Path.GetFullPath(requiredRoot))))
+        {
+            throw new DirectoryNotFoundException("The folder to put this in is not there.");
+        }
+
         var missing = new List<string>();
-        for (var dir = Path.GetFullPath(folder); !string.IsNullOrEmpty(dir) && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir) ?? string.Empty)
+        for (var dir = full; !string.IsNullOrEmpty(dir) && !exists(dir); dir = Path.GetDirectoryName(dir) ?? string.Empty)
         {
             missing.Add(dir);
         }
 
         missing.Reverse();
-        Directory.CreateDirectory(folder);
-        return missing;
+        var made = new List<string>();
+        try
+        {
+            foreach (var dir in missing)
+            {
+                create(dir);
+                made.Add(dir);
+            }
+        }
+        catch
+        {
+            // Part-way failure: what this call made is not left behind (RemoveCreated only takes empty folders).
+            RemoveCreated(made);
+            throw;
+        }
+
+        return made;
     }
 
-    /// <summary>Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive.</summary>
+    /// <summary>
+    /// Removes folders from <see cref="CreateFolderChain"/>, innermost first, only while each is empty; never recursive. Best effort: a folder that
+    /// cannot be removed (not empty, already gone, refused) is skipped and the rest are still tried, and nothing is thrown, so this is safe in a
+    /// failure path.
+    /// DECISION (agent-made, reversible): only an EMPTY folder is ever deleted, so a folder another process made between the probe and the create
+    /// (and listed as made here) is removed only while still empty. That worst case (an empty folder somebody just made goes away, and they can
+    /// make it again) is accepted over a lock or a second probe that could not close the race anyway; it never loses a file.
+    /// </summary>
     public static void RemoveCreated(IReadOnlyList<string> created)
     {
         for (var i = created.Count - 1; i >= 0; i--)
@@ -114,9 +175,9 @@ public static class RunOutputFolders
             {
                 Directory.Delete(created[i]);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception)
             {
-                return;
+                // Skipped: see the summary.
             }
         }
     }

@@ -6,6 +6,7 @@ using DnaEntropyGraph.Cloud.Auth;
 using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cloud.Audit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Shouldly;
@@ -55,6 +56,7 @@ public class ProductionCloudWiringTests : IDisposable
         typeof(IProjectCatalogGateway),
         typeof(IBillingGateway),
         typeof(IServiceEnablementGateway),
+        typeof(IBudgetGateway),
     };
 
     [Fact]
@@ -69,10 +71,21 @@ public class ProductionCloudWiringTests : IDisposable
     {
         using var provider = Build();
 
-        var resolved = provider.GetRequiredService(serviceType);
+        // Issue #245: the audit decorator is see-through; what it wraps is what must not be the fake.
+        var resolved = Unwrap(provider.GetRequiredService(serviceType));
 
         resolved.ShouldNotBeOfType<FakeGcp>($"{serviceType.Name} must be the Google-backed gateway in a real build");
         resolved.GetType().Name.ShouldNotStartWith("Fake");
+    }
+
+    private static object Unwrap(object gateway)
+    {
+        while (gateway is IAuditedGateway audited)
+        {
+            gateway = audited.Inner;
+        }
+
+        return gateway;
     }
 
     [Fact]
@@ -90,7 +103,24 @@ public class ProductionCloudWiringTests : IDisposable
         { typeof(IWorkerIdentityGateway), "DnaEntropyGraph.Cloud.Rest.GoogleIamGateway" },
         { typeof(IProjectCatalogGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectCatalogGateway" },
         { typeof(IServiceEnablementGateway), "DnaEntropyGraph.Cloud.Rest.GoogleServiceUsageGateway" },
+        { typeof(IBudgetGateway), "DnaEntropyGraph.Cloud.Rest.GoogleBudgetGateway" },
+        { typeof(IProjectSetupGateway), "DnaEntropyGraph.Cloud.Rest.GoogleProjectSetupGateway" },
+        { typeof(IQuotaGateway), "DnaEntropyGraph.Cloud.Rest.GoogleQuotaGateway" },
+        { typeof(IBillingGateway), "DnaEntropyGraph.Cloud.ResilientBillingGateway" },
     };
+
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void The_Settings_budget_group_resolves_with_its_whole_chain_in_every_backend(CloudBackend backend)
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: backend);
+        using var provider = services.BuildServiceProvider();
+
+        // The ViewModel only reads the project when the page opens; resolving it proves the service, the gateway and the settings store are all registered.
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.BudgetSettingsViewModel>().ShouldNotBeNull();
+        provider.GetRequiredService<IBudgetService>().ShouldBeOfType<BudgetService>();
+    }
 
     [Theory]
     [MemberData(nameof(UnwrappedGateways))]
@@ -100,8 +130,48 @@ public class ProductionCloudWiringTests : IDisposable
 
         // A Resilient* decorator around a gateway whose every HTTP call already goes through the pipeline would replay a whole
         // create on a transient error (GoogleComputeGateway and GoogleStorageGateway class docs).
-        provider.GetRequiredService(serviceType).GetType().FullName.ShouldBe(expected);
+        // Issue #245: the one wrapper allowed is the audit decorator, which only records and passes through; what it wraps must be the real type.
+        var resolved = provider.GetRequiredService(serviceType);
+        var audited = resolved.ShouldBeAssignableTo<IAuditedGateway>($"{serviceType.Name} must be audited (issue #245)");
+        audited.Inner.GetType().FullName.ShouldBe(expected);
+        audited.Inner.ShouldNotBeOfType<FakeGcp>();
     }
+
+    // Every I*Gateway interface in Core, found by reflection, must resolve to its audit decorator: a hand list could not fail for a gateway
+    // nobody remembered to add. A gateway with no mutating call may be exempted here, with the reason (none today).
+    private static readonly Dictionary<Type, string> ReadOnlyGateways = [];
+
+    public static TheoryData<Type> AuditedInterfaces()
+    {
+        var data = new TheoryData<Type>();
+        foreach (var type in typeof(IComputeGateway).Assembly.GetTypes().Where(t => t.IsInterface && t.Name.StartsWith('I') && t.Name.EndsWith("Gateway", StringComparison.Ordinal)))
+        {
+            if (!ReadOnlyGateways.ContainsKey(type))
+            {
+                data.Add(type);
+            }
+        }
+
+        return data;
+    }
+
+    [Fact]
+    public void The_audited_interface_scan_finds_the_gateways_and_has_no_stale_exemption()
+    {
+        AuditedInterfaces().Count.ShouldBeGreaterThanOrEqualTo(8, "the scan must find the gateways, or the theory below is vacuous");
+        ReadOnlyGateways.Keys.ShouldAllBe(t => t.IsInterface && t.Name.EndsWith("Gateway", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [MemberData(nameof(AuditedInterfaces))]
+    public void Every_gateway_with_a_mutating_call_resolves_to_its_audit_decorator(Type serviceType)
+    {
+        using var provider = Build();
+
+        provider.GetRequiredService(serviceType).ShouldBeAssignableTo<IAuditedGateway>();
+        provider.GetRequiredService<ICloudAuditLog>().ShouldBeOfType<DnaEntropyGraph.Core.Cloud.Audit.JsonLinesCloudAuditLog>();
+    }
+
     [Fact]
     public void The_token_refresher_is_the_real_account_and_the_token_source_is_the_same_account()
     {
