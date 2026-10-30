@@ -286,6 +286,7 @@ public class JobReconcilerTests
     [Fact]
     public async Task A_run_killed_while_Downloading_whose_VM_is_long_gone_still_completes()
     {
+        // Raw-Compute shape ON PURPOSE (#938 round 5 audit): the terminator tolerates a 404 on delete; the real gateway swallows it, so this proves the terminator's own tolerance only.
         var env = new Env(new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete).WithDeleteOfMissingVmNotFound());
         var request = await env.SeedAsync("job-d", JobPhase.Downloading, vm: true);
         await env.Gcp.DeleteVmAsync(request.Spec.VmName, Zone, CancellationToken.None);

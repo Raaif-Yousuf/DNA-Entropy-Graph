@@ -166,6 +166,15 @@ naming the computer, and only that second **Delete it** removes anything. When y
 recovers by itself while the window is open, the window closes and the run carries on. If nobody answers for ten minutes,
 the app ends the run the way you set it to end.
 
+**A cancelled run says "a request for a rented computer was still on its way".** You
+pressed **Cancel run** just as the app was asking Google for a computer. The app keeps
+watching for that request for up to 15 minutes and deletes the computer if it appears
+(or stops it, if it was an earlier computer the app was restarting for you). This message
+appears only when the app could not confirm that. Open the **Cloud** page, find any
+computer labelled with this run and delete or stop it, so it stops billing. If you close
+the app first, the next time it starts it deletes a computer left over from a cancelled run.
+*(`late_create_unconfirmed`)*
+
 **"The computer was shut down before finishing"**, either a hardware issue on Google's
 side, or (if you chose the cheaper "Spot" option) the computer was reclaimed, since Spot
 computers can be interrupted at any time in exchange for a lower price. Whatever your

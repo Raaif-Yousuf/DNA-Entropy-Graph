@@ -354,42 +354,46 @@ public partial class LateCreateAfterCancelTests
     [Fact]
     public async Task M2_a_failing_by_name_look_never_skips_the_delete_of_a_VM_the_label_listing_found_and_does_not_fail_the_cancel()
     {
-        var gcp = new FakeGcp().WithDeleteOfMissingVmNotFound();
+        // Round 5 M1: the PRODUCTION shape (the real gateway answers a delete of a missing VM with a silent success, so a delete proves nothing either way): the looks fail a few times, then read.
+        var gcp = new FakeGcp();
         var rig = new Rig(gcp);
         await rig.SeedRowAsync("job-m2");
         var spec = Spec("job-m2");
         (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
-        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 1000);
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 3);
 
         await rig.Canceller.CancelAsync("job-m2", CancellationToken.None);
 
         gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
         (await gcp.GetVmAsync("deg-job-m2", ZoneA, CancellationToken.None)).ShouldBeNull("the VM the label listing found was left because a by-name look failed");
         rig.LastRow("job-m2").Phase.ShouldBe(JobPhase.Cancelled, "the VM is gone: an unreadable look is not a failed cancel");
+        gcp.DeleteAttempts.Count.ShouldBe(1, "an unreadable look is not a reason to send the delete again: gone is decided only by a look that read");
     }
 
     [Fact]
     public async Task M2_with_the_label_listing_blind_and_every_by_name_look_failing_the_VM_is_still_deleted_by_name()
     {
-        var gcp = new FakeGcp().WithDeleteOfMissingVmNotFound();
+        // Round 5 M1: production shape; the looks fail a few times and then read.
+        var gcp = new FakeGcp();
         var rig = new Rig(gcp);
         await rig.SeedRowAsync("job-m2b");
         var spec = Spec("job-m2b");
         (await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-m2b", spec), spec, new RunProgress(), CancellationToken.None)).Success.ShouldBeTrue();
         gcp.LabelListingBlind = true;
-        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 1000);
+        gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 3);
 
         await rig.Canceller.CancelAsync("job-m2b", CancellationToken.None);
 
         gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
         (await gcp.GetVmAsync("deg-job-m2b", ZoneA, CancellationToken.None)).ShouldBeNull("an unreadable VM is treated as present: it is deleted by name");
         rig.LastRow("job-m2b").Phase.ShouldBe(JobPhase.Cancelled);
+        gcp.DeleteAttempts.Count.ShouldBe(1, "one delete by name went out while the look failed; the read-back looks again instead of deleting again");
     }
 
     [Fact]
     public async Task M2_the_late_watch_deletes_by_name_even_when_every_look_fails()
     {
-        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false).WithDeleteOfMissingVmNotFound();
+        var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false);
         gcp.LabelListingBlind = true;
         var rig = new Rig(gcp);
         rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(500);

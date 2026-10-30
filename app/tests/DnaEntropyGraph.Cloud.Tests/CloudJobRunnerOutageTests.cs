@@ -169,6 +169,7 @@ public class CloudJobRunnerOutageTests
     [Fact]
     public async Task A_worker_that_deleted_its_own_VM_does_not_stop_the_download_when_Delete_was_chosen()
     {
+        // Raw-Compute shape ON PURPOSE (#938 round 5 audit): the terminator tolerates a 404 on delete (a worker that deleted itself); the real gateway swallows it before the terminator sees it, so this proves the terminator's own tolerance, not production behaviour.
         var gcp = new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete).WithDeleteOfMissingVmNotFound();
         var repo = new InMemoryRunRepository();
         var request = TestInputs.Request("job-wd", Spec("job-wd"), null, AfterTaskAction.Delete);
@@ -440,6 +441,7 @@ public class CloudJobRunnerOutageTests
     [Fact]
     public async Task A_run_resumed_after_the_worker_finished_downloads_the_result_without_creating_a_second_VM()
     {
+        // Raw-Compute shape ON PURPOSE (#938 round 5 audit): the terminator tolerates a 404 on delete (a worker that deleted itself); the real gateway swallows it before the terminator sees it, so this proves the terminator's own tolerance, not production behaviour.
         var gcp = new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete).WithDeleteOfMissingVmNotFound();
         var repo = new InMemoryRunRepository();
         var request = TestInputs.Request("job-rs", Spec("job-rs"), null, AfterTaskAction.Delete);

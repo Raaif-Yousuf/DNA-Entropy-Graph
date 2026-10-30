@@ -101,18 +101,6 @@ public partial class LateCreateAfterCancelTests
         var gcp = new FakeGcp();
 
         Should.NotThrow(() => gcp.DeleteVmAsync("deg-nothing", ZoneA, CancellationToken.None).GetAwaiter().GetResult());
-        File.ReadAllText(FindRepoFile("app/src/DnaEntropyGraph.Cloud/FakeGcp.cs")).ShouldNotContain("as real Compute\n    /// Engine does", Case.Sensitive, "the doc claims the real gateway 404s: it swallows the 404 (GoogleComputeGateway.EndVmAsync)");
-    }
-
-    private static string FindRepoFile(string relative)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, relative)))
-        {
-            dir = dir.Parent;
-        }
-
-        return Path.Combine((dir ?? throw new InvalidOperationException("repo root not found")).FullName, relative);
     }
 
     // ---- M2: every delete of a job's VM holds the barrier ----

@@ -558,6 +558,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
                     break;
                 case ReapStep.Superseded:
+                case ReapStep.Deferred:
+                    // Round 5 L1: a newer attempt is pending (it may adopt this VM) or owns it: the VM is handed over, nothing failed.
                     return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
                 default:
                     return sent.Landed
@@ -744,7 +746,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     deleteError ??= await StopBorrowedAsync(listed, cancellationToken).ConfigureAwait(false);
                     foreach (var reuse in allSent.Where(c => c.IsReuse && c.Name == name && c.Zone == zone))
                     {
-                        reuse.Landed = true; // a look saw it: nothing further for the watch to find
+                        // Round 5 H1: a reuse relabels FIRST and starts LAST, so a stopped donor that already carries this job's labels says nothing until the start has answered: while the reuse
+                        // task is still running, the watch keeps it (it stops the VM if the start lands). Only a reuse whose task has ended has nothing further to find.
+                        if (reuse.Create is { IsCompleted: true })
+                        {
+                            reuse.Landed = true;
+                        }
                     }
 
                     continue;
@@ -796,12 +803,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 }
                 else if (state == NameLook.Unknown)
                 {
-                    // Unreadable is not gone: a delete by name says it (404 is gone), so a failing read never marks a cancel failed once the VM is.
-                    var (result, _) = await DeleteByNameAsync(create.Name, create.Zone, cancellationToken).ConfigureAwait(false);
-                    if (result != DeleteResult.AlreadyGone)
-                    {
-                        stillThere.Add((create.Name, create.Zone));
-                    }
+                    // Round 5 M1: unreadable is not gone, and a delete proves nothing either way (the real gateway answers a delete of a missing VM with a silent success, so it never says "already gone").
+                    // Gone is decided only by a look that READ; until one does, the loop keeps looking (bounded by LifecycleTimeout below). The delete was already sent above.
+                    stillThere.Add((create.Name, create.Zone));
                 }
             }
 

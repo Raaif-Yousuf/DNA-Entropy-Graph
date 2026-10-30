@@ -566,7 +566,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>
     /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404): the shape of RAW Compute Engine,
     /// which the real <c>GoogleComputeGateway.EndVmAsync</c> does NOT pass on (it swallows the 404 and returns normally, so production never shows
-    /// the terminator an "already gone"). Off by default, where the delete is a silent no-op, which IS what the real gateway does (MEASURED 2026-10-30:
+    /// the terminator an "already gone"). Off by default, where the delete is a silent no-op, which IS what the real gateway does (Code read 2026-10-30, not a measurement:
     /// read of <c>GoogleComputeGateway.EndVmAsync</c>, round 4 H1). A test that turns this on exercises a branch production cannot reach.
     /// </summary>
     public FakeGcp WithDeleteOfMissingVmNotFound()
@@ -1439,6 +1439,25 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private TaskCompletionSource? _reuseParkGate;
+    private readonly TaskCompletionSource _reuseParked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// <see cref="ReuseVmAsync"/> parks AFTER the claim (the VM carries the new job's labels, still stopped) and BEFORE the start, ignoring cancellation, until <see cref="ReleaseParkedReuse"/>:
+    /// the middle state of the real gateway's reuse (setLabels, disk, scheduling and metadata done, <c>instances.start</c> not yet answered). Issue #938 round 5 H1.
+    /// </summary>
+    public FakeGcp WithReuseParkedAfterClaim()
+    {
+        _reuseParkGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return this;
+    }
+
+    /// <summary>Completes once a reuse has parked after its claim (<see cref="WithReuseParkedAfterClaim"/>).</summary>
+    public Task ReuseParkedAfterClaim => _reuseParked.Task;
+
+    /// <summary>Lets a parked reuse go on to its start.</summary>
+    public void ReleaseParkedReuse() => _reuseParkGate?.TrySetResult();
+
     private bool _reuseResponseLost;
     private Func<VmSpec, Task>? _reuseBarrier;
 
@@ -1583,6 +1602,12 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
                 CloudErrorKind.Billing => Build(CloudErrorKind.Billing, "BILLING_DISABLED", 403, "This API method requires billing to be enabled."),
                 _ => Build(kind, null, null, "The start failed."),
             };
+        }
+
+        if (_reuseParkGate is { } park)
+        {
+            _reuseParked.TrySetResult();
+            await park.Task.ConfigureAwait(false);
         }
 
         ThrowIfProjectWide(spec.ProjectId);
