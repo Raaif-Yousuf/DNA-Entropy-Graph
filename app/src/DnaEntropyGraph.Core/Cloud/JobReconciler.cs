@@ -403,12 +403,18 @@ public sealed class JobReconciler
 
                     if (want == VmWant.Delete)
                     {
-                        // Round 10 M1: the listing is a snapshot, and another run's reuse may have relabelled this VM since: read it again right before the delete, and skip it unless it still carries this row's job id.
+                        // Round 10 M1, round 11 M1 (code read 2026-10-30): the listing is a snapshot, and another run's reuse may have relabelled this VM since, so it is read again right before the delete and
+                        // skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete has no label precondition, so a reuse's setLabels that lands between
+                        // this read and the delete still loses the VM. Consequence (THEORY, unverified): that run's reuse then fails (the VM is gone) and falls to the create ladder, so no VM leaks and the run proceeds.
+                        // Round 11 L2: labels not read (null) say nothing against the VM, as IsOurs does (its job id already matched the row), so the delete goes ahead; a VM that is gone is nothing to delete.
                         try
                         {
                             var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
-                            if (fresh is null || fresh.Labels is null || !fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId)
+                            var relabelled = fresh is not null && fresh.Labels is not null && (!fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId);
+                            if (fresh is null || relabelled)
                             {
+                                // Round 11 L1: observable (ids and states only, never a name).
+                                _log.Warning("reconciler", row.JobId, fresh is null ? "delete-skipped-vm-gone" : "delete-skipped-vm-relabelled");
                                 continue;
                             }
                         }
@@ -474,7 +480,7 @@ public sealed class JobReconciler
             : options is null ? null : CloudJobRequestFactory.LifecycleLabel(options.AfterTask);
         switch (lifecycle)
         {
-            case "delete":
+            case var l when l == CloudJobRequestFactory.LifecycleLabel(AfterTaskAction.Delete):
                 return VmWant.Delete;
             case "stop":
                 return vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;

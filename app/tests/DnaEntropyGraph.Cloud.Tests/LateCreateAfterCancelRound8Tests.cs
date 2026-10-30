@@ -113,13 +113,15 @@ public partial class LateCreateAfterCancelTests
         (await gcp.GetVmAsync(donor.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
     }
 
-    [Fact]
-    public async Task R10_M1_a_stopped_VM_whose_lifecycle_label_says_delete_is_never_a_reuse_donor()
+    [Theory]
+    [InlineData("delete", false)]
+    [InlineData("stop", true)]
+    public async Task R10_M1_a_stopped_VM_whose_lifecycle_label_says_delete_is_never_a_reuse_donor_and_one_that_says_stop_is(string lifecycle, bool reused)
     {
         // The reconciler may be about to delete it (it lists by label and deletes by name): relabelling and starting it for another run would lose that run's VM.
         var gcp = new FakeGcp();
         var rig = new Rig(gcp);
-        var oldSpec = Spec("job-oldr10") with { Lifecycle = "delete" };
+        var oldSpec = Spec("job-oldr10") with { Lifecycle = lifecycle };
         await gcp.CreateVmAsync(oldSpec, ZoneA, CancellationToken.None);
         await gcp.StopVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None);
         await rig.Repo.UpsertAsync(new RunRecord("job-oldr10", JobPhase.Completed, DateTimeOffset.UtcNow), CancellationToken.None);
@@ -130,8 +132,15 @@ public partial class LateCreateAfterCancelTests
         var result = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-r10", spec), spec, progress, CancellationToken.None);
 
         result.Success.ShouldBeTrue();
-        (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
-        (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!.Labels!["job-id"].ShouldBe("job-oldr10", "the donor was not relabelled");
+        var donor = (await gcp.GetVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None))!;
+        if (reused)
+        {
+            donor.Labels!["job-id"].ShouldBe("job-r10", "the positive control: a stop-labelled donor is reused");
+            return;
+        }
+
+        donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        donor.Labels!["job-id"].ShouldBe("job-oldr10", "the donor was not relabelled");
         (await gcp.GetVmAsync("deg-job-r10", ZoneA, CancellationToken.None)).ShouldNotBeNull("a new VM was created instead");
     }
 }

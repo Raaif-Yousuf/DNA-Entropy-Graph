@@ -53,7 +53,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, compute: compute);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null, DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog? log = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, log: log, compute: compute);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -349,9 +349,9 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
-    public async Task A_VM_relabelled_to_another_job_between_the_listing_and_the_delete_survives()
+    public async Task A_VM_relabelled_to_another_job_between_the_listing_and_the_re_read_survives_and_the_skip_is_logged()
     {
-        // Round 10 M1: the reconciler lists by label, decides Delete, and must re-read the VM right before the delete.
+        // Round 10 M1: the reconciler lists by label, decides Delete, and re-reads the VM right before the delete. This covers the listing-to-re-read window ONLY (round 11 M2: the re-read-to-delete window is the next test).
         var rig = new Rig();
         await rig.SeedFinishedAsync("job-race10", AfterTaskAction.Delete);
         await rig.StopAsync("job-race10");
@@ -359,8 +359,11 @@ public class JobReconcilerLifecycleTests
         var otherLabels = new Dictionary<string, string>(vm.Labels!) { ["job-id"] = "job-someone-else", ["lifecycle"] = "stop" };
         var compute = new RelabelAfterListingCompute(rig.Gcp, vm.Name, vm.Zone, otherLabels);
 
-        await rig.Reconciler(compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+        var log = NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog>();
 
+        await rig.Reconciler(log: log, compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+
+        log.Received().Warning("reconciler", "job-race10", "delete-skipped-vm-relabelled");
         rig.Gcp.DeleteAttempts.ShouldBeEmpty("the VM now belongs to another run");
         (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None)).ShouldNotBeNull();
     }
@@ -404,6 +407,54 @@ public class JobReconcilerLifecycleTests
             vm.Status.ShouldBe("RUNNING", "keep-alive has not expired: left running");
         }
     }
+    /// <summary>A gateway that relabels the VM inside the delete call, after the reconciler's re-read: the residual window (Compute's delete has no label precondition).</summary>
+    private sealed class RelabelInsideDeleteCompute(FakeGcp inner, IReadOnlyDictionary<string, string> labels) : IComputeGateway
+    {
+        public Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => inner.GetVmAsync(n, z, ct);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+
+        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+
+        public Task DeleteVmAsync(string n, string z, CancellationToken ct)
+        {
+            inner.SimulateExternalRelabel(n, z, labels); // another run's setLabels lands after the re-read and before the delete
+            return inner.DeleteVmAsync(n, z, ct);
+        }
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct) => inner.FindByJobIdAsync(jobId, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+
+        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+
+        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+    }
+
+    [Fact]
+    public async Task A_relabel_that_lands_between_the_re_read_and_the_delete_is_a_documented_residual_and_the_delete_lands()
+    {
+        // Round 11 M2: pins the residual behaviour cloud_design.md states: the re-read narrows the window, it cannot close it. The delete lands; that other run's reuse then fails and falls to the create ladder (not asserted here).
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-race11", AfterTaskAction.Delete);
+        await rig.StopAsync("job-race11");
+        var vm = (await rig.VmsAsync("job-race11")).Single();
+        var otherLabels = new Dictionary<string, string>(vm.Labels!) { ["job-id"] = "job-someone-else", ["lifecycle"] = "stop" };
+
+        await rig.Reconciler(compute: new RelabelInsideDeleteCompute(rig.Gcp, otherLabels)).EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.DeleteAttempts.ShouldContain(d => d.Name == vm.Name, "Compute's delete has no label precondition");
+        (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
     [Theory]
     [InlineData(RunErrorCodes.StoppedByCleanup)]
     [InlineData(RunErrorCodes.DeletedByCleanup)]
