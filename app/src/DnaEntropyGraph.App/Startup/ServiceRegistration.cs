@@ -6,6 +6,7 @@ using DnaEntropyGraph.Cloud.Rest;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cloud.Audit;
 using DnaEntropyGraph.Core.Diagnostics;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.LocalEngine;
@@ -182,6 +183,9 @@ public static class ServiceRegistration
         {
             AddGoogleCloud(services);
         }
+
+        // Issue #245: the audit of every cloud mutation wraps whichever gateways the switch above registered.
+        CloudAuditRegistration.Add(services, root);
 
         // Persistence (issue #67: real SQLite + settings.json under
         // %LOCALAPPDATA%\DNAEntropyGraph\, docs/architecture.md section 6).
@@ -443,6 +447,7 @@ public static class ServiceRegistration
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<RunDefaultsSettingsViewModel>();
         services.AddTransient<FilesSettingsViewModel>();
+        services.AddTransient<CloudActivityLogSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
@@ -463,6 +468,9 @@ public static class ServiceRegistration
         services.AddSingleton<RunCompletionActions>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IFileProbe, DnaEntropyGraph.Presentation.Services.DiskFileProbe>();
         services.AddTransient<ExternalViewersSettingsViewModel>();
+        // Issues #148 and #222: the Settings "Budget alert" group. The service is the policy (account, API, installation id); the gateway is Google or the fake.
+        services.AddSingleton<IBudgetService, BudgetService>();
+        services.AddTransient<BudgetSettingsViewModel>();
         // Issue #242: export/import of settings and presets as versioned JSON, and the Settings group that drives it.
         services.AddSingleton<DnaEntropyGraph.Core.SettingsPortability.SettingsTransfer>();
         services.AddTransient<SettingsTransferViewModel>();
@@ -527,6 +535,7 @@ public static class ServiceRegistration
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Billing);
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Services);
         services.AddSingleton<IQuotaGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Quota);
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().Budget);
         services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<GoogleCloudGatewaySet>().PricingCatalog);
 
     }
@@ -550,7 +559,57 @@ public static class ServiceRegistration
         services.AddSingleton<IProjectCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IBillingGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IServiceEnablementGateway>(sp => sp.GetRequiredService<FakeGcp>());
+        services.AddSingleton<IBudgetGateway>(sp => sp.GetRequiredService<FakeGcp>());
         services.AddSingleton<IPricingCatalogGateway>(sp => sp.GetRequiredService<FakeGcp>());
+    }
+}
+
+internal static class CloudAuditRegistration
+{
+    /// <summary>
+    /// Issue #245: replaces each registered gateway that has a mutating call with an audited wrapper around the one that was there
+    /// (the Resilient* wrapper over the fake, or the real Google gateway), so every mutation is one entry in the audit file whichever
+    /// backend is built. Reads pass through. The log file is first touched when the first mutation happens.
+    /// </summary>
+    public static void Add(IServiceCollection services, AppDataRoot root)
+    {
+        services.AddSingleton<ICloudAuditLog>(_ => new JsonLinesCloudAuditLog(root.CloudAuditLogFile));
+        services.AddSingleton<CloudAuditor>(sp => new CloudAuditor(
+            sp.GetRequiredService<ICloudAuditLog>(),
+            () =>
+            {
+                try
+                {
+                    return InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
+                }
+                catch (InstallationIdUnusableException)
+                {
+                    return null;
+                }
+            },
+            sp.GetRequiredService<TimeProvider>()));
+
+        Decorate<IComputeGateway>(services, (inner, auditor) => new AuditedComputeGateway(inner, auditor));
+        Decorate<IStorageGateway>(services, (inner, auditor) => new AuditedStorageGateway(inner, auditor));
+        Decorate<IProjectSetupGateway>(services, (inner, auditor) => new AuditedProjectSetupGateway(inner, auditor));
+        Decorate<IWorkerIdentityGateway>(services, (inner, auditor) => new AuditedWorkerIdentityGateway(inner, auditor));
+        Decorate<IServiceEnablementGateway>(services, (inner, auditor) => new AuditedServiceEnablementGateway(inner, auditor));
+        Decorate<IBillingGateway>(services, (inner, auditor) => new AuditedBillingGateway(inner, auditor));
+        Decorate<IProjectCatalogGateway>(services, (inner, auditor) => new AuditedProjectCatalogGateway(inner, auditor));
+        Decorate<IQuotaGateway>(services, (inner, auditor) => new AuditedQuotaGateway(inner, auditor));
+        Decorate<IPricingCatalogGateway>(services, (inner, auditor) => new AuditedPricingCatalogGateway(inner, auditor));
+        Decorate<IBudgetGateway>(services, (inner, auditor) => new AuditedBudgetGateway(inner, auditor));
+    }
+
+    private static void Decorate<T>(IServiceCollection services, Func<T, CloudAuditor, T> wrap)
+        where T : class
+    {
+        var existing = services.LastOrDefault(d => d.ServiceType == typeof(T))
+            ?? throw new InvalidOperationException($"{typeof(T).Name} is not registered, so it cannot be audited.");
+        var factory = existing.ImplementationFactory
+            ?? throw new InvalidOperationException($"{typeof(T).Name} must be registered with a factory so the audit can wrap it.");
+        services.Remove(existing);
+        services.Add(new ServiceDescriptor(typeof(T), sp => wrap((T)factory(sp), sp.GetRequiredService<CloudAuditor>()), existing.Lifetime));
     }
 }
 
