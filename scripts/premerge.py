@@ -81,6 +81,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+import wt_venv  # noqa: E402
+
 PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 
 # Scripts a workflow may reference that are deliberately not pre-merge gates.
@@ -157,12 +163,40 @@ class Result:
 # ---------------------------------------------------------------------------
 
 
-def find_venv_python(root: Path) -> Path | None:
+def _own_venv_python(root: Path) -> Path | None:
     for rel in ("worker/.venv/Scripts/python.exe", "worker/.venv/bin/python"):
         candidate = root / rel
         if candidate.is_file():
             return candidate
     return None
+
+
+def _primary_venv_python(root: Path) -> Path | None:
+    """The primary checkout's venv python, via git's common dir (an agent worktree has no venv of its own, #1001)."""
+    try:
+        return wt_venv.venv_python(wt_venv.primary_venv(root))
+    except wt_venv.LinkError:
+        return None
+
+
+def find_venv_python(root: Path) -> Path | None:
+    return _own_venv_python(root) or _primary_venv_python(root)
+
+
+def venv_fallback_note(root: Path, override: str | None) -> str | None:
+    """One line saying the primary checkout's venv is in use, or None when --python or the checkout's own venv decided."""
+    if override or _own_venv_python(root):
+        return None
+    found = _primary_venv_python(root)
+    return f"NOTE: no worker/.venv in {root}; using the primary checkout's venv python {found} (#1001)" if found else None
+
+
+def pythonpath_for(root: Path, env: dict[str, str] | os._Environ[str]) -> str:
+    """`<root>/worker/src` first on PYTHONPATH, so a shared venv's editable install cannot win the import (#937)."""
+    src = str((root / "worker" / "src").resolve())
+    same = os.path.normcase
+    rest = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and same(p) != same(src)]
+    return os.pathsep.join([src, *rest])
 
 
 def venv_python_or_marker(root: Path, override: str | None) -> str:
@@ -953,6 +987,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"AUDIT: {problem}")
     mode = "fast" if args.fast else "full"
     print(f"premerge ({mode}): {len(chosen)} gate(s), python for guards: {venv_python_or_marker(root, args.python)}")
+    note = venv_fallback_note(root, args.python)
+    if note:
+        print(note)
+    os.environ["PYTHONPATH"] = pythonpath_for(root, os.environ)  # every gate inherits it (run_gate copies os.environ)
     _, summary, code = run_all(chosen, log_dir=args.log_dir)
     print(summary)
     if problems:

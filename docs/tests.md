@@ -139,7 +139,12 @@ unrecognised ID line layouts, where the file ends, and an ID line inside the hea
 ## Fixtures
 
 `worker/tests/conftest.py` carries shared fixtures (currently: `sample_seq`,
-a short valid A/C/G/T sequence). `worker/tests/data/` carries file fixtures:
+a short valid A/C/G/T sequence) and the import-isolation guard (#937): it puts
+its own checkout's `worker/src` first on `sys.path` and `PYTHONPATH` before any
+test imports `dna_entropy`, and aborts the session if the package still resolves
+outside that directory (a shared venv's editable install from another checkout,
+an early plugin import). `tests/test_import_isolation.py` proves both arms in a
+fake two-checkout layout. `worker/tests/data/` carries file fixtures:
 `sample.fasta`, `sample.gb`, `multi.gb` (multi-record), `prokaryotic_demo.
 fasta`. `worker/tests/contract-fixtures/` carries JSON vectors shared with
 the (future) C# side: `cloud_error_classification.json`, `cloud_quota_

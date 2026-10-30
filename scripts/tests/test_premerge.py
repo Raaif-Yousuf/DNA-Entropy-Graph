@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -646,3 +647,84 @@ def test_classify_pytest_reads_xdist_output(rc, output, status):
 def test_a_timed_out_xdist_gate_still_counts_progress():
     out = "......F...  [ 12%]\n..........  [ 24%]\n"
     assert "timed out after 600s with 19 passed and 1 failed" in pm.classify_pytest_timeout(600, out)
+
+
+# ---- #1001: a worktree with no worker/.venv of its own ----------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def fake_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """(primary checkout with a fake shared venv python, a real linked worktree of it with no venv, the fake python)."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    _git(primary, "init", "-q")
+    _git(primary, "commit", "-q", "--allow-empty", "-m", "init")
+    rel = Path("Scripts") / "python.exe" if sys.platform == "win32" else Path("bin") / "python"
+    shared = primary / "worker" / ".venv" / rel
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"fake python\n")
+    wt = tmp_path / "wt"
+    _git(primary, "worktree", "add", "-q", str(wt), "-b", "lane")
+    (wt / "worker" / "src").mkdir(parents=True, exist_ok=True)
+    return primary, wt, shared
+
+
+def test_find_venv_python_prefers_the_checkouts_own_venv(fake_worktree):
+    primary, _, shared = fake_worktree
+    assert pm.find_venv_python(primary) == shared
+
+
+def test_find_venv_python_falls_back_to_the_primary_checkouts_venv_from_a_worktree(fake_worktree):
+    _, wt, shared = fake_worktree
+    assert not (wt / "worker" / ".venv").exists()
+    found = pm.find_venv_python(wt)
+    assert found is not None and found.resolve() == shared.resolve()
+
+
+def test_find_venv_python_is_none_when_neither_checkout_has_a_venv(fake_worktree):
+    _, wt, shared = fake_worktree
+    shared.unlink()
+    assert pm.find_venv_python(wt) is None
+
+
+def test_the_fallback_is_announced_and_an_own_venv_or_override_is_not(fake_worktree):
+    primary, wt, _ = fake_worktree
+    note = pm.venv_fallback_note(wt, None)
+    assert note is not None and "primary checkout" in note and "\n" not in note
+    assert pm.venv_fallback_note(primary, None) is None
+    assert pm.venv_fallback_note(wt, "C:/x/python.exe") is None
+
+
+def test_gates_get_this_checkouts_worker_src_first_on_pythonpath(tmp_path):
+    src = str((tmp_path / "worker" / "src").resolve())
+    sep = os.pathsep
+    assert pm.pythonpath_for(tmp_path, {}) == src
+    assert pm.pythonpath_for(tmp_path, {"PYTHONPATH": "A"}) == src + sep + "A"
+    # already there: moved to the front, not duplicated
+    assert pm.pythonpath_for(tmp_path, {"PYTHONPATH": f"A{sep}{src}"}).split(sep) == [src, "A"]
+
+
+def test_main_in_a_worktree_prints_the_fallback_and_runs_the_gates_with_the_worktree_src(fake_worktree, monkeypatch, capsys):
+    _, wt, shared = fake_worktree
+    seen: dict[str, str] = {}
+
+    def fake_run_all(gates, log_dir=None, runner=None, emit=print):
+        seen["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
+        return [], "SUMMARY", 0
+
+    monkeypatch.setattr(pm, "run_all", fake_run_all)
+    monkeypatch.setattr(pm, "_write_stamp", lambda *a, **k: None)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    (wt / "scripts").mkdir(exist_ok=True)
+    (wt / "scripts" / "check_stub.py").write_text("print('ok')\n", encoding="utf-8", newline="\n")
+    pm.main(["--root", str(wt), "--only", "check_stub"])
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "ERROR" not in captured.err, captured.err
+    assert "primary checkout" in out
+    assert seen["PYTHONPATH"].split(os.pathsep)[0] == str((wt / "worker" / "src").resolve())
+    assert str(shared) in out  # the python it announced is the primary's
