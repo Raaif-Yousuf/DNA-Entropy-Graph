@@ -470,7 +470,7 @@ public sealed class JobReconciler
     /// or one whose cancel could not confirm its VM gone (<see cref="RunErrorCodes.CancelFailed"/>).
     /// </summary>
     private static bool CancelOwnsTheVm(RunRecord row)
-        => (row.Phase == JobPhase.Cancelled && string.IsNullOrEmpty(row.ErrorCode)) || (row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed);
+        => (row.Phase == JobPhase.Cancelled && (string.IsNullOrEmpty(row.ErrorCode) || row.ErrorCode == RunErrorCodes.LateCreateUnconfirmed)) || (row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed);
 
     /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read say nothing against it (its job id already matched a row of this installation).</summary>
     private static bool IsOurs(VmDescriptor vm, string installation)

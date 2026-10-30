@@ -564,8 +564,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>
-    /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404), as real Compute
-    /// Engine does. Off by default, where it is a silent no-op.
+    /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404): the shape of RAW Compute Engine,
+    /// which the real <c>GoogleComputeGateway.EndVmAsync</c> does NOT pass on (it swallows the 404 and returns normally, so production never shows
+    /// the terminator an "already gone"). Off by default, where the delete is a silent no-op, which IS what the real gateway does (MEASURED 2026-10-30:
+    /// read of <c>GoogleComputeGateway.EndVmAsync</c>, round 4 H1). A test that turns this on exercises a branch production cannot reach.
     /// </summary>
     public FakeGcp WithDeleteOfMissingVmNotFound()
     {

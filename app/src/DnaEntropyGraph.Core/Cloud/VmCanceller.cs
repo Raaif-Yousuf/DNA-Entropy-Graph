@@ -39,9 +39,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         // A create the caller gave up on can still land. Wait for it (bounded) before looking, or the VM appears
         // after the run is recorded Cancelled and nothing ever deletes it.
-        var settled = await provisioner.SettleInflightCreatesAsync(jobId).ConfigureAwait(false)
-            ? CreateSettleState.Settled
-            : provisioner.HasInflightCreate(jobId) ? CreateSettleState.CreateInFlight : CreateSettleState.ReuseInFlight;
+        var settled = await provisioner.SettleInflightAsync(jobId).ConfigureAwait(false);
 
         // Issue #938: the creates THIS attempt asked Compute for, claimed now so they are this cancel's alone. Each is looked up BY NAME below whatever became of its task (the real gateway
         // honours cancellation, so a cancelled create ends Canceled although Compute may have accepted the insert), even when the label listing lags.
@@ -87,7 +85,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            failure = ex.Message;
+            failure = UnexpectedFailure(ex);
         }
         catch (OperationCanceledException)
         {
@@ -99,7 +97,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             }
             catch (Exception ex)
             {
-                failure = ex.Message;
+                failure = UnexpectedFailure(ex);
             }
         }
 
@@ -114,6 +112,10 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             StartWatch(jobId, sent);
         }
     }
+
+    /// <summary>What the row records when the cancel itself threw: the error class and the action, never the exception's message (it can carry a path or a name).</summary>
+    private static string UnexpectedFailure(Exception ex)
+        => $"The cancel could not finish ({VmTerminator.ErrorClassOf(ex)}). Check the Cloud page and delete or stop any VM left for this run.";
 
     /// <summary>
     /// A create whose outcome is unknown (still in flight, or ended Canceled or by a network failure: Compute may have accepted it) stays under watch, by name, after the outcome is recorded: ONE loop
@@ -140,7 +142,6 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             return;
         }
 
-        Interlocked.Increment(ref _watchesStarted);
         var reap = Task.Run(() => WatchLateCreatesAsync(jobId, watched));
         _reaps[reap] = 0;
         _ = reap.ContinueWith(
@@ -159,13 +160,8 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reaps = new();
 
-    private int _watchesStarted;
-
     /// <summary>Tests: completes when every late clean-up started so far has ended (a signal, so a test needs no sleep to know a reaper that would have deleted something had its chance).</summary>
     internal Task WhenReapsEndedAsync() => Task.WhenAll(_reaps.Keys);
-
-    /// <summary>Tests: how many late-create watch loops were started (one per cancel that had a create of unknown outcome).</summary>
-    internal int WatchesStarted => Volatile.Read(ref _watchesStarted);
 
     /// <summary>
     /// Issue #938: watches the creates the cancel could not settle (one loop), deletes the VMs they make (by name, whatever became of the tasks), says in the run's row what became of them in ONE sentence,
@@ -191,7 +187,17 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             {
                 await rows.UpdateRowAsync(
                     jobId,
-                    row => SentenceFor(outcomes, row) is { } sentence ? row with { ErrorDetail = $"{row.ErrorDetail} {sentence}".Trim() } : row,
+                    row =>
+                    {
+                        var sentence = SentenceFor(outcomes, row);
+                        var code = CodeFor(outcomes, row);
+                        if (sentence is null && code is null)
+                        {
+                            return row;
+                        }
+
+                        return row with { ErrorDetail = sentence is null ? row.ErrorDetail : $"{row.ErrorDetail} {sentence}".Trim(), ErrorCode = code ?? row.ErrorCode };
+                    },
                     CancellationToken.None).ConfigureAwait(false);
             }
         }
@@ -214,6 +220,16 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     }
 
     /// <summary>
+    /// What the user sees: the Runs page shows the message of a finished row's error code, never its detail. A Cancelled row whose late VM could not be confirmed deleted or stopped (or never seen) gets
+    /// <see cref="RunErrorCodes.LateCreateUnconfirmed"/> (action: the Cloud page); a cancel_failed row already says it. Null when the row's code stays.
+    /// </summary>
+    internal static string? CodeFor(IReadOnlyList<LateCreateOutcome> outcomes, RunRecord row)
+        => row.Phase == JobPhase.Cancelled && string.IsNullOrEmpty(row.ErrorCode)
+           && outcomes.Any(o => o.State is LateCreateState.DeleteFailed or LateCreateState.CouldNotConfirm or LateCreateState.GaveUp or LateCreateState.ReuseStopFailed)
+            ? RunErrorCodes.LateCreateUnconfirmed
+            : null;
+
+    /// <summary>
     /// The one sentence a cancel's row gets about the creates it watched, worded for the row's state. A Cancelled row says only what the user needs (a VM deleted, or one to delete by hand); a
     /// cancel_failed row also says it stays failed, so the sentence never reads as an all-clear. Null when there is nothing to add.
     /// </summary>
@@ -232,6 +248,11 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             return "A create request that was still in flight landed later, and its VM could not be deleted. Delete it from the Cloud page.";
         }
 
+        if (Any(LateCreateState.ReuseStopFailed))
+        {
+            return "A request to start an earlier VM landed after the cancel, and the app could not stop it. Stop it from the Cloud page.";
+        }
+
         if (Any(LateCreateState.CouldNotConfirm))
         {
             return "The app could not tell whether a create request that was still in flight made a VM. Check the Cloud page and delete any VM left for this run.";
@@ -247,6 +268,11 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             return "A create request that was still in flight landed later, and the VM it made was deleted." + (failedRow ? StillFailed : string.Empty);
         }
 
+        if (Any(LateCreateState.ReuseStopped))
+        {
+            return "A request to start an earlier VM landed after the cancel, and the VM was stopped again." + (failedRow ? StillFailed : string.Empty);
+        }
+
         if (failedRow && Any(LateCreateState.CreateFailed))
         {
             return "A create request that was still in flight ended without a VM, and none appeared when the app looked for it by name." + StillFailed;
@@ -257,6 +283,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
     private async Task<string?> DeleteAllAsync(string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)
     {
+        using var hold = terminator.Ledger.HoldDelete(jobId); // round 4 M2: the queued requests' deletes too
         var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
         var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken, sent).ConfigureAwait(false);
         return ownedNote ?? queuedNote;

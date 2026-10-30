@@ -47,6 +47,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LifecycleUnverified] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.CancelFailed] = RunErrorAction.OpenCloudPage,
+        [RunErrorCodes.LateCreateUnconfirmed] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.InputMissing] = RunErrorAction.ChooseFile,
         [RunErrorCodes.WorkerImageUnavailable] = RunErrorAction.UpdateApp,
         [RunErrorCodes.WorkerImageRefused] = RunErrorAction.UpdateApp,

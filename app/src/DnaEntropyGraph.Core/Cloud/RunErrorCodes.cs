@@ -17,6 +17,9 @@ public static class RunErrorCodes
     public const string VmUnhealthy = "vm_unhealthy";
     public const string LifecycleUnverified = "lifecycle_unverified";
     public const string CancelFailed = "cancel_failed";
+
+    /// <summary>Issue #938: the run was cancelled, but a create or a start still in flight at the cancel landed later and the app could not confirm its VM deleted or stopped (or never saw it): recorded on the Cancelled row so the Runs page says to check the Cloud page.</summary>
+    public const string LateCreateUnconfirmed = "late_create_unconfirmed";
     public const string InputMissing = "input_missing";
     public const string WorkerImageUnavailable = "no_worker_image";
     public const string WorkerImageRefused = "worker_image_refused";
@@ -118,7 +121,7 @@ public static class RunErrorCodes
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
-        NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
+        NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed, LateCreateUnconfirmed,
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
@@ -225,6 +228,7 @@ public static class RunErrorCodes
         VmUnhealthy => "RunError_vm_unhealthy",
         LifecycleUnverified => "RunError_lifecycle_unverified",
         CancelFailed => "RunError_cancel_failed",
+        LateCreateUnconfirmed => "RunError_late_create_unconfirmed",
         InputMissing => "RunError_input_missing",
         WorkerImageUnavailable => "RunError_no_worker_image",
         WorkerImageRefused => "RunError_worker_image_refused",

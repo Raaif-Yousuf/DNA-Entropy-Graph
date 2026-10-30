@@ -178,6 +178,9 @@
   <data name="RunError_cancel_failed" xml:space="preserve">
     <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
   </data>
+  <data name="RunError_late_create_unconfirmed" xml:space="preserve">
+    <value>You cancelled this run, but a request for a rented computer was still on its way and we could not confirm it was deleted or stopped. Open the Cloud page and delete or stop any computer left for this run so it stops billing.</value>
+  </data>
   <data name="RunError_input_missing" xml:space="preserve">
     <value>We could not read your input file. Choose the file again, then start the run again.</value>
   </data>

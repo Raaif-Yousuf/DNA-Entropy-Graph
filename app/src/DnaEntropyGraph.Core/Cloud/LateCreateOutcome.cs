@@ -23,7 +23,17 @@ public enum LateCreateState
 
     /// <summary>A newer attempt of the same job created, adopted or reused a VM under the same name in the same zone: it is that attempt's now, and this clean-up left it alone.</summary>
     Superseded,
+
+    /// <summary>Round 4 M3: a reuse still in flight at the cancel landed (the earlier run's VM started) and was stopped again. Never deleted: it is another run's VM.</summary>
+    ReuseStopped,
+
+    /// <summary>Round 4 M3: a reuse landed and the VM could not be confirmed stopped within the lifecycle timeout; <see cref="LateCreateOutcome.ErrorClass"/> says what failed.</summary>
+    ReuseStopFailed,
 }
 
 /// <summary>What happened to a create that was still in flight when a cancel stopped waiting. Ids and classes only: never a name, a zone or a message.</summary>
-public sealed record LateCreateOutcome(string JobId, LateCreateState State, string? ErrorClass = null);
+public sealed record LateCreateOutcome(string JobId, LateCreateState State, string? ErrorClass = null)
+{
+    /// <summary>The one token the diagnostics log records for this outcome: the state, and the error class after a colon when there is one. Never a name, a zone or a message.</summary>
+    public string LogClass => ErrorClass is null ? State.ToString() : $"{State}:{ErrorClass}";
+}

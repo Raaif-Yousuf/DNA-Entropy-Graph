@@ -5,11 +5,14 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// cancel and the late clean-up look up BY NAME, whatever became of the create task: the real gateway honours cancellation, so a cancelled create ends Canceled within
 /// milliseconds although Compute may already have accepted the insert and made the VM. The task is kept only to tell a rejected create (no VM) from one whose outcome is unknown.
 /// </summary>
-internal sealed class SentCreate(string jobId, string name, string zone, long generation, string installationId)
+internal sealed class SentCreate(string jobId, string name, string zone, long generation, string installationId, bool isReuse = false)
 {
     private int _claimed;
 
     public string JobId { get; } = jobId;
+
+    /// <summary>Round 4 M3: this is a REUSE (a start of another run's stopped VM, relabelled to this job), not a create. It is looked up by name like a create, but a VM it lands is STOPPED, never deleted: the VM is its first owner's.</summary>
+    public bool IsReuse { get; } = isReuse;
 
     public string Name { get; } = name;
 

@@ -440,6 +440,23 @@ public class DiResolutionTests
         row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
     }
     [Fact]
+    public void The_production_runner_reports_how_a_late_create_ended_to_the_diagnostics_log_by_id_and_state_only()
+    {
+        // Issue #938 round 4 M1: OnLateCreate was set nowhere in the app, so the outcome of the late clean-up (and the ToTest row's "diagnostics log shows Deleted") could never appear.
+        using var provider = BuildRealServiceProvider();
+        var runner = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>();
+
+        runner.OnLateCreate.ShouldNotBeNull("nothing in the app listened for a late create's outcome");
+        runner.OnLateCreate!(new DnaEntropyGraph.Core.Cloud.LateCreateOutcome("job-late-di", DnaEntropyGraph.Core.Cloud.LateCreateState.DeleteFailed, "permission"));
+
+        var log = Directory.EnumerateFiles(TempAppDataRoot.Value, "app.log", SearchOption.AllDirectories).Select(File.ReadAllText).SingleOrDefault();
+        log.ShouldNotBeNull("the late-create line was not written to app.log");
+        var line = log.Split('\n').Single(l => l.Contains("late-create", StringComparison.Ordinal));
+        line.ShouldContain("job=job-late-di");
+        line.ShouldContain("error=DeleteFailed:permission");
+    }
+
+    [Fact]
     public async Task The_production_runner_asks_the_UI_through_the_coordinator_and_a_missing_window_never_ends_a_run()
     {
         // Issue #675: OnStall / OnNotice / CancelAckTimeout were wired to nothing in production; now they are the RunStallCoordinator's. With no window attached the

@@ -331,6 +331,7 @@ public static class ServiceRegistration
         services.AddSingleton<CloudJobRunner>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
+            var diagnostics = sp.GetRequiredService<IDiagnosticsLog>();
             return new CloudJobRunner(
                 sp.GetRequiredService<IComputeGateway>(),
                 sp.GetRequiredService<IStorageGateway>(),
@@ -340,6 +341,9 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
             {
+                // Issue #938: how the clean-up of a create that landed after a cancel ended goes to the diagnostics log (the run id, the state and an error class, never a name, a file or an email);
+                // what the user must act on is also on the Cancelled row as an error code (VmCanceller.CodeFor). The reap window keeps its default (15 minutes).
+                OnLateCreate = outcome => diagnostics.Warning("late-create", outcome.JobId, outcome.LogClass),
                 // Issue #675: the stall question is a Stop / Delete / Keep waiting dialog and the slow-run notice is a line on the run page (RunStallCoordinator; the notice is also
                 // logged by id and kind, never a sequence, a file name or an email). A dialog that cannot be shown answers Keep waiting; StallDecisions.EndAsRunChose stays the
                 // default for a runner built without a UI (tests, the reconciler's own runner).

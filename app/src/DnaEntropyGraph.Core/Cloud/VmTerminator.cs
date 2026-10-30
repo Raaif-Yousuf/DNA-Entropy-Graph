@@ -97,6 +97,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
         // A VM found by label is ended under its own name and zone, never the spec's.
         var name = vmName ?? request.Spec.VmName;
+
+        // Round 4 M2: a delete of the job's VM holds the barrier a new attempt waits behind, from before the read to the verified end.
+        var hold = action == AfterTaskAction.Delete ? Ledger.HoldDelete(request.JobId) : null;
         try
         {
             var vm = await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false);
@@ -111,6 +114,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 // reached RUNNING has no disk worth keeping: a failure that lands while it boots deletes it, as the boot
                 // deadline does, whatever the user chose for after a run.
                 action = AfterTaskAction.Delete;
+                hold = Ledger.HoldDelete(request.JobId);
             }
 
             if (action == AfterTaskAction.Delete)
@@ -173,6 +177,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         {
             return $"VM '{name}' in zone '{zone}' could not be confirmed {(action == AfterTaskAction.Delete ? "deleted" : "stopped")}: {ex.Message}";
         }
+        finally
+        {
+            hold?.Dispose();
+        }
     }
 
     /// <summary>
@@ -229,7 +237,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return error;
     }
 
-    private static string ErrorClassOf(Exception ex)
+    internal static string ErrorClassOf(Exception ex)
         => (ex as CloudOperationException)?.Kind.ToString().ToLowerInvariant() ?? "other";
 
     /// <summary>The name a VM THIS run created carries (<see cref="VmSpec.VmName"/> without an existing VM). A VM reused from another run keeps that run's name, so a different name means "borrowed".</summary>
@@ -328,43 +336,51 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         Deferred,
     }
 
+    /// <summary>What one reap step came to. <see cref="LookError"/> is the class of a failed look (the VM may be there), else null.</summary>
+    private readonly record struct ReapResult(ReapStep Step, string? ErrorClass, string? LookError = null);
+
     /// <summary>
-    /// Issue #938: one look by name at a create's VM and, if it may be there, one delete by name. A failed look is "maybe present": the delete goes anyway (a 404 means it was never there).
+    /// Issue #938: one look by name at a create's VM and, if it may be there, one delete by name. A failed look is "maybe present": the delete goes anyway (a 404 means it was never there). A VM a look SEES
+    /// is deleted again on every step: an accepted delete says nothing about whether the VM existed (the real gateway answers a delete of a missing VM with a silent success, round 4 H1), so the VM
+    /// being seen, never a delete having been accepted, is what proves one. <paramref name="lookOnly"/> sends nothing (the watch's last look before it judges).
     /// The delete is decided under the ledger's lock (<see cref="AttemptLedger.TryBeginDelete"/>): a VM a LATER attempt of the job owns is left alone, and so is one a later attempt that is
     /// still provisioning may be about to adopt (round 3 M2 and M3).
     /// </summary>
-    private async Task<(ReapStep Step, string? ErrorClass)> ReapStepAsync(SentCreate sent, bool sendDelete)
+    private async Task<ReapResult> ReapStepAsync(SentCreate sent, bool lookOnly = false)
     {
         var (state, lookError) = await LookByNameAsync(sent, CancellationToken.None).ConfigureAwait(false);
         if (state == NameLook.Gone)
         {
-            return (ReapStep.Gone, null);
+            return new ReapResult(ReapStep.Gone, null);
         }
 
         switch (Ledger.TryBeginDelete(sent))
         {
             case DeleteDecision.Superseded:
-                return (ReapStep.Superseded, null);
+                return new ReapResult(ReapStep.Superseded, null);
             case DeleteDecision.Defer:
-                return (ReapStep.Deferred, null);
+                return new ReapResult(ReapStep.Deferred, null);
         }
 
-        if (state == NameLook.Present)
+        var unknown = state == NameLook.Unknown;
+        if (!unknown)
         {
             sent.Landed = true;
         }
 
-        if (!sendDelete && state == NameLook.Present)
+        if (lookOnly)
         {
-            return (ReapStep.DeleteSent, null);
+            return unknown ? new ReapResult(ReapStep.DeleteFailed, lookError, lookError) : new ReapResult(ReapStep.DeleteSent, null);
         }
 
         var (result, deleteError) = await DeleteByNameAsync(sent.Name, sent.Zone, CancellationToken.None).ConfigureAwait(false);
         return result switch
         {
-            DeleteResult.AlreadyGone => (ReapStep.Gone, null),
-            DeleteResult.Accepted => (ReapStep.DeleteSent, null),
-            _ => (ReapStep.DeleteFailed, deleteError ?? lookError),
+
+            // A 404 after a look that could not read says the VM is not there NOW, not that the create will never make one: while the looks fail the watch keeps going.
+            DeleteResult.AlreadyGone => unknown ? new ReapResult(ReapStep.DeleteSent, null, lookError) : new ReapResult(ReapStep.Gone, null),
+            DeleteResult.Accepted => new ReapResult(ReapStep.DeleteSent, null, lookError),
+            _ => new ReapResult(ReapStep.DeleteFailed, deleteError ?? lookError, lookError),
         };
     }
 
@@ -375,23 +391,30 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
         public long? EndedAt { get; set; }
 
+        /// <summary>When the watch began waiting on a delete it knows is needed: a look SAW the VM, or a delete failed. A delete that was merely accepted starts nothing: it may have gone to a VM that did not exist.</summary>
         public long? DeleteStart { get; set; }
 
-        /// <summary>A delete Compute accepted (so the VM existed). A delete that only failed proves nothing about the VM.</summary>
-        public bool DeleteAccepted { get; set; }
+        /// <summary>A reuse: when the watch first asked for the VM to be stopped.</summary>
+        public long? StopStart { get; set; }
 
         public string? LastError { get; set; }
     }
 
+    private int _reapLoops;
+
+    /// <summary>Tests: how many late-watch loops have run (one per cancel that had a create of unknown outcome, however many creates it held).</summary>
+    internal int ReapLoopsStarted => Volatile.Read(ref _reapLoops);
+
     /// <summary>
     /// Issue #938: the watch over the creates a cancel could not settle (in flight, or ended Canceled or by a network failure: Compute may still have accepted them). ONE loop per cancel, however
     /// many creates: each round looks for each outstanding VM BY NAME, whatever became of its task, and deletes it when it appears, until <see cref="CloudRunSettings.LateCreateReapWindow"/> runs out
-    /// (a create still in flight) or <see cref="CloudRunSettings.LateCreateGrace"/> after the task ended. "No VM" is said only after those looks found nothing. A delete that errors is judged by the next
-    /// look, bounded by <see cref="CloudRunSettings.LifecycleTimeout"/>; the VM's own maxRunDuration (Hard Rule 10) and the reconciler on the next launch are the backstops. Returns one outcome per create, in
-    /// order. Never throws.
+    /// (a create still in flight) or <see cref="CloudRunSettings.LateCreateGrace"/> after the task ended. "No VM" is said only after those looks found nothing, and "Deleted" only for a VM a look saw. A delete that errors is
+    /// judged by the next look, bounded by <see cref="CloudRunSettings.LifecycleTimeout"/>; the VM's own maxRunDuration (Hard Rule 10) and the reconciler on the next launch are the backstops. A reuse among them
+    /// (round 4 M3) is STOPPED when it lands, never deleted. Returns one outcome per create, in order. Never throws.
     /// </summary>
     public async Task<IReadOnlyList<LateCreateOutcome>> ReapLateCreatesAsync(IReadOnlyList<SentCreate> creates)
     {
+        Interlocked.Increment(ref _reapLoops);
         var outcomes = new Dictionary<SentCreate, LateCreateOutcome>();
         try
         {
@@ -445,12 +468,55 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return creates.Select(c => outcomes[c]).ToList();
     }
 
+    /// <summary>The outcome when a look found no VM, or null while the watch should keep looking. "Deleted" needs a look that SAW the VM (<see cref="SentCreate.Landed"/>).</summary>
+    private LateCreateOutcome? NoVmYet(LateWatch watch, long windowStart)
+    {
+        var sent = watch.Sent;
+        if (sent.Landed)
+        {
+            // The VM this create made was seen, and is gone now: by this delete, or by another one that got there between the look and the delete (a worker, the platform).
+            return new LateCreateOutcome(sent.JobId, LateCreateState.Deleted);
+        }
+
+        if (sent.Refused)
+        {
+            // Compute refused it: no VM of this create exists.
+            return new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed);
+        }
+
+        if (sent.Settled)
+        {
+            // It answered a VM and a look after the answer found none: the VM is gone (it deleted itself).
+            return new LateCreateOutcome(sent.JobId, LateCreateState.NothingToDelete);
+        }
+
+        var windowOver = settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow;
+        if (sent.Create is { IsCompleted: true })
+        {
+            watch.EndedAt ??= settings.StartClock();
+            if (settings.ElapsedSince(watch.EndedAt.Value) >= settings.LateCreateGrace || windowOver)
+            {
+                // A by-name look after the create ended (and the grace for Compute to show an accepted insert) found nothing.
+                return new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed);
+            }
+
+            return null;
+        }
+
+        return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+    }
+
     /// <summary>One round for one watched create: its outcome once it has one, else null.</summary>
     private async Task<LateCreateOutcome?> AdvanceAsync(LateWatch watch, long windowStart)
     {
         var sent = watch.Sent;
-        var (step, error) = await ReapStepAsync(sent, sendDelete: !watch.DeleteAccepted).ConfigureAwait(false);
-        switch (step)
+        if (sent.IsReuse)
+        {
+            return await AdvanceReuseAsync(watch, windowStart).ConfigureAwait(false);
+        }
+
+        var reap = await ReapStepAsync(sent).ConfigureAwait(false);
+        switch (reap.Step)
         {
             case ReapStep.Superseded:
                 return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
@@ -458,45 +524,21 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 // A newer attempt is still provisioning and may be about to adopt this VM: nothing is deleted yet, and the window still bounds the wait.
                 return settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
             case ReapStep.DeleteSent:
-                watch.DeleteAccepted = true;
                 watch.LastError = null;
-                watch.DeleteStart ??= settings.StartClock();
+                if (sent.Landed)
+                {
+                    watch.DeleteStart ??= settings.StartClock();
+                }
+
                 break;
             case ReapStep.DeleteFailed:
-                watch.LastError = error;
+                watch.LastError = reap.ErrorClass;
                 watch.DeleteStart ??= settings.StartClock();
                 break;
             default:
-                if (watch.DeleteAccepted || sent.Landed)
+                if (NoVmYet(watch, windowStart) is { } none)
                 {
-                    // The VM this create made was seen, and is gone now: by this delete, or by another one that got there between the look and the delete (a worker, the platform).
-                    return new LateCreateOutcome(sent.JobId, LateCreateState.Deleted);
-                }
-
-                if (sent.Refused)
-                {
-                    // Compute refused it: no VM of this create exists.
-                    return new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed);
-                }
-
-                if (sent.Settled)
-                {
-                    // It answered a VM and a look after the answer found none: the VM is gone (it deleted itself).
-                    return new LateCreateOutcome(sent.JobId, LateCreateState.NothingToDelete);
-                }
-
-                if (sent.Create is { IsCompleted: true })
-                {
-                    watch.EndedAt ??= settings.StartClock();
-                    if (settings.ElapsedSince(watch.EndedAt.Value) >= settings.LateCreateGrace || settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow)
-                    {
-                        // A by-name look after the create ended (and the grace for Compute to show an accepted insert) found nothing.
-                        return new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed);
-                    }
-                }
-                else if (settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow)
-                {
-                    return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp);
+                    return none;
                 }
 
                 break;
@@ -505,20 +547,135 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         if (watch.DeleteStart is { } started && settings.ElapsedSince(started) >= settings.LifecycleTimeout)
         {
             // One last look: a delete that errored or lagged may still have worked.
-            var (finalStep, _) = await ReapStepAsync(sent, sendDelete: false).ConfigureAwait(false);
-            return finalStep switch
+            var final = await ReapStepAsync(sent, lookOnly: true).ConfigureAwait(false);
+            switch (final.Step)
             {
-                ReapStep.Gone when watch.DeleteAccepted || sent.Landed => new LateCreateOutcome(sent.JobId, LateCreateState.Deleted),
-                ReapStep.Superseded => new LateCreateOutcome(sent.JobId, LateCreateState.Superseded),
-                ReapStep.Gone => new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed),
-                _ when sent.Landed => new LateCreateOutcome(sent.JobId, LateCreateState.DeleteFailed, watch.LastError ?? "other"),
+                case ReapStep.Gone:
+                    if (NoVmYet(watch, windowStart) is { } gone)
+                    {
+                        return gone;
+                    }
 
-                // No look ever saw a VM, and the looks and deletes kept failing: it cannot be said that one existed.
-                _ => new LateCreateOutcome(sent.JobId, LateCreateState.CouldNotConfirm, watch.LastError ?? "other"),
-            };
+                    break;
+                case ReapStep.Superseded:
+                    return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
+                default:
+                    return sent.Landed
+                        ? new LateCreateOutcome(sent.JobId, LateCreateState.DeleteFailed, watch.LastError ?? "other")
+
+                        // No look ever saw a VM, and the looks and deletes kept failing: it cannot be said that one existed.
+                        : new LateCreateOutcome(sent.JobId, LateCreateState.CouldNotConfirm, watch.LastError ?? final.ErrorClass ?? "other");
+            }
+        }
+
+        if (!sent.Landed && reap.LookError is { } lookClass && settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow)
+        {
+            // Every look failed for the whole window: the deletes by name went out, but nobody saw a VM.
+            return new LateCreateOutcome(sent.JobId, LateCreateState.CouldNotConfirm, watch.LastError ?? lookClass);
         }
 
         return null;
+    }
+
+    /// <summary>Stops a VM by name; a 404 is "already gone". Never throws for a cloud failure.</summary>
+    private async Task<(bool Ok, string? ErrorClass)> StopByNameAsync(string name, string zone)
+    {
+        try
+        {
+            await calls.CallAsync(
+                async token =>
+                {
+                    try
+                    {
+                        await compute.StopVmAsync(name, zone, token).ConfigureAwait(false);
+                    }
+                    catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+                    {
+                        // Already gone: the state wanted.
+                    }
+
+                    return true;
+                },
+                CancellationToken.None).ConfigureAwait(false);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ErrorClassOf(ex));
+        }
+    }
+
+    /// <summary>
+    /// Round 4 M3: one round for a REUSE the cancel could not settle. The VM is another run's (reused by relabelling it to this job and starting it): it is never deleted, only STOPPED when it lands running.
+    /// A reuse relabels and THEN starts, so a stopped VM that already carries this job's labels says nothing until the start has answered.
+    /// </summary>
+    private async Task<LateCreateOutcome?> AdvanceReuseAsync(LateWatch watch, long windowStart)
+    {
+        var sent = watch.Sent;
+        var windowOver = settings.ElapsedSince(windowStart) >= settings.LateCreateReapWindow;
+        switch (Ledger.TryBeginDelete(sent))
+        {
+            case DeleteDecision.Superseded:
+                return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
+            case DeleteDecision.Defer:
+                return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+        }
+
+        VmDescriptor? vm;
+        try
+        {
+            vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Name, sent.Zone, token), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            watch.LastError = ErrorClassOf(ex);
+            var stopOver = watch.StopStart is { } s && settings.ElapsedSince(s) >= settings.LifecycleTimeout;
+            return windowOver || stopOver
+                ? new LateCreateOutcome(sent.JobId, sent.Landed ? LateCreateState.ReuseStopFailed : LateCreateState.CouldNotConfirm, watch.LastError)
+                : null;
+        }
+
+        var mine = vm?.Labels is { } labels
+            && labels.TryGetValue("job-id", out var job) && job == sent.JobId
+            && labels.TryGetValue("installation-id", out var installation) && installation == sent.InstallationId;
+        if (!mine)
+        {
+            if (sent.Landed)
+            {
+                return new LateCreateOutcome(sent.JobId, LateCreateState.NothingToDelete);
+            }
+
+            if (sent.Refused)
+            {
+                return new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed);
+            }
+
+            if (sent.Create is { IsCompleted: true })
+            {
+                watch.EndedAt ??= settings.StartClock();
+                return settings.ElapsedSince(watch.EndedAt.Value) >= settings.LateCreateGrace || windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.CreateFailed) : null;
+            }
+
+            return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+        }
+
+        sent.Landed = true;
+        if (VmFacts.IsStopped(vm!) || vm!.Status == "STOPPING")
+        {
+            if (sent.Create is { IsCompleted: true })
+            {
+                return new LateCreateOutcome(sent.JobId, LateCreateState.ReuseStopped);
+            }
+
+            return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+        }
+
+        var (ok, stopError) = await StopByNameAsync(sent.Name, sent.Zone).ConfigureAwait(false);
+        watch.StopStart ??= settings.StartClock();
+        watch.LastError = ok ? null : stopError;
+        return settings.ElapsedSince(watch.StopStart.Value) >= settings.LifecycleTimeout
+            ? new LateCreateOutcome(sent.JobId, LateCreateState.ReuseStopFailed, watch.LastError ?? "other")
+            : null;
     }
 
     /// <summary>
@@ -530,6 +687,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
     {
         var sent = sentCreates ?? [];
+
+        // Round 4 M2: held for the whole delete and its read-back, so a new attempt of the job never adopts a VM this is deleting. (A cancel's retry, the listed-VM path and the run page's delete all come through here or take the hold themselves.)
+        using var hold = Ledger.HoldDelete(jobId);
         try
         {
             return await DeleteOwnedCoreAsync(jobId, settle, cancellationToken, sent).ConfigureAwait(false);
@@ -543,8 +703,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
-    private async Task<string?> DeleteOwnedCoreAsync(string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> sent)
+    private async Task<string?> DeleteOwnedCoreAsync(string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
     {
+        // Round 4 M3: a REUSE names another run's VM: it is never a delete target nor counted as left (the watch stops it if it lands), so only creates go through the by-name delete and read-back below.
+        var sent = allSent.Where(c => !c.IsReuse).ToList();
         var ownName = OwnVmName(jobId);
         IReadOnlyList<VmDescriptor> owned;
         string? listError = null;
@@ -580,6 +742,11 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     // Round 3 H1: a VM this run did not create (a reuse relabelled it to this job) is its owner's, not this cancel's to delete. Stop it so it does not bill, leave its labels.
                     deleteError ??= await StopBorrowedAsync(listed, cancellationToken).ConfigureAwait(false);
+                    foreach (var reuse in allSent.Where(c => c.IsReuse && c.Name == name && c.Zone == zone))
+                    {
+                        reuse.Landed = true; // a look saw it: nothing further for the watch to find
+                    }
+
                     continue;
                 }
 
@@ -598,12 +765,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             }
 
             var create0 = sent.First(c => c.Name == name && c.Zone == zone);
-            var (step, stepError) = await ReapStepAsync(create0, sendDelete: true).ConfigureAwait(false);
-            if (step == ReapStep.DeleteFailed)
+            var reap = await ReapStepAsync(create0).ConfigureAwait(false);
+            if (reap.Step == ReapStep.DeleteFailed)
             {
                 deleteError ??= create0.Landed
-                    ? $"VM '{name}' in zone '{zone}' could not be deleted ({stepError}). Delete it from the Cloud page."
-                    : $"The app could not confirm whether VM '{name}' in zone '{zone}' exists or delete it ({stepError}). Check the Cloud page and delete it if it is there.";
+                    ? $"VM '{name}' in zone '{zone}' could not be deleted ({reap.ErrorClass}). Delete it from the Cloud page."
+                    : $"The app could not confirm whether VM '{name}' in zone '{zone}' exists or delete it ({reap.ErrorClass}). Check the Cloud page and delete it if it is there.";
             }
         }
 
@@ -655,7 +822,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return listError ?? settle switch
         {
             CreateSettleState.CreateInFlight => $"A create request was still in flight after {seconds} s, so a VM may still appear. The app deletes it if it does; check the Cloud page to be sure.",
-            CreateSettleState.ReuseInFlight => $"A request to start an earlier VM was still in flight after {seconds} s, so that VM may start. The app does not stop it for you: check the Cloud page and stop or delete it there.",
+            CreateSettleState.ReuseInFlight => $"A request to start an earlier VM was still in flight after {seconds} s, so that VM may start. The app stops it again if it does; check the Cloud page to be sure.",
             _ => null,
         };
     }
@@ -720,6 +887,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     public async Task DeleteVmsAsync(string jobId, CancellationToken cancellationToken)
     {
         NoteAppRequestedEnd(jobId);
+        using var hold = Ledger.HoldDelete(jobId); // round 4 M2
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
         foreach (var vm in owned)
         {

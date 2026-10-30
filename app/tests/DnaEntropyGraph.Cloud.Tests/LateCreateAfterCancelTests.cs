@@ -11,7 +11,7 @@ namespace DnaEntropyGraph.Cloud.Tests;
 /// THAT attempt; a create that answered while the label listing lags is still deleted; and nothing the cancel did not start (a later
 /// attempt's VM of the same job id, a reused keep-alive VM) is ever touched by the late clean-up.
 /// </summary>
-public class LateCreateAfterCancelTests
+public partial class LateCreateAfterCancelTests
 {
     private const string Project = "my-project";
     private const string ZoneA = "us-central1-a";
@@ -45,12 +45,15 @@ public class LateCreateAfterCancelTests
             };
             var calls = new GatewayCalls(Settings, gcp);
             var terminator = new VmTerminator(compute ?? gcp, calls, Settings);
+            Terminator = terminator;
             Provisioner = new VmProvisioner(compute ?? gcp, calls, Settings, terminator, JobIsFinished);
             Rows = new RunRowStore(Repo, null);
             Canceller = new VmCanceller(Rows, Provisioner, terminator, new GracefulCancel(gcp, gcp, calls, Settings), Settings);
         }
 
         public FakeGcp Gcp { get; }
+
+        public VmTerminator Terminator { get; }
 
         public CloudRunSettings Settings { get; }
 
@@ -258,9 +261,10 @@ public class LateCreateAfterCancelTests
         (await rig.Provisioner.SettleInflightCreatesAsync("job-l9").WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldBeTrue("the reuse has landed"); // a signal, not a sleep
         await rig.Canceller.WhenReapsEndedAsync(); // no clean-up is running that could still delete it
 
-        rig.LastRow("job-l9").ErrorDetail.ShouldNotBeNull().ShouldNotContain("The app deletes it", Case.Sensitive, "the app never deletes a reuse (#970 tracks stopping it): the row must not promise it");
+        rig.LastRow("job-l9").ErrorDetail.ShouldNotBeNull().ShouldNotContain("The app deletes it", Case.Sensitive, "the app never deletes a reuse: the row must not promise it");
         gcp.DeleteAttempts.ShouldBeEmpty("the late clean-up deleted a VM this run did not create");
-        rig.Outcomes.Reader.TryRead(out _).ShouldBeFalse("no late create was ever reported: the reuse is not a create");
+        rig.Outcomes.Reader.TryRead(out var reported).ShouldBeTrue("round 4 M3: the reuse is watched and stopped when it lands");
+        reported!.State.ShouldBe(LateCreateState.ReuseStopped);
     }
 
     // ---- round 2: the gateway production has (a create that honours its token, but Compute had accepted the insert) ----
@@ -388,7 +392,7 @@ public class LateCreateAfterCancelTests
         var gcp = new FakeGcp().WithServerAcceptedCreateThatTheClientCancels(landAtCancel: false).WithDeleteOfMissingVmNotFound();
         gcp.LabelListingBlind = true;
         var rig = new Rig(gcp);
-        rig.Settings.LateCreateReapWindow = TimeSpan.FromSeconds(30);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(500);
         await rig.SeedRowAsync("job-m2d");
         await CancelAnAcceptedCreateAsync(rig, "job-m2d");
         gcp.WithGetVmFailure(new CloudError(null, 503, "The service is currently unavailable."), 100000);
@@ -398,7 +402,7 @@ public class LateCreateAfterCancelTests
         var outcome = await rig.NextOutcomeAsync();
 
         gcp.WithGetVmFailure(new CloudError(null, 503, "unused"), 0);
-        outcome.State.ShouldBe(LateCreateState.Deleted);
+        outcome.State.ShouldBe(LateCreateState.CouldNotConfirm, "no look ever saw the VM (round 4: an accepted delete proves nothing), so it cannot be said to have been deleted");
         (await gcp.GetVmAsync("deg-job-m2d", ZoneA, CancellationToken.None)).ShouldBeNull("an unreadable VM is treated as maybe present and deleted by name");
     }
 
@@ -636,7 +640,7 @@ public class LateCreateAfterCancelTests
         await rig.Canceller.WhenReapsEndedAsync();
 
         rig.Outcomes.Reader.TryRead(out var extra).ShouldBeFalse($"the stockout create was watched too: {extra}");
-        rig.Canceller.WatchesStarted.ShouldBe(1, "one polling loop per cancel, not one task per sent create");
+        rig.Terminator.ReapLoopsStarted.ShouldBe(1, "one polling loop per cancel, not one task per sent create (the counter counts loops that RUN, so a loop per create reads 2)");
     }
 
     [Fact]
@@ -652,7 +656,7 @@ public class LateCreateAfterCancelTests
         await rig.NextOutcomeAsync();
         await rig.Canceller.WhenReapsEndedAsync();
 
-        rig.Canceller.WatchesStarted.ShouldBe(1);
+        rig.Terminator.ReapLoopsStarted.ShouldBe(1, "two creates of unknown outcome share one loop");
     }
 
     [Fact]
