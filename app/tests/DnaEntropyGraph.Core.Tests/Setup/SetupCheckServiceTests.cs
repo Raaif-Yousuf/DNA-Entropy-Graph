@@ -142,6 +142,19 @@ public class SetupCheckServiceTests
     }
 
     [Fact]
+    public async Task A_permission_failure_listing_accounts_after_the_link_reaches_the_step_as_the_permission_code()
+    {
+        _billing.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "a1"));
+        _billing.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError(SetupErrorCodes.Permission, 403, "denied"), CloudErrorKind.Permission)));
+
+        var result = await NewService().LinkBillingAsync(Project, "a1", TestContext.Current.CancellationToken);
+
+        result.Status.ShouldBe(SetupStatus.NeedsAction);
+        result.Code.ShouldBe(SetupErrorCodes.Permission);
+    }
+
+    [Fact]
     public async Task Linking_the_chosen_account_turns_billing_on()
     {
         _billing.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(true, "a2"));

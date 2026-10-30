@@ -105,8 +105,9 @@ public sealed class BillingSetup
         {
             accounts = await _gateway.ListOpenBillingAccountsAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (CloudOperationException)
+        catch (CloudOperationException ex) when (ex.Kind is CloudErrorKind.Network or CloudErrorKind.Other)
         {
+            // Only a transient or unknown failure is swallowed; permission, billing, api_disabled and org_policy abort with their own message and action.
             accounts = [];
         }
 

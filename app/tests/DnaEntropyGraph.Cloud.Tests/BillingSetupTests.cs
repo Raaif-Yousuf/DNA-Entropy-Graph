@@ -201,4 +201,37 @@ public class BillingSetupTests
 
         await Should.ThrowAsync<OperationCanceledException>(() => new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None));
     }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, SetupErrorCodes.BillingNoPermission)]
+    [InlineData(CloudErrorKind.Billing, "BILLING")]
+    [InlineData(CloudErrorKind.ApiDisabled, "API_DISABLED")]
+    [InlineData(CloudErrorKind.OrgPolicy, "ORG_POLICY_BLOCK")]
+    public async Task An_abort_class_failure_listing_accounts_after_a_link_that_worked_propagates_and_is_not_read_as_a_suspended_account(CloudErrorKind kind, string code)
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError(code, 403, "denied"), kind)));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(kind);
+        ex.Error.Code.ShouldBe(code);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Network)]
+    [InlineData(CloudErrorKind.Other)]
+    public async Task A_transient_or_unknown_failure_listing_accounts_after_a_link_that_worked_still_returns_FixLinkedAccount(CloudErrorKind kind)
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError("X", 0, "x"), kind)));
+
+        var outcome = await new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
+        outcome.Kind.ShouldBe(BillingOutcomeKind.FixLinkedAccount);
+    }
 }
