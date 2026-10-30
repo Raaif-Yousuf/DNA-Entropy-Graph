@@ -116,6 +116,26 @@ public class CloudJobRunnerTransferTests
     }
 
     [Fact]
+    public async Task A_resumed_row_whose_recorded_folder_is_outside_the_output_folder_is_not_written_into()
+    {
+        // Hard Rule 14: OutputDir on a resumed row comes from the database; the probe file and the downloads must not land outside the chosen folder.
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var request = TestInputs.Request("job-res", Spec("job-res"));
+        var victim = Path.Combine(Path.GetDirectoryName(request.OutputFolder)!, "victim-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(victim);
+        await repo.UpsertAsync(new RunRecord("job-res", JobPhase.Draft, DateTimeOffset.UtcNow) { OutputDir = victim }, CancellationToken.None);
+
+        var result = await Runner(gcp, repo).RunAsync(request, CancellationToken.None);
+
+        Directory.EnumerateFileSystemEntries(victim).ShouldBeEmpty();
+        result.FinalPhase.ShouldBe(JobPhase.Completed);
+        var folder = LastRow(repo, "job-res").OutputDir;
+        folder.ShouldNotBeNull();
+        Path.GetDirectoryName(folder!).ShouldBe(request.OutputFolder, "the run falls through to a fresh folder under the chosen output folder");
+        Directory.Delete(victim);
+    }
+    [Fact]
     public async Task A_second_run_with_the_same_input_name_gets_its_own_folder_and_leaves_the_first_alone()
     {
         var gcp = new FakeGcp();

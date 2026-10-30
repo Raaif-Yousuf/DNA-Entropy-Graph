@@ -7,6 +7,7 @@ using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Runs;
 using Shouldly;
 using Xunit;
 
@@ -172,6 +173,19 @@ public sealed class LocalJobRunnerTests : IDisposable
         await Runner(HappyWorker()).RunAsync(Request("job-2"), CancellationToken.None);
 
         Path.GetFileName(_runs.Latest("job-2").OutputDir!).ShouldBe("locus_2");
+    }
+
+    [Fact]
+    public async Task The_run_name_template_names_the_folder_the_same_way_a_cloud_run_does()
+    {
+        // Issue #514: both runners name the folder through RunOutputFolders.RunFolderName, so they cannot drift.
+        var request = Request() with { Options = Request().Options with { NameTemplate = "{file}_{model}" } };
+
+        await Runner(HappyWorker()).RunAsync(request, CancellationToken.None);
+
+        var folder = Path.GetFileName(_runs.Latest(JobId).OutputDir!);
+        folder.ShouldBe("locus_mock");
+        folder.ShouldBe(RunOutputFolders.RunFolderName(request.Options, request.Input, DateTime.Now));
     }
 
     [Fact]
@@ -598,7 +612,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
         var outputDir = Path.Combine(OutputParent, "locus");
         Directory.CreateDirectory(outputDir);
-        _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir));
+        _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(OutputParent)));
 
         await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
 
@@ -606,6 +620,59 @@ public sealed class LocalJobRunnerTests : IDisposable
         File.ReadAllText(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBe("locus 0 12 1.5\n");
     }
 
+    private static string OptionsFor(string outputFolder)
+        => RunOptionsJson.Serialize(new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor, OutputFolder = outputFolder });
+
+    [Fact]
+    public async Task On_launch_a_finished_row_whose_output_folder_is_a_drive_root_still_completes()
+    {
+        // Reconcile copies the run's own results into the folder the app made; it deletes nothing, so a drive-root output folder is fine.
+        var jobDir = Path.Combine(RunsDirectory, "old-5");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var outputDir = Path.Combine(OutputParent, "locus");
+        Directory.CreateDirectory(outputDir);
+        _runs.Seed(new RunRecord("old-5", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(Path.GetPathRoot(outputDir)!)));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        _runs.Latest("old-5").Phase.ShouldBe(JobPhase.Completed);
+        File.Exists(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("x\\..\\other")]
+    [InlineData("..")]
+    [InlineData(".")]
+    public async Task A_job_id_that_is_not_one_plain_name_is_refused_and_creates_nothing(string jobId)
+    {
+        var result = await Runner(HappyWorker()).RunAsync(Request(jobId), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.ErrorCode.ShouldBe(RunErrorCodes.ManifestInvalid);
+        Directory.Exists(Path.Combine(RunsDirectory, "other")).ShouldBeFalse();
+        Directory.Exists(Path.Combine(RunsDirectory, "x")).ShouldBeFalse();
+    }
+    [Theory]
+    [InlineData("..\\victim")]
+    [InlineData("..\\out2\\victim")]
+    public async Task On_launch_a_finished_row_whose_output_folder_is_outside_the_output_root_copies_nothing_there_and_is_failed(string relative)
+    {
+        // Hard Rule 14: OutputDir comes from the history database; a corrupt row must not make the finish step write into any folder.
+        var jobDir = Path.Combine(RunsDirectory, "old-4");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var victim = Path.GetFullPath(Path.Combine(OutputParent, relative));
+        Directory.CreateDirectory(victim);
+        Directory.CreateDirectory(OutputParent);
+        _runs.Seed(new RunRecord("old-4", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: victim, OptionsJson: OptionsFor(OutputParent)));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        Directory.EnumerateFileSystemEntries(victim).ShouldBeEmpty();
+        _runs.Latest("old-4").Phase.ShouldBe(JobPhase.Failed);
+        _runs.Latest("old-4").ErrorCode.ShouldBe(RunErrorCodes.LocalRunInterrupted);
+    }
     [Fact]
     public async Task On_launch_a_Cancelling_local_run_becomes_Cancelled_and_cloud_and_finished_rows_are_left_alone()
     {

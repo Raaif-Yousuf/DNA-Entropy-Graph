@@ -193,7 +193,7 @@ public static class ServiceRegistration
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
         services.AddSingleton(_ => new SqliteDatabase(databasePath, portable: root.IsPortable));
-        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper));
+        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper, sp.GetRequiredService<IDiagnosticsLog>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
         services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
@@ -221,7 +221,21 @@ public static class ServiceRegistration
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             [root.Path]));
-        services.AddSingleton<IJobObjectDeleter, UnconnectedJobObjectDeleter>();
+        // Issues #262 and #534: the real deleter, scoped to jobs/<job id>/ in a deg- bucket and read back afterwards.
+        services.AddSingleton<IJobObjectDeleter>(sp => new JobObjectDeleter(
+            sp.GetRequiredService<IStorageGateway>(),
+            () =>
+            {
+                // Read at each delete; an unusable id file answers null and the delete is refused rather than guessing ownership.
+                try
+                {
+                    return InstallationId.GetOrCreate(sp.GetRequiredService<ISettingsStore>());
+                }
+                catch (InstallationIdUnusableException)
+                {
+                    return null;
+                }
+            }));
 
         // Issue #102: the Results page reads a run's own output folder and opens its files through Windows.
         services.AddSingleton<IRunOutputReader, RunOutputReader>();
@@ -302,7 +316,10 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 sp.GetRequiredService<LocalEngineLayout>(),
                 sp.GetRequiredService<AppDataRoot>().RunsDirectory,
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)));
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+            {
+                DefaultOutputParent = () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
+            };
         });
         services.AddSingleton<LocalRunDriver>();
 

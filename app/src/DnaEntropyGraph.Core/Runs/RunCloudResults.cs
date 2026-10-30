@@ -28,6 +28,30 @@ public enum CloudResultsStatus
     NotConnected,
 
     Failed,
+
+    /// <summary>A delete stopped partway: some objects are gone, some are not, and the same press finishes it.</summary>
+    PartiallyDeleted,
+
+    /// <summary>The folder was made by another installation (or has no readable manifest naming this one): nothing was deleted.</summary>
+    OtherComputer,
+
+    /// <summary>The folder's owner could not be confirmed (no or unreadable manifest, or this installation's id unreadable): nothing was deleted.</summary>
+    NotConfirmed,
+
+    /// <summary>The results bucket was not found, so nothing was deleted and the run row is unchanged.</summary>
+    StorageNotFound,
+}
+
+/// <summary>
+/// What a cloud-copy delete did. <see cref="ObjectsLeft"/> is how many objects were still in the bucket for <see cref="CloudResultsStatus.PartiallyDeleted"/>
+/// (null when that could not be read). <see cref="ErrorKind"/> is the classified cause of a <see cref="CloudResultsStatus.Failed"/> when the gateway named one, or of a
+/// <see cref="CloudResultsStatus.PartiallyDeleted"/> whatever its count (a known count with a refused permission needs that cause's action; an unknown one may have lost some files too).
+/// <see cref="SweepCompleted"/> is true when the sweep itself finished without error and only the count read back afterwards failed or disagreed.
+/// A bare <see cref="CloudResultsStatus"/> converts to a result with none.
+/// </summary>
+public sealed record CloudDeleteResult(CloudResultsStatus Status, int? ObjectsLeft = null, CloudErrorKind? ErrorKind = null, bool SweepCompleted = false, bool ListingStuck = false)
+{
+    public static implicit operator CloudDeleteResult(CloudResultsStatus status) => new(status);
 }
 
 /// <summary>
@@ -78,7 +102,7 @@ public interface IRunCloudResults
     Task<RedownloadResult> RedownloadAsync(RunRecord run, CancellationToken cancellationToken);
 
     /// <summary>Deletes the objects under this run's job-id prefix and records that the cloud copy is gone. Never anything outside that prefix (Hard Rule 11).</summary>
-    Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
+    Task<CloudDeleteResult> DeleteAsync(RunRecord run, CancellationToken cancellationToken);
 }
 
 /// <summary>Moves one file without ever overwriting. A seam so a test can make a move fail where only a real disk race would.</summary>
@@ -168,7 +192,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
     }
 
-    public async Task<CloudResultsStatus> DeleteAsync(RunRecord run, CancellationToken cancellationToken)
+    public async Task<CloudDeleteResult> DeleteAsync(RunRecord run, CancellationToken cancellationToken)
     {
         // Issue #111: a run found from another computer is read-only here; its owner's computer deletes it.
         if (run.Imported)
@@ -195,6 +219,38 @@ public sealed class RunCloudResults : IRunCloudResults
         {
             return CloudResultsStatus.NotConnected;
         }
+        catch (PartialCloudDeleteException partial)
+        {
+            // Some objects are gone and some are not: the row is NOT marked deleted, so Delete cloud copy stays offered and the next press finishes it.
+            // With no count, the classified cause that stopped the sweep rides along so the page names its action (an unreadable count is not proof that nothing went).
+            // The cause rides along whether or not the count is known: a known count with a refused permission needs that cause's action, not "choose it again".
+            // A raw transport exception (not classified by a gateway that did not see it) is a dropped connection.
+            CloudErrorKind? cause = partial.InnerException switch
+            {
+                CloudOperationException cloud => CauseOf(cloud),
+                IOException or HttpRequestException or System.Net.Sockets.SocketException => CloudErrorKind.Network,
+                _ => null,
+            };
+
+            // A completed sweep (the count after it is what failed or disagrees) is the exception's own flag: the page must not say it stopped.
+            return new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, partial.Remaining, cause, SweepCompleted: partial.SweepCompleted, ListingStuck: partial.InnerException is CloudOperationException stuck && IsStuck(stuck));
+        }
+        catch (CloudDeleteRefusedException refused)
+        {
+            // Refused up front: nothing was requested to be deleted.
+            return refused.Reason switch
+            {
+                CloudDeleteRefusal.OtherComputer => CloudResultsStatus.OtherComputer,
+                CloudDeleteRefusal.Unconfirmed => CloudResultsStatus.NotConfirmed,
+                CloudDeleteRefusal.StorageNotFound => CloudResultsStatus.StorageNotFound,
+                _ => CloudResultsStatus.Refused,
+            };
+        }
+        catch (CloudOperationException cloud)
+        {
+            // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
+            return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud), ListingStuck: IsStuck(cloud));
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return CloudResultsStatus.Failed;
@@ -203,6 +259,14 @@ public sealed class RunCloudResults : IRunCloudResults
         await _runs.UpsertAsync(run with { CloudResultsDeleted = true }, cancellationToken).ConfigureAwait(false);
         return CloudResultsStatus.Done;
     }
+
+    /// <summary>
+    /// The cause the delete copy is chosen by. A listing that repeated a page token (<see cref="CloudErrorCodes.ListPaginationStuck"/>) keeps the gateway's Network kind for everyone else (the reconciler
+    /// reads Network as "no answer"), but it is not a dropped connection, so the delete copy must not tell the user to check their internet: it reads as Other here.
+    /// </summary>
+    private static bool IsStuck(CloudOperationException cloud) => cloud.Error.Code == CloudErrorCodes.ListPaginationStuck;
+
+    private static CloudErrorKind CauseOf(CloudOperationException cloud) => IsStuck(cloud) ? CloudErrorKind.Other : cloud.Kind;
 
     private CloudResultsStatus? Classify(RunRecord run)
     {
@@ -225,7 +289,7 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsStrictlyInside(folder, root) ? folder : null;
+        return RunOutputRoot.IsSafelyInside(folder, root) ? folder : null;
     }
 
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>

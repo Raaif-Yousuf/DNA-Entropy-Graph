@@ -48,6 +48,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private readonly IAccessionLookup? _accessionLookup;
     private readonly IClipboardTextReader? _clipboard;
     private readonly Func<string, string, Topology, AnnotationCheckResult> _validateAnnotation;
+    private readonly TimeProvider _clock;
     private bool _applyingPreset;
 
     // The files ticked on the page, per input group (issue #103): read from the remembered choice the first time a group is shown,
@@ -114,8 +115,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         bool? offerAccession = null,
         IAccessionLookup? accessionLookup = null,
         RunTargetPickerViewModel? runTarget = null,
-        IDispatcher? dispatcher = null)
+        IDispatcher? dispatcher = null,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
         Gpu.Changed += OnGpuPlanChanged;
@@ -148,6 +151,38 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasSeveralItems));
     }
 
+    /// <summary>
+    /// What the result folder of the run is called (issue #514): tokens <c>{file} {date} {time} {model} {n}</c>, expanded by
+    /// <see cref="RunOutputFolders.RunFolderName"/>. Sent in <see cref="RunOptions.NameTemplate"/>; blank means the file name.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RunNamePreview))]
+    [NotifyPropertyChangedFor(nameof(HasRunNamePreview))]
+    private string _nameTemplate = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.NameTemplate;
+
+    /// <summary>
+    /// "This run will be named ...": the folder name the runner will create for the selected file, from the same function the runner calls.
+    /// Empty while nothing is selected. If that name is already taken in the output folder the runner adds <c>_2</c>.
+    /// </summary>
+    public string RunNamePreview
+    {
+        get
+        {
+            if (_selectedItem is not { } item)
+            {
+                return string.Empty;
+            }
+
+            var input = item.IsAccession
+                ? StagedInput.ForAccession(item.Accession!, item.AccessionRange)
+                : new StagedInput(item.Path, System.IO.Path.GetFileName(item.Path));
+            return RunOutputFolders.RunFolderName(new RunOptions { ModelId = Gpu.ModelId, RunTarget = "Cloud", NameTemplate = NameTemplate }, input, _clock.GetLocalNow().DateTime);
+        }
+    }
+
+    /// <summary>True while there is a name to show: the preview line is hidden with nothing selected.</summary>
+    public bool HasRunNamePreview => RunNamePreview.Length > 0;
+
     /// <summary>The pill Run will run. Never cleared while pills exist: see the setter.</summary>
     public InputPillItem? SelectedItem
     {
@@ -167,6 +202,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             if (SetProperty(ref _selectedItem, value))
             {
                 RefreshOutputChoices();
+                OnPropertyChanged(nameof(RunNamePreview));
+                OnPropertyChanged(nameof(HasRunNamePreview));
                 StartRunCommand.NotifyCanExecuteChanged();
                 AddAnnotationCommand.NotifyCanExecuteChanged();
                 _ = RefreshEstimateAsync();
@@ -222,6 +259,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private void OnGpuPlanChanged()
     {
+        OnPropertyChanged(nameof(RunNamePreview));
         StartRunCommand.NotifyCanExecuteChanged();
         _ = RefreshEstimateAsync();
     }
@@ -957,6 +995,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         var group = _shownOutputGroup!.Value;
         var outputs = _outputSelections[group];
         var startedItem = SelectedItem!;
+
+        // {date} and {time} are read when the name is made: raise the preview now so the page shows the same minute the run takes (#514).
+        OnPropertyChanged(nameof(RunNamePreview));
         var options = new RunOptions
         {
             ModelId = Gpu.ModelId,
@@ -967,6 +1008,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             AnnotationPath = SelectedItem.AnnotationPath,
             Accession = SelectedItem.Accession,
             AccessionRange = SelectedItem.AccessionRange,
+            NameTemplate = NameTemplate,
             TreatAsRna = IsTreatingAsRna,
             Direction = Presets?.Direction ?? Direction.BothCombined,
             ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,

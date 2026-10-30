@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
@@ -74,7 +75,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             await calls.CallAsync(
                 async token =>
                 {
-                    await storage.UploadAsync(bucket, prefix + "manifest.json", manifestStream, token).ConfigureAwait(false);
+                    await storage.UploadAsync(bucket, prefix + ResultsBucket.ManifestObject, manifestStream, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken,
@@ -212,7 +213,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
     private async Task<string> ResolveRunFolderAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
         var existing = (await rows.LatestRecordAsync(request.JobId, cancellationToken).ConfigureAwait(false))?.OutputDir;
-        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing))
+        // OutputDir comes from the history database: a resumed run only reuses it when it still lies inside the output folder this run was
+        // given (Hard Rule 14). Otherwise it falls through to a fresh folder under the chosen output folder, so nothing is written elsewhere.
+        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && IsInsideOutputFolder(existing, request.OutputFolder))
         {
             return existing;
         }
@@ -220,7 +223,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         string folder;
         try
         {
-            folder = RunOutputFolders.CreateUnique(request.OutputFolder, request.Inputs[0].OutputStem);
+            folder = RunOutputFolders.CreateUnique(
+                request.OutputFolder,
+                RunOutputFolders.RunFolderName(request.Options, request.Inputs[0], settings.TimeProvider.GetLocalNow().DateTime));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -229,6 +234,18 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
         await rows.UpdateRowAsync(request.JobId, row => row with { OutputDir = folder }, cancellationToken).ConfigureAwait(false);
         return folder;
+    }
+
+    private static bool IsInsideOutputFolder(string folder, string outputFolder)
+    {
+        try
+        {
+            return RunOutputRoot.IsStrictlyInside(folder, outputFolder);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Creates the run folder and writes then deletes a probe file in it, so an unwritable folder fails here, before a VM is billed.</summary>

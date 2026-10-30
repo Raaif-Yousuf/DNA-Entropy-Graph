@@ -594,14 +594,14 @@ public sealed class HistoryViewModelTests
     public async Task A_redownload_or_cloud_delete_that_throws_toasts_the_failure_copy(Type exception)
     {
         _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<RedownloadResult>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
-        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudResultsStatus>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns<Task<CloudDeleteResult>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
         var vm = await Loaded(Row("a"));
 
         await Item(vm, "a").RedownloadCommand.ExecuteAsync(null);
         _toasts.Received(1).ShowToast("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error);
 
         await Item(vm, "a").DeleteCloudCommand.ExecuteAsync(null);
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error);
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_FailedOther_Title", "Runs_DeleteCloud_FailedOther_Body", ToastSeverity.Error);
     }
 
     [Fact]
@@ -785,6 +785,224 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task A_cloud_delete_that_stopped_partway_toasts_the_partial_copy_and_not_done()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast("Runs_DeleteCloud_Done_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
+    }
+
+    [Fact]
+    public async Task A_partial_cloud_delete_with_an_unknown_count_says_so_without_a_number()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        // The count is unknown, so the title must not assert "partly deleted" either: it is the "may be" one.
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialMaybe_Title", "Runs_DeleteCloud_PartialUnknown_Body", ToastSeverity.Warning);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_PartialKnown_Body_Permission")]
+    [InlineData(CloudErrorKind.OrgPolicy, "Runs_DeleteCloud_PartialKnown_Body_OrgPolicy")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_PartialKnown_Body_Billing")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_PartialKnown_Body_Api")]
+    [InlineData(CloudErrorKind.Quota, "Runs_DeleteCloud_PartialKnown_Body_Quota")]
+    public async Task A_partial_delete_with_a_known_count_and_a_cause_with_its_own_action_states_the_count_and_that_action(CloudErrorKind kind, string body)
+    {
+        // "Choose Delete cloud copy again" alone will not help a refused permission, and a known count must not be dropped for the unknown-count copy ("may").
+        _strings.GetString(body).Returns("left:{0}");
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "left:3", ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), "Runs_DeleteCloud_Partial_Body", Arg.Any<ToastSeverity>());
+        _toasts.DidNotReceive().ShowToast("Runs_DeleteCloud_PartialMaybe_Title", Arg.Any<string>(), Arg.Any<ToastSeverity>());
+    }
+
+    [Fact]
+    public async Task A_partial_delete_with_one_file_left_and_a_cause_with_its_own_action_still_states_the_count()
+    {
+        _strings.GetString("Runs_DeleteCloud_PartialKnown_Body_Permission").Returns("left:{0}");
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 1, CloudErrorKind.Permission));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "left:1", ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public async Task A_delete_that_finished_but_could_not_be_confirmed_empty_says_so_and_does_not_claim_it_stopped()
+    {
+        // Truth table cell: sweep completed = yes, count known = no, cause = none.
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, null, SweepCompleted: true));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialUnconfirmed_Title", "Runs_DeleteCloud_PartialUnconfirmed_Body", ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), "Runs_DeleteCloud_PartialUnknown_Body", Arg.Any<ToastSeverity>());
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Network)]
+    [InlineData(CloudErrorKind.Other)]
+    public async Task A_partial_delete_with_a_known_count_and_a_retryable_cause_keeps_the_count_copy(CloudErrorKind kind)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 3, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_PartialMaybe_Body_Permission")]
+    [InlineData(CloudErrorKind.OrgPolicy, "Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_PartialMaybe_Body_Billing")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_PartialMaybe_Body_Api")]
+    [InlineData(CloudErrorKind.Quota, "Runs_DeleteCloud_PartialMaybe_Body_Quota")]
+    [InlineData(CloudErrorKind.Network, "Runs_DeleteCloud_PartialMaybe_Body_Network")]
+    [InlineData(CloudErrorKind.Other, "Runs_DeleteCloud_PartialMaybe_Body_Other")]
+    public async Task A_possibly_partial_cloud_delete_with_a_known_cause_says_some_files_may_be_gone_and_names_that_causes_action(CloudErrorKind kind, string body)
+    {
+        // Issue #262 review round 2 (M): never "nothing was deleted" when the sweep may have removed some.
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, null, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_PartialMaybe_Title", body, ToastSeverity.Warning);
+        _toasts.DidNotReceive().ShowToast(Arg.Any<string>(), Arg.Is<string>(b => b.StartsWith("Runs_DeleteCloud_Failed", StringComparison.Ordinal)), Arg.Any<ToastSeverity>());
+    }
+
+    [Fact]
+    public async Task A_partial_cloud_delete_with_one_file_left_uses_the_singular_copy()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.PartiallyDeleted, 1));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body_One", ToastSeverity.Warning);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, "Runs_DeleteCloud_FailedPermission_Title", "Runs_DeleteCloud_FailedPermission_Body")]
+    [InlineData(CloudErrorKind.Billing, "Runs_DeleteCloud_FailedBilling_Title", "Runs_DeleteCloud_FailedBilling_Body")]
+    [InlineData(CloudErrorKind.ApiDisabled, "Runs_DeleteCloud_FailedApi_Title", "Runs_DeleteCloud_FailedApi_Body")]
+    [InlineData(CloudErrorKind.Network, "Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body")]
+    [InlineData(CloudErrorKind.OrgPolicy, "Runs_DeleteCloud_FailedOrgPolicy_Title", "Runs_DeleteCloud_FailedOrgPolicy_Body")]
+    [InlineData(CloudErrorKind.Quota, "Runs_DeleteCloud_FailedQuota_Title", "Runs_DeleteCloud_FailedQuota_Body")]
+    [InlineData(CloudErrorKind.Other, "Runs_DeleteCloud_FailedOther_Title", "Runs_DeleteCloud_FailedOther_Body")]
+    public async Task A_classified_cloud_delete_failure_toasts_its_own_action(CloudErrorKind kind, string title, string body)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(CloudResultsStatus.Failed, null, kind));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast(title, body, ToastSeverity.Error);
+    }
+
+    [Theory]
+    [InlineData(CloudResultsStatus.Failed, null, "Runs_DeleteCloud_ListingStuckNothing_Body")]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, null, "Runs_DeleteCloud_ListingStuck_Body")]
+    [InlineData(CloudResultsStatus.PartiallyDeleted, 3, "Runs_DeleteCloud_ListingStuck_Body")]
+    public async Task A_cloud_delete_whose_listing_never_finished_toasts_the_stuck_copy_not_a_try_again_one(CloudResultsStatus status, int? left, string body)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(new CloudDeleteResult(status, left, CloudErrorKind.Other, ListingStuck: true));
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_ListingStuck_Title", body, ToastSeverity.Warning);
+    }
+
+    [Fact]
+    public void Delete_cloud_failure_copy_without_a_known_kind_is_the_general_other_copy_not_the_network_one()
+    {
+        RunsCopy.DeleteCloudFailed(null).Body.ShouldBe("Runs_DeleteCloud_FailedOther_Body");
+        RunsCopy.DeleteCloudFailed(CloudErrorKind.OrgPolicy).Body.ShouldBe("Runs_DeleteCloud_FailedOrgPolicy_Body");
+        RunsCopy.DeleteCloudFailed(CloudErrorKind.Network).Body.ShouldBe("Runs_DeleteCloud_Failed_Body");
+    }
+
+    [Fact]
+    public async Task A_cloud_delete_of_another_computers_run_toasts_the_other_computer_copy_and_offers_the_storage_page()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.OtherComputer);
+        var vm = await Loaded(Row("a"));
+        Item(vm, "a").ShowStoragePage.ShouldBeFalse();
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_OtherComputer_Title", "Runs_DeleteCloud_OtherComputer_Body", ToastSeverity.Warning);
+        Item(vm, "a").ShowStoragePage.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_cloud_delete_that_could_not_confirm_ownership_toasts_its_own_copy()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.NotConfirmed);
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_NotConfirmed_Title", "Runs_DeleteCloud_NotConfirmed_Body", ToastSeverity.Warning);
+        Item(vm, "a").ShowStoragePage.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Open_storage_page_opens_this_runs_own_folder_on_googles_storage_page()
+    {
+        _launcher.OpenUrl(Arg.Any<string>()).Returns(true);
+        var vm = await Loaded(Row("a"));
+
+        Item(vm, "a").OpenStoragePageCommand!.Execute(null);
+
+        _launcher.Received(1).OpenUrl("https://console.cloud.google.com/storage/browser/b/jobs/a/");
+    }
+
+    [Theory]
+    [InlineData("jobs/../x/")]
+    [InlineData("jobs/a/b/")]
+    [InlineData("jobs/a?x=1/")]
+    [InlineData("jobs/a")]
+    public async Task A_row_whose_stored_folder_is_not_a_plain_job_folder_gets_no_storage_button_and_no_link(string prefix)
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.OtherComputer);
+        var vm = await Loaded(Row("a") with { JobPrefix = prefix });
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+        Item(vm, "a").OpenStoragePageCommand!.Execute(null);
+
+        Item(vm, "a").ShowStoragePage.ShouldBeFalse();
+        _launcher.DidNotReceiveWithAnyArgs().OpenUrl(default!);
+    }
+
+    [Fact]
+    public async Task A_cloud_delete_in_a_missing_bucket_toasts_storage_not_found_without_the_storage_button()
+    {
+        _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.StorageNotFound);
+        var vm = await Loaded(Row("a"));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_StorageNotFound_Title", "Runs_DeleteCloud_StorageNotFound_Body", ToastSeverity.Warning);
+        Item(vm, "a").ShowStoragePage.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_failed_cloud_delete_toasts_the_failure_copy()
     {
         _cloud.DeleteAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.Failed);
@@ -792,7 +1010,7 @@ public sealed class HistoryViewModelTests
 
         await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)Item(vm, "a").DeleteCloudCommand).ExecuteAsync(null);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error);
+        _toasts.Received(1).ShowToast("Runs_DeleteCloud_FailedOther_Title", "Runs_DeleteCloud_FailedOther_Body", ToastSeverity.Error);
     }
 
     [Fact]

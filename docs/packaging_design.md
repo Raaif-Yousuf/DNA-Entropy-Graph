@@ -119,7 +119,7 @@ badge (#638) are separate, and all three can show together.
   - Results: the default output folder is `<base>\outputs`, not the host PC's Downloads. Paths under `<base>` are stored in `app.db`
     relative (`portable:outputs\run`, `DataPathMapper`, used by `RunRepository` for `Runs.OutputDir`) and expanded on read, so a stick that gets another drive
     letter still opens its results; a folder the user chose outside `<base>` is stored as given. Only `Runs.OutputDir` is written by code today
-    (the `RunOutputs` and `RunInputs` tables are unused); a new path column must go through `DataPathMapper`.
+    (the `RunOutputs` and `RunInputs` tables are unused); a new path column must go through `DataPathMapper`. A stored remainder that is rooted or climbs out of the stick reads back as null (no output folder), never joined. The shared containment test for a path built from outside text is `RunOutputRoot.IsStrictlyInside`; it is lexical (it does not resolve junctions or symlinks) and handles drive roots like `D:\`. For anything that writes or deletes use `RunOutputRoot.IsSafelyInside`, which also refuses a drive root (`C:\`) as the root; a UNC share root stays a normal root. A job id used as a folder name must pass `RunOutputRoot.IsPlainJobId` (containment alone lets `x\..\y` name another job). CodeQL `cs/path-combine` triage, 2026-10-29: no other join needed it.
   - Database: `journal_mode=DELETE` instead of WAL in portable mode, and on any removable or network drive (`SqliteDatabase.ChooseJournalMode`), because WAL's
     shared-memory file is unreliable on shares and leaves `-wal` files when a stick is pulled.
   - Registry: Open with (file associations) is refused in portable mode (`FileAssociationRefusal.PortableMode`, Settings says why) so no entry points at
@@ -312,8 +312,8 @@ template, every call of a detected wrapper helper `Name(string key, params objec
 siblings; conditional keys check each branch), that every placeholder template is referenced by a literal or a used
 const, and that no file ends inside a string or comment (LEX-DESYNC). Stays dynamic, with exact counts in
 `KNOWN_DYNAMIC`: variable, `switch` or ambiguous-const keys, array-typed sole arguments (a params spread),
-unparseable calls, and helper calls whose first argument is not a literal key. MEASURED 2026-10-29: 110 sites
-checked, 11 dynamic.
+unparseable calls, helper calls whose first argument is not a literal key, and the trace listener's application of a caller's own format string (`DiagnosticsTraceListener`). MEASURED 2026-10-29: 110 sites
+checked, 12 dynamic (the 11 above plus the listener).
 Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
 `scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
 and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining
