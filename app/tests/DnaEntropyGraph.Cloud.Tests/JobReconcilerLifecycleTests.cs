@@ -313,19 +313,19 @@ public class JobReconcilerLifecycleTests
     {
         private bool _done;
 
-        public Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => inner.GetVmAsync(n, z, ct);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.GetVmAsync(scope, n, z, ct);
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(scope, spec, existingVmName, z, ct);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(scope, spec, z, ct);
 
-        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+        public Task StopVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StopVmAsync(scope, n, z, ct);
 
-        public Task DeleteVmAsync(string n, string z, CancellationToken ct) => inner.DeleteVmAsync(n, z, ct);
+        public Task DeleteVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.DeleteVmAsync(scope, n, z, ct);
 
-        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct)
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken ct)
         {
-            var found = await inner.FindByJobIdAsync(jobId, ct);
+            var found = await inner.FindByJobIdAsync(scope, jobId, ct);
             if (!onInstallationList && !_done && found.Any(v => v.Name == vmName))
             {
                 _done = true;
@@ -335,9 +335,9 @@ public class JobReconcilerLifecycleTests
             return found;
         }
 
-        public async Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct)
+        public async Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string i, CancellationToken ct)
         {
-            var listed = await inner.ListByInstallationAsync(i, ct);
+            var listed = await inner.ListByInstallationAsync(scope, i, ct);
             if (onInstallationList && !_done && listed.Any(v => v.Name == vmName))
             {
                 _done = true;
@@ -347,15 +347,15 @@ public class JobReconcilerLifecycleTests
             return listed;
         }
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken ct) => inner.ListAppVmsAsync(scope, ct);
 
-        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+        public Task StartVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StartVmAsync(scope, n, z, ct);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(scope, i, ct);
 
-        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+        public Task DeleteDiskAsync(CloudScope scope, string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(scope, d, z, ct);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(scope, a, ct);
     }
 
     [Fact]
@@ -420,33 +420,33 @@ public class JobReconcilerLifecycleTests
     /// <summary>A gateway that relabels the VM inside the delete call, after the reconciler's re-read: the residual window (Compute's delete has no label precondition).</summary>
     private sealed class RelabelInsideDeleteCompute(FakeGcp inner, IReadOnlyDictionary<string, string> labels) : IComputeGateway
     {
-        public Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => inner.GetVmAsync(n, z, ct);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.GetVmAsync(scope, n, z, ct);
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(scope, spec, existingVmName, z, ct);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(scope, spec, z, ct);
 
-        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+        public Task StopVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StopVmAsync(scope, n, z, ct);
 
-        public Task DeleteVmAsync(string n, string z, CancellationToken ct)
+        public Task DeleteVmAsync(CloudScope scope, string n, string z, CancellationToken ct)
         {
             inner.SimulateExternalRelabel(n, z, labels); // another run's setLabels lands after the re-read and before the delete
-            return inner.DeleteVmAsync(n, z, ct);
+            return inner.DeleteVmAsync(scope, n, z, ct);
         }
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct) => inner.FindByJobIdAsync(jobId, ct);
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken ct) => inner.FindByJobIdAsync(scope, jobId, ct);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string i, CancellationToken ct) => inner.ListByInstallationAsync(scope, i, ct);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken ct) => inner.ListAppVmsAsync(scope, ct);
 
-        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+        public Task StartVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StartVmAsync(scope, n, z, ct);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(scope, i, ct);
 
-        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+        public Task DeleteDiskAsync(CloudScope scope, string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(scope, d, z, ct);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(scope, a, ct);
     }
 
     [Fact]
@@ -468,33 +468,33 @@ public class JobReconcilerLifecycleTests
     /// <summary>A gateway whose GetVm answer is rewritten by <paramref name="map"/> (the re-read of round 12): null VM, or the VM with its labels removed.</summary>
     private sealed class GetVmMappedCompute(FakeGcp inner, Func<VmDescriptor?, VmDescriptor?> map, Func<VmDescriptor, VmDescriptor>? mapListed = null) : IComputeGateway
     {
-        public async Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => map(await inner.GetVmAsync(n, z, ct));
+        public async Task<VmDescriptor?> GetVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => map(await inner.GetVmAsync(scope, n, z, ct));
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(scope, spec, existingVmName, z, ct);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(scope, spec, z, ct);
 
-        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+        public Task StopVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StopVmAsync(scope, n, z, ct);
 
-        public Task DeleteVmAsync(string n, string z, CancellationToken ct) => inner.DeleteVmAsync(n, z, ct);
+        public Task DeleteVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.DeleteVmAsync(scope, n, z, ct);
 
-        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct)
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken ct)
         {
-            var found = await inner.FindByJobIdAsync(jobId, ct);
+            var found = await inner.FindByJobIdAsync(scope, jobId, ct);
             return mapListed is null ? found : found.Select(mapListed).ToList();
         }
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string i, CancellationToken ct) => inner.ListByInstallationAsync(scope, i, ct);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken ct) => inner.ListAppVmsAsync(scope, ct);
 
-        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+        public Task StartVmAsync(CloudScope scope, string n, string z, CancellationToken ct) => inner.StartVmAsync(scope, n, z, ct);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(scope, i, ct);
 
-        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+        public Task DeleteDiskAsync(CloudScope scope, string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(scope, d, z, ct);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(scope, a, ct);
     }
 
     [Fact]
@@ -643,34 +643,34 @@ public class JobReconcilerLifecycleTests
     /// <summary>The delete registers a callback that throws on the token it was handed, then waits for that token (a callee with a throwing cancellation callback).</summary>
     private sealed class ThrowingCallbackCompute(FakeGcp inner, TaskCompletionSource reached) : IComputeGateway
     {
-        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         {
             cancellationToken.Register(() => throw new InvalidOperationException("callee callback"));
             reached.TrySetResult();
             return Task.Delay(Timeout.Infinite, cancellationToken);
         }
 
-        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(scope, spec, zone, cancellationToken);
 
-        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+        public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(scope, jobId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
 
-        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+        public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+        public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
     }
 
     [Fact]

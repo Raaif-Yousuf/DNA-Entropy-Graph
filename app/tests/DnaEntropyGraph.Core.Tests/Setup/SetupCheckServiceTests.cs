@@ -17,8 +17,9 @@ public class SetupCheckServiceTests
     private readonly IStorageGateway _storage = Substitute.For<IStorageGateway>();
     private readonly IWorkerIdentityGateway _identity = Substitute.For<IWorkerIdentityGateway>();
     private readonly IQuotaGateway _quota = Substitute.For<IQuotaGateway>();
+    private readonly DnaEntropyGraph.Core.Abstractions.IGcpAccount _account = Substitute.For<DnaEntropyGraph.Core.Abstractions.IGcpAccount>();
 
-    private SetupCheckService NewService() => new(_projects, _billing, new BillingSetup(_billing), _services, _storage, _identity, _quota);
+    private SetupCheckService NewService() => new(_projects, _billing, new BillingSetup(_billing), _services, _storage, _identity, _quota, _account);
 
     private static CloudOperationException Denied(string? code = null, int status = 403, string message = "denied")
     {

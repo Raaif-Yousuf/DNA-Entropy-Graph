@@ -313,7 +313,7 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
             return true;
         });
 
-        await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", path, null, TimeSpan.FromMilliseconds(200), CancellationToken.None, null, TimeSpan.FromMilliseconds(100)));
+        await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", path, null, TimeSpan.FromMilliseconds(200), CancellationToken.None, null, TimeSpan.FromMilliseconds(100)));
 
         var deadline = Stopwatch.StartNew();
         while (File.Exists(path) && deadline.Elapsed < TimeSpan.FromSeconds(10))

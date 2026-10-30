@@ -75,7 +75,7 @@ public class GoogleAccountServiceTests
 
         restarted.IsSignedIn.ShouldBeTrue();
         restarted.CurrentAccount!.Email.ShouldBe("first@example.test");
-        (await restarted.GetAccessTokenAsync(CancellationToken.None)).ShouldStartWith("at-");
+        (await restarted.GetAccessTokenAsync(null, CancellationToken.None)).ShouldStartWith("at-");
         harness.Google.BrowserLaunches.ShouldBe(launchesBefore);
     }
 
@@ -88,7 +88,7 @@ public class GoogleAccountServiceTests
         var original = harness.Google.RefreshTokenFor("1001");
 
         var service = harness.NewService();
-        var token = await service.GetAccessTokenAsync(CancellationToken.None);
+        var token = await service.GetAccessTokenAsync(null, CancellationToken.None);
 
         harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(1);
         harness.Google.TokenRequests.Last()["refresh_token"].ShouldBe(original);
@@ -97,9 +97,9 @@ public class GoogleAccountServiceTests
         // The refreshed access token was persisted: a restart needs no second refresh. And the stored refresh
         // token survived Google's refresh answer, which omits it: a forced refresh still works with the original.
         var again = harness.NewService();
-        await again.GetAccessTokenAsync(CancellationToken.None);
+        await again.GetAccessTokenAsync(null, CancellationToken.None);
         harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(1);
-        await ((ICloudTokenRefresher)again).RefreshAsync(CancellationToken.None);
+        await ((ICloudTokenRefresher)again).RefreshAsync(null, CancellationToken.None);
         harness.Google.TokenRequests.Last()["refresh_token"].ShouldBe(original);
         harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(2);
     }
@@ -122,7 +122,7 @@ public class GoogleAccountServiceTests
         await service.SwitchAccountAsync("1001", CancellationToken.None);
         changes.ShouldBe(1);
         service.CurrentAccount!.Email.ShouldBe("first@example.test");
-        await service.GetAccessTokenAsync(CancellationToken.None);
+        await service.GetAccessTokenAsync(null, CancellationToken.None);
         harness.Google.TokenRequests.Last()["refresh_token"].ShouldBe(harness.Google.RefreshTokenFor("1001"));
 
         // The choice survives a restart.
@@ -154,7 +154,7 @@ public class GoogleAccountServiceTests
         var service = harness.NewService();
         harness.Google.RevokeEverythingAtGoogle();
 
-        var failure = await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe("SIGNIN_EXPIRED");
         AuthErrorCodes.ActionResourceKey(failure.Code).ShouldBe("AuthAction_SignInAgain");
@@ -177,7 +177,7 @@ public class GoogleAccountServiceTests
         await harness.SignedInAsync("1001", "first@example.test");
         var service = harness.NewService();
 
-        await ((ICloudTokenRefresher)service).RefreshAsync(CancellationToken.None);
+        await ((ICloudTokenRefresher)service).RefreshAsync(null, CancellationToken.None);
 
         harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(1);
     }
@@ -191,7 +191,7 @@ public class GoogleAccountServiceTests
         var service = harness.NewService();
         harness.Google.NetworkDown = true;
 
-        var failure = await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.NetworkUnavailable);
         service.IsSignedIn.ShouldBeTrue();
@@ -347,7 +347,7 @@ public class GoogleAccountServiceTests
         var service = harness.NewService();
         harness.Google.TokenRequestsTimeOut = true;
 
-        var failure = await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.NetworkUnavailable);
         service.IsSignedIn.ShouldBeTrue();
@@ -362,7 +362,7 @@ public class GoogleAccountServiceTests
         var service = harness.NewService();
         harness.Google.TokenRequestsThrowABug = true;
 
-        await Should.ThrowAsync<InvalidOperationException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => service.GetAccessTokenAsync(null, CancellationToken.None));
     }
 
     [Fact]
@@ -460,7 +460,7 @@ public class GoogleAccountServiceTests
         File.WriteAllBytes(Path.Combine(harness.AuthDirectory, "1001.tok"), [1, 2, 3, 4]);
         var service = harness.NewService();
 
-        var failure = await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.SigninExpired);
         service.IsSignedIn.ShouldBeFalse();
@@ -476,7 +476,7 @@ public class GoogleAccountServiceTests
         var service = harness.NewService();
 
         service.IsSignedIn.ShouldBeFalse();
-        (await FailureOf(() => service.GetAccessTokenAsync(CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
+        (await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
     }
 
     [Fact]
@@ -484,7 +484,7 @@ public class GoogleAccountServiceTests
     {
         using var harness = new AuthHarness();
 
-        (await FailureOf(() => harness.NewService().GetAccessTokenAsync(CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
+        (await FailureOf(() => harness.NewService().GetAccessTokenAsync(null, CancellationToken.None))).Code.ShouldBe(AuthErrorCodes.SigninExpired);
     }
 
     [Fact]

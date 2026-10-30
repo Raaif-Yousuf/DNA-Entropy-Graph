@@ -433,7 +433,7 @@ public class DiResolutionTests
         var runs = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>();
         await runs.UpsertAsync(new DnaEntropyGraph.Core.Abstractions.RunRecord("job-di", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
 
-        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync("fake-project", "inst-di", CancellationToken.None);
+        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync(new DnaEntropyGraph.Core.Cloud.CloudScope("fake-project"), "inst-di", CancellationToken.None);
 
         var row = (await runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-di");
         row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);

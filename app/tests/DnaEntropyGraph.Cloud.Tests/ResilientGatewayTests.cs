@@ -22,7 +22,7 @@ public class ResilientGatewayTests
     {
         public int Count { get; private set; }
 
-        public Task RefreshAsync(CancellationToken cancellationToken)
+        public Task RefreshAsync(string? accountSub, CancellationToken cancellationToken)
         {
             Count++;
             return Task.CompletedTask;

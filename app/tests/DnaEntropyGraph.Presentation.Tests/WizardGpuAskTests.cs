@@ -54,7 +54,7 @@ public class WizardGpuAskTests
     };
 
     private SetupStepsViewModel NewViewModel(bool withRequester = true)
-        => new(_service, _account, _shell, _strings, withRequester ? new GpuQuotaRequester(_quota) : null);
+        => new(_service, _account, _shell, _strings, withRequester ? new GpuQuotaRequester(_quota, _account) : null);
 
     private async Task<(SetupStepsViewModel Steps, SetupStepRow Row)> ZeroQuotaRowAsync(bool withRequester = true)
     {

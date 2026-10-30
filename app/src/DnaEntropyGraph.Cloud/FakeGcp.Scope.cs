@@ -114,7 +114,10 @@ public sealed partial class FakeGcp
         public void Dispose() => CallScope.Value = previous;
     }
 
-    private static bool InProject(VmDescriptor vm, CloudScope scope) => vm.Scope is null || string.Equals(vm.Scope.ProjectId, scope.ProjectId, StringComparison.Ordinal);
+    /// <summary>A scope naming this project sees every project, like the unscoped overloads (test call sites that do not care which project they act in).</summary>
+    public const string AnyProject = "*";
+
+    private static bool InProject(VmDescriptor vm, CloudScope scope) => scope.ProjectId == AnyProject || vm.Scope is null || string.Equals(vm.Scope.ProjectId, scope.ProjectId, StringComparison.Ordinal);
 
     private static IReadOnlyList<VmDescriptor> InProject(IReadOnlyList<VmDescriptor> vms, CloudScope scope) => [.. vms.Where(vm => InProject(vm, scope))];
 

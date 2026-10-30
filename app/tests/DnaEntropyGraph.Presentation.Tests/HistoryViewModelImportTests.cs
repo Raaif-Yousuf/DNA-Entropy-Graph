@@ -185,7 +185,7 @@ public sealed class HistoryViewModelImportTests
     public async Task A_failed_scan_shows_the_message_for_its_kind(Exception failure, string expectedKey)
     {
         var importer = Substitute.For<IRunImporter>();
-        importer.ImportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<RunImportResult>(_ => throw failure);
+        importer.ImportAsync(Arg.Any<DnaEntropyGraph.Core.Cloud.CloudScope>(), Arg.Any<CancellationToken>()).Returns<RunImportResult>(_ => throw failure);
         var vm = Make(importer);
 
         await vm.ImportRunsCommand.ExecuteAsync(null);

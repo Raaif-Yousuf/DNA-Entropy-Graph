@@ -107,7 +107,7 @@ public partial class LateCreateAfterCancelTests
         rig.Settings.LifecycleTimeout = TimeSpan.FromMilliseconds(200);
         var generation = await rig.Terminator.Ledger.BeginAttemptAsync("job-r7l1", CancellationToken.None);
         rig.Terminator.Ledger.EndAttempt("job-r7l1", generation);
-        var sent = new SentCreate("job-r7l1", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
+        var sent = new SentCreate(TestScopedGateways.Default, "job-r7l1", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
 
         var result = await rig.Terminator.DeleteOwnedVmsAndVerifyAsync("job-r7l1", CreateSettleState.Settled, CancellationToken.None, [sent]);
 

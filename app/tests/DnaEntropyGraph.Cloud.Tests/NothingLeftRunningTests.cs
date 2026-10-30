@@ -179,7 +179,7 @@ public class NothingLeftRunningTests
         public int? Choice { get; set; } = 2;
 
         public LeftRunningGuard NewGuard(LeftRunningScanner scanner, InstallationCleanup cleanup)
-            => new(scanner, cleanup, Settings, Dialog, Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, Clock);
+            => new(scanner, cleanup, Settings, Dialog, Toasts, new EchoStrings(), NullDiagnosticsLog.Instance, Clock, Gcp);
 
         public async Task<VmDescriptor> CreateVmAsync(string installation, string job, TimeSpan maxRun)
         {
@@ -365,7 +365,7 @@ public class NothingLeftRunningTests
         var log = Substitute.For<IDiagnosticsLog>();
         var broken = Substitute.For<IComputeGateway>();
         broken.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
-        var guard = new LeftRunningGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock);
+        var guard = new LeftRunningGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock, rig.Gcp);
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
         await Task.Yield();
@@ -503,7 +503,7 @@ public class NothingLeftRunningTests
         var late = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
         var hung = Substitute.For<IComputeGateway>();
         hung.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(late.Task);
-        var guard = new LeftRunningGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock);
+        var guard = new LeftRunningGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock, rig.Gcp);
 
         var closing = guard.ConfirmExitAsync(CancellationToken.None);
         await rig.Clock.FireNextTimeoutAsync(LeftRunningGuard.ScanTimeout);

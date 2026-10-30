@@ -164,12 +164,12 @@ public class CloudJobRunnerWorkerIdentityTests
 
     private sealed class SlowIdentity(IWorkerIdentityGateway inner, TimeSpan delay, VirtualTimeProvider clock) : IWorkerIdentityGateway
     {
-        public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
+        public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(CloudScope scope, string bucket, CancellationToken cancellationToken)
         {
             await Task.Yield();
             clock.Advance(delay);
             cancellationToken.ThrowIfCancellationRequested();
-            return await inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken);
+            return await inner.EnsureWorkerIdentityAsync(scope, bucket, cancellationToken);
         }
     }
 
@@ -177,10 +177,10 @@ public class CloudJobRunnerWorkerIdentityTests
     {
         public List<(string Project, string Bucket, int VmsCreatedSoFar)> Calls { get; } = [];
 
-        public Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
+        public Task<WorkerIdentity> EnsureWorkerIdentityAsync(CloudScope scope, string bucket, CancellationToken cancellationToken)
         {
-            Calls.Add((projectId, bucket, vmsCreated()));
-            return inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken);
+            Calls.Add((scope.ProjectId, bucket, vmsCreated()));
+            return inner.EnsureWorkerIdentityAsync(scope, bucket, cancellationToken);
         }
     }
 }

@@ -228,7 +228,7 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
             return true;
         });
 
-        var found = await StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", path, null, TimeSpan.FromMilliseconds(1000), CancellationToken.None, Probe).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var found = await StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", path, null, TimeSpan.FromMilliseconds(1000), CancellationToken.None, Probe).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         found.ShouldBeTrue("an IOException while reading the length is 'no progress observed yet', not a timeout");
         calls.ShouldBeGreaterThan(2, "vacuity: the probe really ran and threw");
@@ -244,7 +244,7 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
             return true;
         });
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", Path.Combine(_base, "m2b.part"), null, TimeSpan.FromMilliseconds(200), CancellationToken.None, _ => throw new IOException("locked")).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", Path.Combine(_base, "m2b.part"), null, TimeSpan.FromMilliseconds(200), CancellationToken.None, _ => throw new IOException("locked")).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
 
         ex.Kind.ShouldBe(CloudErrorKind.Network);
     }

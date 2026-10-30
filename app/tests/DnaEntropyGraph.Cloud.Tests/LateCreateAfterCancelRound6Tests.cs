@@ -22,13 +22,13 @@ public partial class LateCreateAfterCancelTests
         /// <summary>How many stops this gateway refused (round 7: while the VM was booting, or while <c>rejectStop</c> said so).</summary>
         public int RejectedStops => Volatile.Read(ref _rejectedStops);
 
-        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(scope, spec, zone, cancellationToken);
 
-        public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+        public async Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
         {
-            var started = await inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+            var started = await inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken);
             if (afterReuse is not null)
             {
                 await afterReuse();
@@ -37,19 +37,19 @@ public partial class LateCreateAfterCancelTests
             return started;
         }
 
-        public async Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        public async Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         {
-            var booting = rejectStopWhileBooting && await inner.GetVmAsync(vmName, zone, cancellationToken) is { } vm && VmFacts.IsBooting(vm);
+            var booting = rejectStopWhileBooting && await inner.GetVmAsync(scope, vmName, zone, cancellationToken) is { } vm && VmFacts.IsBooting(vm);
             if (booting || rejectStop?.Invoke() == true)
             {
                 Interlocked.Increment(ref _rejectedStops);
                 throw new CloudOperationException(new CloudError("INVALID_STATE", 400, "The instance is not running."), CloudErrorKind.Other);
             }
 
-            await inner.StopVmAsync(vmName, zone, cancellationToken);
+            await inner.StopVmAsync(scope, vmName, zone, cancellationToken);
         }
 
-        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         {
             if (lateDelete)
             {
@@ -57,37 +57,37 @@ public partial class LateCreateAfterCancelTests
                 return Task.CompletedTask;
             }
 
-            return inner.DeleteVmAsync(vmName, zone, cancellationToken);
+            return inner.DeleteVmAsync(scope, vmName, zone, cancellationToken);
         }
 
-        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
         {
             if (failFind is not null && failFind(Interlocked.Increment(ref _finds)))
             {
                 throw new CloudOperationException(new CloudError("UNAVAILABLE", 503, "listing failed"), CloudErrorKind.Network);
             }
 
-            var found = await inner.FindByJobIdAsync(jobId, cancellationToken);
+            var found = await inner.FindByJobIdAsync(scope, jobId, cancellationToken);
             if (_pendingDelete is { } pending)
             {
                 _pendingDelete = null;
-                await inner.DeleteVmAsync(pending.Name, pending.Zone, cancellationToken);
+                await inner.DeleteVmAsync(scope, pending.Name, pending.Zone, cancellationToken);
             }
 
             return found;
         }
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
 
-        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+        public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+        public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public partial class LateCreateAfterCancelTests
         rig.Settings.LifecycleTimeout = TimeSpan.Zero; // the final look runs in the same round as the first delete
         var generation = await rig.Terminator.Ledger.BeginAttemptAsync("job-r6l2", CancellationToken.None);
         rig.Terminator.Ledger.EndAttempt("job-r6l2", generation);
-        sent = new SentCreate("job-r6l2", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
+        sent = new SentCreate(TestScopedGateways.Default, "job-r6l2", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
 
         var outcomes = await rig.Terminator.ReapLateCreatesAsync([sent]);
 
@@ -235,7 +235,7 @@ public partial class LateCreateAfterCancelTests
         var rig = new Rig(gcp, compute);
         var generation = await rig.Terminator.Ledger.BeginAttemptAsync("job-r6l3", CancellationToken.None);
         rig.Terminator.Ledger.EndAttempt("job-r6l3", generation);
-        var sent = new SentCreate("job-r6l3", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
+        var sent = new SentCreate(TestScopedGateways.Default, "job-r6l3", spec.VmName, ZoneA, generation, spec.InstallationId) { Create = Task.CompletedTask };
 
         var result = await rig.Terminator.DeleteOwnedVmsAndVerifyAsync("job-r6l3", CreateSettleState.Settled, CancellationToken.None, [sent]);
 

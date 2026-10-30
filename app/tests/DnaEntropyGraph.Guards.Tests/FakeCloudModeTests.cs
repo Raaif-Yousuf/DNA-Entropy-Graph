@@ -160,7 +160,7 @@ public sealed class FakeCloudModeTests : IDisposable
         await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
 
         provider.GetService<DnaEntropyGraph.Cloud.Auth.GoogleAccountService>().ShouldBeNull("nothing may sit underneath the fake account");
-        (await provider.GetRequiredService<IGcpAccessTokenSource>().GetAccessTokenAsync(CancellationToken.None)).ShouldNotBeNullOrEmpty();
+        (await provider.GetRequiredService<IGcpAccessTokenSource>().GetAccessTokenAsync(null, CancellationToken.None)).ShouldNotBeNullOrEmpty();
         provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.ShellViewModel>().HasSimulatedCloud.ShouldBeTrue();
     }
 
