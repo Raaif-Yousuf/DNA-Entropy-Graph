@@ -56,6 +56,7 @@ public partial class GatewayDeadlineGuardTests
         ["src/DnaEntropyGraph.Core/Cloud/VmProvisioner.cs"] = (1, "pre-existing caller link (batchCts) whose token reaches compute.CreateVmAsync raw, so a throwing callee callback can still surface out of the user's Cancel() through it; tracked in #961, not fixed here"),
         ["src/DnaEntropyGraph.Presentation/ViewModels/CloudResourcesViewModel.cs"] = (1, "links the caller's token so a project switch can cancel the in-flight listing (issue #828); no timer; reached from main, reviewed at the 245 re-merge"),
         ["src/DnaEntropyGraph.Core/Cloud/ResultWaiter.cs"] = (1, "links the run's token for the waiter's own stop; no timer; each read goes through GatewayCalls"),
+        ["src/DnaEntropyGraph.Core/Cloud/StreamedDownload.cs"] = (1, "links the caller's token so the stall watcher can cancel the streamed file download (issue #588); the stall limit is a poll on file length against the injected clock, not a CancelAfter timer"),
     };
 
     private static string Strip(string text) => LiteralOrCommentRegex().Replace(text, m => m.Value[0] switch

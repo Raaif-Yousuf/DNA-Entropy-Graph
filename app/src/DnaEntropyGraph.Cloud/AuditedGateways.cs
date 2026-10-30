@@ -109,6 +109,9 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
     public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
         => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
 
+    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        => inner.TryDownloadToFileAsync(bucket, objectKey, destinationPath, cancellationToken);
+
     public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
         => inner.ListBucketsAsync(projectId, cancellationToken);
 }

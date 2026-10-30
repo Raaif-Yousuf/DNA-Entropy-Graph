@@ -3342,4 +3342,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
     <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
   </data>
+  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
+    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
+  </data>
 </root>
