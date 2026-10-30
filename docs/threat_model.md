@@ -190,8 +190,8 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
   keys included, is left out with a note (`<omitted: file is not valid json>`) and never blocks the export.- **Deliberately included:** the installation id (it is a label on every cloud resource and is needed to find them),
   the app, OS, .NET and WebView2 versions.
 - **Not guaranteed:** the redaction is pattern-based. A new field is added to a key list, never to a blocklist. The app has no
-  Serilog file log yet (issue #164, which will drop its `logs/` folder into the bundle with no change here), so today the
-  bundle holds the worker and run logs and per-run files only.
+  Serilog file log yet (issue #164). Today `logs/app.log` (written by `FileDiagnosticsLog` and by `DiagnosticsTraceListener`, which routes every
+  `Trace.Trace*` line through a redaction of paths, emails and long nucleotide runs, #923) is in the bundle, with the worker and run logs and per-run files.
 
 ## 5c. The network proxy (issue #239, implemented)
 

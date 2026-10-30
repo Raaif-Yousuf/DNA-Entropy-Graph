@@ -27,7 +27,7 @@ public class CloudJobRunnerProgressStallTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, VirtualTimeProvider clock, StallDecision? onStall, TimeSpan? bound = null) => new(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+    private static CloudJobRunner Runner(FakeGcp gcp, VirtualTimeProvider clock, StallDecision? onStall, TimeSpan? bound = null, Func<Task>? gate = null) => new(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
     {
         ResultPollInterval = TimeSpan.FromSeconds(10),
         ResultTimeout = TimeSpan.FromHours(3),
@@ -37,11 +37,15 @@ public class CloudJobRunnerProgressStallTests
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
         LifecycleTimeout = TimeSpan.FromMilliseconds(200),
         TimeProvider = clock,
-        PollDelay = (span, token) =>
+        PollDelay = async (span, token) =>
         {
             token.ThrowIfCancellationRequested();
+            if (gate is not null)
+            {
+                await gate().ConfigureAwait(false);
+            }
+
             clock.Advance(span);
-            return Task.CompletedTask;
         },
         OnStall = onStall,
     };
@@ -69,12 +73,18 @@ public class CloudJobRunnerProgressStallTests
     {
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInRunning);
         var prompts = new ConcurrentQueue<StallPrompt>();
+        var clock = new VirtualTimeProvider();
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var result = await Runner(gcp, new VirtualTimeProvider(), (prompt, _) =>
+        // The prompt handler runs on its own task while the poll loop advances VIRTUAL time, and the answer timeout is virtual too: on a starved thread pool the clock
+        // can pass the answer timeout before the handler ever starts (MEASURED 2026-10-30: 0 prompts). So time does not move on once the stall bound has passed until
+        // the handler has acted, the same gate CloudJobRunnerStallTests uses.
+        var result = await Runner(gcp, clock, (prompt, _) =>
         {
             prompts.Enqueue(prompt);
+            asked.TrySetResult();
             return Task.FromResult(StallChoice.Delete);
-        }).RunAsync(TestInputs.Request("job-ask", Spec("job-ask")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }, gate: () => TimeSpan.FromTicks(clock.GetTimestamp()) >= TimeSpan.FromMinutes(20) ? asked.Task.WaitAsync(TimeSpan.FromSeconds(30)) : Task.CompletedTask).RunAsync(TestInputs.Request("job-ask", Spec("job-ask")), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var seen = prompts.ShouldHaveSingleItem();
         seen.Code.ShouldBe(RunErrorCodes.WorkerProgressStalled);
