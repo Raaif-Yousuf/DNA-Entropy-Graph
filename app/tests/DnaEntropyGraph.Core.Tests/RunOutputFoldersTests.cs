@@ -73,14 +73,135 @@ public sealed class RunOutputFoldersTests : IDisposable
     }
 
     [Fact]
-    public void RemoveCreated_leaves_a_folder_that_has_something_in_it()
+    public void RemoveCreated_leaves_a_folder_that_has_something_in_it_and_removes_the_empty_one_inside_it()
     {
-        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "x"));
+        // Issue #922: the old assertion (a file survives) passed against a no-op. Here the empty inner folder must go and the busy outer one must stay.
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "x", "y"));
         File.WriteAllText(Path.Combine(_parent, "x", "keep.txt"), "k");
 
         RunOutputFolders.RemoveCreated(made);
 
+        Directory.Exists(Path.Combine(_parent, "x", "y")).ShouldBeFalse("the empty folder the call made is taken away");
         File.Exists(Path.Combine(_parent, "x", "keep.txt")).ShouldBeTrue();
+        Directory.Exists(Path.Combine(_parent, "x")).ShouldBeTrue("a folder with something in it is never removed");
+    }
+
+    [Fact]
+    public void CreateFolderChain_counts_a_trailing_separator_once()
+    {
+        Directory.CreateDirectory(_parent);
+
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "leaf") + Path.DirectorySeparatorChar);
+
+        made.ShouldBe([Path.Combine(_parent, "leaf")]);
+    }
+
+    [Fact]
+    public void CreateFolderChain_with_a_required_root_that_is_missing_creates_nothing_and_says_so()
+    {
+        var root = Path.Combine(_parent, "deleted-downloads");
+
+        Should.Throw<DirectoryNotFoundException>(() => RunOutputFolders.CreateFolderChain(Path.Combine(root, "exports"), root));
+
+        Directory.Exists(root).ShouldBeFalse("a missing export root is not brought back");
+    }
+
+    [Fact]
+    public void CreateFolderChain_with_a_required_root_that_exists_makes_only_the_leaf()
+    {
+        Directory.CreateDirectory(_parent);
+
+        var made = RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "leaf"), _parent + Path.DirectorySeparatorChar);
+
+        made.ShouldBe([Path.Combine(_parent, "leaf")]);
+    }
+
+    [Fact]
+    public void A_failed_CreateDirectory_part_way_removes_the_parents_it_already_made_and_rethrows()
+    {
+        Directory.CreateDirectory(_parent);
+        var target = Path.Combine(_parent, "a", "b", "c");
+        var calls = 0;
+
+        Should.Throw<IOException>(() => RunOutputFolders.CreateFolderChain(target, null, Directory.Exists, dir =>
+        {
+            if (++calls == 3)
+            {
+                throw new IOException("disk full");
+            }
+
+            Directory.CreateDirectory(dir);
+        }));
+
+        calls.ShouldBe(3);
+        Directory.Exists(Path.Combine(_parent, "a")).ShouldBeFalse("both folders were made by this call and are taken away");
+        Directory.Exists(_parent).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_folder_that_exists_but_cannot_be_probed_is_not_claimed_as_made()
+    {
+        // Directory.Exists answers false when access is denied, so a pre-existing empty folder would be listed as made and then removed.
+        RunOutputFolders.FolderExists(@"C:\locked", _ => throw new UnauthorizedAccessException()).ShouldBeTrue();
+        RunOutputFolders.FolderExists(@"C:\none", _ => throw new DirectoryNotFoundException()).ShouldBeFalse();
+        RunOutputFolders.FolderExists(@"C:\none", _ => throw new FileNotFoundException()).ShouldBeFalse();
+        RunOutputFolders.FolderExists(@"C:\there", _ => FileAttributes.Directory).ShouldBeTrue();
+
+        // Through the chain itself: the folder is really there, but the attribute read is refused for it.
+        Directory.CreateDirectory(Path.Combine(_parent, "locked"));
+        var made = RunOutputFolders.CreateFolderChain(
+            Path.Combine(_parent, "locked"),
+            null,
+            path => path.EndsWith("locked", StringComparison.Ordinal) ? throw new UnauthorizedAccessException() : File.GetAttributes(path));
+
+        made.ShouldBeEmpty("the probe could not say it is missing, so nothing is claimed");
+        RunOutputFolders.RemoveCreated(made);
+        Directory.Exists(Path.Combine(_parent, "locked")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_file_at_the_path_is_not_a_folder()
+    {
+        RunOutputFolders.FolderExists(@"C:\a-file", _ => FileAttributes.Normal).ShouldBeFalse();
+        RunOutputFolders.FolderExists(@"C:\a-link", _ => FileAttributes.Directory | FileAttributes.ReparsePoint).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void RemoveCreated_goes_on_past_a_folder_it_cannot_remove_and_never_throws()
+    {
+        // Innermost first: the busy folder is tried before the empty one, and must not stop the cleanup.
+        var empty = Path.Combine(_parent, "empty");
+        var busy = Path.Combine(_parent, "busy");
+        Directory.CreateDirectory(empty);
+        Directory.CreateDirectory(busy);
+        File.WriteAllText(Path.Combine(busy, "keep.txt"), "k");
+
+        RunOutputFolders.RemoveCreated([empty, busy, Path.Combine(_parent, "gone"), "bad\0name"]);
+
+        Directory.Exists(empty).ShouldBeFalse("an empty folder is removed even though a later one could not be");
+        Directory.Exists(busy).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_cleanup_problem_in_the_failure_path_does_not_hide_the_original_exception()
+    {
+        Directory.CreateDirectory(_parent);
+        var calls = 0;
+
+        var ex = Should.Throw<InvalidOperationException>(() => RunOutputFolders.CreateFolderChain(Path.Combine(_parent, "p", "q"), null, Directory.Exists, dir =>
+        {
+            if (++calls == 2)
+            {
+                // Make the folder made first impossible to remove, then fail.
+                File.WriteAllText(Path.Combine(_parent, "p", "keep.txt"), "k");
+                throw new InvalidOperationException("original");
+            }
+
+            Directory.CreateDirectory(dir);
+        }));
+
+        ex.Message.ShouldBe("original");
+        File.Exists(Path.Combine(_parent, "p", "keep.txt")).ShouldBeTrue("the folder with something in it is left");
     }
 
     [Fact]
