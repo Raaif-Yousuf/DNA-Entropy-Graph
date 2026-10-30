@@ -10,7 +10,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, VmTerminator terminator, GracefulCancel graceful, CloudRunSettings settings)
 {
-    public async Task CancelAsync(string jobId, CancellationToken cancellationToken)
+    public async Task CancelAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
     {
         var existing = await rows.LatestRecordAsync(jobId, cancellationToken).ConfigureAwait(false);
         if (existing is null)
@@ -59,7 +59,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             {
                 try
                 {
-                    outcome = await graceful.AskAsync(jobId, bucket, cancellationToken).ConfigureAwait(false);
+                    outcome = await graceful.AskAsync(scope, jobId, bucket, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                 {
@@ -81,7 +81,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 }
             }
 
-            failure = await DeleteAllAsync(jobId, settled, queued, sent, cancellationToken).ConfigureAwait(false);
+            failure = await DeleteAllAsync(scope, jobId, settled, queued, sent, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -93,7 +93,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // last attempt that the caller's token cannot cut, then the terminal state is recorded from what it finds.
             try
             {
-                failure = await DeleteAllAsync(jobId, settled, queued, sent, CancellationToken.None).ConfigureAwait(false);
+                failure = await DeleteAllAsync(scope, jobId, settled, queued, sent, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -281,11 +281,11 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         return null;
     }
 
-    private async Task<string?> DeleteAllAsync(string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)
+    private async Task<string?> DeleteAllAsync(CloudScope scope, string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)
     {
         using var hold = terminator.Ledger.HoldDelete(jobId); // round 4 M2: the queued requests' deletes too
-        var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
-        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken, sent).ConfigureAwait(false);
+        var queuedNote = await terminator.DeleteQueuedRequestsAsync(scope, queued, cancellationToken).ConfigureAwait(false);
+        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(scope, jobId, settled, cancellationToken, sent).ConfigureAwait(false);
         return ownedNote ?? queuedNote;
     }
 

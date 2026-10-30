@@ -5,9 +5,12 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// cancel and the late clean-up look up BY NAME, whatever became of the create task: the real gateway honours cancellation, so a cancelled create ends Canceled within
 /// milliseconds although Compute may already have accepted the insert and made the VM. The task is kept only to tell a rejected create (no VM) from one whose outcome is unknown.
 /// </summary>
-internal sealed class SentCreate(string jobId, string name, string zone, long generation, string installationId, bool isReuse = false)
+internal sealed class SentCreate(CloudScope scope, string jobId, string name, string zone, long generation, string installationId, bool isReuse = false)
 {
     private int _claimed;
+
+    /// <summary>Issue #830: the project and account the create was sent in: every later look at, stop of and delete of this create's VM is made in the same scope, whatever is selected by then.</summary>
+    public CloudScope Scope { get; } = scope;
 
     public string JobId { get; } = jobId;
 

@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using System.Text.RegularExpressions;
 
 namespace DnaEntropyGraph.Core.Cloud;
@@ -121,10 +122,12 @@ public sealed class GpuQuotaRequester
     public const string QuotaReadFailedCode = "QUOTA_READ_FAILED";
 
     private readonly IQuotaGateway _quota;
+    private readonly IGcpAccount _account;
 
-    public GpuQuotaRequester(IQuotaGateway quota)
+    public GpuQuotaRequester(IQuotaGateway quota, IGcpAccount account)
     {
         _quota = quota;
+        _account = account;
     }
 
     private static readonly Regex RegionName = new(@"\A[a-z]+-[a-z]+[0-9]+\z", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -136,12 +139,14 @@ public sealed class GpuQuotaRequester
             throw new ArgumentException("The region is not a Google Cloud region name such as us-central1.", nameof(region));
         }
 
-        var read = await _quota.ReadQuotaAsync(projectId, cancellationToken).ConfigureAwait(false);
+        // Issue #830: the wizard's selection path: the project it was asked about, as the current account, read once for the whole request.
+        var scope = new CloudScope(projectId, _account.CurrentAccount?.Sub);
+        var read = await _quota.ReadQuotaAsync(scope, cancellationToken).ConfigureAwait(false);
         var readFailure = read.Failures.FirstOrDefault();
         var items = new List<QuotaRequestItem>
         {
             await RequestOneAsync(
-                projectId,
+                scope,
                 QuotaMetrics.NvidiaL4Gpus,
                 region,
                 $"deg-{Slug(QuotaMetrics.NvidiaL4Gpus)}-{region}",
@@ -150,7 +155,7 @@ public sealed class GpuQuotaRequester
                 contactEmail,
                 cancellationToken).ConfigureAwait(false),
             await RequestOneAsync(
-                projectId,
+                scope,
                 QuotaMetrics.GpusAllRegions,
                 null,
                 $"deg-{Slug(QuotaMetrics.GpusAllRegions)}",
@@ -178,7 +183,7 @@ public sealed class GpuQuotaRequester
     }
 
     private async Task<QuotaRequestItem> RequestOneAsync(
-        string projectId,
+        CloudScope scope,
         string metric,
         string? region,
         string preferenceId,
@@ -201,7 +206,7 @@ public sealed class GpuQuotaRequester
         QuotaEligibility eligibility;
         try
         {
-            eligibility = await _quota.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken).ConfigureAwait(false);
+            eligibility = await _quota.GetQuotaIncreaseEligibilityAsync(scope, metric, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex)
         {
@@ -222,7 +227,7 @@ public sealed class GpuQuotaRequester
         var request = new QuotaIncreaseRequest(metric, region, Math.Max(1, (long)Math.Floor(limit) + 1), preferenceId, Justification, contactEmail);
         try
         {
-            var result = await _quota.RequestQuotaIncreaseAsync(projectId, request, cancellationToken).ConfigureAwait(false);
+            var result = await _quota.RequestQuotaIncreaseAsync(scope, request, cancellationToken).ConfigureAwait(false);
             var outcome = result.Granted ? QuotaRequestOutcome.Granted : result.AlreadyExisted ? QuotaRequestOutcome.AlreadyRequested : QuotaRequestOutcome.Requested;
             return new QuotaRequestItem(metric, region, outcome, Result: result);
         }

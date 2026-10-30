@@ -30,7 +30,7 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
 {
     private static readonly TimeSpan MaxLook = TimeSpan.FromSeconds(2);
 
-    public async Task<GracefulOutcome> AskAsync(string jobId, string bucket, CancellationToken cancellationToken)
+    public async Task<GracefulOutcome> AskAsync(CloudScope scope, string jobId, string bucket, CancellationToken cancellationToken)
     {
         var outcome = GracefulOutcome.NotAsked;
         if (settings.CancelAckTimeout <= TimeSpan.Zero)
@@ -41,14 +41,14 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
         var prefix = WorkerManifestBuilder.JobPrefix(jobId);
         try
         {
-            var vms = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+            var vms = await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false);
             if (!vms.Any(v => v.Status == "RUNNING"))
             {
                 return outcome; // nothing is running to answer
             }
 
-            var before = await ReadStatusAsync(bucket, prefix, cancellationToken).ConfigureAwait(false);
-            if (before is not { WorkerOwned: true } || IsTerminal(before) || await ResultExistsAsync(bucket, prefix, cancellationToken).ConfigureAwait(false))
+            var before = await ReadStatusAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false);
+            if (before is not { WorkerOwned: true } || IsTerminal(before) || await ResultExistsAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false))
             {
                 return outcome; // no worker has started (nobody to answer), or it has already finished
             }
@@ -57,7 +57,7 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
                 async token =>
                 {
                     using var empty = new MemoryStream();
-                    await storage.UploadAsync(bucket, prefix + "control/cancel", empty, token).ConfigureAwait(false);
+                    await storage.UploadAsync(scope, bucket, prefix + "control/cancel", empty, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -68,14 +68,14 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
             while (settings.ElapsedSince(started) < settings.CancelAckTimeout)
             {
                 await settings.DelayAsync(Look(settings.CancelAckTimeout), cancellationToken).ConfigureAwait(false);
-                var now = await ReadStatusAsync(bucket, prefix, cancellationToken).ConfigureAwait(false);
+                var now = await ReadStatusAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false);
                 if (now is not null && (IsTerminal(now) || now.CancelSeen))
                 {
                     acknowledged = true;
                     break;
                 }
 
-                if (await ResultExistsAsync(bucket, prefix, cancellationToken).ConfigureAwait(false))
+                if (await ResultExistsAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false))
                 {
                     return GracefulOutcome.Finished;
                 }
@@ -91,8 +91,8 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
             started = settings.StartClock();
             while (settings.ElapsedSince(started) < settings.CancelFinishTimeout)
             {
-                var now = await ReadStatusAsync(bucket, prefix, cancellationToken).ConfigureAwait(false);
-                if ((now is not null && IsTerminal(now)) || await ResultExistsAsync(bucket, prefix, cancellationToken).ConfigureAwait(false))
+                var now = await ReadStatusAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false);
+                if ((now is not null && IsTerminal(now)) || await ResultExistsAsync(scope, bucket, prefix, cancellationToken).ConfigureAwait(false))
                 {
                     return GracefulOutcome.Finished;
                 }
@@ -120,12 +120,12 @@ internal sealed class GracefulCancel(IComputeGateway compute, IStorageGateway st
 
     private static bool IsTerminal(WorkerStatusSnapshot status) => status.Stage is WorkerStages.Done or WorkerStages.Failed or WorkerStages.Cancelled;
 
-    private async Task<WorkerStatusSnapshot?> ReadStatusAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    private async Task<WorkerStatusSnapshot?> ReadStatusAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
     {
-        var text = await calls.TryReadTextAsync(bucket, prefix + "status.json", cancellationToken).ConfigureAwait(false);
+        var text = await calls.TryReadTextAsync(scope, bucket, prefix + "status.json", cancellationToken).ConfigureAwait(false);
         return text is null ? null : WorkerStatusReader.TryParseStatus(text);
     }
 
-    private async Task<bool> ResultExistsAsync(string bucket, string prefix, CancellationToken cancellationToken)
-        => await calls.TryReadTextAsync(bucket, prefix + "result.json", cancellationToken).ConfigureAwait(false) is not null;
+    private async Task<bool> ResultExistsAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
+        => await calls.TryReadTextAsync(scope, bucket, prefix + "result.json", cancellationToken).ConfigureAwait(false) is not null;
 }

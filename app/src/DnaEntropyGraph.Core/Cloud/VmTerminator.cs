@@ -62,7 +62,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         IReadOnlyList<VmDescriptor> owned;
         try
         {
-            owned = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), CancellationToken.None).ConfigureAwait(false);
+            owned = await calls.CallAsync(token => compute.FindByJobIdAsync(request.ResolvedScope, request.JobId, token), CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -111,7 +111,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         var hold = action == AfterTaskAction.Delete ? Ledger.HoldDelete(request.JobId) : null;
         try
         {
-            var vm = await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false);
+            var vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, name, zone, token), cancellationToken).ConfigureAwait(false);
             if (vm is null)
             {
                 return null;
@@ -133,7 +133,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     {
                         try
                         {
-                            await compute.DeleteVmAsync(name, zone, token).ConfigureAwait(false);
+                            await compute.DeleteVmAsync(request.ResolvedScope, name, zone, token).ConfigureAwait(false);
                         }
                         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                         {
@@ -155,14 +155,14 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 }
                 else
                 {
-                    await StopQuietlyAsync(name, zone, cancellationToken).ConfigureAwait(false);
+                    await StopQuietlyAsync(request.ResolvedScope, name, zone, cancellationToken).ConfigureAwait(false);
                 }
             }
 
             var clockStart = settings.StartClock();
             while (true)
             {
-                vm = await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false);
+                vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, name, zone, token), cancellationToken).ConfigureAwait(false);
                 if (vm is null || (action != AfterTaskAction.Delete && VmFacts.IsStopped(vm)))
                 {
                     return null;
@@ -170,7 +170,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
                 if (!stopSent && vm.Status == "RUNNING")
                 {
-                    await StopQuietlyAsync(name, zone, cancellationToken).ConfigureAwait(false);
+                    await StopQuietlyAsync(request.ResolvedScope, name, zone, cancellationToken).ConfigureAwait(false);
                     stopSent = true;
                 }
 
@@ -201,13 +201,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>Sends a stop; a 404 is "already gone" (the wanted end state).</summary>
-    private Task<bool> StopQuietlyAsync(string name, string zone, CancellationToken cancellationToken)
+    private Task<bool> StopQuietlyAsync(CloudScope scope, string name, string zone, CancellationToken cancellationToken)
         => calls.CallAsync(
             async token =>
             {
                 try
                 {
-                    await compute.StopVmAsync(name, zone, token).ConfigureAwait(false);
+                    await compute.StopVmAsync(scope, name, zone, token).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                 {
@@ -228,7 +228,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Defence in depth beside the label listing: THEORY (unverified, no live project) a pending request is a listable instance; if it is not, only this finds it.
     /// Null when every one is gone (or none was given), else why not. A request already gone (404) is the state wanted.
     /// </summary>
-    public async Task<string?> DeleteQueuedRequestsAsync(IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken)
+    public async Task<string?> DeleteQueuedRequestsAsync(CloudScope scope, IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken)
     {
         string? error = null;
         foreach (var (name, zone) in requests)
@@ -240,7 +240,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     {
                         try
                         {
-                            await compute.DeleteVmAsync(name, zone, token).ConfigureAwait(false);
+                            await compute.DeleteVmAsync(scope, name, zone, token).ConfigureAwait(false);
                         }
                         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                         {
@@ -252,7 +252,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     cancellationToken).ConfigureAwait(false);
 
                 var clockStart = settings.StartClock();
-                while (await calls.CallAsync(token => compute.GetVmAsync(name, zone, token), cancellationToken).ConfigureAwait(false) is not null)
+                while (await calls.CallAsync(token => compute.GetVmAsync(scope, name, zone, token), cancellationToken).ConfigureAwait(false) is not null)
                 {
                     if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
                     {
@@ -309,7 +309,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         var answeredBefore = sent.Answered;
         try
         {
-            var vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Name, sent.Zone, token), cancellationToken).ConfigureAwait(false);
+            var vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Scope, sent.Name, sent.Zone, token), cancellationToken).ConfigureAwait(false);
             if (vm is not null && IsOurs(sent, vm))
             {
                 return (NameLook.Present, null);
@@ -336,7 +336,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>Deletes by name; a 404 is the state wanted ("already gone"). Never throws for a cloud failure.</summary>
-    private async Task<(DeleteResult Result, string? ErrorClass)> DeleteByNameAsync(string name, string zone, CancellationToken cancellationToken)
+    private async Task<(DeleteResult Result, string? ErrorClass)> DeleteByNameAsync(CloudScope scope, string name, string zone, CancellationToken cancellationToken)
     {
         try
         {
@@ -345,7 +345,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     try
                     {
-                        await compute.DeleteVmAsync(name, zone, token).ConfigureAwait(false);
+                        await compute.DeleteVmAsync(scope, name, zone, token).ConfigureAwait(false);
                         return false;
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
@@ -408,7 +408,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             return unknown ? new ReapResult(ReapStep.DeleteFailed, lookError, lookError) : new ReapResult(ReapStep.DeleteSent, null);
         }
 
-        var (result, deleteError) = await DeleteByNameAsync(sent.Name, sent.Zone, CancellationToken.None).ConfigureAwait(false);
+        var (result, deleteError) = await DeleteByNameAsync(sent.Scope, sent.Name, sent.Zone, CancellationToken.None).ConfigureAwait(false);
         return result switch
         {
 
@@ -617,7 +617,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>Stops a VM by name; a 404 is "already gone". Never throws for a cloud failure.</summary>
-    private async Task<(bool Ok, string? ErrorClass)> StopByNameAsync(string name, string zone)
+    private async Task<(bool Ok, string? ErrorClass)> StopByNameAsync(CloudScope scope, string name, string zone)
     {
         try
         {
@@ -626,7 +626,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     try
                     {
-                        await compute.StopVmAsync(name, zone, token).ConfigureAwait(false);
+                        await compute.StopVmAsync(scope, name, zone, token).ConfigureAwait(false);
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                     {
@@ -663,7 +663,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         VmDescriptor? vm;
         try
         {
-            vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Name, sent.Zone, token), CancellationToken.None).ConfigureAwait(false);
+            vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Scope, sent.Name, sent.Zone, token), CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -718,7 +718,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
 
         sent.Landed = true; // seen running: the start landed
-        var (ok, stopError) = await StopByNameAsync(sent.Name, sent.Zone).ConfigureAwait(false);
+        var (ok, stopError) = await StopByNameAsync(sent.Scope, sent.Name, sent.Zone).ConfigureAwait(false);
         watch.StopStart ??= settings.StartClock();
         watch.LastError = ok ? null : stopError;
         return settings.ElapsedSince(watch.StopStart.Value) >= settings.LifecycleTimeout
@@ -732,7 +732,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Only a VM this run CREATED (named <see cref="OwnVmName"/>) is deleted: one the run borrowed by reuse keeps its owner's name, is STOPPED here, and is never counted as left.
     /// Returns null when the VMs are confirmed gone, else why not.
     /// </summary>
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
+    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
     {
         var sent = sentCreates ?? [];
 
@@ -740,7 +740,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         using var hold = Ledger.HoldDelete(jobId);
         try
         {
-            return await DeleteOwnedCoreAsync(jobId, settle, cancellationToken, sent).ConfigureAwait(false);
+            return await DeleteOwnedCoreAsync(scope, jobId, settle, cancellationToken, sent).ConfigureAwait(false);
         }
         finally
         {
@@ -751,7 +751,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
-    private async Task<string?> DeleteOwnedCoreAsync(string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
+    private async Task<string?> DeleteOwnedCoreAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
     {
         // Round 4 M3: a REUSE names another run's VM: it is never a delete target nor counted as left (the watch stops it if it lands), so only creates go through the by-name delete and read-back below.
         var sent = allSent.Where(c => !c.IsReuse).ToList();
@@ -760,7 +760,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         string? listError = null;
         try
         {
-            owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+            owned = await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (sent.Count > 0 && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -789,7 +789,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 if (name != ownName)
                 {
                     // Round 3 H1: a VM this run did not create (a reuse relabelled it to this job) is its owner's, not this cancel's to delete. Stop it so it does not bill, leave its labels.
-                    deleteError ??= await StopBorrowedAsync(listed, cancellationToken).ConfigureAwait(false);
+                    deleteError ??= await StopBorrowedAsync(scope, listed, cancellationToken).ConfigureAwait(false);
                     foreach (var reuse in allSent.Where(c => c.IsReuse && c.Name == name && c.Zone == zone))
                     {
                         // Rounds 5 and 6 H1: a reuse relabels FIRST and starts LAST, so a stopped donor that already carries this job's labels says nothing until the start has ANSWERED. A task still running, ended
@@ -809,7 +809,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     create.Landed = true;
                 }
 
-                var (result, error) = await DeleteByNameAsync(name, zone, cancellationToken).ConfigureAwait(false);
+                var (result, error) = await DeleteByNameAsync(scope, name, zone, cancellationToken).ConfigureAwait(false);
                 if (result == DeleteResult.Failed)
                 {
                     deleteError ??= $"VM '{name}' in zone '{zone}' could not be deleted ({error}). Delete it from the Cloud page.";
@@ -841,7 +841,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             var listUnreadable = false;
             try
             {
-                stillThere = (await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false))
+                stillThere = (await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false))
                     .Where(v => v.Name == ownName)
                     .Select(v => (v.Name, v.Zone))
                     .ToHashSet();
@@ -905,7 +905,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>Stops a VM this run borrowed (it keeps its owner's name). Null when it is stopped (or stopping, or gone), else why not, with the action.</summary>
-    private async Task<string?> StopBorrowedAsync(VmDescriptor vm, CancellationToken cancellationToken)
+    private async Task<string?> StopBorrowedAsync(CloudScope scope, VmDescriptor vm, CancellationToken cancellationToken)
     {
         if (VmFacts.IsStopped(vm) || vm.Status == "STOPPING")
         {
@@ -919,7 +919,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     try
                     {
-                        await compute.StopVmAsync(vm.Name, vm.Zone, token).ConfigureAwait(false);
+                        await compute.StopVmAsync(scope, vm.Name, vm.Zone, token).ConfigureAwait(false);
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                     {
@@ -944,16 +944,16 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// next health check in <see cref="CloudJobRunner.RunAsync"/> sees the stopped VM and
     /// records the failure, which keeps one writer per phase transition.
     /// </summary>
-    public async Task StopVmsAsync(string jobId, CancellationToken cancellationToken)
+    public async Task StopVmsAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
     {
         NoteAppRequestedEnd(jobId);
-        var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+        var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false);
         foreach (var vm in owned)
         {
             await calls.CallAsync(
                 async token =>
                 {
-                    await compute.StopVmAsync(vm.Name, vm.Zone, token).ConfigureAwait(false);
+                    await compute.StopVmAsync(scope, vm.Name, vm.Zone, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -961,17 +961,17 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>The run page's "Delete VM now"; same lookup and no-op rules as <see cref="StopVmsAsync"/>.</summary>
-    public async Task DeleteVmsAsync(string jobId, CancellationToken cancellationToken)
+    public async Task DeleteVmsAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
     {
         NoteAppRequestedEnd(jobId);
         using var hold = Ledger.HoldDelete(jobId); // round 4 M2
-        var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+        var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false);
         foreach (var vm in owned)
         {
             await calls.CallAsync(
                 async token =>
                 {
-                    await compute.DeleteVmAsync(vm.Name, vm.Zone, token).ConfigureAwait(false);
+                    await compute.DeleteVmAsync(scope, vm.Name, vm.Zone, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken).ConfigureAwait(false);

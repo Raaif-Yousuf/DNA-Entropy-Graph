@@ -358,7 +358,12 @@ public sealed class JobReconciler
             await EnforceRowAsync(row, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
         }
 
-        await SweepIdleAsync(installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        // Issue #830: the idle sweep lists in every scope a recent finished run of this installation was made in, never in whatever is selected now.
+        foreach (var scope in finished.Select(ScopeOf).Distinct())
+        {
+            await SweepIdleAsync(scope, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        }
+
         bool deferred;
         lock (outcomes)
         {
@@ -378,13 +383,14 @@ public sealed class JobReconciler
     {
         try
         {
+            var scope = ScopeOf(row);
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
                 IReadOnlyList<VmDescriptor> vms;
                 try
                 {
-                    vms = await Lookup(t => _compute.FindByJobIdAsync(row.JobId, t), linked.Token).ConfigureAwait(false);
+                    vms = await Lookup(t => _compute.FindByJobIdAsync(scope, row.JobId, t), linked.Token).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                 {
@@ -409,7 +415,7 @@ public sealed class JobReconciler
                     // (labels not read, as IsOurs documents) there is nothing to compare: the documented fallback stands and the action proceeds. A VM that is gone is nothing to act on.
                     try
                     {
-                        var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        var fresh = await Lookup(t => _compute.GetVmAsync(scope, vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
                         string? skip = fresh is null ? "vm-gone"
                             : fresh.Labels is null ? (vm.Labels is not null ? "vm-unlabelled" : null)
                             : (!fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId) ? "vm-relabelled"
@@ -427,7 +433,7 @@ public sealed class JobReconciler
                         continue;
                     }
 
-                    await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                    await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
                 }
             });
             if (driver is not null)
@@ -441,6 +447,8 @@ public sealed class JobReconciler
             _log.Warning("reconciler", row.JobId, ex.GetType().Name);
         }
     }
+
+    private static CloudScope ScopeOf(RunRecord row) => RunScope.Of(row);
 
     private enum VmWant
     {
@@ -515,14 +523,14 @@ public sealed class JobReconciler
             || (vm.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && vm.Labels.TryGetValue("installation-id", out var owner) && owner == installation);
 
-    private async Task SweepIdleAsync(string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task SweepIdleAsync(CloudScope scope, string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         var limit = CloudHousekeepingSettings.IdleStoppedVmLimit(_settings);
 
         IReadOnlyList<VmDescriptor> listed;
         try
         {
-            listed = await Lookup(token => _compute.ListByInstallationAsync(installation, token), cancellationToken).ConfigureAwait(false);
+            listed = await Lookup(token => _compute.ListByInstallationAsync(scope, installation, token), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
@@ -548,7 +556,7 @@ public sealed class JobReconciler
                     VmDescriptor? fresh;
                     try
                     {
-                        fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        fresh = await Lookup(t => _compute.GetVmAsync(scope, vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
@@ -565,7 +573,7 @@ public sealed class JobReconciler
 
                     if (fresh is not null && IsIdle(fresh, now, limit))
                     {
-                        await ApplyAsync(jobId, vm, true, LifecycleAction.IdleVmDeleted, outcomes, linked.Token).ConfigureAwait(false);
+                        await ApplyAsync(scope, jobId, vm, true, LifecycleAction.IdleVmDeleted, outcomes, linked.Token).ConfigureAwait(false);
                     }
                 });
                 if (driver is not null)
@@ -586,7 +594,7 @@ public sealed class JobReconciler
         => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
 
     /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
-    private async Task ApplyAsync(string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         try
         {
@@ -595,7 +603,7 @@ public sealed class JobReconciler
                 {
                     try
                     {
-                        await (delete ? _compute.DeleteVmAsync(vm.Name, vm.Zone, token) : _compute.StopVmAsync(vm.Name, vm.Zone, token)).ConfigureAwait(false);
+                        await (delete ? _compute.DeleteVmAsync(scope, vm.Name, vm.Zone, token) : _compute.StopVmAsync(scope, vm.Name, vm.Zone, token)).ConfigureAwait(false);
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                     {
@@ -987,7 +995,7 @@ public sealed class JobReconciler
         try
         {
             var bucket = row.Bucket;
-            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
+            var stream = await Lookup(token => _storage.TryDownloadAsync(ScopeOf(row), bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 return (null, null);
@@ -1040,7 +1048,7 @@ public sealed class JobReconciler
     {
         try
         {
-            var vms = await Lookup(token => _compute.FindByJobIdAsync(row.JobId, token), cancellationToken).ConfigureAwait(false);
+            var vms = await Lookup(token => _compute.FindByJobIdAsync(ScopeOf(row), row.JobId, token), cancellationToken).ConfigureAwait(false);
             if (vms.Count > 0)
             {
                 return Evidence.Found;
@@ -1052,7 +1060,7 @@ public sealed class JobReconciler
             }
 
             var bucket = row.Bucket;
-            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
+            var stream = await Lookup(token => _storage.TryDownloadAsync(ScopeOf(row), bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 return Evidence.Nothing;
@@ -1161,7 +1169,7 @@ public sealed class JobReconciler
     {
         try
         {
-            await _runner.CancelAsync(row.JobId, cancellationToken).ConfigureAwait(false);
+            await _runner.CancelAsync(ScopeOf(row), row.JobId, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (IsNoAnswer(ex))
         {

@@ -24,7 +24,15 @@ public sealed record CloudJobRequest(
     IReadOnlyList<StagedInput> Inputs,
     string OutputFolder,
     AfterTaskAction AfterTask = AfterTaskAction.Stop,
-    string? WorkerImage = null);
+    string? WorkerImage = null,
+    CloudScope? Scope = null)
+{
+    /// <summary>
+    /// Issue #830: the project and Google account every call of this run is made in. <see cref="JobEngine"/> captures it ONCE when the run
+    /// is created; a request built without one (a test, or a legacy caller) acts in the spec's project as the current account (null sub).
+    /// </summary>
+    public CloudScope ResolvedScope => Scope ?? new CloudScope(Spec.ProjectId);
+}
 
 /// <summary>The phase a run ended in, plus - when it did not reach a happy terminal phase - which class of error stopped it and why.</summary>
 /// <param name="FailureKind">Which class of error stopped the run.</param>
@@ -218,12 +226,12 @@ public sealed class CloudJobRunner
     /// <summary>The location of the run's bucket (issue #670: the ladder prefers zones on its continent), or null when it is not known yet or cannot be read.</summary>
     private async Task<string?> BucketLocationAsync(RunProgress progress, CancellationToken cancellationToken)
     {
-        if (progress.Bucket is not { } bucket || progress.ProjectId is not { } project)
+        if (progress.Bucket is not { } bucket || progress.Scope is not { } scope)
         {
             return null;
         }
 
-        var buckets = await _calls.CallAsync(token => _storage.ListBucketsAsync(project, token), cancellationToken).ConfigureAwait(false);
+        var buckets = await _calls.CallAsync(token => _storage.ListBucketsAsync(scope, token), cancellationToken).ConfigureAwait(false);
         return buckets.FirstOrDefault(b => string.Equals(b.Name, bucket, StringComparison.Ordinal))?.Location;
     }
 
@@ -234,7 +242,7 @@ public sealed class CloudJobRunner
     /// </summary>
     private async Task ClaimZoneAsync(RunProgress progress, string zone, CancellationToken cancellationToken)
     {
-        if (progress.Bucket is not { } bucket || progress.JobId is not { } jobId)
+        if (progress.Bucket is not { } bucket || progress.JobId is not { } jobId || progress.Scope is not { } scope)
         {
             return;
         }
@@ -243,7 +251,7 @@ public sealed class CloudJobRunner
             async token =>
             {
                 using var content = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(zone));
-                await _storage.UploadAsync(bucket, WorkerManifestBuilder.JobPrefix(jobId) + "control/zone", content, token).ConfigureAwait(false);
+                await _storage.UploadAsync(scope, bucket, WorkerManifestBuilder.JobPrefix(jobId) + "control/zone", content, token).ConfigureAwait(false);
                 return true;
             },
             cancellationToken).ConfigureAwait(false);
@@ -339,7 +347,7 @@ public sealed class CloudJobRunner
             // Cancelling would be an illegal transition, and would leave the VM the cancel was deleting alive.
             try
             {
-                await CancelAsync(request.JobId, cancellationToken).ConfigureAwait(false);
+                await CancelAsync(request.ResolvedScope, request.JobId, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
@@ -396,10 +404,11 @@ public sealed class CloudJobRunner
         await _transfer.PrepareRunFolderAsync(request, cancellationToken).ConfigureAwait(false);
 
         // Step 5 of the preflight order (docs/cloud_design.md section 2): the bucket exists.
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.ResolvedScope, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
 
         progress.Bucket = bucket;
         progress.ProjectId = request.Spec.ProjectId;
+        progress.Scope = request.ResolvedScope;
         progress.JobId = request.JobId;
         await _rows.SetPhaseAsync(request.JobId, JobPhase.Uploading, cancellationToken).ConfigureAwait(false);
 
@@ -418,7 +427,7 @@ public sealed class CloudJobRunner
             string? finished = null;
             try
             {
-                finished = await _calls.TryReadTextAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json", cancellationToken).ConfigureAwait(false);
+                finished = await _calls.TryReadTextAsync(request.ResolvedScope, bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json", cancellationToken).ConfigureAwait(false);
             }
             catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
             {
@@ -430,7 +439,7 @@ public sealed class CloudJobRunner
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Preparing, cancellationToken).ConfigureAwait(false);
                 await _rows.SetPhaseAsync(request.JobId, JobPhase.Running, cancellationToken).ConfigureAwait(false);
-                var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
+                var owned = await _calls.CallAsync(token => _compute.FindByJobIdAsync(request.ResolvedScope, request.JobId, token), cancellationToken).ConfigureAwait(false);
                 if (owned.Count > 0)
                 {
                     // A crash in the middle of a parallel batch can leave several: finish on one, delete and verify the rest (#670).
@@ -481,7 +490,7 @@ public sealed class CloudJobRunner
                     await _calls.CallAsync(
                         async token =>
                         {
-                            await _storage.DeleteObjectAsync(bucket, jobFolder + stale, token).ConfigureAwait(false);
+                            await _storage.DeleteObjectAsync(request.ResolvedScope, bucket, jobFolder + stale, token).ConfigureAwait(false);
                             return true;
                         },
                         cancellationToken).ConfigureAwait(false);
@@ -538,7 +547,7 @@ public sealed class CloudJobRunner
     /// </summary>
     private async Task<VmSpec> CompleteSpecAsync(CloudJobRequest request, string bucket, RunProgress progress, CancellationToken cancellationToken)
     {
-        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.Spec.ProjectId, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
+        var identity = await _calls.CallAsync(token => _workerIdentity.EnsureWorkerIdentityAsync(request.ResolvedScope, bucket, token), cancellationToken, _settings.WorkerIdentityTimeout).ConfigureAwait(false);
         progress.WorkerAccountEmail = identity.ServiceAccountEmail;
         if (identity.NoteCode == SetupErrorCodes.WorkerDefaultAccount)
         {
@@ -570,7 +579,7 @@ public sealed class CloudJobRunner
         {
             // A fast worker can finish and stop its VM between two looks, and a boot failure ends the VM without a
             // result.json: judge it exactly like a VM lost while waiting.
-            var done = await _calls.TryReadTextAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json", cancellationToken).ConfigureAwait(false);
+            var done = await _calls.TryReadTextAsync(request.ResolvedScope, bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json", cancellationToken).ConfigureAwait(false);
             if (done is null)
             {
                 throw await _waiter.VmLostAsync(request, bucket, zone, bootReason, cancellationToken).ConfigureAwait(false);
@@ -595,7 +604,7 @@ public sealed class CloudJobRunner
     /// remembered zone - the runner that requested cancellation may not be
     /// the one that provisioned it), then <see cref="JobPhase.Cancelled"/>.
     /// </summary>
-    public Task CancelAsync(string jobId, CancellationToken cancellationToken) => _canceller.CancelAsync(jobId, cancellationToken);
+    public Task CancelAsync(CloudScope scope, string jobId, CancellationToken cancellationToken) => _canceller.CancelAsync(scope, jobId, cancellationToken);
 
     /// <summary>
     /// The run page's "Stop VM now": stops every VM this job id owns, found
@@ -604,10 +613,10 @@ public sealed class CloudJobRunner
     /// next health check in <see cref="RunAsync"/> sees the stopped VM and
     /// records the failure, which keeps one writer per phase transition.
     /// </summary>
-    public Task StopVmAsync(string jobId, CancellationToken cancellationToken) => _terminator.StopVmsAsync(jobId, cancellationToken);
+    public Task StopVmAsync(CloudScope scope, string jobId, CancellationToken cancellationToken) => _terminator.StopVmsAsync(scope, jobId, cancellationToken);
 
     /// <summary>The run page's "Delete VM now"; same lookup and no-op rules as <see cref="StopVmAsync"/>.</summary>
-    public Task DeleteVmAsync(string jobId, CancellationToken cancellationToken) => _terminator.DeleteVmsAsync(jobId, cancellationToken);
+    public Task DeleteVmAsync(CloudScope scope, string jobId, CancellationToken cancellationToken) => _terminator.DeleteVmsAsync(scope, jobId, cancellationToken);
 
     /// <summary>
     /// Uploads the staged inputs and then <c>manifest.json</c> to <c>jobs/&lt;jobId&gt;/</c>. The manifest goes
@@ -616,7 +625,7 @@ public sealed class CloudJobRunner
     /// </summary>
     public async Task UploadInputsAsync(CloudJobRequest request, CancellationToken cancellationToken)
     {
-        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.Spec.ProjectId, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
+        var bucket = await _calls.CallAsync(token => _storage.EnsureBucketAsync(request.ResolvedScope, token), cancellationToken, _settings.EnsureBucketTimeout).ConfigureAwait(false);
         await _transfer.UploadAsync(request, bucket, cancellationToken).ConfigureAwait(false);
     }
 }

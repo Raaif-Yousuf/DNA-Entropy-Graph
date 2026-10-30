@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 
 namespace DnaEntropyGraph.Core.Setup;
@@ -43,6 +44,7 @@ public sealed class SetupCheckService : ISetupCheckService
     private readonly IStorageGateway _storage;
     private readonly IWorkerIdentityGateway _identity;
     private readonly IQuotaGateway _quota;
+    private readonly IGcpAccount _account;
 
     public SetupCheckService(
         IProjectCatalogGateway projects,
@@ -51,7 +53,8 @@ public sealed class SetupCheckService : ISetupCheckService
         IServiceEnablementGateway services,
         IStorageGateway storage,
         IWorkerIdentityGateway identity,
-        IQuotaGateway quota)
+        IQuotaGateway quota,
+        IGcpAccount account)
     {
         _projects = projects;
         _billingGateway = billingGateway;
@@ -60,7 +63,11 @@ public sealed class SetupCheckService : ISetupCheckService
         _storage = storage;
         _identity = identity;
         _quota = quota;
+        _account = account;
     }
+
+    /// <summary>Issue #830: the wizard acts on the project it is checking as the current account (the selection path), read once per step.</summary>
+    private CloudScope ScopeFor(string projectId) => new(projectId, _account.CurrentAccount?.Sub);
 
     public async Task<SetupStepResult> ListProjectsAsync(CancellationToken cancellationToken)
     {
@@ -147,8 +154,9 @@ public sealed class SetupCheckService : ISetupCheckService
     {
         try
         {
-            var bucket = await _storage.EnsureBucketAsync(projectId, cancellationToken).ConfigureAwait(false);
-            var identity = await _identity.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken).ConfigureAwait(false);
+            var scope = ScopeFor(projectId);
+            var bucket = await _storage.EnsureBucketAsync(scope, cancellationToken).ConfigureAwait(false);
+            var identity = await _identity.EnsureWorkerIdentityAsync(scope, bucket, cancellationToken).ConfigureAwait(false);
             return new SetupStepResult(SetupStep.Storage, SetupStatus.Ok) { ProjectId = projectId, Bucket = bucket, NoteCode = identity.NoteCode };
         }
         catch (CloudOperationException failure)
@@ -162,7 +170,7 @@ public sealed class SetupCheckService : ISetupCheckService
         QuotaReadResult read;
         try
         {
-            read = await _quota.ReadQuotaAsync(projectId, cancellationToken).ConfigureAwait(false);
+            read = await _quota.ReadQuotaAsync(ScopeFor(projectId), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException failure)
         {

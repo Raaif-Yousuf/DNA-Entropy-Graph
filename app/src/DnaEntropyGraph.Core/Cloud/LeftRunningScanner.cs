@@ -8,10 +8,10 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// expiry: a computer left running is never left indefinitely), null when the limit is unknown. <paramref name="UsdPerHour"/> is the computer's own rate, null when
 /// the price list could not be read. <paramref name="HasLiveRun"/> is true when a run of this installation that has not ended carries the VM's job id.
 /// </summary>
-public sealed record LeftRunningVm(string Name, string Zone, string? JobId, TimeSpan? Remaining, double? UsdPerHour, bool HasLiveRun, VmDescriptor Descriptor);
+public sealed record LeftRunningVm(string Name, string Zone, string? JobId, TimeSpan? Remaining, double? UsdPerHour, bool HasLiveRun, VmDescriptor Descriptor, CloudScope? Scope = null);
 
 /// <summary>A disk of this installation that no running computer holds: it keeps billing every month until it is deleted.</summary>
-public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth);
+public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth, CloudScope? Scope = null);
 
 /// <summary>What the scan found. <see cref="IsClean"/> is true when nothing of this installation runs and no disk is being paid for.</summary>
 public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks)
@@ -26,11 +26,11 @@ public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, 
 /// </summary>
 public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore settings, IRunRepository runs, IPricingSource? pricing, TimeProvider clock)
 {
-    public async Task<LeftRunningReport> ScanAsync(CancellationToken cancellationToken)
+    public async Task<LeftRunningReport> ScanAsync(CloudScope scope, CancellationToken cancellationToken)
     {
         var installation = InstallationId.GetOrCreate(settings);
-        var vms = (await compute.ListByInstallationAsync(installation, cancellationToken).ConfigureAwait(false)).Where(v => Owns(v.Labels, installation)).ToList();
-        var disks = (await compute.ListDisksByInstallationAsync(installation, cancellationToken).ConfigureAwait(false)).Where(d => d.BelongsTo(installation)).ToList();
+        var vms = (await compute.ListByInstallationAsync(scope, installation, cancellationToken).ConfigureAwait(false)).Where(v => Owns(v.Labels, installation)).ToList();
+        var disks = (await compute.ListDisksByInstallationAsync(scope, installation, cancellationToken).ConfigureAwait(false)).Where(d => d.BelongsTo(installation)).ToList();
         var running = vms.Where(IsRunning).ToList();
         if (running.Count == 0 && disks.Count == 0)
         {
@@ -45,13 +45,13 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
         {
             var jobId = vm.Labels is not null && vm.Labels.TryGetValue("job-id", out var job) ? job : null;
             var machine = vm.MachineType is { Length: > 0 } type ? table?.Find(type[(type.LastIndexOf('/') + 1)..]) : null;
-            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Contains(jobId), vm);
+            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Contains(jobId), vm, scope);
         }).ToList();
 
         var runningNames = running.Select(v => v.Name).ToHashSet(StringComparer.Ordinal);
         var stopped = disks
             .Where(d => !d.Users.Any(u => runningNames.Contains(u[(u.LastIndexOf('/') + 1)..])))
-            .Select(d => new LeftStoppedDisk(d.Name, d.Zone, d.SizeGb, table is null ? null : d.SizeGb * table.DiskUsdPerGbMonth))
+            .Select(d => new LeftStoppedDisk(d.Name, d.Zone, d.SizeGb, table is null ? null : d.SizeGb * table.DiskUsdPerGbMonth, scope))
             .ToList();
         return new LeftRunningReport(runningReport, stopped);
     }

@@ -81,7 +81,7 @@ public interface IJobObjectDeleter
     /// <summary>False while nothing real is behind this deleter, so the UI offers no deletion it cannot perform.</summary>
     bool IsAvailable { get; }
 
-    Task DeleteJobObjectsAsync(string bucket, string jobPrefix, CancellationToken cancellationToken);
+    Task DeleteJobObjectsAsync(CloudScope scope, string bucket, string jobPrefix, CancellationToken cancellationToken);
 }
 
 /// <summary>A run's copy in the bucket (issue #101): fetch it again, or delete it.</summary>
@@ -179,7 +179,7 @@ public sealed class RunCloudResults : IRunCloudResults
         var tally = new KeptAsideTally();
         try
         {
-            await using var resultStream = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + "result.json", cancellationToken).ConfigureAwait(false);
+            await using var resultStream = await _storage.TryDownloadAsync(RunScope.Of(run), run.Bucket!, run.JobPrefix + "result.json", cancellationToken).ConfigureAwait(false);
             if (resultStream is null)
             {
                 return CloudResultsStatus.ResultNotFound;
@@ -236,7 +236,7 @@ public sealed class RunCloudResults : IRunCloudResults
 
         try
         {
-            await _deleter.DeleteJobObjectsAsync(run.Bucket, run.JobPrefix, cancellationToken).ConfigureAwait(false);
+            await _deleter.DeleteJobObjectsAsync(RunScope.Of(run), run.Bucket, run.JobPrefix, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudNotConnectedException)
         {
@@ -375,7 +375,7 @@ public sealed class RunCloudResults : IRunCloudResults
         try
         {
             // Issue #588: streamed from the bucket straight into a unique .part file under a stall deadline, then verified; memory stays flat for a result of any size.
-            if (!await StreamedDownload.RunAsync(_storage, _time, run.Bucket!, run.JobPrefix + file.Path, partial, file.Bytes, _downloadStall, cancellationToken).ConfigureAwait(false))
+            if (!await StreamedDownload.RunAsync(_storage, _time, RunScope.Of(run), run.Bucket!, run.JobPrefix + file.Path, partial, file.Bytes, _downloadStall, cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidDataException("A result file is listed but is not in the bucket.");
             }
