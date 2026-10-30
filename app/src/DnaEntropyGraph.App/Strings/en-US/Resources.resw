@@ -2922,6 +2922,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="PrototypeImportNothingFound" xml:space="preserve">
     <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
   </data>
+  <data name="PrototypeImportOnlyRemoved" xml:space="preserve">
+    <value>The earlier runs found here are either in Runs already or ones you removed from the list. To see the removed ones again, choose Reset all settings on the Settings page (this also resets your other settings).</value>
+  </data>
   <data name="PrototypeImportAlreadyDone" xml:space="preserve">
     <value>Every earlier run found is already in Runs.</value>
   </data>

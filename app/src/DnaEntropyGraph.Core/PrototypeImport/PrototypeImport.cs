@@ -152,6 +152,13 @@ public sealed class PrototypeImporter(IRunRepository runs, Runs.ImportedRunDismi
         return scan.Runs.Where(run => !ids.Contains(JobIdFor(run.Folder)) && !dismissed.Contains(JobIdFor(run.Folder)) && !folders.Contains(Normalize(run.Folder))).ToList();
     }
 
+    /// <summary>Issue #915: how many of the scanned runs the user removed from the list earlier (so a rescan can say so, not "already in Runs").</summary>
+    public int CountRemoved(PrototypeScan scan)
+    {
+        var dismissed = dismissals?.Load() ?? new HashSet<string>();
+        return scan.Runs.Count(run => dismissed.Contains(JobIdFor(run.Folder)));
+    }
+
     /// <summary>Returns how many rows were added. A folder already in history, under any id, is left as it is.</summary>
     public async Task<int> ImportAsync(PrototypeScan scan, CancellationToken cancellationToken)
     {
