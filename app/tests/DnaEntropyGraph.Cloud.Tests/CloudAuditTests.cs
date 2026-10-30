@@ -426,6 +426,7 @@ public class CloudAuditTests
         [typeof(IProjectCatalogGateway)] = ([("CreateProjectAsync", "ProjectCatalog.CreateProject")], ["ListActiveProjectsAsync", "GetProjectAsync"]),
         [typeof(IQuotaGateway)] = ([("RequestQuotaIncreaseAsync", "Quota.RequestQuotaIncrease")], ["GetGpuQuotaAsync", "ReadQuotaAsync", "GetQuotaIncreaseEligibilityAsync"]),
         [typeof(IPricingCatalogGateway)] = ([], ["ListComputeSkusAsync"]),
+        [typeof(IBudgetGateway)] = ([("UpsertAsync", "Billing.UpsertBudget"), ("DeleteAsync", "Billing.DeleteBudget")], ["FindAsync"]),
     };
 
     [Fact]
@@ -481,6 +482,7 @@ public class CloudAuditTests
         _ when type == typeof(VmSpec) => Spec("job-9"),
         _ when type == typeof(VmIncarnation) => new VmIncarnation(1UL, null),
         _ when type == typeof(QuotaIncreaseRequest) => new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret),
+        _ when type == typeof(BudgetSpec) => new BudgetSpec("acct-1", "p", "i", 50m),
         _ when type == typeof(IReadOnlyList<string>) => new[] { "compute.googleapis.com" },
         _ => throw new NotSupportedException("teach CloudAuditTests.ArgFor to build a " + type.Name),
     };
