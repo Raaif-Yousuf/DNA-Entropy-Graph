@@ -1965,6 +1965,39 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.FromResult<Stream>(new MemoryStream(bytes, writable: false));
     }
 
+    /// <summary>Issue #588: same observable behaviour as <see cref="TryDownloadAsync"/> (scripted failures, hangs, live workers), written to a file; a failure or cancel leaves no file.</summary>
+    public async Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+    {
+        var source = await TryDownloadAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
+        if (source is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await using (source.ConfigureAwait(false))
+            await using (var target = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            {
+                await source.CopyToAsync(target, 81920, cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            try
+            {
+                File.Delete(destinationPath);
+            }
+            catch (IOException)
+            {
+            }
+
+            throw;
+        }
+    }
+
     public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
     {
         if (ConsumeHang())

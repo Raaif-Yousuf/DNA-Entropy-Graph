@@ -3088,7 +3088,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
   </data>
   <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder inside your output folder (usually Downloads), named after the run followed by "exports" and a short code. Check that your output folder is still there and has free space, then choose Save picture again.</value>
   </data>
   <data name="Results_ExportPngNoFolder" xml:space="preserve">
     <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
@@ -3239,5 +3239,161 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
     <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
+  </data>
+  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
+    <value>Open cloud activity log</value>
+  </data>
+  <data name="CloudActivityLogNone" xml:space="preserve">
+    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
+  </data>
+  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
+    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
+  </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
+  </data>
+  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
+    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
+  </data>
+  <data name="SettingsBudgetHeader.Text" xml:space="preserve">
+    <value>Budget alert</value>
+  </data>
+  <data name="SettingsBudgetExplainer.Text" xml:space="preserve">
+    <value>Google can email you when this project's spending nears an amount you choose: at 50%, 90% and 100% of it each month. The emails go to the people who administer your billing account. This is Google's own count, so it is a good check on the estimate this app shows. The amount is in the currency of your billing account.</value>
+  </data>
+  <data name="BudgetAmountBox.Header" xml:space="preserve">
+    <value>Monthly amount</value>
+  </data>
+  <data name="BudgetSaveButton.Content" xml:space="preserve">
+    <value>Create or update the alert</value>
+  </data>
+  <data name="BudgetRemoveButton.Content" xml:space="preserve">
+    <value>Remove the alert</value>
+  </data>
+  <data name="BudgetOpenConsoleLink.Content" xml:space="preserve">
+    <value>Open the matching Google page</value>
+  </data>
+  <data name="BudgetCopyRequestButton.Content" xml:space="preserve">
+    <value>Copy a request for my administrator</value>
+  </data>
+  <data name="BudgetNeedsProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen yet. Finish the setup steps first, then come back here to create the alert.</value>
+  </data>
+  <data name="BudgetStatusNone" xml:space="preserve">
+    <value>There is no budget alert yet. Press Create or update the alert to make one.</value>
+  </data>
+  <data name="BudgetStatusExists" xml:space="preserve">
+    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {1} of {0} a month.</value>
+  </data>
+  <data name="BudgetSaved" xml:space="preserve">
+    <value>Done. Google will email your billing administrators when spending reaches {1} of {0} a month.</value>
+  </data>
+  <data name="BudgetRemoved" xml:space="preserve">
+    <value>The budget alert was removed.</value>
+  </data>
+  <data name="BudgetRemovedNone" xml:space="preserve">
+    <value>There was no budget alert left to remove. Press Create or update the alert if you want one.</value>
+  </data>
+  <data name="BudgetStatusExistsNoAmount" xml:space="preserve">
+    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {0} of the amount that budget follows (last month's spend), so no fixed amount is shown here. To set a fixed amount instead, type one in the box and press Create or update the alert.</value>
+  </data>
+  <data name="BudgetStatusNoThresholdsNoAmount" xml:space="preserve">
+    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. To add them, type a monthly amount in the box and press Create or update the alert.</value>
+  </data>
+  <data name="BudgetStatusNoThresholds" xml:space="preserve">
+    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. Press Create or update the alert to add them.</value>
+  </data>
+  <data name="BudgetThresholdItem" xml:space="preserve">
+    <value>{0}%</value>
+  </data>
+  <data name="BudgetThresholdsJoiner" xml:space="preserve">
+    <value>, </value>
+  </data>
+  <data name="BudgetThresholdsAnd" xml:space="preserve">
+    <value>{0} and {1}</value>
+  </data>
+  <data name="BudgetError_ApiEnablePermission" xml:space="preserve">
+    <value>Your Google account is not allowed to switch on the Cloud Billing Budget API for this project. Open the matching Google page and switch it on there, then press Create or update the alert again.</value>
+  </data>
+  <data name="BudgetError_ApiReadPermission" xml:space="preserve">
+    <value>Your Google account is not allowed to see which Google services are switched on for this project, so nothing was saved. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
+  </data>
+  <data name="BudgetError_PermissionRemove" xml:space="preserve">
+    <value>Your Google account is not allowed to remove budgets on this billing account. Open the matching Google page and remove the alert there.</value>
+  </data>
+  <data name="BudgetAmountInvalid" xml:space="preserve">
+    <value>The monthly amount must be a number of 1 or more. Type an amount such as 50 and press the button again.</value>
+  </data>
+  <data name="BudgetError_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my administrator and send it to your billing administrator.</value>
+  </data>
+  <data name="BudgetError_NoBilling" xml:space="preserve">
+    <value>This project has no billing account yet, so there is nothing to put a budget on. Open the matching Google page and link a billing account to the project.</value>
+  </data>
+  <data name="BudgetError_Network" xml:space="preserve">
+    <value>Google could not be reached. Check your internet connection and press the button again.</value>
+  </data>
+  <data name="BudgetError_Other" xml:space="preserve">
+    <value>Google did not accept the budget. Press the button to try again.</value>
+  </data>
+  <data name="BudgetRequestText" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. Please create a monthly budget of {1} on our billing account with email alerts at 50%, 90% and 100% of it. Or give me the Billing Account Costs Manager role on the account so I can create it myself. Thank you.</value>
+  </data>
+  <data name="BudgetRequestCopied" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to your billing administrator.</value>
+  </data>
+  <data name="BudgetStatusApiReadNoAccess" xml:space="preserve">
+    <value>Your Google account is not allowed to see which Google services are switched on for this project, so the app cannot check for a budget alert and Create or update is turned off. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
+  </data>
+  <data name="BudgetRequestCopied_ApiRead" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to a project owner of your Google Cloud project.</value>
+  </data>
+  <data name="BudgetRequestCopied_OrgPolicy" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetRequestCopyFailed" xml:space="preserve">
+    <value>The request could not be copied. Press Copy a request for my administrator again in a moment.</value>
+  </data>
+  <data name="BudgetStatusNoAccess" xml:space="preserve">
+    <value>This Google account cannot see budgets on your billing account, so an existing alert is not shown and Create or update is turned off. Ask your billing administrator to give you the Billing Account Costs Manager role, then open Settings again.</value>
+  </data>
+  <data name="BudgetStatusBillingReadNoAccess" xml:space="preserve">
+    <value>Your Google account is not allowed to see which billing account this project uses, so the app cannot check for a budget alert and Create or update is turned off. Ask a project owner to give you access to the project, then open Settings again.</value>
+  </data>
+  <data name="BudgetStatusBilling" xml:space="preserve">
+    <value>Billing looks switched off for this project, so the app cannot check for a budget alert and Create or update is turned off. Open the matching Google page and turn billing back on.</value>
+  </data>
+  <data name="BudgetStatusOrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization blocked checking for a budget alert, so Create or update is turned off. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetStatusApiDisabled" xml:space="preserve">
+    <value>A Google service the app needs to check for a budget alert is switched off for this project, so Create or update is turned off. Open the matching Google page and switch it on.</value>
+  </data>
+  <data name="BudgetStatusNetwork" xml:space="preserve">
+    <value>Google could not be reached, so the app could not check for a budget alert and Create or update is turned off. Check your internet connection, then open Settings again.</value>
+  </data>
+  <data name="BudgetError_BillingReadPermission" xml:space="preserve">
+    <value>Your Google account is not allowed to see which billing account this project uses, so nothing was saved. Ask a project owner to give you access to the project, then press the button again.</value>
+  </data>
+  <data name="BudgetStatusCouldNotCheck" xml:space="preserve">
+    <value>The app could not check for an existing budget alert, so Create or update is turned off for now. Open Settings again to check once more.</value>
+  </data>
+  <data name="BudgetError_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetError_ApiDisabled" xml:space="preserve">
+    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again.</value>
+  </data>
+  <data name="BudgetError_BillingDisabled" xml:space="preserve">
+    <value>Billing is switched off for this project, so a budget cannot be made. Open the matching Google page to turn it back on.</value>
+  </data>
+  <data name="BudgetRequestText_ApiRead" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. The app cannot check which Google services are switched on for this project. Please give my Google account the Service Usage Viewer role on the project so I can set up a budget alert. Thank you.</value>
+  </data>
+  <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
   </data>
 </root>

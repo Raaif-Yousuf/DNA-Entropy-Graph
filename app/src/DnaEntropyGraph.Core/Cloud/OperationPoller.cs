@@ -77,15 +77,14 @@ public static class OperationPoller
             }
 
             firstRead = false;
-            using var deadlineSource = new CancellationTokenSource(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, clock);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineSource.Token);
+            using var linked = new Audit.DeadlineSource(cancellationToken, remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, clock);
 
             OperationPoll<T> snapshot;
             try
             {
                 snapshot = await poll(linked.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadlineSource.IsCancellationRequested)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && linked.Token.IsCancellationRequested)
             {
                 return TimedOut<T>(deadline);
             }

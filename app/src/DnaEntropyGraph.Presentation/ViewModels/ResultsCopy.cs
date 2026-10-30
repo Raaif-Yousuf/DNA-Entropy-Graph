@@ -82,6 +82,8 @@ public static class ResultsCopy
     public const string NotesSaveFailed = "Results_NotesSaveFailed";
     public const string NotesRunGone = "Results_NotesRunGone";
     public const string NotesEditedDuringSave = "Results_NotesEditedDuringSave";
+    /// <summary>Issue #916: saved, but the note was longer than the limit (<c>{0}</c>) and its end was cut off.</summary>
+    public const string NotesShortened = "Results_NotesShortened";
 
     // The worker's direction tokens (DirectionKey maps a token to one of these).
     public const string DirectionBothCombined = "Results_Direction_BothCombined";
@@ -127,7 +129,7 @@ public static class ResultsCopy
     [
         NoRun, FolderMissing, ReadFailed, StatsNone, StatsUnreadable, FileActionFailed, OpenFolderFailed, CopyFailed, ExportPngFailed, ExportPngNoFolder, ExportPngFailedInExports,
         IgvNoFiles, IgvNotFound, IgvLaunchFailed, IgvRejected, IgvNoReply, IgvNoAnswer, ViewerUnsafePath, IgvPathUnsendable, IgvNoGenome, IgvFirstInputOnly,
-        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed, NotesRunGone, NotesEditedDuringSave,
+        GeneiousNoFiles, GeneiousNotFound, GeneiousLaunchFailed, NotesSaved, NotesSaveFailed, NotesRunGone, NotesEditedDuringSave, NotesShortened,
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
         ExportPngTitle, ExportPngXAxis, ExportPngYAxis, GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
@@ -136,6 +138,6 @@ public static class ResultsCopy
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, CostEstimate, CostEstimateSpot, CostShort, CostShortSpot];
+    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, NotesShortened, CostEstimate, CostEstimateSpot, CostShort, CostShortSpot];
 }
 

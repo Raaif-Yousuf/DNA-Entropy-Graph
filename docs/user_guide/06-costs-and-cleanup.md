@@ -183,6 +183,25 @@ this app created.*
 - In **Settings > Budget**, you can set a monthly spending warning (a friendly reminder,
   $50 a month by default) or a hard stop that disables the Run button once you reach it.
 
+## Get an email from Google when spending gets high
+
+The estimate in this app is only an estimate. Google keeps its own count and can email you when
+your spending nears an amount you choose. In **Settings > Budget alert**, type a monthly amount
+(50 is suggested, in the currency of your billing account) and press **Create or update the
+alert**. Google then emails the people who administer your billing account at 50%, 90% and 100%
+of that amount each month. The alert watches this project only, and the app switches the Cloud
+Billing Budget API on for you the first time. Press **Remove the alert** to delete it.
+
+Creating a budget needs a role on the **billing account**, not just on the project, and the person
+who made the project is often not a billing administrator. If Google refuses, the group says so and
+offers two things: **Open the matching Google page** (the console page for your billing account) and
+**Copy a request for my administrator**, which you can paste into an email. Once they make
+the budget themselves or give you the Billing Account Costs Manager role, press the button again.
+The group also tells you what state the alert is in. If the alert follows last month's spend instead of a fixed amount (a budget made in Google's own console), it says so and leaves the amount box empty; type an amount and press **Create or update the alert** to set a fixed one (with the box empty, the button asks for an amount and changes nothing). If you press **Remove the alert** and there is nothing left to remove (it was already deleted elsewhere), it says there was nothing to remove rather than "removed". If a budget somehow has no email thresholds, it says Google sends no warnings and tells you to press **Create or update the alert** (when the amount box is empty it tells you to type an amount first). If your Google account is not allowed to switch on the Cloud Billing Budget API, the group offers one thing: **Open the matching Google page**, where you switch it on. If your Google account is not even allowed to see which Google services are on for the project, nothing is saved (so an alert you cannot see is never overwritten) and the group offers **Copy a request for my administrator**, a request to a project owner for the Service Usage Viewer role (the confirmation after copying names the project owner). The same holds when the group first opens: if it cannot read what Google holds (no access, or no connection), **Create or update the alert** and **Remove the alert** are turned off until a look succeeds, and the line under the group says what to do for that cause (ask a billing administrator for the Billing Account Costs Manager role, ask a project owner, open the Google page that turns billing back on, send your organization's administrator the copied request, check your internet connection, or open Settings again). Changing the selected project without reopening Settings also turns both buttons off until the next look succeeds.
+
+This alert only emails you; it does not stop anything from running. Use the spending cap in
+Settings to stop new runs.
+
 ## Spot computers
 
 A Spot computer is a cheaper rented computer that Google can take back (Spot). It is off in this version and the New run page has no switch for it yet. When it is on and Google takes the computer back in the middle of a run, the app deletes it and starts the run again, once, on a normal computer, so the run still finishes; the run's history row records the one interruption.
