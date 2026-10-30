@@ -473,12 +473,13 @@ public sealed partial class ResultsViewModel : ObservableObject
                     var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
 
                     // A run's own folder must still be there (one the user deleted or moved is not brought back with a lone picture in it);
-                    // only the exports folder of an earlier-version run is made here, with whatever parents it lacks, and all of it is
-                    // taken away again if nothing was written.
+                    // only the exports folder of an earlier-version run is made here (never its root), and it is taken away again if
+                    // nothing was written.
                     IReadOnlyList<string> made = [];
                     if (ownFolder)
                     {
-                        made = RunOutputFolders.CreateFolderChain(target);
+                        // The export root (usually Downloads) must still be there: a deleted one is not brought back; only the exports folder is made.
+                        made = RunOutputFolders.CreateFolderChain(target, _exportRoot!.Parent());
                     }
                     else if (!Directory.Exists(target))
                     {
@@ -571,7 +572,9 @@ public sealed partial class ResultsViewModel : ObservableObject
         var generation = Volatile.Read(ref _loadGeneration);
         var capturedNotesText = NotesText;
         var capturedTagsText = TagsText;
-        var notes = string.IsNullOrWhiteSpace(NotesText) ? null : RunTags.ClampNotes(NotesText.Trim());
+        var typedNotes = string.IsNullOrWhiteSpace(NotesText) ? null : NotesText.Trim();
+        var notes = RunTags.ClampNotes(typedNotes);
+        var notesShortened = typedNotes is not null && notes!.Length < typedNotes.Length;
         var tags = RunTags.ParseInput(TagsText);
         bool found;
         try
@@ -614,7 +617,10 @@ public sealed partial class ResultsViewModel : ObservableObject
             TagsText = RunTags.Format(tags);
         }
 
-        AnnotationsStatusText = _strings.GetString(notesUnchanged && tagsUnchanged ? ResultsCopy.NotesSaved : ResultsCopy.NotesEditedDuringSave);
+        // Issue #916: "Saved." must not hide that the end of a note was cut off. Typing during the save is the more urgent message.
+        AnnotationsStatusText = notesUnchanged && tagsUnchanged
+            ? (notesShortened ? Format(ResultsCopy.NotesShortened, RunTags.MaxNotesLength) : _strings.GetString(ResultsCopy.NotesSaved))
+            : _strings.GetString(ResultsCopy.NotesEditedDuringSave);
     }
 
     private bool IsStillShowing(string jobId, int generation)

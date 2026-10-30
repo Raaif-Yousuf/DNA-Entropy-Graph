@@ -3030,6 +3030,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
     <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
   </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but the note was longer than {0} characters, so the end was cut off. To choose what stays, shorten the note yourself and press Save notes again.</value>
+  </data>
   <data name="Results_NotesEditedDuringSave" xml:space="preserve">
     <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>
   </data>
@@ -3037,7 +3040,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
   </data>
   <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder inside your output folder (usually Downloads), named after the run followed by "exports" and a short code. Check that your output folder is still there and has free space, then choose Save picture again.</value>
   </data>
   <data name="Results_ExportPngNoFolder" xml:space="preserve">
     <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
