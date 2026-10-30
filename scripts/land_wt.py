@@ -137,10 +137,7 @@ def _kernel32() -> Any:  # noqa: ANN401  (a ctypes library object)
     return _K32[0]
 
 
-def _taskkill_tree(pid: int) -> None:
-    """`taskkill /T /F /PID <pid>`: that PID and its descendants only, never by image name."""
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
+_taskkill_tree = wt_venv.taskkill_tree
 
 
 def _proc_fields(pid: int | str) -> tuple[str, int, int] | None:
@@ -256,15 +253,7 @@ def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
     return True
 
 
-def kill_tree(proc: subprocess.Popen[bytes]) -> None:
-    """Kill `proc` and everything it started: taskkill /T on exactly this PID (never by image name), or the process group."""
-    if os.name == "nt":
-        _taskkill_tree(proc.pid)
-    else:
-        with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-    with contextlib.suppress(OSError):
-        proc.kill()
+kill_tree = wt_venv.kill_tree
 
 
 def run_bounded(
@@ -453,12 +442,7 @@ def run_premerge(wt: Path, venv: Path, full: bool, timeout: float | None = None)
     py = wt / VENV_REL / "Scripts" / "python.exe"
     if not py.is_file():
         py = wt / VENV_REL / "bin" / "python"
-    argv = [str(py), str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", str(py)]
-    if not full:
-        argv.append("--fast")
-    heavy = wt / "scripts" / "heavy.py"
-    if heavy.is_file():  # one machine-wide heavy slot for the whole run (RAM)
-        argv = [str(py), str(heavy), "--lane", f"land-{wt.name}"[:64], "--", *argv]
+    argv = wt_venv.premerge_argv(wt, py, full=full, lane_prefix="land")
     env = dict(os.environ)
     env["PYTHONPATH"] = str(wt / "worker" / "src")
     try:

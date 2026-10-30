@@ -6,7 +6,11 @@ NEVER follows it. Never shutil.rmtree or Remove-Item -Recurse on a path that may
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
+import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 VENV_REL = Path("worker") / ".venv"
@@ -42,11 +46,52 @@ def unlink_dir_link(link: Path) -> None:
     if not os.path.lexists(link):
         return
     if os.path.isjunction(link) or os.path.islink(link):
-        if os.name == "nt":
-            os.rmdir(link)  # removes the reparse point only
-        else:
-            os.unlink(link)
+        _remove_link_only(link)
     else:
         raise LinkError(f"{link} is a real directory, not a link; refusing to remove it")
     if os.path.lexists(link):
         raise LinkError(f"could not remove the link {link}")
+
+
+def _remove_link_only(link: Path) -> None:
+    """Take the reparse point / symlink only, never its target. A junction or directory link goes with rmdir on Windows,
+    a file symlink only with unlink: try the first, fall back to the second, and report any OSError as a LinkError."""
+    try:
+        if os.name == "nt":
+            try:
+                os.rmdir(link)
+            except OSError:
+                os.unlink(link)  # an NT file symlink: rmdir says NotADirectoryError
+        else:
+            os.unlink(link)
+    except OSError as err:
+        raise LinkError(f"could not remove the link {link}: {err}") from err
+
+
+def taskkill_tree(pid: int) -> None:
+    """`taskkill /T /F /PID <pid>`: that PID and its descendants only, never by image name."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
+
+
+def kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill `proc` and everything it started: taskkill /T on exactly this PID (never by image name), or the process group."""
+    if os.name == "nt":
+        taskkill_tree(proc.pid)
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def premerge_argv(wt: Path, py: Path, *, full: bool, lane_prefix: str, extra: Sequence[str] = ()) -> list[str]:
+    """The premerge command line, wrapped in heavy.py's one machine-wide slot when the worktree has it."""
+    argv = [str(py), str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", str(py)]
+    if not full:
+        argv.append("--fast")
+    argv += list(extra)
+    heavy = wt / "scripts" / "heavy.py"
+    if heavy.is_file():
+        argv = [str(py), str(heavy), "--lane", f"{lane_prefix}-{wt.name}"[:64], "--", *argv]
+    return argv

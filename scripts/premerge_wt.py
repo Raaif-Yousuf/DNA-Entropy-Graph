@@ -16,12 +16,14 @@ What it does:
   `<wt>\\worker\\.venv` is refused and untouched; afterwards it asserts the shared venv's python still exists.
 - Removal is `os.rmdir`/`os.unlink` of the link only (wt_venv.py), never a recursive delete.
 - The primary checkout has a real venv: run premerge.py there directly (this script refuses).
-Exit code: premerge's. 2 refused, 4 shared venv damaged, 130 interrupted.
+Exit code: premerge's. 2 refused, 4 shared venv damaged (overrides everything else), 5 link could not be removed,
+124 timed out (tree killed), 130 interrupted.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import subprocess
 import sys
@@ -37,13 +39,30 @@ import wt_venv  # noqa: E402
 _RECREATE = 'cd worker; uv venv --python 3.12; uv pip install -e ".[dev,genes]"'
 EXIT_REFUSED = 2
 EXIT_VENV_GONE = 4
+EXIT_CLEANUP_FAILED = 5
+EXIT_TIMEOUT = 124
 EXIT_INTERRUPTED = 130
+TIMEOUT_SECONDS = 120 * 60.0  # the whole run, heavy.py slot wait included (same bound as land_wt.py)
 
-Runner = Callable[[list[str], dict[str, str], Path], int]
+Runner = Callable[[list[str], dict[str, str], Path, "float | None"], int]
 
 
-def default_runner(argv: list[str], env: dict[str, str], cwd: Path) -> int:
-    return subprocess.call(argv, env=env, cwd=cwd)
+def default_runner(argv: list[str], env: dict[str, str], cwd: Path, timeout: float | None = None) -> int:
+    """Run the gate with inherited stdio. On timeout or Ctrl-C the tree THIS call started (by PID) is killed first."""
+    proc = subprocess.Popen(argv, env=env, cwd=cwd, **({} if os.name == "nt" else {"start_new_session": True}))  # type: ignore[arg-type]
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        wt_venv.kill_tree(proc)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+        print(f"ERROR: premerge timed out after {int(timeout or 0)} s and its process tree was killed")
+        return EXIT_TIMEOUT
+    except BaseException:
+        wt_venv.kill_tree(proc)  # Ctrl-C or anything else: no orphan gate keeps running after the link is gone
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+        raise
 
 
 def is_primary_checkout(root: Path) -> bool:
@@ -52,10 +71,13 @@ def is_primary_checkout(root: Path) -> bool:
 
 
 def primary_venv(root: Path) -> Path:
-    """`<primary checkout>\\worker\\.venv`, from git's common dir."""
-    out = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root, capture_output=True, text=True, check=True
-    )
+    """`<primary checkout>\\worker\\.venv`, from git's common dir. Raises wt_venv.LinkError when git cannot say."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root, capture_output=True, text=True, check=True
+        )
+    except (subprocess.CalledProcessError, OSError) as err:
+        raise wt_venv.LinkError(f"could not ask git for the primary checkout ({err})") from err
     return Path(out.stdout.strip()).parent / wt_venv.VENV_REL
 
 
@@ -72,6 +94,7 @@ def run(
     runner: Runner = default_runner,
     extra: Sequence[str] = (),
     fast: bool = True,
+    timeout: float | None = TIMEOUT_SECONDS,
 ) -> int:
     link = wt / wt_venv.VENV_REL
     shared_py = wt_venv.venv_python(venv)
@@ -86,42 +109,52 @@ def run(
     env = dict(os.environ)
     src = str(wt / "worker" / "src")
     env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    code = EXIT_INTERRUPTED
+    code: int | None = None
+    cleanup_error: wt_venv.LinkError | None = None
     try:
+        py: Path | None = shared_py
         if junction:
-            wt_venv.make_dir_link(link, venv)
-            py = wt_venv.venv_python(link)
-            if py is None:
-                print(f"ERROR: the venv link {link} does not reach a python")
-                return EXIT_REFUSED
-        else:
-            py = shared_py
-        argv = [str(py), str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", str(py)]
-        if fast:
-            argv.append("--fast")
-        argv += list(extra)
-        heavy = wt / "scripts" / "heavy.py"
-        if heavy.is_file():  # one machine-wide heavy slot for the whole run (RAM)
-            argv = [str(py), str(heavy), "--lane", f"premerge-{wt.name}"[:64], "--", *argv]
-        try:
-            code = runner(argv, env, wt)
-        except KeyboardInterrupt:
-            print("ERROR: interrupted")
-            code = EXIT_INTERRUPTED
+            try:
+                wt_venv.make_dir_link(link, venv)
+            except wt_venv.LinkError as err:
+                print(f"ERROR: {err}. Run without --junction, or fix the link and retry")
+                code = EXIT_REFUSED
+                py = None
+            else:
+                py = wt_venv.venv_python(link)
+                if py is None:
+                    print(f"ERROR: the venv link {link} does not reach a python")
+                    code = EXIT_REFUSED
+        if py is not None:
+            argv = wt_venv.premerge_argv(wt, py, full=not fast, lane_prefix="premerge", extra=extra)
+            try:
+                code = runner(argv, env, wt, timeout)
+            except KeyboardInterrupt:
+                print("ERROR: interrupted")
+                code = EXIT_INTERRUPTED
     finally:
         if junction or os.path.lexists(link):
-            wt_venv.unlink_dir_link(link)
+            try:
+                wt_venv.unlink_dir_link(link)
+            except wt_venv.LinkError as err:
+                cleanup_error = err
+                shown = "unknown (premerge raised)" if code is None else str(code)
+                print(f"ERROR: could not remove {link}: {err}. premerge's exit code {shown}.")
+                print("Remove the link by hand (rmdir, never a recursive delete)")
     if wt_venv.venv_python(venv) is None:
         _say_gone(venv)
         return EXIT_VENV_GONE
-    return code
+    if cleanup_error is not None:
+        return EXIT_CLEANUP_FAILED
+    return EXIT_INTERRUPTED if code is None else code
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, runner: Runner = default_runner) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0] if __doc__ else None)
     ap.add_argument("--junction", action="store_true", help="link <wt>\\worker\\.venv to the shared venv for the run (always unlinked)")
     ap.add_argument("--venv", type=Path, default=None, help="the shared venv (default: the primary checkout's worker/.venv)")
     ap.add_argument("--full", action="store_true", help="run the full gate, not --fast (only with no agent mid-edit)")
+    ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS, help="seconds before the gate tree is killed (default 7200)")
     ap.add_argument("extra", nargs="*", help="further premerge.py arguments, after --")
     args = ap.parse_args(argv)
     wt = Path.cwd().resolve()
@@ -131,8 +164,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if is_primary_checkout(wt):
         print("ERROR: this is the primary checkout, which has a real venv. Run scripts\\premerge.py --fast directly")
         return EXIT_REFUSED
-    venv = args.venv or primary_venv(wt)
-    return run(wt, venv, junction=args.junction, extra=args.extra, fast=not args.full)
+    try:
+        venv = args.venv or primary_venv(wt)
+    except wt_venv.LinkError as err:
+        print(f"ERROR: {err}. Pass --venv <primary checkout>\\worker\\.venv")
+        return EXIT_REFUSED
+    return run(wt, venv, junction=args.junction, extra=args.extra, fast=not args.full, runner=runner, timeout=args.timeout)
 
 
 if __name__ == "__main__":
