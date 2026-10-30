@@ -17,6 +17,14 @@ public interface IGcpAccount
     /// <summary>The project the current account chose in the setup wizard (stored with that account, so switching accounts switches it); null when signed out or none chosen yet.</summary>
     string? SelectedProjectId { get; }
 
+    /// <summary>
+    /// Issue #830: the selected project AND the current account, read together from ONE snapshot of the active account (reading
+    /// <see cref="SelectedProjectId"/> and <see cref="CurrentAccount"/> separately can pair one account's project with another's sub when a
+    /// switch lands between the two reads). Null when signed out or no project is chosen. Only the selection path (wizard, setup, shell pill,
+    /// diagnostics, a new run's capture, the Cloud page listing, import) may ask; everything that acts on an existing run uses that run's own scope.
+    /// </summary>
+    CloudScope? SelectedScope();
+
     /// <summary>The account calls are made as; null when none is signed in.</summary>
     AccountInfo? CurrentAccount { get; }
 

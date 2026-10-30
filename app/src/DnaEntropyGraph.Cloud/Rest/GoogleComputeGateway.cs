@@ -43,26 +43,25 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     private readonly ComputeService _service;
     private readonly CloudCallPipeline _pipeline;
     private readonly GoogleCloudOptions _options;
-    private readonly Func<string?> _selectedProjectId;
 
-    public GoogleComputeGateway(ComputeService service, CloudCallPipeline pipeline, GoogleCloudOptions options, Func<string?> selectedProjectId)
+    public GoogleComputeGateway(ComputeService service, CloudCallPipeline pipeline, GoogleCloudOptions options)
     {
         _service = service;
         _pipeline = pipeline;
         _options = options;
-        _selectedProjectId = selectedProjectId;
     }
 
-    public async Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
+    public async Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(spec);
 
         // Hard Rule 10: a spec missing a label or a lifetime limit throws here, before any request exists.
         var labels = spec.ToLabels();
+        using var _account = CallAccount.Use(scope);
 
-        // Create is the one call that carries its own project (spec.ProjectId); the rest use the selected one. They must agree, or a
-        // later find, stop or delete would look in a different project from the one that holds the VM.
-        if (_selectedProjectId() is not { Length: > 0 } selected || !string.Equals(selected, spec.ProjectId, StringComparison.Ordinal))
+        // Create is the one call that carries its own project (spec.ProjectId); it must agree with the scope, or a later find, stop or
+        // delete would look in a different project from the one that holds the VM.
+        if (!string.Equals(scope.ProjectId, spec.ProjectId, StringComparison.Ordinal))
         {
             throw new CloudOperationException(
                 new CloudError("PROJECT_MISMATCH", null, "The VM spec names a different Google Cloud project from the selected one, so no VM was created."),
@@ -112,9 +111,10 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// which falls back to the requested zones on an empty answer, not a safety decision like the VM listings).
     /// THEORY (unverified, no live project): that the <c>name = "nvidia-l4"</c> filter syntax matches.
     /// </summary>
-    public async Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         if (!LabelValuePattern.IsMatch(acceleratorType ?? string.Empty))
         {
             return [];
@@ -163,13 +163,14 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// stopped: the caller ends it. THEORY (unverified, no live project): that <c>instances.setScheduling</c> accepts <c>maxRunDuration</c> and
     /// <c>instanceTerminationAction</c> on a stopped instance.
     /// </summary>
-    public async Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+    public async Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(spec);
         ArgumentException.ThrowIfNullOrWhiteSpace(existingVmName);
         var reuse = spec with { ExistingVmName = existingVmName };
         var labels = reuse.ToLabels();
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         if (!string.Equals(project, spec.ProjectId, StringComparison.Ordinal))
         {
             throw new CloudOperationException(
@@ -311,9 +312,10 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// Issue #105: <c>instances.start</c> on the VM as it is, polled to <c>DONE</c>. No label, scheduling or metadata write (that is
     /// <see cref="ReuseVmAsync"/>). A 404 is <c>VM_NOT_FOUND</c>, never a silent success: the caller asked for a VM to run.
     /// </summary>
-    public async Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+    public async Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         ComputeData.Operation operation;
         try
         {
@@ -333,9 +335,10 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// The server filter is the query; every disk is checked again here, so one without both labels can never be returned. Regional disks list under
     /// <c>regions/..</c>, and their scope name is returned as the zone.
     /// </summary>
-    public async Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         if (!LabelValuePattern.IsMatch(installationId ?? string.Empty))
         {
             return [];
@@ -400,9 +403,10 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// for a regional disk, a region (<c>us-central1</c>), which goes to <c>regionDisks.delete</c> (a zonal delete of a regional disk is a 404, and a 404 here
     /// means "already gone"). Already gone is a success; a disk still attached is the platform's own 400, passed through.
     /// </summary>
-    public async Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
+    public async Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         var regional = !IsZoneName(zone);
         ComputeData.Operation operation;
         try
@@ -422,8 +426,11 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// <summary>A zone name ends in one letter after the region (<c>us-central1-a</c>); a region (<c>us-central1</c>) does not.</summary>
     internal static bool IsZoneName(string location) => System.Text.RegularExpressions.Regex.IsMatch(location ?? string.Empty, "-[a-z]$");
 
-    public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => GetAsync(RequireProject(), vmName, zone, cancellationToken);
+    public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+    {
+        using var _account = CallAccount.Use(scope);
+        return GetAsync(scope.ProjectId, vmName, zone, cancellationToken);
+    }
 
     /// <summary>
     /// Issue #91: <c>zoneOperations.list</c> filtered on the operation TYPE only, then matched on the client to this VM's incarnation: by the instance's numeric id
@@ -432,7 +439,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     /// the target link can never hide a real preemption. THEORY (unverified, no live project): that a preempted instance records an operation of type
     /// <c>compute.instances.preempted</c> with <c>targetId</c> set to the instance id, and that the type filter syntax matches (ToTest row #91).
     /// </summary>
-    public async Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
+    public async Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(incarnation);
         if (incarnation.InstanceId is null && incarnation.CreatedAt is null)
@@ -440,7 +447,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             return false;
         }
 
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         var targetSuffix = $"/zones/{zone}/instances/{vmName}";
         var paging = new PageTokenGuard();
         string? pageToken = null;
@@ -493,19 +501,20 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
     private const string PreemptedOperationType = "compute.instances.preempted";
 
-    public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => EndVmAsync(vmName, zone, delete: false, onAccepted: null, cancellationToken);
+    public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => EndVmAsync(scope, vmName, zone, delete: false, onAccepted: null, cancellationToken);
 
-    public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => EndVmAsync(vmName, zone, delete: true, onAccepted: null, cancellationToken);
+    public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => EndVmAsync(scope, vmName, zone, delete: true, onAccepted: null, cancellationToken);
 
     /// <summary>
     /// Issue #113: <c>instances.stop</c> or <c>instances.delete</c> in two steps the caller can tell apart: the request (the operation insert), after which
     /// <paramref name="onAccepted"/> is called, and the wait for the operation to reach <c>DONE</c>. A VM that is already gone (404 on the insert) is accepted and done.
     /// </summary>
-    public async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    public async Task EndVmAsync(CloudScope scope, string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
         ComputeData.Operation operation;
         try
         {
@@ -523,19 +532,20 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         await AwaitOperationAsync(project, zone, operation, goneIsDone: true, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
-        => ListByLabelAsync("job-id", jobId, cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
+        => ListByLabelAsync(scope, "job-id", jobId, cancellationToken);
 
-    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
-        => ListByLabelAsync("installation-id", installationId, cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
+        => ListByLabelAsync(scope, "installation-id", installationId, cancellationToken);
 
-    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
-        => ListByLabelAsync(null, null, cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken)
+        => ListByLabelAsync(scope, null, null, cancellationToken);
 
     /// <summary>The app label is always part of the query; with <paramref name="labelKey"/> null it is the whole query (every VM of ours, issue #60).</summary>
-    private async Task<IReadOnlyList<VmDescriptor>> ListByLabelAsync(string? labelKey, string? labelValue, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<VmDescriptor>> ListByLabelAsync(CloudScope scope, string? labelKey, string? labelValue, CancellationToken cancellationToken)
     {
-        var project = RequireProject();
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
 
         // A value no label can hold matches no VM, and it must never reach a filter expression.
         if (labelKey is not null && !LabelValuePattern.IsMatch(labelValue ?? string.Empty))
@@ -703,11 +713,6 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 }
             },
             cancellationToken);
-
-    private string RequireProject()
-        => _selectedProjectId() is { Length: > 0 } project
-            ? project
-            : throw new InvalidOperationException("No Google Cloud project is selected, so there is no project to ask Compute Engine about.");
 
     private static VmDescriptor ToDescriptor(ComputeData.Instance instance, string zone)
         => new(

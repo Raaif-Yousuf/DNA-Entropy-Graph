@@ -48,8 +48,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         _options = options;
     }
 
-    public async Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
+    public async Task<string> EnsureBucketAsync(CloudScope scope, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var installationId = _options.CurrentInstallationId;
         if (string.IsNullOrWhiteSpace(installationId))
         {
@@ -69,8 +71,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             : await CreateAsync(projectId, projectNumber, labels, retention, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
+    public async Task UploadAsync(CloudScope scope, string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
         ArgumentNullException.ThrowIfNull(content);
 
         // The Google client sends a seekable stream from offset 0 whatever its Position, so a stream positioned part way is
@@ -94,17 +97,24 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             replayable: content.CanSeek).ConfigureAwait(false);
     }
 
-    public async Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false)
+    public async Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        {
+        using var _account = CallAccount.Use(scope);
+        return await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false)
             ?? throw new CloudOperationException(new CloudError("NOT_FOUND", 404, $"No such object: {bucket}/{objectKey}"), CloudErrorKind.Other);
+    }
 
-    public async Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
+    public async Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        {
+        using var _account = CallAccount.Use(scope);
+        return await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
+    }
 
     // ------------------------------------------------------------------ issue #105: usage and cleanup of a prefix
 
-    public async Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    public async Task<PrefixUsage> GetPrefixUsageAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
         var count = 0;
         long bytes = 0;
         await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
@@ -119,8 +129,9 @@ internal sealed class GoogleStorageGateway : IStorageGateway
         return new PrefixUsage(count, bytes);
     }
 
-    public async Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<string>> ListChildPrefixesAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
         var children = new SortedSet<string>(StringComparer.Ordinal);
         await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: "/", cancellationToken).ConfigureAwait(false))
         {
@@ -134,8 +145,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     }
 
     /// <summary>Issue #91: deletes exactly one object by its exact name; one already gone (404) counts as deleted. One HTTP request through the pipeline.</summary>
-    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync(
+    public Task DeleteObjectAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        {
+        using var _account = CallAccount.Use(scope);
+        return _pipeline.ExecuteAsync(
             "Storage.DeleteObject",
             async ct =>
             {
@@ -155,14 +168,16 @@ internal sealed class GoogleStorageGateway : IStorageGateway
             cancellationToken,
             bypassBreaker: true,
             singleRequest: true);
+    }
 
     /// <summary>
     /// Lists the objects under the prefix (one page at a time) and deletes each by its exact name; one already gone (404) counts as deleted. A prefix that is
     /// not a folder path is refused before any request (<see cref="StoragePrefixes.RequireDeletable"/>), so a typo can never empty the bucket. Each delete is one
     /// HTTP request through the pipeline; a failure stops the sweep and throws, leaving the rest in place for the caller's read-back to report.
     /// </summary>
-    public async Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
+    public async Task<int> DeletePrefixAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
         StoragePrefixes.RequireDeletable(prefix);
         var deleted = 0;
         var manifestKey = prefix + ResultsBucket.ManifestObject;
@@ -256,8 +271,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     }
 
     /// <summary>Read-only: every bucket of ours in the project (issue #60). Never creates or repairs one.</summary>
-    public async Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(CloudScope scope, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var ours = await ListOursAsync(projectId, cancellationToken).ConfigureAwait(false);
         return ours
             .OrderBy(b => b.TimeCreatedDateTimeOffset ?? DateTimeOffset.MaxValue)
@@ -653,8 +670,10 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// stays flat however large the object is. A 404 is false with nothing on disk. Every failed attempt, a retry included, and a cancel deletes the file; a retry starts the
     /// file again from byte zero. Integrity is the caller's: it verifies the file's size and SHA-256 against <c>result.json</c>.
     /// </summary>
-    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync(
+    public Task<bool> TryDownloadToFileAsync(CloudScope scope, string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        {
+        using var _account = CallAccount.Use(scope);
+        return _pipeline.ExecuteAsync(
             "Storage.Download",
             async ct =>
             {
@@ -686,6 +705,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                 }
             },
             cancellationToken);
+    }
 
     private static void DeleteQuietly(string path)
     {

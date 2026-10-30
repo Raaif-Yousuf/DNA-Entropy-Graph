@@ -26,76 +26,76 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
 
     private static string Vm(string zone, string name) => $"zones/{zone}/instances/{name}";
 
-    public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.CreateVm", () => (Vm(zone, spec.VmName), spec.JobId), () => inner.CreateVmAsync(spec, zone, cancellationToken), started: true, mintRequestId: true, cancellationToken: cancellationToken);
+    public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.CreateVm", () => (Vm(zone, spec.VmName), spec.JobId), () => inner.CreateVmAsync(scope, spec, zone, cancellationToken), started: true, mintRequestId: true, cancellationToken: cancellationToken);
 
-    public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.ReuseVm", () => (Vm(zone, existingVmName), spec.JobId), () => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
+    public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.ReuseVm", () => (Vm(zone, existingVmName), spec.JobId), () => inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
 
-    public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StopVmAsync(vmName, zone, cancellationToken), cancellationToken: cancellationToken);
+    public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StopVmAsync(scope, vmName, zone, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.DeleteVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.DeleteVmAsync(vmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
+    public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.DeleteVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.DeleteVmAsync(scope, vmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
 
     // Issue #113 meets #245: IComputeGateway.EndVmAsync has a default body that only reports acceptance when the work is done, and says a gateway that can do better MUST override it.
     // Without this override the audit decorator would use that default and hide the real gateway's earlier acceptance report from the caller. It is audited under the same operation
     // names as the plain stop and delete, so the log reads the same whichever way the computer was ended.
-    public Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
-        => auditor.RunAsync(delete ? "Compute.DeleteVm" : "Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.EndVmAsync(vmName, zone, delete, onAccepted, cancellationToken), started: delete, cancellationToken: cancellationToken);
+    public Task EndVmAsync(CloudScope scope, string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+        => auditor.RunAsync(delete ? "Compute.DeleteVm" : "Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.EndVmAsync(scope, vmName, zone, delete, onAccepted, cancellationToken), started: delete, cancellationToken: cancellationToken);
 
-    public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.StartVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StartVmAsync(vmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
+    public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.StartVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StartVmAsync(scope, vmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
 
-    public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken)
-        => auditor.RunAsync("Compute.DeleteDisk", () => ($"zones/{zone}/disks/{diskName}", null), () => inner.DeleteDiskAsync(diskName, zone, cancellationToken), cancellationToken: cancellationToken);
+    public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.DeleteDisk", () => ($"zones/{zone}/disks/{diskName}", null), () => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken)
-        => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+    public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
+        => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
 
-    public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken)
-        => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+    public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken)
+        => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
 
-    public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-        => inner.GetVmAsync(vmName, zone, cancellationToken);
+    public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+        => inner.GetVmAsync(scope, vmName, zone, cancellationToken);
 
-    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
-        => inner.FindByJobIdAsync(jobId, cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
+        => inner.FindByJobIdAsync(scope, jobId, cancellationToken);
 
-    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken)
-        => inner.ListByInstallationAsync(installationId, cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
+        => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
 
-    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken)
-        => inner.ListAppVmsAsync(cancellationToken);
+    public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.ListAppVmsAsync(scope, cancellationToken);
 
     // Issue #91: a read, forwarded to the real gateway's own lookup (the interface default says "not preempted", which would silently disable the Spot retry).
-    public Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
-        => inner.WasPreemptedAsync(vmName, zone, incarnation, cancellationToken);
+    public Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
+        => inner.WasPreemptedAsync(scope, vmName, zone, incarnation, cancellationToken);
 }
 
 public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor auditor) : IStorageGateway, IAuditedGateway
 {
     public object Inner => inner;
 
-    public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.EnsureBucket", () => ($"projects/{projectId}", null), () => inner.EnsureBucketAsync(projectId, cancellationToken), bucket => $"buckets/{bucket}", started: true, cancellationToken: cancellationToken);
+    public Task<string> EnsureBucketAsync(CloudScope scope, CancellationToken cancellationToken)
+        => auditor.RunAsync("Storage.EnsureBucket", () => ($"projects/{scope.ProjectId}", null), () => inner.EnsureBucketAsync(scope, cancellationToken), bucket => $"buckets/{bucket}", started: true, cancellationToken: cancellationToken);
 
-    public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
+    public Task UploadAsync(CloudScope scope, string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
         // Only the job prefix is named: the part of the key below it can carry the user's own file name.
-        => auditor.RunAsync("Storage.Upload", () => PrefixOf(bucket, objectKey), () => inner.UploadAsync(bucket, objectKey, content, cancellationToken), cancellationToken: cancellationToken);
+        => auditor.RunAsync("Storage.Upload", () => PrefixOf(bucket, objectKey), () => inner.UploadAsync(scope, bucket, objectKey, content, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(bucket, prefix, cancellationToken), started: true, cancellationToken: cancellationToken);
+    public Task<int> DeletePrefixAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
+        => auditor.RunAsync("Storage.DeletePrefix", () => PrefixOf(bucket, prefix.TrimEnd('/') + "/_"), () => inner.DeletePrefixAsync(scope, bucket, prefix, cancellationToken), started: true, cancellationToken: cancellationToken);
 
     // Issue #91: the Spot retry clears the preempted attempt's status and progress files. The interface default refuses, so the audit must forward to the real delete.
-    public Task DeleteObjectAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => auditor.RunAsync("Storage.DeleteObject", () => PrefixOf(bucket, objectKey), () => inner.DeleteObjectAsync(bucket, objectKey, cancellationToken), cancellationToken: cancellationToken);
+    public Task DeleteObjectAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        => auditor.RunAsync("Storage.DeleteObject", () => PrefixOf(bucket, objectKey), () => inner.DeleteObjectAsync(scope, bucket, objectKey, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken)
-        => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+    public Task<PrefixUsage> GetPrefixUsageAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
+        => inner.GetPrefixUsageAsync(scope, bucket, prefix, cancellationToken);
 
-    public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken)
-        => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+    public Task<IReadOnlyList<string>> ListChildPrefixesAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
+        => inner.ListChildPrefixesAsync(scope, bucket, prefix, cancellationToken);
 
     private static (string Resource, string? JobId) PrefixOf(string bucket, string objectKey)
     {
@@ -103,34 +103,34 @@ public sealed class AuditedStorageGateway(IStorageGateway inner, CloudAuditor au
         return ($"buckets/{bucket}/{prefix}", jobId);
     }
 
-    public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => inner.DownloadAsync(bucket, objectKey, cancellationToken);
+    public Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        => inner.DownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-    public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken)
-        => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
+    public Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
+        => inner.TryDownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-    public Task<bool> TryDownloadToFileAsync(string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
-        => inner.TryDownloadToFileAsync(bucket, objectKey, destinationPath, cancellationToken);
+    public Task<bool> TryDownloadToFileAsync(CloudScope scope, string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
+        => inner.TryDownloadToFileAsync(scope, bucket, objectKey, destinationPath, cancellationToken);
 
-    public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken)
-        => inner.ListBucketsAsync(projectId, cancellationToken);
+    public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.ListBucketsAsync(scope, cancellationToken);
 }
 
 public sealed class AuditedProjectSetupGateway(IProjectSetupGateway inner, CloudAuditor auditor) : IProjectSetupGateway, IAuditedGateway
 {
     public object Inner => inner;
 
-    public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
-        => auditor.RunAsync("ProjectSetup.EnableComputeApi", () => ($"projects/{projectId}/services/compute.googleapis.com", null), () => inner.EnableComputeApiAsync(projectId, cancellationToken), cancellationToken: cancellationToken);
+    public Task EnableComputeApiAsync(CloudScope scope, CancellationToken cancellationToken)
+        => auditor.RunAsync("ProjectSetup.EnableComputeApi", () => ($"projects/{scope.ProjectId}/services/compute.googleapis.com", null), () => inner.EnableComputeApiAsync(scope, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
-        => inner.GetProjectStateAsync(projectId, cancellationToken);
+    public Task<ProjectLifecycleState> GetProjectStateAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.GetProjectStateAsync(scope, cancellationToken);
 
-    public Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => inner.IsBillingEnabledAsync(projectId, cancellationToken);
+    public Task<bool> IsBillingEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.IsBillingEnabledAsync(scope, cancellationToken);
 
-    public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => inner.IsComputeApiEnabledAsync(projectId, cancellationToken);
+    public Task<bool> IsComputeApiEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.IsComputeApiEnabledAsync(scope, cancellationToken);
 }
 
 public sealed class AuditedWorkerIdentityGateway(IWorkerIdentityGateway inner, CloudAuditor auditor) : IWorkerIdentityGateway, IAuditedGateway
@@ -138,8 +138,8 @@ public sealed class AuditedWorkerIdentityGateway(IWorkerIdentityGateway inner, C
     public object Inner => inner;
 
     // Creates the worker service account and its role, and writes the project and bucket bindings: the one IAM write seam.
-    public Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
-        => auditor.RunAsync("Iam.EnsureWorkerIdentity", () => ($"projects/{projectId}/buckets/{bucket}", null), () => inner.EnsureWorkerIdentityAsync(projectId, bucket, cancellationToken), started: true, cancellationToken: cancellationToken);
+    public Task<WorkerIdentity> EnsureWorkerIdentityAsync(CloudScope scope, string bucket, CancellationToken cancellationToken)
+        => auditor.RunAsync("Iam.EnsureWorkerIdentity", () => ($"projects/{scope.ProjectId}/buckets/{bucket}", null), () => inner.EnsureWorkerIdentityAsync(scope, bucket, cancellationToken), started: true, cancellationToken: cancellationToken);
 }
 
 public sealed class AuditedServiceEnablementGateway(IServiceEnablementGateway inner, CloudAuditor auditor) : IServiceEnablementGateway, IAuditedGateway
@@ -187,20 +187,20 @@ public sealed class AuditedQuotaGateway(IQuotaGateway inner, CloudAuditor audito
     public object Inner => inner;
 
     // The resource is the project and the quota metric (and region); the justification text and contact email in the request are never logged.
-    public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken)
+    public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(CloudScope scope, QuotaIncreaseRequest request, CancellationToken cancellationToken)
         => auditor.RunAsync(
             "Quota.RequestQuotaIncrease",
-            () => ($"projects/{projectId}/quotas/{request.Metric}" + (request.Region is { Length: > 0 } region ? $"/regions/{region}" : string.Empty), null),
-            () => inner.RequestQuotaIncreaseAsync(projectId, request, cancellationToken), cancellationToken: cancellationToken);
+            () => ($"projects/{scope.ProjectId}/quotas/{request.Metric}" + (request.Region is { Length: > 0 } region ? $"/regions/{region}" : string.Empty), null),
+            () => inner.RequestQuotaIncreaseAsync(scope, request, cancellationToken), cancellationToken: cancellationToken);
 
-    public Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
-        => inner.GetGpuQuotaAsync(projectId, region, acceleratorType, cancellationToken);
+    public Task<int> GetGpuQuotaAsync(CloudScope scope, string region, string acceleratorType, CancellationToken cancellationToken)
+        => inner.GetGpuQuotaAsync(scope, region, acceleratorType, cancellationToken);
 
-    public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
-        => inner.ReadQuotaAsync(projectId, cancellationToken);
+    public Task<QuotaReadResult> ReadQuotaAsync(CloudScope scope, CancellationToken cancellationToken)
+        => inner.ReadQuotaAsync(scope, cancellationToken);
 
-    public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
-        => inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken);
+    public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(CloudScope scope, string metric, CancellationToken cancellationToken)
+        => inner.GetQuotaIncreaseEligibilityAsync(scope, metric, cancellationToken);
 }
 
 public sealed class AuditedPricingCatalogGateway : IPricingCatalogGateway, IAuditedGateway

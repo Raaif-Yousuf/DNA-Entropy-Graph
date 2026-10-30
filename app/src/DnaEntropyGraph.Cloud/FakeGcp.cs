@@ -155,9 +155,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         _timeProvider = timeProvider;
     }
 
-    public bool IsSignedIn => _signedIn;
+    public bool IsSignedIn => ActiveIsDefault ? _signedIn : _modeled[_activeSub].SignedIn;
 
-    public string? SelectedProjectId => _selectedProjectId;
+    public string? SelectedProjectId => ActiveIsDefault ? _selectedProjectId : _modeled[_activeSub].SelectedProject;
 
     /// <summary>
     /// Issue #424's other half: WizardViewModel.SignInAsync reads
@@ -185,9 +185,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private string? _signInErrorCode;
 
-    public AccountInfo? CurrentAccount => _signedIn ? FakeAccount : null;
+    public AccountInfo? CurrentAccount => ActiveIsDefault ? (_signedIn ? FakeAccount : null) : _modeled[_activeSub].Info;
 
-    public IReadOnlyList<AccountInfo> Accounts => _signedIn ? [FakeAccount] : [];
+    public IReadOnlyList<AccountInfo> Accounts => [.. (_signedIn ? new[] { FakeAccount } : []), .. _modeled.Values.Select(m => m.Info)];
 
     public event EventHandler? AccountChanged;
 
@@ -220,19 +220,35 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw new AccountAuthException(AuthErrorCodes.ProjectInvalid);
         }
 
-        if (!_signedIn)
+        if (!IsSignedIn)
         {
             throw new AccountAuthException(AuthErrorCodes.SigninExpired);
         }
 
-        _selectedProjectId = projectId;
+        if (ActiveIsDefault)
+        {
+            _selectedProjectId = projectId;
+        }
+        else
+        {
+            _modeled[_activeSub].SelectedProject = projectId;
+        }
+
         AccountChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
     public Task SwitchAccountAsync(string sub, CancellationToken cancellationToken)
     {
-        if (!_signedIn || sub != FakeAccount.Sub)
+        if (_modeled.ContainsKey(sub))
+        {
+            _activeSub = sub;
+        }
+        else if (_signedIn && sub == FakeAccount.Sub)
+        {
+            _activeSub = DefaultAccountSub;
+        }
+        else
         {
             throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
         }
@@ -875,13 +891,32 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
+    private readonly List<string?> _refreshedAccounts = [];
+
+    /// <summary>Issue #830: the account sub of each token refresh the pipeline asked for (null: the current account), in order.</summary>
+    public IReadOnlyList<string?> RefreshedAccounts
+    {
+        get
+        {
+            lock (_callLock)
+            {
+                return [.. _refreshedAccounts];
+            }
+        }
+    }
+
     /// <summary>How many times the resilience pipeline asked this fake to refresh the token.</summary>
     public int TokenRefreshCount { get; private set; }
 
     /// <summary>A real implementation refreshes the OAuth access token; the fake only counts the request.</summary>
-    public Task RefreshAsync(CancellationToken cancellationToken)
+    public Task RefreshAsync(string? accountSub, CancellationToken cancellationToken)
     {
         TokenRefreshCount++;
+        lock (_callLock)
+        {
+            _refreshedAccounts.Add(accountSub);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -1284,7 +1319,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
         var now = _timeProvider.GetUtcNow();
         // Check and insert are ONE step (#918): a request of the same VM that landed since the exists check wins, and this one is its replay.
-        var request = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        var request = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId), Scope: new CloudScope(spec.ProjectId, CallScope.Value?.AccountSub ?? DefaultAccountSub));
         if (!TryInsertVm(key, request))
         {
             return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
@@ -1329,7 +1364,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>Grants a create. <paramref name="queued"/> is the pending request's row when this is a queued grant: it is replaced by the granted row in ONE step (#910), so a poll never sees the VM missing and a delete that lands first wins.</summary>
     private VmDescriptor GrantCreate(VmSpec spec, string zone, (string, string) key, VmDescriptor? queued = null)
     {
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId), Scope: new CloudScope(spec.ProjectId, CallScope.Value?.AccountSub ?? DefaultAccountSub));
         // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
         // A VM the simulation is about to preempt or lose (#91) never gets a worker.
         var willBeLost = spec.Spot ? _spotPreemptionsLeft > 0 : _onDemandLossesLeft > 0;
