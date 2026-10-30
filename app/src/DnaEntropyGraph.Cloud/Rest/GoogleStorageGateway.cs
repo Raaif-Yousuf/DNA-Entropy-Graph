@@ -165,33 +165,38 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     {
         StoragePrefixes.RequireDeletable(prefix);
         var deleted = 0;
-        await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
+        var manifestKey = prefix + ResultsBucket.ManifestObject;
+        var manifestListed = false;
+        try
         {
-            foreach (var item in page.Items ?? [])
+            await foreach (var page in ListPagesAsync(bucket, prefix, delimiter: null, cancellationToken).ConfigureAwait(false))
             {
-                var name = item.Name;
-                await _pipeline.ExecuteAsync(
-                    "Storage.DeleteObject",
-                    async ct =>
+                foreach (var item in page.Items ?? [])
+                {
+                    if (item.Name == manifestKey)
                     {
-                        try
-                        {
-                            await _service.Objects.Delete(bucket, name).ExecuteAsync(ct).ConfigureAwait(false);
-                        }
-                        catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
-                        {
-                            // Already gone is what a delete wants.
-                        }
-                        catch (GoogleApiException ex)
-                        {
-                            throw GoogleApiErrors.ToException(GoogleApiErrors.FromApiException(ex));
-                        }
-                    },
-                    cancellationToken,
-                    bypassBreaker: true,
-                    singleRequest: true).ConfigureAwait(false);
+                        // The listing is lexicographic, so the manifest would be deleted before output/, result.json and status.json. It is what proves
+                        // a folder is ours (JobObjectDeleter), so it goes last: a sweep that dies keeps the proof for the retry.
+                        manifestListed = true;
+                        continue;
+                    }
+
+                    await DeleteObjectAsync(bucket, item.Name, cancellationToken).ConfigureAwait(false);
+                    deleted++;
+                }
+            }
+
+            if (manifestListed)
+            {
+                await DeleteObjectAsync(bucket, manifestKey, cancellationToken).ConfigureAwait(false);
                 deleted++;
             }
+        }
+        catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
+        {
+            // A raw transport failure (a connection reset mid-sweep) is a dropped connection, classified like every other call's, so the delete page can name an action for it.
+            // An HttpRequestException is not caught here: CloudCallPipeline already maps it to Network. Only the sweep's own requests run in here, so an IOException is never a local file.
+            throw new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "The connection dropped during the delete (" + ex.GetType().Name + ")."), CloudErrorKind.Network);
         }
 
         return deleted;

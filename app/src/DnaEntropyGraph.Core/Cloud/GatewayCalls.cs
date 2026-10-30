@@ -19,26 +19,26 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
     public async Task<T> CallAsync<T>(Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
         var limit = timeout ?? settings.CallTimeout;
-        using var timer = new CancellationTokenSource(limit, settings.TimeProvider);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token);
+        using var deadline = new Audit.DeadlineSource(cancellationToken, limit, settings.TimeProvider);
         Task<T>? task = null;
         try
         {
-            task = call(deadline.Token);
+            // Issue #245: the audit decorator sees the linked deadline token; this tells it which token is the caller's own.
+            task = Audit.CloudAuditContext.StartUnderDeadline(cancellationToken, deadline.Token, call);
 
             // WaitAsync, not just a token the callee may ignore: a call that never looks at its token (a stuck
             // socket under a library that does not check) must still be cut at the deadline.
             return await task.WaitAsync(limit, settings.TimeProvider, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller's wait can unwind (and dispose the deadline source) before its registration has passed the cancel on, so the call would keep running unaware: tell it now.
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline.Source, task).ConfigureAwait(false);
+            throw;
+        }
         catch (Exception ex) when (ex is TimeoutException || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            await deadline.CancelAsync().ConfigureAwait(false);
-            if (task is not null)
-            {
-                // The abandoned call may still fault later; nobody is waiting to see it.
-                _ = task.ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            }
-
+            await Audit.CloudAuditContext.StopAbandonedAsync(deadline.Source, task).ConfigureAwait(false);
             throw new CloudOperationException(new CloudError("TIMEOUT", null, "request timed out"), CloudErrorKind.Network);
         }
     }

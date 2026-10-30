@@ -288,7 +288,7 @@ classifier at all.
 Every Google list loop in `DnaEntropyGraph.Cloud/Rest` (billing accounts, projects, price catalog, buckets, objects, region quotas, quota preferences,
 VMs, disks, accelerator zones, zone operations: 11 loops) reads the next page token through one helper, `PageTokenGuard.Advance`
 (`app/src/DnaEntropyGraph.Cloud/Rest/PageTokenGuard.cs`), one guard per walk. It remembers every token it was given, not only the last, so the same
-token for ever and a cycle (A, B, A) both fail on the first repeat, with `LIST_PAGINATION_STUCK`, one extra request after the first page (A, B, A: the third).
+token for ever and a cycle (A, B, A) both fail on the first repeat, with `CloudErrorCodes.ListPaginationStuck` (`LIST_PAGINATION_STUCK`, the one constant `PageTokenGuard.StuckCode` and the delete copy both read), one extra request after the first page (A, B, A: the third).
 A short list must never read as a complete one: an empty VM list reads as "no VM" (a duplicate or a leak), an empty quota table as "no quota".
 `Guards.Tests/PageTokenGuardWiringTests` scans every `Rest/*.cs` (comments removed, strings blanked) and fails on a next page token read outside `.Advance(`, a string that names the JSON member, a hand comparison of a token, or a `PageTokenGuard` built inside a loop.
 Before this, `GoogleStorageGateway.ListOursAsync` looped for ever on a repeated token, the billing and project listings had no guard, and the accelerator
@@ -909,7 +909,7 @@ network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). A
 by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
 rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
-**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.1.log` (about 2 MB on disk at most), and swallows every exception but a fatal one,
 because it is called from inside the reconciler's catch blocks. A rotation that cannot move the file (the copy is held open or read-only) keeps appending up to twice the cap, then drops lines until a rotation works, so a failing rotation cannot grow the log without bound; every control character and the Unicode line and paragraph separators in a field become a space, so one event is always one line. A lifecycle step that throws no longer orphans the reattach: `EnforceLifecycleAsync` itself rethrows, and `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
 `WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
 (#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
@@ -986,8 +986,8 @@ it); a non-seekable stream gets one attempt and no 401 replay.
 
 Every retry is reported to `ICloudCallObserver` (operation, attempt, delay, status, kind,
 the API error text, never a sequence, file name or email). `CloudRetryLog` keeps the last
-200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
-not in the diagnostics zip; when it is, forward `OnRetry` there.
+200 in memory. MEASURED 2026-10-29: Serilog is not wired into the app; the
+log is not in the diagnostics zip. `logs\app.log` (`FileDiagnosticsLog`, `DiagnosticsTraceListener`) is; forward `OnRetry` there when wanted.
 
 The pipeline's kind is kept end to end: `VmProvisioner.ProvisionAsync` uses the kind the
 gateway threw instead of re-classifying the error text (which turned `network` into `other`,
@@ -1393,7 +1393,7 @@ the running app calls this class yet.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
   (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
-  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation; see Paging in section 5); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  with `CloudErrorCodes.ListPaginationStuck` (`LIST_PAGINATION_STUCK`), kind `network` so the reconciler reads it as no answer, never a silent truncation; the delete copy reads the code and does not tell the user to check the internet); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
@@ -1508,6 +1508,29 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
   job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
   `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `JobObjectDeleter` (Core/Runs, issues #262 and #534): the real `IJobObjectDeleter` behind the Runs page "Delete cloud copy" (replaces the stand-in that always said
+  "not connected"). It deletes exactly `jobs/<job id>/` and nothing else: the bucket must be a `deg-` bucket and the prefix must match `^jobs/[a-z0-9_-]{1,63}/$`
+  (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request, `CloudDeleteRefusedException(NotAJobFolder)`), and
+  `RunCloudResults.DeleteAsync` has already checked the stored prefix equals `jobs/<run's own job id>/`. **Ownership:** when the folder has objects, its
+  `manifest.json` must name this installation (`createdBy.installationId`, the `InstallationCleanup` test); another computer's run (an imported row, #111) is `CloudDeleteRefusal.OtherComputer` -> `CloudResultsStatus.OtherComputer`; a missing, unreadable or
+  wrong-shaped manifest, or an unreadable installation id, is `Unconfirmed` -> `NotConfirmed` (its own copy, "could not confirm this run is yours"); both leave
+  everything untouched and offer Open storage page. `DeletePrefixAsync` (Google and Fake) deletes `jobs/<id>/manifest.json` LAST: Cloud Storage lists lexicographically,
+  so otherwise the manifest would go before `output/`, `result.json` and `status.json`, and a sweep that died after it would strand the rest behind a false refusal
+  on the retry. (THEORY, unverified: persisting a "verified" flag on the run row would also survive an outside deletion of the manifest; not built, it needs a
+  migration.) The installation id is a write-once file untouched by Reset all settings (`SettingsStore.cs:172-191`, #558/#565), and manifests have carried
+  `createdBy.installationId` since `69707244` (2026-10-02, #460), before any release. An empty prefix is success only when the bucket listing succeeded; a 404 bucket is
+  `StorageNotFound` and the row is not changed. The shared name of the manifest object is `ResultsBucket.ManifestObject`.
+  Known limits (no code): (1) an object written under the prefix after the manifest was deleted (a late worker write) is stranded, and a later Delete cloud copy
+  answers `NotConfirmed` (the manifest is gone), so that leftover is removed from Open storage page; (2) `StorageNotFound` offers no storage button, so a user whose
+  bucket is in another project looks at the Cloud page instead. Open storage page links are only built for a `jobs/<id>/` folder in a bucket-shaped name, with each segment escaped. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
+  none left is success even if the call threw afterwards; the same count left means nothing was deleted, so the real classified error surfaces
+  (`CloudDeleteResult.ErrorKind`: permission, billing and API-off each have their own Runs copy, anything else the general one); only some-gone-some-left throws
+  `PartialCloudDeleteException(Remaining)` -> `PartiallyDeleted` with the count (singular copy for one). The classified cause rides along in `CloudDeleteResult.ErrorKind` whatever the count, and `CloudDeleteResult.SweepCompleted` says the sweep itself finished without error (a flag `PartialCloudDeleteException.SweepCompleted` set at each place the exception is made, not inferred from its inner exception). Every toast states only what the app knows (sweep completed? count known? cause?): sweep completed with an unreadable count says the delete finished but could not be confirmed empty and to choose Delete cloud copy again to check (`Runs_DeleteCloud_PartialUnconfirmed_*`, the row stays unmarked); sweep stopped with an unknown count says "may" (never that files remain) and names the cause's action, or the plain "stopped and could not count" copy when no cause was classified; a known count with a cause that pressing again cannot fix (permission, organization policy, billing, API off, request limit) states the count and that cause's action (`Runs_DeleteCloud_PartialKnown_Body_*`, "Files still in your Google Cloud storage: N") instead of only "choose Delete cloud copy again"; any other known count uses the count copy. `GoogleStorageGateway.DeletePrefixAsync` itself classifies a raw `IOException` or `SocketException` from the sweep as `Network` (code `TRANSPORT_FAILED`); it has no arm for `HttpRequestException`, which `CloudCallPipeline` maps and owns, `RunCloudResults` treats an `IOException`, `HttpRequestException` or `SocketException` inner exception of a partial delete as `Network`, and a cause whose code is `CloudErrorCodes.ListPaginationStuck` (a listing that repeated a page token) is read as `Other` with `CloudDeleteResult.ListingStuck` set by `RunCloudResults` whatever kind the gateway gave it, and the page shows `Runs_DeleteCloud_ListingStuck_*` (one action: Save diagnostics in Settings; it does not say to try again, because the same listing repeats). A failed delete (the listing stuck before any delete) uses `Runs_DeleteCloud_ListingStuckNothing_Body` ("nothing was deleted", the app cannot see what is stored); only a partial delete says "some files may have been deleted". The storage, compute and quota gateways keep their own `Network` classification for it (`JobReconciler.IsNoAnswer` treats `Network` as no answer and defers). The
+  run row is marked `CloudResultsDeleted` only on a clean read-back, so the button stays offered and the next press finishes it (a repeat delete of an empty prefix is
+  success). Deleted objects are not recoverable beyond the bucket's soft-delete window, which the confirm dialog does not promise either way.
+  The `cache/` model weights have their own lifecycle rule (`matchesPrefix: ["cache/"]`, 365 days or longer) separate from the `jobs/` rule, so neither the retention
+  rule nor this delete can reach the other prefix (`GoogleStorageGatewayTests` pins both rules by prefix). `FakeGcp.WithPrefixDeleteFailingAfter(n, kind)` scripts a
+  sweep that dies after n objects.
 - `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
   never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
   every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),
@@ -1617,6 +1640,62 @@ The handler matches Google.Apis's own defaults (MEASURED 2026-10-16 against `Htt
 
 **Diagnostics.** `versions.json` records `proxyMode` (`system`/`manual`/`none`) and nothing else: the address can name the user's institution, and `proxy_address` is `<omitted>` in the bundle's settings.json like every unlisted key. No credential is ever recorded.
 
+## 22. The cloud audit log (issue #245)
+
+Every call that changes something in the user's Google Cloud project leaves one line in `logs\cloud-audit.jsonl` under the data root
+(so portable mode and `--profile` follow it). Support reads it to answer "what did the app do, and when".
+
+- **Where it hooks.** Not in `CloudCallPipeline` (the pipeline sees an operation name and a closure, not the resource, and the real
+  Google gateways run it once per HTTP request, so a pipeline hook would log a retry as a second mutation). It is a decorator per gateway
+  interface (`Audited*Gateway` in `DnaEntropyGraph.Cloud/AuditedGateways.cs`) around whatever the container hands out: the
+  `Resilient*` wrapper over `FakeGcp`, or the real Google gateway. One entry per logical call, with the whole duration including retries.
+  `CloudAuditRegistration.Add` (ServiceRegistration) wraps the registered descriptors after the Google/Fake switch, so both backends are
+  audited the same way. `CloudAuditTests.Classified` is a closed list of every method of every gateway interface, as a mutation (with the
+  operation name its entry must carry) or a read. A reflection scan of every `I*Gateway` in Core
+  (`Every_gateway_interface_in_Core_is_classified...`) fails for a gateway nobody listed, `Every_method_of_every_gateway_interface_is_classified...`
+  for an unlisted method, and `Every_classified_mutation_has_an_audited_decorator_that_records_it` invokes EVERY listed mutation through
+  its decorator over a stub inner and asserts exactly one entry with that operation (and none for a read). `ProductionCloudWiringTests`
+  resolves every scanned gateway from the production container and requires its audit decorator, seeing through `IAuditedGateway.Inner`
+  to check the real gateway underneath.
+- **Not audited: the developer CloudCli.** `app/tools/DnaEntropyGraph.CloudCli` (dev-only, never shipped in the installer; driven by
+  `scripts/cloud_gpu_test.ps1`) builds the gateways itself with `GoogleCloudGateways.Create` in `CloudCliSessions`, outside
+  `CloudAuditRegistration`, so what it creates or deletes in the owner's test project leaves NO line in `cloud-audit.jsonl`. The
+  Settings explainer says so. Its trail is the script's own log and the resource labels.
+- **What is a mutation.** Compute create, reuse (claim, scheduling, metadata, start), stop, delete; Storage `EnsureBucket` (create and
+  lifecycle patch) and object upload; the worker identity (service account, role, project and bucket bindings); Service Usage enable;
+  `EnableComputeApi`; billing link; project create; start VM; delete disk; delete a job prefix; the quota-increase request
+  (resource `projects/<p>/quotas/<metric>[/regions/<r>]`, never the justification text or contact email). Reads (get, list, find, download, quota) are never logged. MEASURED 2026-10-16
+  (read of the interfaces): there is no `setLabels`, bucket-patch or object-delete call at the interface today; they are inside `ReuseVm` and `EnsureBucket`, so
+  each shows as that one entry. When one becomes its own interface method, the guard test above names it.
+- **An entry** (`CloudAuditEntry`): `timeUtc`, `installationId`, `jobId` (when the VM name or object key carries one), `operation`
+  (`Compute.CreateVm`), `resource` (`zones/<zone>/instances/deg-<job>`, `buckets/<bucket>/jobs/<job>`, `projects/<project>`),
+  `requestId` and `operationId` (the Compute insert reports both through `CloudAuditContext`; other calls leave them null because
+  the gateway interface does not surface them). The insert's `requestId` is client-made: the create decorator mints it BEFORE the started
+  line (`mintRequestId`), the gateway sends that same id (`CloudAuditContext.RequestIdForCall`), so the started line and a finished line
+  for a refused insert (403) both carry it; `operationId` is added once Google answers. `outcome` (`ok`; `cancelled` only when the caller's own token was cancelled; `timeout` for any other cancellation, such as an HttpClient timeout; or the `CloudErrorClassifier` bucket), `errorCode`
+  (Google's structured code, never the message) and `durationMs`.
+- **One way to start a call under the app's deadline.** Any code that hands an audited gateway call a token linked to an app-made deadline (`GatewayCalls`, the reconciler's `WithDeadline`) starts it through `CloudAuditContext.StartUnderDeadline(callerToken, deadlineToken, call)`, which names the caller's own token to the auditor; a new site that links a deadline and calls a gateway uses the same helper. Both sites also give up on the call through `CloudAuditContext.StopAbandonedAsync(deadline, task)` when the wait ends (timeout or user cancel): it cancels the call's token so it ends and is audited at once, observes a fault the abandoned task may raise later, and does not let a cancellation callback the callee registered replace the outcome: `CancelAsync` raises an `AggregateException` when the callback is registered directly on the source being cancelled (MEASURED 2026-10-29: the helper's own swallow test) that would otherwise replace the cancellation or timeout that callers such as the reconciler's quiet-cancel filter look for. That covers the app's own abandon of a call; the deadline token itself is made by `DeadlineSource` (`Core/Cloud/Audit`), never by `CreateLinkedTokenSource` plus `CancelAfter` or a timed `CancellationTokenSource` (`GatewayCalls`, the reconciler's `WithDeadline` on its injected clock, `OperationPoller`, `CatalogPricingSource` and `GoogleServiceUsageGateway` all use it; `DeadlineSource` is public so the Cloud project can). MEASURED 2026-10-29: with a raw linked source a callee's throwing cancellation callback surfaced out of the user's own `Cancel()` (PR #944 CI, Release, twice) and, on a 200 ms CallTimeout, ended the test host from the timer thread (3 of 3 runs). `DeadlineSource` relays the caller's cancel and the timer through its own `Cancel()`, which swallows a throwing callback and traces only its class. `DeadlineSourceTests` forces both shapes deterministically (a cancel from inside the call; a manually fired timer) and `GatewayDeadlineGuardTests` scans every `app/src` file that names a gateway (whitespace and line breaks tolerated, comments removed) for `CancelAfter`, a timed `CancellationTokenSource` (also the target-typed `new(limit)`), a timer whose callback calls Cancel, and any `CreateLinkedTokenSource` not on its reviewed allowlist (by path and count: `JobReconciler`, `ResultWaiter`, and `VmProvisioner`, whose caller link reaches `CreateVmAsync` raw and so is still exposed to a throwing callee callback: tracked in #961). It is a text scan, not a compiler: a timer that reaches Cancel through another method, or a timed source made in a file that names no gateway and handed to one, is not seen. A zero deadline cancels at construction (like `new CancellationTokenSource(TimeSpan.Zero)`); any other negative one throws. THEORY (unverified): the Google client libraries do not register throwing callbacks.
+- **Known race (accepted).** A user cancel that lands after the app's deadline already fired, but before the abandoned inner call ends, is recorded as `cancelled`, because the auditor reads the caller's token when the call ends. The entry is then wrong about the first cause only; the call did not succeed either way.
+- **Never in it:** a sequence, an input file name, an object name below `jobs/<id>` (only the prefix is named), an error message, the
+  email, a billing account id or the service account email. `CloudAuditTests.No_entry_names_an_input_file_the_email_or_a_message` and
+  `Object_prefix_stops_at_the_job...` guard it.
+- **Started and finished lines.** The multi-step, non-replayable mutations (create, reuse, start and delete a VM; `Storage.EnsureBucket`;
+  `Storage.DeletePrefix`; `Iam.EnsureWorkerIdentity`) write a `phase: started` line (outcome `started`) BEFORE the call and a
+  `phase: finished` line with the outcome after, both with the same `correlationId`. A process killed mid-call leaves the started line
+  with no finished line: that is the evidence. Single-request writes (stop VM, delete disk, upload, enable API or services, billing
+  link, project create, quota request) write only the finished line.
+- **Arguments are read inside the audit.** Each decorator passes the resource and job id as a function the auditor runs inside its
+  guarded region, so a null argument is a recorded failure (`resource: (unknown)`, outcome `other`), not a synchronous throw.
+- **Never throws.** `CloudAuditor` and `JsonLinesCloudAuditLog` swallow every failure to write (full disk, locked file, bad path): the
+  line is lost, the run is not.
+- **Size.** 1 MB, then the file moves to `cloud-audit.1.jsonl`, replacing the older one: at most about 2 MB. The cap is soft: if the move
+  fails (the previous file is open in a reader or antivirus), the line is still appended to the current file and the rotation is tried
+  again on the next write. Rotate plus append run under a machine-wide named mutex (`Global\deg-cloud-audit-<hash of the full path>`,
+  `JsonLinesCloudAuditLog.MutexName`), so two processes (or two log instances) sharing one data root cannot both move the same full file
+  and clobber `.1` with a nearly empty one. The wait is 250 ms; on a timeout, or where the platform gives no mutex, the line is appended
+  WITHOUT rotating, so the audit never holds a caller up (the next write rotates).
+- **Support bundle.** `DiagnosticsBundleBuilder` copies both generations as `files/logs/cloud-audit.jsonl` and `.1.jsonl`, redacted
+  like a log. Settings > Diagnostics > Open cloud activity log reveals the live file (`CloudActivityLogSettingsViewModel`).
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -146,7 +146,7 @@ public sealed partial class FakeGcp
         if (request.Metric == QuotaMetrics.NvidiaL4Gpus)
         {
             var key = (request.Region!.ToLowerInvariant(), "nvidia-l4");
-            _regionalQuota[key] = Math.Max(_regionalQuota.GetValueOrDefault(key), (int)request.PreferredValue);
+            _regionalQuota.AddOrUpdate(key, (int)request.PreferredValue, (_, current) => Math.Max(current, (int)request.PreferredValue)); // concurrent with a quota read that enumerates it (#918)
         }
         else
         {
