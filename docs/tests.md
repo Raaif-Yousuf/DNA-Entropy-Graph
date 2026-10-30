@@ -143,7 +143,10 @@ a short valid A/C/G/T sequence) and the import-isolation guard (#937): it puts
 its own checkout's `worker/src` first on `sys.path` and `PYTHONPATH` before any
 test imports `dna_entropy`, and aborts the session if the package still resolves
 outside that directory (a shared venv's editable install from another checkout,
-an early plugin import). `tests/test_import_isolation.py` proves both arms in a
+an early plugin import). It does this only in a development layout: the dist
+absent or installed editable. A normal wheel install (the GPU image, `Dockerfile.cuda`)
+is tested as installed, and `DEG_TEST_INSTALLED=1` forces that mode (`startup.sh`
+sets it for the gpu-test container run). `tests/test_import_isolation.py` proves both arms in a
 fake two-checkout layout. `worker/tests/data/` carries file fixtures:
 `sample.fasta`, `sample.gb`, `multi.gb` (multi-record), `prokaryotic_demo.
 fasta`. `worker/tests/contract-fixtures/` carries JSON vectors shared with

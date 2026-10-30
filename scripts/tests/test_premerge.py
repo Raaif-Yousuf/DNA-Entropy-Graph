@@ -712,13 +712,14 @@ def test_main_in_a_worktree_prints_the_fallback_and_runs_the_gates_with_the_work
     _, wt, shared = fake_worktree
     seen: dict[str, str] = {}
 
-    def fake_run_all(gates, log_dir=None, runner=None, emit=print):
-        seen["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
+    def fake_run_all(gates, log_dir=None, runner=None, emit=print, env=None):
+        seen["PYTHONPATH"] = (env or {}).get("PYTHONPATH", "")
         return [], "SUMMARY", 0
 
     monkeypatch.setattr(pm, "run_all", fake_run_all)
     monkeypatch.setattr(pm, "_write_stamp", lambda *a, **k: None)
-    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.setenv("PYTHONPATH", "KEEP")
+    before = dict(os.environ)
     (wt / "scripts").mkdir(exist_ok=True)
     (wt / "scripts" / "check_stub.py").write_text("print('ok')\n", encoding="utf-8", newline="\n")
     pm.main(["--root", str(wt), "--only", "check_stub"])
@@ -726,5 +727,42 @@ def test_main_in_a_worktree_prints_the_fallback_and_runs_the_gates_with_the_work
     out = captured.out
     assert "ERROR" not in captured.err, captured.err
     assert "primary checkout" in out
-    assert seen["PYTHONPATH"].split(os.pathsep)[0] == str((wt / "worker" / "src").resolve())
+    assert seen["PYTHONPATH"].split(os.pathsep) == [str((wt / "worker" / "src").resolve()), "KEEP"]
     assert str(shared) in out  # the python it announced is the primary's
+    assert dict(os.environ) == before  # main() builds the gates' env locally; this process is not mutated
+
+
+def test_run_all_hands_the_given_env_to_every_gate_and_leaves_os_environ_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    code = "import os; print(os.environ.get('PYTHONPATH', 'unset'))"
+    gate = pm.Gate("echo-env", [sys.executable, "-c", code], tmp_path)
+    results, _, _ = pm.run_all([gate], env={**os.environ, "PYTHONPATH": "FROM_ENV"}, emit=lambda *_: None)
+    assert "FROM_ENV" in results[0].output
+    assert "PYTHONPATH" not in os.environ
+
+
+def test_git_is_asked_once_per_root_and_with_a_timeout(fake_worktree, monkeypatch):
+    _, wt, _ = fake_worktree
+    calls: list[dict] = []
+    real = subprocess.run
+
+    def spy(argv, *a, **k):
+        if argv[:2] == ["git", "rev-parse"]:
+            calls.append(k)
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    pm._primary_venv_dir.cache_clear()
+    pm.find_venv_python(wt)
+    pm.find_venv_python(wt)
+    pm.venv_fallback_note(wt, None)
+    assert len(calls) == 1
+    assert calls[0].get("timeout")
+
+
+def test_pythonpath_dedupe_ignores_case_and_relative_spelling(tmp_path, monkeypatch):
+    src = (tmp_path / "worker" / "src").resolve()
+    monkeypatch.chdir(tmp_path)
+    spelled = os.path.join("worker", "..", "worker", "src")  # relative, same directory
+    out = pm.pythonpath_for(tmp_path, {"PYTHONPATH": os.pathsep.join([spelled, "A"])})
+    assert out.split(os.pathsep) == [str(src), "A"]

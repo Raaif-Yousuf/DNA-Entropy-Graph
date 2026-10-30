@@ -83,10 +83,24 @@ def layout(tmp_path: Path) -> dict[str, Path]:
     return {"mine": mine, "other": other, "site": site, "tests": tests}
 
 
-def _pytest(layout: dict[str, Path], *args: str) -> subprocess.CompletedProcess[str]:
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+def _dist_info(layout: dict[str, Path], direct_url: str | None) -> None:
+    """A fake `dna-entropy` dist on the site dir; `direct_url` is its direct_url.json text (None: no file)."""
+    info = layout["site"] / "dna_entropy-0.0.1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: dna-entropy\nVersion: 0.0.1\n", encoding="utf-8", newline="\n"
+    )
+    if direct_url is not None:
+        (info / "direct_url.json").write_text(direct_url, encoding="utf-8", newline="\n")
+
+
+def _pytest(
+    layout: dict[str, Path], *args: str, env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "DEG_TEST_INSTALLED")}
     env["PYTHONPATH"] = str(layout["site"])
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
         cwd=layout["mine"] / "worker",
@@ -123,6 +137,80 @@ def test_a_plugin_that_imported_the_other_package_first_fails_loudly(layout: dic
     assert done.returncode != 0
     assert "dna_entropy" in out and layout["other"].name in out
     assert "passed" not in out
+
+
+INSTALLED_TEST = """
+import os
+import sys
+from pathlib import Path
+
+import dna_entropy
+
+MINE = (Path(__file__).resolve().parents[1] / "src").resolve()
+
+
+def test_the_installed_copy_is_what_is_tested():
+    assert dna_entropy.MARK == "other", dna_entropy.__file__
+
+
+def test_path_and_pythonpath_were_left_alone():
+    assert str(MINE) not in [str(Path(p).resolve()) for p in sys.path if p]
+    assert str(MINE) not in os.environ["PYTHONPATH"]
+"""
+
+
+def _installed_layout(layout: dict[str, Path]) -> None:
+    (layout["tests"] / "test_inside.py").write_text(INSTALLED_TEST, encoding="utf-8", newline="\n")
+
+
+def test_a_non_editable_install_is_tested_as_installed_and_nothing_is_touched(
+    layout: dict[str, Path],
+) -> None:
+    """The GPU image shape: a wheel installed beside /opt/worker/src. The tests must run against the wheel."""
+    _dist_info(layout, '{"url": "file:///build/worker", "dir_info": {}}')
+    _installed_layout(layout)
+    done = _pytest(layout)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "2 passed" in done.stdout
+
+
+def test_an_index_install_with_no_direct_url_is_also_tested_as_installed(layout: dict[str, Path]) -> None:
+    _dist_info(layout, None)
+    _installed_layout(layout)
+    done = _pytest(layout)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_an_editable_install_from_another_checkout_still_loses_to_this_checkouts_src(
+    layout: dict[str, Path],
+) -> None:
+    _dist_info(layout, '{"url": "file:///elsewhere/worker", "dir_info": {"editable": true}}')
+    done = _pytest(layout)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "3 passed" in done.stdout
+
+
+def test_the_opt_out_variable_tests_the_installed_package_even_with_no_install_metadata(
+    layout: dict[str, Path],
+) -> None:
+    _installed_layout(layout)
+    off = _pytest(layout, env_extra={"DEG_TEST_INSTALLED": "1"})
+    assert off.returncode == 0, off.stdout + off.stderr
+    zero = _pytest(
+        layout, env_extra={"DEG_TEST_INSTALLED": "0"}
+    )  # "0" is not an opt-out: this checkout's src wins
+    assert zero.returncode != 0, zero.stdout
+
+
+def test_a_namespace_package_is_named_not_a_traceback_about_none(layout: dict[str, Path]) -> None:
+    for root in (layout["mine"], layout["other"]):
+        (
+            root / "worker" / "src" / "dna_entropy" / "__init__.py"
+        ).unlink()  # leaves a bare directory: a namespace package
+    done = _pytest(layout)
+    out = done.stdout + done.stderr
+    assert done.returncode != 0
+    assert "resolved to a namespace package" in out and "NoneType" not in out and "TypeError" not in out
 
 
 def test_the_guard_fires_when_this_checkout_has_no_package(layout: dict[str, Path]) -> None:
