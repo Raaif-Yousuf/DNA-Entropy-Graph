@@ -45,13 +45,15 @@ def _assert_imports_from_own_src() -> None:
         raise pytest.UsageError(
             f"dna_entropy is not importable from this checkout's worker/src ({_SRC}): {err}"
         ) from err
-    if getattr(module, "__file__", None) is None:
+    file = getattr(module, "__file__", None)
+    if file is None:
         raise pytest.UsageError(
-            f"dna_entropy resolved to a namespace package (no __init__.py; paths {list(module.__path__)}), "
+            "dna_entropy resolved to a namespace package (no __init__.py; paths "
+            f"{list(getattr(module, '__path__', []))}), "
             f"not to a regular package under this checkout's worker/src ({_SRC}). "
             "Is the source tree incomplete?"
         )
-    where = Path(module.__file__).resolve()
+    where = Path(file).resolve()
     if not where.is_relative_to(_SRC):
         raise pytest.UsageError(
             f"dna_entropy was imported from {where}, outside this checkout's worker/src ({_SRC}). "
