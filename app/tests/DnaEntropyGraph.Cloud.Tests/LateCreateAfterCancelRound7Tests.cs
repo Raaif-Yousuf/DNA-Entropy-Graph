@@ -57,8 +57,10 @@ public partial class LateCreateAfterCancelTests
     }
 
     [Fact]
-    public async Task R7_M2_a_resume_whose_only_labelled_VM_is_a_stopped_donor_provisions_new_instead_of_adopting_it()
+    public async Task R7_M2_a_resume_whose_only_labelled_VM_is_a_stopped_donor_adopts_it_and_creates_no_new_VM_billed_without_a_startup_script()
     {
+        // Round 8 H1+M1: round 7 skipped the stopped donor and provisioned a NEW VM (no startup script, stale status.json, a silently replaced lost VM). The donor is adopted: the existing
+        // judgment (heartbeat deadline, status.json) then fails the run, the donor ends stopped, and no new VM is billed.
         var gcp = new FakeGcp();
         var rig = new Rig(gcp);
         var donor = await SeedStoppedDonorAsync(gcp, rig, "job-oldr7m2");
@@ -70,12 +72,12 @@ public partial class LateCreateAfterCancelTests
         var result = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-r7m2", spec), spec, progress, CancellationToken.None);
 
         result.Success.ShouldBeTrue();
-        progress.VmAdopted.ShouldBeFalse("a stopped VM that is not this job's own would be waited on and fail vm_unhealthy");
-        (await gcp.GetVmAsync("deg-job-r7m2", ZoneA, CancellationToken.None)).ShouldNotBeNull("a VM was provisioned for this job");
+        progress.VmName.ShouldBe(donor.VmName);
+        progress.VmAdopted.ShouldBeTrue("the stopped donor is adopted and judged by the existing path, never replaced");
+        (await gcp.GetVmAsync("deg-job-r7m2", ZoneA, CancellationToken.None)).ShouldBeNull("no new VM is created for a resume that found the donor");
         (await gcp.GetVmAsync(donor.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         gcp.DeleteAttempts.ShouldBeEmpty();
     }
-
     [Fact]
     public async Task R7_M3_a_borrowed_VM_that_is_still_booting_is_stopped_once_it_runs_never_deleted()
     {

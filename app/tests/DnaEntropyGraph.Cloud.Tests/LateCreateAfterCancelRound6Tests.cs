@@ -13,9 +13,10 @@ namespace DnaEntropyGraph.Cloud.Tests;
 public partial class LateCreateAfterCancelTests
 {
     /// <summary>A gateway whose reuse runs the real fake and then fails (the start ran, the poll or the answer failed), or whose label listing fails on a chosen call.</summary>
-    private sealed class ScriptedCompute(FakeGcp inner, Func<Task>? afterReuse = null, Func<int, bool>? failFind = null, Func<bool>? rejectStop = null, bool rejectStopWhileBooting = false) : IComputeGateway
+    private sealed class ScriptedCompute(FakeGcp inner, Func<Task>? afterReuse = null, Func<int, bool>? failFind = null, Func<bool>? rejectStop = null, bool rejectStopWhileBooting = false, bool lateDelete = false) : IComputeGateway
     {
         private int _finds;
+        private (string Name, string Zone)? _pendingDelete;
         private int _rejectedStops;
 
         /// <summary>How many stops this gateway refused (round 7: while the VM was booting, or while <c>rejectStop</c> said so).</summary>
@@ -48,12 +49,33 @@ public partial class LateCreateAfterCancelTests
             await inner.StopVmAsync(vmName, zone, cancellationToken);
         }
 
-        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
+        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            if (lateDelete)
+            {
+                _pendingDelete = (vmName, zone); // round 8: the delete is accepted but takes effect only after the first label listing has answered
+                return Task.CompletedTask;
+            }
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
-            => failFind is not null && failFind(Interlocked.Increment(ref _finds))
-                ? throw new CloudOperationException(new CloudError("UNAVAILABLE", 503, "listing failed"), CloudErrorKind.Network)
-                : inner.FindByJobIdAsync(jobId, cancellationToken);
+            return inner.DeleteVmAsync(vmName, zone, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
+        {
+            if (failFind is not null && failFind(Interlocked.Increment(ref _finds)))
+            {
+                throw new CloudOperationException(new CloudError("UNAVAILABLE", 503, "listing failed"), CloudErrorKind.Network);
+            }
+
+            var found = await inner.FindByJobIdAsync(jobId, cancellationToken);
+            if (_pendingDelete is { } pending)
+            {
+                _pendingDelete = null;
+                await inner.DeleteVmAsync(pending.Name, pending.Zone, cancellationToken);
+            }
+
+            return found;
+        }
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
 

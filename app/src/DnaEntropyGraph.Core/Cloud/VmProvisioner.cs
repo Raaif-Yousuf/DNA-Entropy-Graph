@@ -151,9 +151,9 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     {
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
 
-        // Round 7 M2: a STOPPED VM that is not this job's own (deg-<job>) is a donor a failed reuse left relabelled for this job (restoring its labels is #970). A run that waits on it
-        // waits on a stopped VM and fails vm_unhealthy, so it is treated as absent: provision new. It is left stopped, and never deleted.
-        existing = existing.Where(v => !(VmFacts.IsStopped(v) && v.Name != VmTerminator.OwnVmName(request.JobId))).ToList();
+        // Round 8 H1+M1 (DECISION, reversible): a VM found under the job id is ALWAYS adopted, even a stopped donor a failed reuse left relabelled for this job (restoring its labels is #970).
+        // Skipping it provisioned a new VM with no startup script and stale status.json/progress.jsonl, and silently replaced a lost VM. The existing judgment (heartbeat deadline, status.json)
+        // fails the run, and the donor is stopped, never deleted (ownOnly).
         progress.VmAdopted = false;
         if (existing.Count > 0)
         {
@@ -758,15 +758,19 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     }
 
     /// <summary>
-    /// A resume that finds several VMs labelled with the job (a crash in the middle of a parallel batch): keeps ONE, preferring a running VM,
+    /// A resume that finds several VMs labelled with the job (a crash in the middle of a parallel batch): keeps ONE, preferring this job's own VM (deg-job), then a running VM,
     /// then a booting one, then the earliest in the request's zone order, and deletes and verifies the rest. Returns the VM to continue on and
     /// a note that is null when every extra is confirmed gone.
     /// </summary>
     public async Task<(VmDescriptor Kept, string? Note)> KeepOneOwnedVmAsync(CloudJobRequest request, IReadOnlyList<VmDescriptor> owned, CancellationToken cancellationToken)
     {
         var zoneOrder = request.Zones.ToList();
+        var ownName = VmTerminator.OwnVmName(request.JobId);
+        // Round 8 M2 (DECISION, reversible): this run's own VM (deg-<job>) is kept over any borrowed one whatever the states, so the user's Delete after the run never lands on another run's VM.
+        // A borrowed VM is kept only when no own VM exists.
         var kept = owned
-            .OrderBy(v => v.Status == "RUNNING" ? 0 : VmFacts.IsBooting(v) ? 1 : 2)
+            .OrderBy(v => v.Name == ownName ? 0 : 1)
+            .ThenBy(v => v.Status == "RUNNING" ? 0 : VmFacts.IsBooting(v) ? 1 : 2)
             .ThenBy(v => zoneOrder.IndexOf(v.Zone) is var i and >= 0 ? i : int.MaxValue)
             .ThenBy(v => v.Zone, StringComparer.Ordinal)
             .First();

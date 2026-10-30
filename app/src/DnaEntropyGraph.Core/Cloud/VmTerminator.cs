@@ -176,6 +176,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
                 if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
                 {
+                    if (!stopSent)
+                    {
+                        // Round 8 L2: no stop was ever sent (a borrowed VM that never left booting), so never say "after Stop".
+                        return $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after the app started waiting, so the stop could not be sent while it was starting. Stop it from the Cloud page.";
+                    }
+
                     return action == AfterTaskAction.Delete
                         ? $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete."
                         : $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Stop (Hard Rule 11).";
@@ -848,6 +854,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             }
 
             seen.UnionWith(stillThere);
+            var confirmed = stillThere.ToHashSet(); // READ present by the listing or by name below; an unreadable look is not a VM that is there
             var unreadable = false;
             foreach (var create in sent)
             {
@@ -857,6 +864,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     stillThere.Add((create.Name, create.Zone));
                     seen.Add((create.Name, create.Zone));
+                    confirmed.Add((create.Name, create.Zone));
                 }
                 else if (state == NameLook.Unknown)
                 {
@@ -875,13 +883,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
             if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
             {
-                if (seen.Count == 0)
+                if (confirmed.Count == 0)
                 {
-                    // Round 7 L1: nothing was ever SEEN there; the looks only failed. Say that, not "still there".
+                    // Round 7 L1, round 8 L1: nothing READ present on the last look (never seen, or seen once and since read gone or unreadable). Say that, not "still there".
                     return "The app could not check whether the VMs for this job are gone. Check the Cloud page and delete any VM left for this job.";
                 }
 
-                return $"{Math.Max(1, stillThere.Count)} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
+                return $"{confirmed.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
             }
 
             await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);

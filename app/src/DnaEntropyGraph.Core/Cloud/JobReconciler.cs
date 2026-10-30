@@ -426,6 +426,15 @@ public sealed class JobReconciler
     /// <summary>What a finished run's VM should be now, from its lifecycle label (or, when the gateway did not read labels, the run's own options).</summary>
     private static VmWant WantedByLifecycle(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
     {
+        var want = WantedByLifecycleCore(row, vm, options, installation, now);
+
+        // Round 8 M3: a VM that is not the row's own deg-<job> is another run's (a failed or cancelled reuse relabelled it), whatever the row's state or the lifecycle label says:
+        // stopped at most, never deleted.
+        return want == VmWant.Delete && vm.Name != VmTerminator.OwnVmName(row.JobId) ? (vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave) : want;
+    }
+
+    private static VmWant WantedByLifecycleCore(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
+    {
         if (!IsOurs(vm, installation))
         {
             return VmWant.Leave;

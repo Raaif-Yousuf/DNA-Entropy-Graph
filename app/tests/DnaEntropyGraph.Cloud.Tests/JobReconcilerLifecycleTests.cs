@@ -250,6 +250,29 @@ public class JobReconcilerLifecycleTests
     }
 
     [Theory]
+    [InlineData("RUNNING")]
+    [InlineData("STOPPED")]
+    public async Task A_failed_runs_donor_VM_a_failed_reuse_relabelled_lifecycle_delete_is_stopped_at_most_never_deleted(string state)
+    {
+        // Round 8 M3: a Failed row (not a cancel) whose job label says delete must never delete a VM that is not its own deg-<job>.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor8", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor8");
+        var request = await rig.Env.SeedAsync("job-failed8", JobPhase.Failed, vm: false, after: AfterTaskAction.Delete, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10) });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor8", Zone, CancellationToken.None);
+        if (state == "STOPPED")
+        {
+            await rig.Gcp.StopVmAsync("deg-job-donor8", Zone, CancellationToken.None);
+        }
+
+        (await rig.Gcp.GetVmAsync("deg-job-donor8", Zone, CancellationToken.None))!.Labels!["lifecycle"].ShouldBe("delete");
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.DeleteAttempts.ShouldBeEmpty("another run's VM and disk are never deleted by a launch");
+        (await rig.Gcp.GetVmAsync("deg-job-donor8", Zone, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+    }
+    [Theory]
     [InlineData(RunErrorCodes.StoppedByCleanup)]
     [InlineData(RunErrorCodes.DeletedByCleanup)]
     public async Task A_run_the_user_ended_with_Stop_or_Delete_from_the_exit_window_keeps_its_stopped_VM_as_the_user_chose(string code)
