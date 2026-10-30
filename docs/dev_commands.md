@@ -203,6 +203,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
 - **Timing.** A full run exceeds one tool call's 600 s cap; run `--fast` per lane, and launch the
   full run detached with `--log-dir` and poll `summary.txt`.
 
+## Pre-land check from an agent worktree: `scripts/premerge_wt.py` (#958)
+
+An agent worktree has no `worker\.venv`. From the worktree root, with the PRIMARY checkout's python:
+
+```powershell
+<primary checkout>\worker\.venv\Scripts\python.exe scripts\premerge_wt.py [--junction] [--full] [-- <extra premerge args>]
+```
+
+It runs `premerge.py --fast` (through `heavy.py`) with `--python <shared venv python>` and `PYTHONPATH=<wt>\worker\src`, so the shared venv's editable install imports THIS worktree's worker code (#937), and forwards premerge's exit code. By default it links nothing (MEASURED 2026-10-30: no gate needs `<wt>\worker\.venv` to exist; premerge's `--python` overrides its venv lookup and `check_pyright.py` uses `sys.executable`). `--junction` instead links `<wt>\worker\.venv` to the shared venv for the run (the `land_wt.py` shape) and unlinks it in `finally`, also on Ctrl-C. Either way: a stale junction from a killed run is unlinked first; a real directory at `worker\.venv` is refused and untouched; afterwards the shared venv's python is asserted to still exist (exit 4 if not). Exit codes: premerge's own; 2 refused (a real `worker\.venv` directory, the primary checkout where you run `premerge.py` directly, a missing `scripts\premerge.py`, git unable to name the primary checkout so pass `--venv`, or `--junction` unable to link); 5 the link could not be removed after the run (the message carries premerge's real exit code; remove it by hand with `rmdir`); 124 timed out (`--timeout`, default 7200 s, heavy.py slot wait included; the gate tree it started is killed by PID first, also on Ctrl-C); 130 interrupted (2 and 130 can also be premerge's or heavy.py's own codes, so they overlap with the above; read the ERROR line); on Windows the gate tree runs in a kill-on-close Job Object owned by this script, so a timeout, Ctrl-C or a hard kill of this script ends heavy.py, premerge, pytest and dotnet together (taskkill /T by PID is the fallback, announced by a WARNING line); `--venv` inside the worktree's own `worker\.venv` path is refused; in default mode a real directory appearing at `worker\.venv` mid-run is left alone with a WARNING; 4 the shared venv is damaged, which overrides 5, 124, 130 and a red premerge. Link removal is `os.rmdir`/`os.unlink` of the reparse point only (`scripts/wt_venv.py`, shared with `land_wt.py`), never a recursive delete. `prune_worktrees.py` also unlinks any junction before `git worktree remove` (`test_venv_junction_does_not_make_a_worktree_dirty_and_is_unlinked_before_git_removes_it`). Tests: `scripts/tests/test_premerge_wt.py`.
+
 ## Landing a committed worktree branch: `scripts/land_wt.py`
 
 For lanes that work in their own worktree (#510). Flow and refusals: [branching_and_prs.md](branching_and_prs.md).
@@ -450,8 +460,10 @@ name-matched, not type-resolved, and it says so in detail.
 **Running `scripts/tests/` itself** — the hooks, the label/memory sync, `compile_sprint_log.py`, `agent_wave.ps1`, `new_issue.ps1`, `sync_labels.ps1`, and every `check_*.py` guard above all have their own test file here, run as one suite (issue #311's own scripts-tests CI job runs exactly this, on Ubuntu, with full git history since some tests exercise git-aware code paths):
 
 ```powershell
-uv run --with pytest --with pytest-xdist --with pyyaml python -m pytest scripts\tests -q -n auto
+uv run --with pytest --with pytest-xdist --with pytest-timeout --with pyyaml python -m pytest scripts\tests -q -n auto --timeout=300
 ```
+
+A hung test now fails after 300 s with every thread's traceback (pytest-timeout, #840), instead of stalling the gate until its 1800 s bound.
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
 worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.

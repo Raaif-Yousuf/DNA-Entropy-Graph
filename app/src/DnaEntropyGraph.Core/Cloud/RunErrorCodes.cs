@@ -16,6 +16,8 @@ public static class RunErrorCodes
     public const string TargetNotSupported = "target_not_supported";
     public const string VmUnhealthy = "vm_unhealthy";
     public const string LifecycleUnverified = "lifecycle_unverified";
+    /// <summary>The run finished, but a file already in its output folder differed from the download and was kept under a "(changed ...)" name (#588, Hard Rule 14); the message tells the user to open the output folder.</summary>
+    public const string ChangedFilesKeptAside = "changed_files_kept_aside";
     public const string CancelFailed = "cancel_failed";
     public const string InputMissing = "input_missing";
     public const string WorkerImageUnavailable = "no_worker_image";
@@ -120,7 +122,7 @@ public static class RunErrorCodes
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
-        NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, CancelFailed,
+        NoProject, TargetNotSupported, VmUnhealthy, LifecycleUnverified, ChangedFilesKeptAside, CancelFailed,
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
@@ -226,6 +228,7 @@ public static class RunErrorCodes
         TargetNotSupported => "RunError_target_not_supported",
         VmUnhealthy => "RunError_vm_unhealthy",
         LifecycleUnverified => "RunError_lifecycle_unverified",
+        ChangedFilesKeptAside => "RunError_changed_files_kept_aside",
         CancelFailed => "RunError_cancel_failed",
         InputMissing => "RunError_input_missing",
         WorkerImageUnavailable => "RunError_no_worker_image",

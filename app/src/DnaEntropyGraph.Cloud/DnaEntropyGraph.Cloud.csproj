@@ -22,6 +22,7 @@
     <PackageReference Include="Google.Apis.Compute.v1" />
     <PackageReference Include="Google.Apis.Storage.v1" />
     <PackageReference Include="Google.Apis.Iam.v1" />
+    <PackageReference Include="Google.Apis.CloudBillingBudget.v1" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 

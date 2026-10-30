@@ -90,12 +90,12 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         vm.ActionNoticeText.ShouldBeEmpty();
     }
 
-    private async Task<ResultsViewModel> ResultsFor(RunRecord run, string exportParent, IOverviewImageExporter exporter)
+    private async Task<ResultsViewModel> ResultsFor(RunRecord run, string exportParent, IOverviewImageExporter exporter, bool appOwnedRoot = false)
     {
         var repository = Substitute.For<IRunRepository>();
         repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { run });
         _source.Load(run.OutputDir!).Returns(Overview("chr1"));
-        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent));
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, exporter, exportRoot: new ResultsExportRoot(() => exportParent, appOwnedRoot));
         await vm.LoadAsync(run.JobId, TestContext.Current.CancellationToken);
         return vm;
     }
@@ -120,6 +120,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         File.WriteAllText(Path.Combine(own, "proto.entropy.bedgraph"), "x");
         var before = Directory.EnumerateFileSystemEntries(own, "*", SearchOption.AllDirectories).Order().ToList();
         var exports = Path.Combine(_dir, "exports");
+        Directory.CreateDirectory(exports); // issue #922: the export root is the user's own folder and must already be there
         var vm = await ResultsFor(Row("legacy-1", own) with { Imported = true, Target = "local" }, exports, WritingExporter());
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
@@ -183,6 +184,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         var own = Path.Combine(_dir, "proto3");
         Directory.CreateDirectory(own);
         var exports = Path.Combine(_dir, "exports3");
+        Directory.CreateDirectory(exports); // issue #922: the export root is the user's own folder and must already be there
         var vm = await ResultsFor(Row("legacy-3", own) with { Imported = true, Target = "local" }, exports, WritingExporter());
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
@@ -198,6 +200,7 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         var own = Path.Combine(_dir, "proto4");
         Directory.CreateDirectory(own);
         var exports = Path.Combine(_dir, "exports4");
+        Directory.CreateDirectory(exports); // issue #922: the export root is the user's own folder and must already be there
         var failing = Substitute.For<IOverviewImageExporter>();
         failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
         var vm = await ResultsFor(Row("legacy-4", own) with { Imported = true, Target = "local" }, exports, failing);
@@ -209,18 +212,51 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_failed_export_removes_every_folder_it_made_including_a_missing_exports_root()
+    public async Task A_missing_export_root_is_not_recreated_and_the_export_fails_with_the_exports_notice()
     {
+        // Issue #922: a Downloads the user deleted is not brought back, with or without a picture in it.
         var own = Path.Combine(_dir, "proto5");
         Directory.CreateDirectory(own);
         var root = Path.Combine(_dir, "deep", "exports5");
-        var failing = Substitute.For<IOverviewImageExporter>();
-        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
-        var vm = await ResultsFor(Row("legacy-5", own) with { Imported = true, Target = "local" }, root, failing);
+        var exporter = WritingExporter();
+        var vm = await ResultsFor(Row("legacy-5", own) with { Imported = true, Target = "local" }, root, exporter);
 
         await vm.ExportOverviewPngCommand.ExecuteAsync(null);
 
-        Directory.Exists(Path.Combine(_dir, "deep")).ShouldBeFalse("the missing parents made for the export are taken away again");
+        Directory.Exists(Path.Combine(_dir, "deep")).ShouldBeFalse();
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
+        exporter.DidNotReceiveWithAnyArgs().Export(default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task An_export_root_the_app_owns_is_made_on_first_use_so_a_fresh_portable_install_can_save_a_picture()
+    {
+        // Portable mode: <stick>\outputs is the app's own folder and nothing creates it at startup.
+        var own = Path.Combine(_dir, "proto6");
+        Directory.CreateDirectory(own);
+        var root = Path.Combine(_dir, "stick", "outputs");
+        var vm = await ResultsFor(Row("legacy-6", own) with { Imported = true, Target = "local" }, root, WritingExporter(), appOwnedRoot: true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.EnumerateFiles(root, "*.png", SearchOption.AllDirectories).ShouldHaveSingleItem();
+        vm.ActionNoticeText.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_app_owned_export_root_made_for_a_failed_picture_is_taken_away_again()
+    {
+        var own = Path.Combine(_dir, "proto7");
+        Directory.CreateDirectory(own);
+        var root = Path.Combine(_dir, "stick7", "outputs");
+        var failing = Substitute.For<IOverviewImageExporter>();
+        failing.Export(Arg.Any<EntropyContig>(), Arg.Any<OverviewImageLabels>(), Arg.Any<string>()).Returns(false);
+        var vm = await ResultsFor(Row("legacy-7", own) with { Imported = true, Target = "local" }, root, failing, appOwnedRoot: true);
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(Path.Combine(_dir, "stick7")).ShouldBeFalse();
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
     }
 
     [Theory]

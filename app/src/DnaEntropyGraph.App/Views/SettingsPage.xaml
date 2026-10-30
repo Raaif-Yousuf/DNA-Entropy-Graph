@@ -193,6 +193,9 @@
                             <ProgressRing IsActive="{x:Bind ViewModel.IsSavingDiagnostics, Mode=OneWay}" Width="20" Height="20" />
                         </StackPanel>
                         <TextBlock Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock x:Uid="CloudActivityLogExplainer" TextWrapping="Wrap" />
+                        <Button x:Uid="CloudActivityLogOpenButton" Command="{x:Bind CloudActivity.OpenCloudActivityLogCommand}" />
+                        <TextBlock Text="{x:Bind CloudActivity.CloudActivityStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -297,6 +300,28 @@
                                 <Button Grid.Column="2" x:Uid="ViewerGeneiousPathResetButton" VerticalAlignment="Bottom" Command="{x:Bind ExternalViewers.ResetGeneiousPathCommand}" />
                             </Grid>
                             <TextBlock Text="{x:Bind ExternalViewers.GeneiousPathStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsBudgetHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsBudgetExplainer" TextWrapping="Wrap" />
+                        <!-- Nothing to edit until a project is chosen; the status line then says so. Remove is offered only while a budget exists. -->
+                        <StackPanel Spacing="8" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.HasProject), Mode=OneWay}">
+                            <TextBox x:Uid="BudgetAmountBox" Width="160" HorizontalAlignment="Left" Text="{x:Bind Budget.AmountText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{x:Bind Budget.CanEdit, Mode=OneWay}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Uid="BudgetSaveButton" Command="{x:Bind Budget.SaveCommand}" />
+                                <Button x:Uid="BudgetRemoveButton" Command="{x:Bind Budget.RemoveCommand}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.HasBudget), Mode=OneWay}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind Budget.StatusText, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <TextBlock Text="{x:Bind Budget.ErrorText, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" AutomationProperties.LiveSetting="Assertive" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <HyperlinkButton x:Uid="BudgetOpenConsoleLink" NavigateUri="{x:Bind Budget.ConsoleLink, Mode=OneWay}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.ShowConsoleLink), Mode=OneWay}" />
+                            <Button x:Uid="BudgetCopyRequestButton" Command="{x:Bind Budget.CopyRequestCommand}" Visibility="{x:Bind converters:VisibilityHelper.FromBool(Budget.ShowCopyRequest), Mode=OneWay}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -27,7 +27,11 @@ public sealed partial class SettingsPage : Page
 
     public UpdateViewModel Updates { get; }
 
+    public BudgetSettingsViewModel Budget { get; }
+    public CloudActivityLogSettingsViewModel CloudActivity { get; }
+
     public ProxySettingsViewModel Proxy { get; }
+
     public SettingsTransferViewModel Transfer { get; }
     public TourViewModel Tour { get; }
 
@@ -35,6 +39,8 @@ public sealed partial class SettingsPage : Page
 
     public SettingsPage()
     {
+        Budget = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<BudgetSettingsViewModel>();
+        CloudActivity = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudActivityLogSettingsViewModel>();
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
@@ -54,5 +60,9 @@ public sealed partial class SettingsPage : Page
     }
 
     /// <summary>Looks at this PC every time the page opens, so the health card is never blank and never stale.</summary>
-    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => _ = ThisPc.RefreshCommand.ExecuteAsync(null);
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        _ = ThisPc.RefreshCommand.ExecuteAsync(null);
+        _ = Budget.RefreshCommand.ExecuteAsync(null);
+    }
 }

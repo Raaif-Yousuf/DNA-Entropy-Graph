@@ -196,6 +196,14 @@ it can never contain, is decided by code in `DnaEntropyGraph.Core/Diagnostics/`,
 ## 5c. The network proxy (issue #239, implemented)
 
 A proxy sees which Google hosts the app talks to (not the contents: the traffic is TLS, and the app does not trust a proxy to re-sign it silently, so a TLS-inspecting proxy whose root this PC lacks fails as `network_certificate` instead of being bypassed). The app never sets `ServerCertificateCustomValidationCallback`, so there is no setting that turns validation off. A manual proxy's password is DPAPI-encrypted for the Windows user in `auth\proxy.cred`, never in settings.json, SQLite, the logs or the diagnostics zip; the zip records only the mode. A password cannot be typed into the address box (the parser refuses an `@`).
+## 5d. The cloud audit log (issue #245, implemented)
+
+`logs/cloud-audit.jsonl` records every mutating cloud call (operation, a resource name the app made, request and operation ids, the
+outcome class, the duration). It is an identifiers-only file: no sequence, no input file name, no object name below `jobs/<id>`, no
+error message, no email, no billing account id (pinned by `CloudAuditTests`). It is local, size-bounded (about 2 MB across two files),
+copied into the diagnostics zip through the same redactor and leak scan as a log, and a failure to write it never reaches the run.
+It is evidence for support and for the user, not a tamper-proof record: anyone with access to the data folder can edit it
+(section 4, local access), and Google's own Cloud Audit Logs are the authoritative record.
 ## 6. Residual risk this document does not pretend to solve
 
 - A user's own Windows account being compromised compromises the DPAPI-protected token
