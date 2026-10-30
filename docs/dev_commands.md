@@ -203,6 +203,16 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
 - **Timing.** A full run exceeds one tool call's 600 s cap; run `--fast` per lane, and launch the
   full run detached with `--log-dir` and poll `summary.txt`.
 
+## Pre-land check from an agent worktree: `scripts/premerge_wt.py` (#958)
+
+An agent worktree has no `worker\.venv`. From the worktree root, with the PRIMARY checkout's python:
+
+```powershell
+C:\Users\raaif\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe scripts\premerge_wt.py [--junction] [--full] [-- <extra premerge args>]
+```
+
+It runs `premerge.py --fast` (through `heavy.py`) with `--python <shared venv python>` and `PYTHONPATH=<wt>\worker\src`, so the shared venv's editable install imports THIS worktree's worker code (#937), and forwards premerge's exit code. By default it links nothing (MEASURED 2026-10-30: no gate needs `<wt>\worker\.venv` to exist; premerge's `--python` overrides its venv lookup and `check_pyright.py` uses `sys.executable`). `--junction` instead links `<wt>\worker\.venv` to the shared venv for the run (the `land_wt.py` shape) and unlinks it in `finally`, also on Ctrl-C. Either way: a stale junction from a killed run is unlinked first; a real directory at `worker\.venv` is refused and untouched; afterwards the shared venv's python is asserted to still exist (exit 4 if not). Exit 2 refused (also the primary checkout: run `premerge.py` there directly), 130 interrupted. Link removal is `os.rmdir`/`os.unlink` of the reparse point only (`scripts/wt_venv.py`, shared with `land_wt.py`), never a recursive delete. `prune_worktrees.py` also unlinks any junction before `git worktree remove` (`test_venv_junction_does_not_make_a_worktree_dirty_and_is_unlinked_before_git_removes_it`). Tests: `scripts/tests/test_premerge_wt.py`.
+
 ## Landing a committed worktree branch: `scripts/land_wt.py`
 
 For lanes that work in their own worktree (#510). Flow and refusals: [branching_and_prs.md](branching_and_prs.md).

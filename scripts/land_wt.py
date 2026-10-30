@@ -65,11 +65,12 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import check_totest_format as ctf  # noqa: E402
+import wt_venv  # noqa: E402
 
 REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
-VENV_REL = Path("worker") / ".venv"
+VENV_REL = wt_venv.VENV_REL
 # NUL..BS, VT, FF and SO..US except ESC. ESC (0x1b) is allowed on purpose: captured logs and test output carry ANSI
 # colour and no measured corruption produced it. VT (0x0b, the MEASURED `\v` case) and FF are refused; TAB, LF, CR are text.
 CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]")
@@ -331,30 +332,17 @@ def git(
 
 def make_dir_link(link: Path, target: Path) -> None:
     try:
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            import _winapi  # noqa: PLC0415  (Windows only)
-
-            _winapi.CreateJunction(str(target), str(link))
-        else:
-            os.symlink(target, link, target_is_directory=True)
-    except OSError as err:
-        raise LandError(f"could not link {link} to {target}: {err}") from err
+        wt_venv.make_dir_link(link, target)
+    except wt_venv.LinkError as err:
+        raise LandError(str(err)) from err
 
 
 def unlink_dir_link(link: Path) -> None:
     """Remove a junction or directory symlink without touching its target. Refuses a real directory."""
-    if not os.path.lexists(link):
-        return
-    if os.path.isjunction(link) or os.path.islink(link):
-        if os.name == "nt":
-            os.rmdir(link)  # removes the reparse point only
-        else:
-            os.unlink(link)
-    else:
-        raise LandError(f"{link} is a real directory, not a link; refusing to remove it")
-    if os.path.lexists(link):
-        raise LandError(f"could not remove the link {link}")
+    try:
+        wt_venv.unlink_dir_link(link)
+    except wt_venv.LinkError as err:
+        raise LandError(str(err)) from err
 
 
 # ---------------------------------------------------------------------------

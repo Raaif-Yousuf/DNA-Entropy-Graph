@@ -225,6 +225,8 @@ to buy. (`cold-diff-reviewer` under `.claude/agents/` is built for this.)
 
 ## Merging / landing the work
 
+Pre-land check in a worktree lane: from the worktree root run `C:\Users\raaif\DNA-Entropy-Graph\worker\.venv\Scripts\python.exe scripts\premerge_wt.py` (premerge --fast on the shared venv, this worktree's sources, no junction left behind). Never hand-junction `worker\.venv` (#958).
+
 Worktree lanes: land a committed branch with `scripts/land_wt.py --branch <b> --sha <tip> --title ... --body-file ...`
 (`--full` for a full premerge). It verifies that exact sha in a throwaway worktree (origin/main merged in, ToTest rows
 union-resolved, any other conflict refused, premerge red refused, venv junction always unlinked before the worktree is
