@@ -12,7 +12,7 @@ import signal
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 VENV_REL = Path("worker") / ".venv"
 
@@ -181,13 +181,21 @@ def resume_process_threads(pid: int) -> int:
     return resumed
 
 
-def spawn_in_job(argv: Sequence[str], env: dict[str, str], cwd: Path, job: KillJob | None) -> tuple[subprocess.Popen[bytes], bool]:
+def spawn_in_job(
+    argv: Sequence[str],
+    env: dict[str, str],
+    cwd: Path,
+    job: KillJob | None,
+    **popen_kwargs: Any,  # noqa: ANN401  (stdout=, stderr=, ...)
+) -> tuple[subprocess.Popen[bytes], bool]:
     """Start `argv` with inherited stdio and put it in `job` BEFORE it runs (Windows: CREATE_SUSPENDED, assign, resume), so
     nothing it starts can be outside the job. Returns (process, assigned). An assignment that fails still resumes the child
-    (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job."""
+    (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job. `popen_kwargs` (stdout=, stderr=)
+    go to Popen; `creationflags` is not accepted (it is how the child is suspended)."""
     if os.name != "nt":
-        return subprocess.Popen(list(argv), env=env, cwd=cwd, start_new_session=True), False
-    proc = subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4)  # CREATE_SUSPENDED
+        started = subprocess.Popen(list(argv), env=env, cwd=cwd, start_new_session=True, **popen_kwargs)
+        return cast("subprocess.Popen[bytes]", started), False
+    proc = cast("subprocess.Popen[bytes]", subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4, **popen_kwargs))  # CREATE_SUSPENDED
     try:
         assigned = job.assign(proc) if job is not None else False
         if resume_process_threads(proc.pid) == 0:

@@ -263,11 +263,47 @@ def run_bounded(
     env: dict[str, str] | None = None,
     stdin: bytes | None = None,
     timeout: float | None = None,
+    job: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     """`subprocess.run(capture_output=True)` whose timeout kills the WHOLE process tree (a grandchild holding the pipes open would
-    otherwise make `run` wait forever after its own kill). Raises subprocess.TimeoutExpired (after a bounded wait) and OSError."""
+    otherwise make `run` wait forever after its own kill). Raises subprocess.TimeoutExpired (after a bounded wait) and OSError.
+
+    `job=True` (Windows) runs the child in a kill-on-close Job Object (#930), so a timeout also ends a grandchild whose parent already
+    exited (taskkill /T cannot find it) and the child's leftovers die when this returns. Off for the other calls, which may leave a
+    daemon on purpose. A job that cannot be set up prints a WARNING and falls back to taskkill /T."""
+    kill_job = wt_venv.create_kill_job() if job else None
+    try:
+        if job:
+            proc, assigned = wt_venv.spawn_in_job(
+                argv,
+                env if env is not None else dict(os.environ),
+                cwd if cwd is not None else Path.cwd(),
+                kill_job,
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        else:
+            proc, assigned = _popen_bounded(argv, cwd, env, stdin), False
+    except BaseException:
+        if kill_job is not None:
+            kill_job.close()
+        raise
+    if job and os.name == "nt" and not assigned:
+        print("WARNING: no job object for the premerge tree; falling back to taskkill /T by PID", file=sys.stderr, flush=True)
+        if kill_job is not None:
+            kill_job.close()
+        kill_job = None
+    try:
+        return _communicate_bounded(proc, argv, stdin, timeout, kill_job)
+    finally:
+        if kill_job is not None:
+            kill_job.close()
+
+
+def _popen_bounded(argv: Sequence[str], cwd: Path | None, env: dict[str, str] | None, stdin: bytes | None) -> subprocess.Popen[bytes]:
     extra: dict[str, object] = {} if os.name == "nt" else {"start_new_session": True}
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         list(argv),
         cwd=cwd,
         env=env,
@@ -276,9 +312,16 @@ def run_bounded(
         stderr=subprocess.PIPE,
         **extra,  # type: ignore[arg-type]
     )
+
+
+def _communicate_bounded(
+    proc: subprocess.Popen[bytes], argv: Sequence[str], stdin: bytes | None, timeout: float | None, kill_job: wt_venv.KillJob | None
+) -> subprocess.CompletedProcess[bytes]:
     try:
         out, err = proc.communicate(stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
+        if kill_job is not None:
+            kill_job.terminate()
         kill_tree(proc)
         try:
             out, err = proc.communicate(timeout=5)
@@ -446,7 +489,7 @@ def run_premerge(wt: Path, venv: Path, full: bool, timeout: float | None = None)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(wt / "worker" / "src")
     try:
-        proc = run_bounded(argv, cwd=wt, env=env, timeout=limit)
+        proc = run_bounded(argv, cwd=wt, env=env, timeout=limit, job=True)
     except subprocess.TimeoutExpired as err:
         tail = _text((err.stdout or b"")[-2000:]) if isinstance(err.stdout, bytes) else ""
         return 124, f"ERROR: premerge timed out after {int(limit)} s and was killed (a hung gate or heavy.py slot wait)\n{tail}"

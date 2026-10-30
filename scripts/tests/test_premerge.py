@@ -454,6 +454,36 @@ def test_a_timeout_kills_the_grandchild_too_and_returns_promptly(tmp_path):
     assert _wait_until(lambda: not pm._pid_alive(pid), seconds=5.0), f"grandchild {pid} survived the timeout"
 
 
+def _kill_pid_quietly(pid: int) -> None:
+    """Test cleanup only: stop exactly this PID (never by image name)."""
+    cmd = ["taskkill", "/F", "/PID", str(pid)] if pm.os.name == "nt" else ["kill", "-9", str(pid)]
+    subprocess.run(cmd, capture_output=True, check=False, timeout=30)
+
+
+def test_a_timeout_kills_a_detached_grandchild_whose_parent_already_exited(tmp_path):
+    """#930. The direct child exits 0 at once; its DETACHED grandchild keeps the output pipe open. taskkill /T cannot
+    find it (its parent is gone), so only a job object (Windows) or the process group (POSIX) can end it.
+    Limit: a job does not cover a process started with CREATE_BREAKAWAY_FROM_JOB (when the job allows breakaway)."""
+    ready, marker = tmp_path / "ready", tmp_path / "grandchild.pid"
+    code = (
+        "import subprocess, sys\n"
+        "kw = {'creationflags': 0x8 | 0x200} if sys.platform == 'win32' else {}\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=sys.stdout, stderr=sys.stderr, **kw)\n"
+        f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+        f"open({str(ready)!r}, 'w').write('ready')\n"
+        "sys.exit(0)\n"
+    )
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=SLOW_START_TIMEOUT)
+    result = pm.run_gate(gate)
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    pid = int(marker.read_text())
+    try:
+        assert result.status == pm.ERROR
+        assert _wait_until(lambda: not pm._pid_alive(pid), seconds=5.0), f"detached grandchild {pid} survived the timeout"
+    finally:
+        _kill_pid_quietly(pid)
+
+
 def test_a_child_that_exited_but_left_its_pipe_open_reports_its_exit_code(tmp_path, monkeypatch):
     monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
     ready, marker = tmp_path / "ready", tmp_path / "sleeper.pid"
