@@ -2,7 +2,7 @@
 
 An agent worktree has no `worker\\.venv`. Run this from the worktree root, with the PRIMARY checkout's venv python:
 
-    C:\\Users\\raaif\\DNA-Entropy-Graph\\worker\\.venv\\Scripts\\python.exe scripts\\premerge_wt.py [--junction] [-- <extra premerge args>]
+    <primary checkout>\\worker\\.venv\\Scripts\\python.exe scripts\\premerge_wt.py [--junction] [-- <extra premerge args>]
 
 What it does:
 - Default (junction-free): premerge's own `--python` points every Python gate at the shared venv's interpreter and
@@ -34,6 +34,7 @@ if _SCRIPTS_DIR not in sys.path:
 
 import wt_venv  # noqa: E402
 
+_RECREATE = 'cd worker; uv venv --python 3.12; uv pip install -e ".[dev,genes]"'
 EXIT_REFUSED = 2
 EXIT_VENV_GONE = 4
 EXIT_INTERRUPTED = 130
@@ -59,7 +60,8 @@ def primary_venv(root: Path) -> Path:
 
 
 def _say_gone(venv: Path) -> None:
-    print(f"ERROR: THE SHARED VENV IS DAMAGED: no python in {venv}. Something followed a link into it. Recreate it: cd worker; uv venv --python 3.12; uv pip install -e \".[dev,genes]\"")
+    print(f"ERROR: THE SHARED VENV IS DAMAGED: no python in {venv}. Something followed a link into it.")
+    print(f"Recreate it: {_RECREATE}")
 
 
 def run(
@@ -74,7 +76,7 @@ def run(
     link = wt / wt_venv.VENV_REL
     shared_py = wt_venv.venv_python(venv)
     if shared_py is None:
-        print(f"ERROR: no python in the shared venv {venv}. Create it in the primary checkout: cd worker; uv venv --python 3.12; uv pip install -e \".[dev,genes]\"")
+        print(f"ERROR: no python in the shared venv {venv}. Create it in the primary checkout: {_RECREATE}")
         return EXIT_REFUSED
     try:
         wt_venv.unlink_dir_link(link)  # a stale junction from a killed run; refuses a real directory
