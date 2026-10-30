@@ -65,11 +65,12 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import check_totest_format as ctf  # noqa: E402
+import wt_venv  # noqa: E402
 
 REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
-VENV_REL = Path("worker") / ".venv"
+VENV_REL = wt_venv.VENV_REL
 # NUL..BS, VT, FF and SO..US except ESC. ESC (0x1b) is allowed on purpose: captured logs and test output carry ANSI
 # colour and no measured corruption produced it. VT (0x0b, the MEASURED `\v` case) and FF are refused; TAB, LF, CR are text.
 CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]")
@@ -136,10 +137,7 @@ def _kernel32() -> Any:  # noqa: ANN401  (a ctypes library object)
     return _K32[0]
 
 
-def _taskkill_tree(pid: int) -> None:
-    """`taskkill /T /F /PID <pid>`: that PID and its descendants only, never by image name."""
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, check=False, timeout=30)
+_taskkill_tree = wt_venv.taskkill_tree
 
 
 def _proc_fields(pid: int | str) -> tuple[str, int, int] | None:
@@ -255,15 +253,7 @@ def kill_pid_tree(pid: int, wait: float = 10.0) -> bool:
     return True
 
 
-def kill_tree(proc: subprocess.Popen[bytes]) -> None:
-    """Kill `proc` and everything it started: taskkill /T on exactly this PID (never by image name), or the process group."""
-    if os.name == "nt":
-        _taskkill_tree(proc.pid)
-    else:
-        with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-    with contextlib.suppress(OSError):
-        proc.kill()
+kill_tree = wt_venv.kill_tree
 
 
 def run_bounded(
@@ -331,30 +321,17 @@ def git(
 
 def make_dir_link(link: Path, target: Path) -> None:
     try:
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            import _winapi  # noqa: PLC0415  (Windows only)
-
-            _winapi.CreateJunction(str(target), str(link))
-        else:
-            os.symlink(target, link, target_is_directory=True)
-    except OSError as err:
-        raise LandError(f"could not link {link} to {target}: {err}") from err
+        wt_venv.make_dir_link(link, target)
+    except wt_venv.LinkError as err:
+        raise LandError(str(err)) from err
 
 
 def unlink_dir_link(link: Path) -> None:
     """Remove a junction or directory symlink without touching its target. Refuses a real directory."""
-    if not os.path.lexists(link):
-        return
-    if os.path.isjunction(link) or os.path.islink(link):
-        if os.name == "nt":
-            os.rmdir(link)  # removes the reparse point only
-        else:
-            os.unlink(link)
-    else:
-        raise LandError(f"{link} is a real directory, not a link; refusing to remove it")
-    if os.path.lexists(link):
-        raise LandError(f"could not remove the link {link}")
+    try:
+        wt_venv.unlink_dir_link(link)
+    except wt_venv.LinkError as err:
+        raise LandError(str(err)) from err
 
 
 # ---------------------------------------------------------------------------
@@ -465,12 +442,7 @@ def run_premerge(wt: Path, venv: Path, full: bool, timeout: float | None = None)
     py = wt / VENV_REL / "Scripts" / "python.exe"
     if not py.is_file():
         py = wt / VENV_REL / "bin" / "python"
-    argv = [str(py), str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", str(py)]
-    if not full:
-        argv.append("--fast")
-    heavy = wt / "scripts" / "heavy.py"
-    if heavy.is_file():  # one machine-wide heavy slot for the whole run (RAM)
-        argv = [str(py), str(heavy), "--lane", f"land-{wt.name}"[:64], "--", *argv]
+    argv = wt_venv.premerge_argv(wt, py, full=full, lane_prefix="land")
     env = dict(os.environ)
     env["PYTHONPATH"] = str(wt / "worker" / "src")
     try:

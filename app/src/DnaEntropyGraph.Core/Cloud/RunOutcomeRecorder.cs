@@ -41,6 +41,8 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
             return await FailAsync(request.JobId, CloudErrorKind.Other, RunErrorCodes.WorkerFailed, "result.json could not be read: " + ex.Message, note).ConfigureAwait(false);
         }
 
+        var tally = new DownloadTally();
+
         // A finished input must have a track: one that lists no files is not finished, whatever it says.
         var doneInputs = result.Inputs.Count(i => i.Status == "done" && i.Files.Count > 0);
         if (result.Status != "done" || doneInputs == 0)
@@ -52,7 +54,7 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
             {
                 try
                 {
-                    await transfer.DownloadAsync(request, bucket, result, cancellationToken).ConfigureAwait(false);
+                    await transfer.DownloadAsync(request, bucket, result, cancellationToken, tally).ConfigureAwait(false);
                     keptPartial = true;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -67,7 +69,7 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
                 request.JobId,
                 CloudErrorKind.Other,
                 RunErrorCodes.ForWorkerStatusCode(workerCode) ?? RunErrorCodes.WorkerFailed,
-                DescribeWorkerFailure(result) + (keptPartial ? " Partial files were kept in the output folder." : string.Empty),
+                DescribeWorkerFailure(result) + (keptPartial ? " Partial files were kept in the output folder." : string.Empty) + AsideNote(tally.KeptAside),
                 note).ConfigureAwait(false);
         }
 
@@ -75,13 +77,14 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
         await rows.SetPhaseAsync(request.JobId, JobPhase.Downloading, cancellationToken).ConfigureAwait(false);
         try
         {
-            await transfer.DownloadAsync(request, bucket, result, cancellationToken).ConfigureAwait(false);
+            await transfer.DownloadAsync(request, bucket, result, cancellationToken, tally).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The results are still in the bucket; the VM must not keep billing while the user sorts out the folder.
             var downloadNote = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
-            throw VmEndNotes.Apply(ex, downloadNote);
+            // A file renamed aside before the failure is still the user's to hear about: it rides on the detail, the failure code stays the headline.
+            throw VmEndNotes.Apply(WithAsideNote(ex, tally.KeptAside), downloadNote);
         }
 
         var lifecycleError = request.AfterTask == AfterTaskAction.KeepAlive
@@ -92,13 +95,28 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
         if (lifecycleError is not null)
         {
             // A good result with an unconfirmed VM: finished, with the code that tells the user to check the Cloud page.
-            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.LifecycleUnverified, lifecycleError).ConfigureAwait(false);
-            return new CloudJobResult(finalPhase, CloudErrorKind.Other, lifecycleError, RunErrorCodes.LifecycleUnverified);
+            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.LifecycleUnverified, lifecycleError + AsideNote(tally.KeptAside)).ConfigureAwait(false);
+            return new CloudJobResult(finalPhase, CloudErrorKind.Other, lifecycleError + AsideNote(tally.KeptAside), RunErrorCodes.LifecycleUnverified);
+        }
+
+        if (tally.KeptAside > 0)
+        {
+            // Hard Rule 14: a file the user had changed was renamed aside, not overwritten. A finished run still, with the code that tells the user where to look (the count is not text a user reads).
+            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.ChangedFilesKeptAside, AsideNote(tally.KeptAside).TrimStart()).ConfigureAwait(false);
+            return new CloudJobResult(finalPhase, null, null, RunErrorCodes.ChangedFilesKeptAside);
         }
 
         await rows.SetPhaseAsync(request.JobId, finalPhase, cancellationToken).ConfigureAwait(false);
         return new CloudJobResult(finalPhase);
     }
+
+    /// <summary>Detail text (never the message the user reads, Hard Rule 13) saying how many of the user's changed files were renamed aside; empty when none.</summary>
+    internal static string AsideNote(int count) => count > 0 ? $" {count} changed file(s) in the output folder were kept under a changed name." : string.Empty;
+
+    private static Exception WithAsideNote(Exception ex, int count)
+        => count > 0 && ex is RunFailureException failure
+            ? new RunFailureException(failure.Kind, failure.Code, failure.Message + AsideNote(count)) { SpotPreempted = failure.SpotPreempted }
+            : ex;
 
     private static string DescribeWorkerFailure(WorkerResultDocument result)
     {

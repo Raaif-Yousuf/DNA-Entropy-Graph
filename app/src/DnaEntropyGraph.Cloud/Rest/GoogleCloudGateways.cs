@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core.Cloud;
 using Google.Apis.Cloudbilling.v1;
+using Google.Apis.CloudBillingBudget.v1;
 using Google.Apis.CloudResourceManager.v3;
 using Google.Apis.Compute.v1;
 using Google.Apis.Iam.v1;
@@ -22,6 +23,7 @@ public sealed record GoogleCloudGatewaySet(
     IComputeGateway Compute,
     IWorkerIdentityGateway WorkerIdentity,
     IQuotaGateway Quota,
+    IBudgetGateway Budget,
     IPricingCatalogGateway PricingCatalog);
 
 /// <summary>
@@ -72,6 +74,13 @@ public static class GoogleCloudGateways
             workerIdentity,
             // Not wrapped: both reads (regions.list, projects.get) go through the pipeline per request, and a failed read is a value (UNKNOWN), never a zero.
             new GoogleQuotaGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, GoogleRestClient.CreateHttpClient(tokens, options)),
+            // Not wrapped: the upsert is a list, a project-number read and a create or patch; each HTTP call goes through the pipeline itself,
+            // and the create is never replayed (a lost response would otherwise make a second budget; the next upsert finds the first by name).
+            new GoogleBudgetGateway(
+                new CloudBillingBudgetService(GoogleRestClient.CreateInitializer(tokens, options)),
+                new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options)),
+                pipeline,
+                selectedProjectId ?? (() => null)),
             // Not wrapped: a read-only list whose every page goes through the pipeline (issue #214).
             new GooglePricingCatalogGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options.TimeProvider));
     }
