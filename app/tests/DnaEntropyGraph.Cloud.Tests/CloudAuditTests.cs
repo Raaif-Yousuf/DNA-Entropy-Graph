@@ -418,7 +418,7 @@ public class CloudAuditTests
             ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync", "WasPreemptedAsync"]),
         [typeof(IStorageGateway)] = (
             [("EnsureBucketAsync", "Storage.EnsureBucket"), ("UploadAsync", "Storage.Upload"), ("DeletePrefixAsync", "Storage.DeletePrefix"), ("DeleteObjectAsync", "Storage.DeleteObject")],
-            ["DownloadAsync", "TryDownloadAsync", "ListBucketsAsync", "GetPrefixUsageAsync", "ListChildPrefixesAsync"]),
+            ["DownloadAsync", "TryDownloadAsync", "TryDownloadToFileAsync", "ListBucketsAsync", "GetPrefixUsageAsync", "ListChildPrefixesAsync"]),
         [typeof(IProjectSetupGateway)] = ([("EnableComputeApiAsync", "ProjectSetup.EnableComputeApi")], ["GetProjectStateAsync", "IsBillingEnabledAsync", "IsComputeApiEnabledAsync"]),
         [typeof(IWorkerIdentityGateway)] = ([("EnsureWorkerIdentityAsync", "Iam.EnsureWorkerIdentity")], []),
         [typeof(IServiceEnablementGateway)] = ([("EnableServicesAsync", "ServiceUsage.EnableServices")], ["IsServiceEnabledAsync"]),
