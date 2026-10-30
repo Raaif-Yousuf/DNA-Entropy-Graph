@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ SETUP = "DnaEntropyGraph-win-Setup.exe"
 PORTABLE = "DnaEntropyGraph-win-Portable.zip"
 
 
-def _folder(tmp_path: Path, listed: list[str], extra_on_disk: list[str] = ()) -> Path:
+def _folder(tmp_path: Path, listed: list[str], extra_on_disk: Sequence[str] = ()) -> Path:
     d = tmp_path / "releases"
     d.mkdir()
     for name in [*listed, *extra_on_disk]:
