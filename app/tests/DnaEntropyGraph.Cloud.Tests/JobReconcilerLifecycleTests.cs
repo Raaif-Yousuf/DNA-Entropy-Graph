@@ -309,7 +309,7 @@ public class JobReconcilerLifecycleTests
         (await rig.Gcp.GetVmAsync("deg-job-donor9b", Zone, CancellationToken.None)).ShouldNotBeNull();
     }
     /// <summary>A gateway whose label listing answers, and then (once) relabels the VM to another job before anyone can delete it: the race of round 10 M1.</summary>
-    private sealed class RelabelAfterListingCompute(FakeGcp inner, string vmName, string zone, IReadOnlyDictionary<string, string> labels) : IComputeGateway
+    private sealed class RelabelAfterListingCompute(FakeGcp inner, string vmName, string zone, IReadOnlyDictionary<string, string> labels, bool onInstallationList = false) : IComputeGateway
     {
         private bool _done;
 
@@ -326,7 +326,7 @@ public class JobReconcilerLifecycleTests
         public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct)
         {
             var found = await inner.FindByJobIdAsync(jobId, ct);
-            if (!_done && found.Any(v => v.Name == vmName))
+            if (!onInstallationList && !_done && found.Any(v => v.Name == vmName))
             {
                 _done = true;
                 inner.SimulateExternalRelabel(vmName, zone, labels); // another run's reuse claims the VM after the listing
@@ -335,7 +335,17 @@ public class JobReconcilerLifecycleTests
             return found;
         }
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+        public async Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct)
+        {
+            var listed = await inner.ListByInstallationAsync(i, ct);
+            if (onInstallationList && !_done && listed.Any(v => v.Name == vmName))
+            {
+                _done = true;
+                inner.SimulateExternalRelabel(vmName, zone, labels); // a reuse claims the donor after the idle sweep listed it
+            }
+
+            return listed;
+        }
 
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
 
@@ -456,7 +466,7 @@ public class JobReconcilerLifecycleTests
     }
 
     /// <summary>A gateway whose GetVm answer is rewritten by <paramref name="map"/> (the re-read of round 12): null VM, or the VM with its labels removed.</summary>
-    private sealed class GetVmMappedCompute(FakeGcp inner, Func<VmDescriptor?, VmDescriptor?> map) : IComputeGateway
+    private sealed class GetVmMappedCompute(FakeGcp inner, Func<VmDescriptor?, VmDescriptor?> map, Func<VmDescriptor, VmDescriptor>? mapListed = null) : IComputeGateway
     {
         public async Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => map(await inner.GetVmAsync(n, z, ct));
 
@@ -468,7 +478,11 @@ public class JobReconcilerLifecycleTests
 
         public Task DeleteVmAsync(string n, string z, CancellationToken ct) => inner.DeleteVmAsync(n, z, ct);
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct) => inner.FindByJobIdAsync(jobId, ct);
+        public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct)
+        {
+            var found = await inner.FindByJobIdAsync(jobId, ct);
+            return mapListed is null ? found : found.Select(mapListed).ToList();
+        }
 
         public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
 
@@ -501,20 +515,64 @@ public class JobReconcilerLifecycleTests
     }
 
     [Theory]
-    [InlineData("gone", "delete-skipped-vm-gone")]
-    [InlineData("unlabelled", "delete-skipped-vm-unlabelled")]
-    public async Task A_re_read_that_finds_the_VM_gone_or_without_labels_skips_the_delete_and_logs_it(string how, string logged)
+    [InlineData("delete", "gone", "delete-skipped-vm-gone")]
+    [InlineData("delete", "unlabelled", "delete-skipped-vm-unlabelled")]
+    [InlineData("stop", "gone", "stop-skipped-vm-gone")]
+    [InlineData("stop", "unlabelled", "stop-skipped-vm-unlabelled")]
+    public async Task A_re_read_that_finds_a_listed_VM_gone_or_stripped_of_its_labels_skips_the_action_and_logs_it(string action, string how, string logged)
     {
         var rig = new Rig();
-        await rig.SeedFinishedAsync("job-skip12" + how, AfterTaskAction.Delete);
-        await rig.StopAsync("job-skip12" + how);
+        var job = "job-skip13" + action + how;
+        await rig.SeedFinishedAsync(job, action == "delete" ? AfterTaskAction.Delete : AfterTaskAction.Stop);
+        if (action == "delete")
+        {
+            await rig.StopAsync(job);
+        }
+
         var log = NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog>();
         var compute = new GetVmMappedCompute(rig.Gcp, vm => how == "gone" ? null : vm! with { Labels = null });
 
         await rig.Reconciler(log: log, compute: compute).EnforceLifecycleAsync(CancellationToken.None);
 
-        log.Received().Warning("reconciler", "job-skip12" + how, logged);
+        log.Received().Warning("reconciler", job, logged);
         rig.Gcp.DeleteAttempts.ShouldBeEmpty();
+        if (action == "stop")
+        {
+            (await rig.Gcp.GetVmAsync("deg-" + job, Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+        }
+    }
+
+    [Fact]
+    public async Task A_VM_the_listing_itself_returned_without_labels_is_judged_by_the_rows_options_and_proceeds()
+    {
+        // Round 13 M2: labels NOT READ (null in the listing too) are not labels removed: the documented fallback (the row's own options) applies and the delete goes ahead.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-unread13", AfterTaskAction.Delete);
+        await rig.StopAsync("job-unread13");
+        var compute = new GetVmMappedCompute(rig.Gcp, vm => vm! with { Labels = null }, listed => listed with { Labels = null });
+
+        await rig.Reconciler(compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-unread13")).ShouldBeEmpty("no labels were read, so there is nothing to compare and the options say Delete");
+    }
+
+    [Fact]
+    public async Task An_idle_stopped_VM_a_reuse_relabels_between_the_idle_listing_and_the_re_read_is_not_deleted_and_the_skip_is_logged()
+    {
+        // Round 13 M1: setLabels does not change the stop time, so the idle check alone cannot see the claim.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-idle13", AfterTaskAction.Stop);
+        await rig.StopAsync("job-idle13");
+        rig.Clock.Advance(TimeSpan.FromHours(80));
+        var vm = (await rig.VmsAsync("job-idle13")).Single();
+        var otherLabels = new Dictionary<string, string>(vm.Labels!) { ["job-id"] = "job-someone-else" };
+        var log = NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog>();
+
+        await rig.Reconciler(log: log, compute: new RelabelAfterListingCompute(rig.Gcp, vm.Name, vm.Zone, otherLabels, onInstallationList: true)).EnforceLifecycleAsync(CancellationToken.None);
+
+        log.Received().Warning("reconciler", "job-idle13", "idle-delete-skipped-vm-relabelled");
+        rig.Gcp.DeleteAttempts.ShouldBeEmpty();
+        (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None)).ShouldNotBeNull();
     }
 
     [Theory]

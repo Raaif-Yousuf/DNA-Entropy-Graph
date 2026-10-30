@@ -404,14 +404,15 @@ public sealed class JobReconciler
                     // Round 10 M1, round 11 M1, round 12 M1 (code read 2026-10-30): the listing is a snapshot, and another run's reuse may have relabelled this VM since, so before ANY delete or stop it is read
                     // again and skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete and stop have no label precondition, so a reuse's setLabels that
                     // lands between this read and the call still affects the VM. Consequence (THEORY, unverified): for a delete, that run's reuse then fails (the VM is gone) and falls to the create ladder,
-                    // so no VM leaks and the run proceeds. Round 12 M2: null labels on a VM just found BY label mean the labels were removed (GoogleComputeGateway.ToDescriptor line 719 maps the API's
-                    // absent label map to null), not "unread", so they skip like a mismatch. A VM that is gone is nothing to act on.
+                    // so no VM leaks and the run proceeds. Round 12 M2, round 13 M2: when the LISTED descriptor had labels, null labels on the re-read mean they were
+                    // removed in between (GoogleComputeGateway.ToDescriptor maps the API's absent label map to null), so the VM skips like a mismatch (maxRunDuration is its backstop). When the listing itself had null labels
+                    // (labels not read, as IsOurs documents) there is nothing to compare: the documented fallback stands and the action proceeds. A VM that is gone is nothing to act on.
                     try
                     {
                         var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
                         string? skip = fresh is null ? "vm-gone"
-                            : fresh.Labels is null ? "vm-unlabelled"
-                            : !fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId ? "vm-relabelled"
+                            : fresh.Labels is null ? (vm.Labels is not null ? "vm-unlabelled" : null)
+                            : (!fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId) ? "vm-relabelled"
                             : null;
                         if (skip is not null)
                         {
@@ -508,7 +509,7 @@ public sealed class JobReconciler
     private static bool CancelOwnsTheVm(RunRecord row)
         => (row.Phase == JobPhase.Cancelled && (string.IsNullOrEmpty(row.ErrorCode) || row.ErrorCode == RunErrorCodes.LateCreateUnconfirmed)) || (row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed);
 
-    /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read say nothing against it (its job id already matched a row of this installation).</summary>
+    /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read (null in the LISTING) say nothing against it (its job id already matched a row of this installation); null labels on a re-read of a VM the listing showed with labels mean they were removed, and that VM is skipped (round 13 M2).</summary>
     private static bool IsOurs(VmDescriptor vm, string installation)
         => vm.Labels is null
             || (vm.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
@@ -552,6 +553,13 @@ public sealed class JobReconciler
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
                         Record(outcomes, jobId, vm.Name, ex);
+                        return;
+                    }
+
+                    // Round 13 M1: a donor a reuse is claiming keeps its stop time (setLabels does not change it), so the re-read also checks the job id the listing carried.
+                    if (fresh is not null && (fresh.Labels is null || !fresh.Labels.TryGetValue("job-id", out var freshJob) || freshJob != jobId))
+                    {
+                        _log.Warning("reconciler", jobId, fresh.Labels is null ? "idle-delete-skipped-vm-unlabelled" : "idle-delete-skipped-vm-relabelled");
                         return;
                     }
 
