@@ -1,84 +1,54 @@
-# Handoff: after the 2026-10-16c wave
+# Handoff: after the 2026-10-28b/29 three-layer wave
 
-> Overwritten every session. Re-check `git log -1 origin/main`, `gh pr list` and the runner's `done.log` before trusting anything here.
+> Overwritten every session. Re-check `git log -1 origin/main`, `gh pr list` and the lander's `land_results.txt` before trusting anything here.
 
 ## What this session was
 
-One orchestrator, at most 3 Sonnet lanes in worktrees, every lane diff cold-reviewed (cloud, deletion and tooling diffs 2 to 7 rounds).
-Issues worked in ascending order from the 2026-10-16b triage; about 45 branches were built and reviewed.
+Three layers: one top orchestrator (owns main, landing, the full suite) -> 3 Opus orchestrators at a time (7 in total over the
+session, each retired near 300k context) -> 1 Sonnet each, in worktrees. Every lane diff cold-reviewed. A scratchpad lander
+(`lander.sh`) landed serially with `land_wt.py --merge-when-green`.
 
-- **Landed this session:** #94, #670, #678, #679, #691, #99 (gateway + wizard), #675, #723, #759 (GPU test mode), #694 (+#543),
-  #129/#130/#192, #800 (resw driver), #143, #144, #784 (a real product race: a cancel during VM reuse could leave a
-  running VM), #825 (every DI container shared `WeakReferenceMessenger.Default`), app10 #684/#686/#688, app12 base, #105 app side.
-- **Closed as already done (verified on main):** #44, #54, #299, #480, #583, #627, #712.
-- **Cleanup:** worktrees 87 -> 3, local branches 160 -> 52 (all queued, held or active), remote branches -> main + the
-  Dependabot PR + the branch landing. Every removed worktree's dirty state is archived (diff + untracked tar) in
-  `%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\9a565426-06c5-4d10-8b43-9ca87d758089\scratchpad\worktree-archive\`
-  (index.txt maps each to its branch). The tracked "modifications" there are stale trees from branch refs moved by
-  later lanes, not lost work.
+- **Landed (about 40):** #242, #244, #813, #812, #243, #499/#701/#807, #892/#904, #652, #552, the RunOptions equality fix
+  (PR #940), #925, #875/#910, #214, #239, #761/#653 (CodeQL product-only + format-arity guard), codeql-misc,
+  codeql-path-combine, #920, #741 (process-wide `ClearAllPools` flake), #720, #841, #828, #846/#847, landed-prs record race,
+  #959 (scripts tests under pytest-xdist: 1600 s -> ~600 s), #587, #255, #141, #514, #945/#927, #933, #909, dead-pid flake, #620/#624, #772.
+- **CodeQL:** 90 triaged product false positives dismissed (path-combine, py ineffectual stubs); tables were in the session scratchpad.
+- **Closed superseded PRs:** #876, #857, #900, #926, #928.
 
-## The landing runner (still running when this session ended)
+## Landing queue at hand-off (lander may still be running)
 
-`%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\2fcad6ed-bcba-448f-9b07-bbd7f0ed5eff\scratchpad\land_queue.sh`, orphan, reads
-`queue.txt` (`branch|sha|title`, `#` skipped), appends `MERGED`/`FAILED ... b @ sha` to `done.log`. Stop: `touch STOP` there.
-A `b @ sha` already in done.log is never retried; requeue a fixed branch under a new name (`-r2`) or a new sha.
-Order (landing now, top first): the `-ea3` cloud chain (675, 717, 677, 111, 113, 91, 92, 87, 109, 100), then 214, 148,
-204 -> 205 -> 208 -> 209 (stacked), 239, tool-lq-land, 255, 242 -> 244 -> 243 (stacked), 259, 450, 303, 245, 479,
-262/534, 488/491, 563, 613, 423, 499 (stacked on 243), 527, 451, 247 -> 497 -> 699 (stacked), 842, 567, 568 -> 601
-(stacked), 652, 141, 611/689/796, and this handoff.
+Lander: `%TEMP%\claude\C--Users-raaif-DNA-Entropy-Graph\f06a0c5f-11b5-4b76-b349-ebb248ff3a02\scratchpad\`
+(`land_requests.txt` + `processed.count` pointer, results in `land_results.txt`, stop with `touch STOP`).
+Queued after it: #918, #262/#534-r12, #923-r3, #133-r8, #109-r14 -> #100-r15, #844, #840 (timeout only), #588-r4, this handoff.
 
-**Expect landing failures that need a small repair lane, by design:**
-- Hot files (ServiceRegistration, Resources.resw, RunErrorCodes/Actions, SettingsPage, ToTest.md) will conflict as
-  the chain lands. The resw merge driver is installed in this clone (`setup_git_drivers.py`).
-- `feat/242-settings-export` adds a guard that fails when any settings key is neither exported nor excluded; keys
-  added by the chain (spend cap, This PC, cloud results), budget (#148) and proxy (#239) must be added to
-  `SettingsCatalog` at that landing.
-- `docs/303` changes shipped Spot prices (L4 0.18 -> 0.51 MEASURED); `feat/214` tests that pin the shipped Spot
-  value may need the new number.
-- `tool-lq-land` replaces the scratchpad runner with `scripts/land_queue.py` (#813). Switch to it once it lands.
+**Need a repair round (FAILED at landing):**
+- `feat/245-cloud-audit-log-r13` @ cae874c9: Cloud.Tests red at landing premerge (log under `%TEMP%\landwt\logs\feat-245-*`).
+  `feat/148-billing-budget-r13` @ 6e9cce11 is stacked on it (HELD).
 
-## Start here next session
+## Held / not started (P1 first)
 
-1. **Check `done.log`.** For each FAILED: read `land-<branch>.log` and `%TEMP%\landwt\logs\<branch>-*.premerge.log`.
-   CI-only flakes: rerun the failed job once (`gh run rerun <id> --failed`). CodeQL `cs/invalid-string-formatting`
-   on resw templates is a known false positive (#761): check the template, dismiss, merge by hand.
-2. **Then #830 (P1): thread the run's own project AND account through every gateway call.** Compute calls and the
-   reconciler use the currently selected project/account, so a switch mid-run orphans the VM. Held behind it:
-   - `feat/260-switch-project` @ 4e0f53dc (#260; DECISION comment on the issue: rebase on #830, drop the guard).
-   - `feat/112-per-account-runs` @ 823a8c2d (#112, never landed; review findings on the issue; renumber its
-     migration after 0003, #842 now enforces contiguity).
-   - #519 (accounts section) belongs in the same lane.
-3. **Still held from before:** #138 CLI (`feat/138-cli` @ 432104bf; findings in the 2026-10-16b handoff, git history of
-   this file), `ci/761-653-codeql-src-only` (its `scripts/tests/test_codeql_workflow.py:65` still asserts the old
-   build line, so it fails premerge as is).
-4. **Built, NOT cold-reviewed, not queued (the session ended first):** `tooling/584-notices-regen` @ 0c5a4fc8
-   (#584, built on tool-lq-land; needs a ToTest app-dev row citing 0c5a4fc8) and `tooling/812-prune-content-check`
-   @ 599804b9 (#812, content-based prune with `--contained-in` and `--remote`). Cold-review both, then queue.
-5. **Code-scanning dismissals:** after `quality/488-491-codescan` lands, dismiss the reviewed false positives listed in
-   `...\9a565426-...\scratchpad\codescan-dismiss.tsv` (165 FALSE-POSITIVE rows; the NOISE-CONFIG rows close by config).
-6. **Next buildable, ascending:** #514, #515, #522-follow-ups, #523, #552, #556 (after #109), #566, #571, #588, #591
-   (DECISION), #598, #610, #620, #624, #630, #631, #668, #680, #697, #720, #722, #735, #741, #768, #769, #772, #803,
-   #828, #840, #841, #846, #847, plus the cost family #215-#225 once #100/#109 land.
+- **#938 (P1)** `fix/938-late-create-after-cancel-r3` @ 9a17aaa8: a create landing after a cancel is never deleted. Round-3 High:
+  the real delete swallows 404, so a delete sent before the VM exists counts as accepted and is never re-sent.
+- **#830 (P1)** not started; design is the DECISION comment on the issue. Then #476/#523, #260, #112, #519.
+- **#958 (P1)** one safe command for `premerge --fast` in an agent worktree (junction + PYTHONPATH + guaranteed unlink).
+- #921 needs a lane with Docker (CUDA image hash-lock). #929 after #588 lands.
+- Unstarted app list: #515, #566, #571, #598, #610, #630, #631, #668, #680, P3s #914 #915 #916 #922.
 
 ## Measured this session
 
-- **A cancel during VM reuse could leave a running VM under a cancelled run (#784).** It looked like a flaky test.
-  Treat a flaky cloud test as a product race until proven otherwise.
-- **GCS lists objects alphabetically, so `manifest.json` is deleted early in a prefix sweep.** The delete now removes
-  it last (#262/#534).
-- **`gh` itself failed to start (0xC0000142) during a long wave and land_wt reported "no checks were reported"**
-  (#811). land_wt now reports gh read failures as such and bounds every gh/git call.
-- **Shipped L4 Spot price was about 3x low** (0.18 vs 0.51/h, cloud.google.com Spot pricing, #303).
-- **Only `Window.Resources` converters crash XamlCompiler silently; `Page.Resources` builds** (#423).
-- **A newer app.db was silently used by an older app, and a busy DB could be quarantined or deleted** (#842).
-- **Two heavy slots (heavy.py) are the right limit with 3 lanes:** RAM stayed above 12 GB free; lanes queued for
-  slots for up to an hour during 20x stress loops, which is acceptable.
-- **Lanes left sleep monitors that kept waking finished agents.** Stop a finished agent with TaskStop once its
-  result is in.
+- **A land_wt refusal named only CodeQL while build-and-test was also red; a hand merge then turned main red** (#552 -> fixed by
+  PR #940; #927 fixed the message). Never hand-merge without `gh pr checks` showing every non-CodeQL check green.
+- **Fast premerge skips the C# suites**: lanes must run the affected C# projects; PR CI is the full gate.
+- **scripts-tests exceeded 1800 s under 3-lane load** with zero failures; #959 parallelised it.
+- **`SqliteConnection.ClearAllPools()` is process-wide**: disposing one database closed other tests' handles (#741; guard idea #951).
+- **Windows reuses a reaped PID quickly**; a "dead pid" test helper must use an impossible pid.
+- **The owner's CLAIR app loads a local model (5-8 GB)**; free RAM fell to 0.4 GB. Drop heavy.py slots to 1 when `llama-server` runs.
 
 ## Owner asks
 
-- **GPU runs are blocked on #24.** The only configured gcloud project is `clair-corpus-52g9xx` (the CLAIR project). Create
-  `deg-dev` per OWNER_TODO 1b, or say to use the CLAIR project, and `cloud_gpu_test.ps1 -Apply` can run #83/#84/#85.
-- **DECISIONs:** #801, #802 (CLI), #14, #672, plus the agent-made ones recorded this session (#450 docs follow
-  workflows; #260 hold).
+- **GCP setup** (deferred): billing link, budget, GPU quota, make the ghcr package public; commands in the git history of this file (2026-10-28 handoff).
+- **DECISIONs to confirm (agent-made, reversible; recommendation: keep all):** #109/#100 ledger is the only cost source and reads never
+  write; cancel stops (never deletes) a reused VM; a VM end is never booked in the future; #933 stuck listing defers the run (safe
+  only with #972); #133 key deleted by the app, not the VM; #620/#624 missing account says "sign in again"; drive-root output folders refused (#954 adds the user action).
+- **#934:** older runs without an output-folder marker: refuse delete, or ask once with a dialog (recommend the dialog).
+- **#840:** relax "under 3 minutes" to "a hang fails fast" (done)?
