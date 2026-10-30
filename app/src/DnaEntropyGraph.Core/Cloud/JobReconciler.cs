@@ -405,7 +405,7 @@ public sealed class JobReconciler
                     // again and skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete and stop have no label precondition, so a reuse's setLabels that
                     // lands between this read and the call still affects the VM. Consequence (THEORY, unverified): for a delete, that run's reuse then fails (the VM is gone) and falls to the create ladder,
                     // so no VM leaks and the run proceeds. Round 12 M2, round 13 M2: when the LISTED descriptor had labels, null labels on the re-read mean they were
-                    // removed in between (GoogleComputeGateway.ToDescriptor maps the API's absent label map to null), so the VM skips like a mismatch (maxRunDuration is its backstop). When the listing itself had null labels
+                    // removed in between (GoogleComputeGateway.ToDescriptor maps the API's absent label map to null), so the VM skips like a mismatch (maxRunDuration is the backstop only for a RUNNING one; a STOPPED one is never listed again and must be deleted by hand in the console, the log line is the only trace). When the listing itself had null labels
                     // (labels not read, as IsOurs documents) there is nothing to compare: the documented fallback stands and the action proceeds. A VM that is gone is nothing to act on.
                     try
                     {
