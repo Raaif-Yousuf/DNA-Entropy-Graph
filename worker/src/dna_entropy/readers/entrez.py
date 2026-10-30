@@ -179,7 +179,8 @@ def _failure(exc: BaseException, acc: str) -> tuple[EntrezError, bool]:
     if isinstance(exc, _TooLarge):
         return EntrezError(
             f"The record for {acc} is larger than {_size_text(_MAX_BODY_BYTES)}, more than this app "
-            "reads. In the app, type a smaller range into the From base and To base boxes and run again; "
+            "reads. In the app, type a smaller range into the From base and To base boxes, then choose "
+            "Fetch record again; "
             "on the command line, use --accession-range START-END."
         ), False
     if isinstance(exc, urllib.error.HTTPError):

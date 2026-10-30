@@ -2448,7 +2448,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
   </data>
   <data name="RunError_input_accession_too_large" xml:space="preserve">
-    <value>That NCBI record is larger than one run can read. Ask for a smaller range of it (the From base and To base boxes), then start the run again.</value>
+    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>

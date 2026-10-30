@@ -419,6 +419,8 @@ def test_a_body_over_the_size_cap_is_refused_with_its_own_action(
     # To base boxes; the CLI flag stays as the command-line route.
     assert "From base" in message
     assert "To base" in message
+    # The range is only captured by choosing Fetch record again; Run alone re-sends the same item.
+    assert "Fetch record" in message
     assert "--accession-range" in message
     assert message.index("From base") < message.index("--accession-range")
     assert "\u2014" not in message
