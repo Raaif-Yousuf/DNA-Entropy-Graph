@@ -141,6 +141,57 @@ public sealed class RunNotesTagsViewModelTests
     }
 
     [Fact]
+    public async Task A_note_cut_to_the_limit_says_it_was_shortened_instead_of_plain_saved()
+    {
+        _rows = [Row("r")];
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        _strings.GetString(ResultsCopy.NotesShortened).Returns("shortened {0}");
+        vm.NotesText = new string('x', RunTags.MaxNotesLength + 1);
+
+        await vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.AnnotationsStatusText.ShouldBe($"shortened {RunTags.MaxNotesLength}");
+        vm.NotesText.Length.ShouldBe(RunTags.MaxNotesLength, "the box shows what was stored");
+    }
+
+    [Fact]
+    public async Task A_cut_note_is_still_mentioned_when_only_the_tags_were_edited_during_the_save()
+    {
+        _rows = [Row("r")];
+        var gate = new TaskCompletionSource<bool>();
+        _annotations.UpdateAsync("r", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        _strings.GetString(ResultsCopy.NotesShortened).Returns("shortened {0}");
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = new string('x', RunTags.MaxNotesLength + 10);
+        var saving = vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.TagsText = "typed-while-saving";
+        gate.SetResult(true);
+        await saving;
+
+        vm.NotesText.Length.ShouldBe(RunTags.MaxNotesLength);
+        vm.AnnotationsStatusText.ShouldContain($"shortened {RunTags.MaxNotesLength}");
+        vm.AnnotationsStatusText.ShouldContain(ResultsCopy.NotesEditedDuringSave);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task A_note_at_the_limit_or_only_over_it_by_spaces_is_plain_saved(int extraSpaces)
+    {
+        _rows = [Row("r")];
+        var vm = Results();
+        await vm.LoadAsync("r", TestContext.Current.CancellationToken);
+        vm.NotesText = new string('x', RunTags.MaxNotesLength) + new string(' ', extraSpaces);
+
+        await vm.SaveAnnotationsCommand.ExecuteAsync(null);
+
+        vm.AnnotationsStatusText.ShouldBe(ResultsCopy.NotesSaved);
+    }
+
+    [Fact]
     public async Task A_tag_that_ends_in_an_emoji_at_the_limit_saves_instead_of_throwing()
     {
         _rows = [Row("r")];
