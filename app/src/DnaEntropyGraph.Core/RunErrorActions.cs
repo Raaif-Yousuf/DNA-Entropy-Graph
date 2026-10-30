@@ -27,6 +27,7 @@ public enum RunErrorAction
     RestoreFile,
     CheckAccession,
     NarrowRange,
+    OpenOutputFolder,
 }
 
 /// <summary>
@@ -46,6 +47,7 @@ public static class RunErrorActions
         [RunErrorCodes.WorkerStageStuck] = RunErrorAction.StartAgain,
         [RunErrorCodes.WorkerProgressStalled] = RunErrorAction.StartAgain,
         [RunErrorCodes.LifecycleUnverified] = RunErrorAction.OpenCloudPage,
+        [RunErrorCodes.ChangedFilesKeptAside] = RunErrorAction.OpenOutputFolder,
         [RunErrorCodes.CancelFailed] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.InputMissing] = RunErrorAction.ChooseFile,
         [RunErrorCodes.WorkerImageUnavailable] = RunErrorAction.UpdateApp,
@@ -141,6 +143,7 @@ public static class RunErrorActions
         RunErrorAction.RestoreFile => ["Restore the id"],
         RunErrorAction.CheckAccession => ["Check the accession"],
         RunErrorAction.NarrowRange => ["smaller range"],
+        RunErrorAction.OpenOutputFolder => ["Open the output folder"],
         _ => [],
     };
 }

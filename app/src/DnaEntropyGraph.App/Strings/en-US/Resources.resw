@@ -175,6 +175,9 @@
   <data name="RunError_lifecycle_unverified" xml:space="preserve">
     <value>Your results were saved, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
+  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
+    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
+  </data>
   <data name="RunError_cancel_failed" xml:space="preserve">
     <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
   </data>
@@ -195,9 +198,6 @@
   </data>
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
-  </data>
-  <data name="RunError_worker_stage_stuck" xml:space="preserve">
-    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
@@ -2084,150 +2084,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
   </data>
-  <data name="SettingsBudgetHeader.Text" xml:space="preserve">
-    <value>Budget alert</value>
-  </data>
-  <data name="SettingsBudgetExplainer.Text" xml:space="preserve">
-    <value>Google can email you when this project's spending nears an amount you choose: at 50%, 90% and 100% of it each month. The emails go to the people who administer your billing account. This is Google's own count, so it is a good check on the estimate this app shows. The amount is in the currency of your billing account.</value>
-  </data>
-  <data name="BudgetAmountBox.Header" xml:space="preserve">
-    <value>Monthly amount</value>
-  </data>
-  <data name="BudgetSaveButton.Content" xml:space="preserve">
-    <value>Create or update the alert</value>
-  </data>
-  <data name="BudgetRemoveButton.Content" xml:space="preserve">
-    <value>Remove the alert</value>
-  </data>
-  <data name="BudgetOpenConsoleLink.Content" xml:space="preserve">
-    <value>Open the matching Google page</value>
-  </data>
-  <data name="BudgetCopyRequestButton.Content" xml:space="preserve">
-    <value>Copy a request for my administrator</value>
-  </data>
-  <data name="BudgetNeedsProject" xml:space="preserve">
-    <value>No Google Cloud project is chosen yet. Finish the setup steps first, then come back here to create the alert.</value>
-  </data>
-  <data name="BudgetStatusNone" xml:space="preserve">
-    <value>There is no budget alert yet. Press Create or update the alert to make one.</value>
-  </data>
-  <data name="BudgetStatusExists" xml:space="preserve">
-    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {1} of {0} a month.</value>
-  </data>
-  <data name="BudgetSaved" xml:space="preserve">
-    <value>Done. Google will email your billing administrators when spending reaches {1} of {0} a month.</value>
-  </data>
-  <data name="BudgetRemoved" xml:space="preserve">
-    <value>The budget alert was removed.</value>
-  </data>
-  <data name="BudgetRemovedNone" xml:space="preserve">
-    <value>There was no budget alert left to remove. Press Create or update the alert if you want one.</value>
-  </data>
-  <data name="BudgetStatusExistsNoAmount" xml:space="preserve">
-    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {0} of the amount that budget follows (last month's spend), so no fixed amount is shown here. To set a fixed amount instead, type one in the box and press Create or update the alert.</value>
-  </data>
-  <data name="BudgetStatusNoThresholdsNoAmount" xml:space="preserve">
-    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. To add them, type a monthly amount in the box and press Create or update the alert.</value>
-  </data>
-  <data name="BudgetStatusNoThresholds" xml:space="preserve">
-    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. Press Create or update the alert to add them.</value>
-  </data>
-  <data name="BudgetThresholdItem" xml:space="preserve">
-    <value>{0}%</value>
-  </data>
-  <data name="BudgetThresholdsJoiner" xml:space="preserve">
-    <value>, </value>
-  </data>
-  <data name="BudgetThresholdsAnd" xml:space="preserve">
-    <value>{0} and {1}</value>
-  </data>
-  <data name="BudgetError_ApiEnablePermission" xml:space="preserve">
-    <value>Your Google account is not allowed to switch on the Cloud Billing Budget API for this project. Open the matching Google page and switch it on there, then press Create or update the alert again.</value>
-  </data>
-  <data name="BudgetError_ApiReadPermission" xml:space="preserve">
-    <value>Your Google account is not allowed to see which Google services are switched on for this project, so nothing was saved. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
-  </data>
-  <data name="BudgetError_PermissionRemove" xml:space="preserve">
-    <value>Your Google account is not allowed to remove budgets on this billing account. Open the matching Google page and remove the alert there.</value>
-  </data>
-  <data name="BudgetAmountInvalid" xml:space="preserve">
-    <value>The monthly amount must be a number of 1 or more. Type an amount such as 50 and press the button again.</value>
-  </data>
-  <data name="BudgetError_Permission" xml:space="preserve">
-    <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my administrator and send it to your billing administrator.</value>
-  </data>
-  <data name="BudgetError_NoBilling" xml:space="preserve">
-    <value>This project has no billing account yet, so there is nothing to put a budget on. Open the matching Google page and link a billing account to the project.</value>
-  </data>
-  <data name="BudgetError_Network" xml:space="preserve">
-    <value>Google could not be reached. Check your internet connection and press the button again.</value>
-  </data>
-  <data name="BudgetError_Other" xml:space="preserve">
-    <value>Google did not accept the budget. Press the button to try again.</value>
-  </data>
-  <data name="BudgetRequestText" xml:space="preserve">
-    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. Please create a monthly budget of {1} on our billing account with email alerts at 50%, 90% and 100% of it. Or give me the Billing Account Costs Manager role on the account so I can create it myself. Thank you.</value>
-  </data>
-  <data name="BudgetRequestCopied" xml:space="preserve">
-    <value>The request is copied. Paste it into an email to your billing administrator.</value>
-  </data>
-  <data name="BudgetStatusApiReadNoAccess" xml:space="preserve">
-    <value>Your Google account is not allowed to see which Google services are switched on for this project, so the app cannot check for a budget alert and Create or update is turned off. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
-  </data>
-  <data name="BudgetRequestCopied_ApiRead" xml:space="preserve">
-    <value>The request is copied. Paste it into an email to a project owner of your Google Cloud project.</value>
-  </data>
-  <data name="BudgetRequestCopied_OrgPolicy" xml:space="preserve">
-    <value>The request is copied. Paste it into an email to whoever manages your organization's Google Cloud.</value>
-  </data>
-  <data name="BudgetRequestCopyFailed" xml:space="preserve">
-    <value>The request could not be copied. Press Copy a request for my administrator again in a moment.</value>
-  </data>
-  <data name="BudgetStatusNoAccess" xml:space="preserve">
-    <value>This Google account cannot see budgets on your billing account, so an existing alert is not shown and Create or update is turned off. Ask your billing administrator to give you the Billing Account Costs Manager role, then open Settings again.</value>
-  </data>
-  <data name="BudgetStatusBillingReadNoAccess" xml:space="preserve">
-    <value>Your Google account is not allowed to see which billing account this project uses, so the app cannot check for a budget alert and Create or update is turned off. Ask a project owner to give you access to the project, then open Settings again.</value>
-  </data>
-  <data name="BudgetStatusBilling" xml:space="preserve">
-    <value>Billing looks switched off for this project, so the app cannot check for a budget alert and Create or update is turned off. Open the matching Google page and turn billing back on.</value>
-  </data>
-  <data name="BudgetStatusOrgPolicy" xml:space="preserve">
-    <value>A rule set by your organization blocked checking for a budget alert, so Create or update is turned off. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
-  </data>
-  <data name="BudgetStatusApiDisabled" xml:space="preserve">
-    <value>A Google service the app needs to check for a budget alert is switched off for this project, so Create or update is turned off. Open the matching Google page and switch it on.</value>
-  </data>
-  <data name="BudgetStatusNetwork" xml:space="preserve">
-    <value>Google could not be reached, so the app could not check for a budget alert and Create or update is turned off. Check your internet connection, then open Settings again.</value>
-  </data>
-  <data name="BudgetError_BillingReadPermission" xml:space="preserve">
-    <value>Your Google account is not allowed to see which billing account this project uses, so nothing was saved. Ask a project owner to give you access to the project, then press the button again.</value>
-  </data>
-  <data name="BudgetStatusCouldNotCheck" xml:space="preserve">
-    <value>The app could not check for an existing budget alert, so Create or update is turned off for now. Open Settings again to check once more.</value>
-  </data>
-  <data name="BudgetError_OrgPolicy" xml:space="preserve">
-    <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
-  </data>
-  <data name="BudgetError_ApiDisabled" xml:space="preserve">
-    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again.</value>
-  </data>
-  <data name="BudgetError_BillingDisabled" xml:space="preserve">
-    <value>Billing is switched off for this project, so a budget cannot be made. Open the matching Google page to turn it back on.</value>
-  </data>
-  <data name="BudgetRequestText_ApiRead" xml:space="preserve">
-    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. The app cannot check which Google services are switched on for this project. Please give my Google account the Service Usage Viewer role on the project so I can set up a budget alert. Thank you.</value>
-  </data>
-  <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
-    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
-  </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
-  <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
-  </data>
   <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
     <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
   </data>
@@ -2236,6 +2092,162 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
+  </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="SettingsTransferHeader.Text" xml:space="preserve">
+    <value>Share settings</value>
+  </data>
+  <data name="SettingsTransferExplainer.Text" xml:space="preserve">
+    <value>Save your defaults to a file, or load a file a colleague saved, so a whole lab starts from the same settings. The file holds your defaults and presets only. It never holds your sign-in, your folders or your program locations.</value>
+  </data>
+  <data name="SettingsTransferExportButton.Content" xml:space="preserve">
+    <value>Export settings</value>
+  </data>
+  <data name="SettingsTransferImportButton.Content" xml:space="preserve">
+    <value>Import settings</value>
+  </data>
+  <data name="SettingsTransferApplyButton.Content" xml:space="preserve">
+    <value>Apply these changes</value>
+  </data>
+  <data name="SettingsTransferCancelButton.Content" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="SettingsTransferArrow.Text" xml:space="preserve">
+    <value>becomes</value>
+  </data>
+  <data name="SettingsFileTypeLabel" xml:space="preserve">
+    <value>Settings file</value>
+  </data>
+  <data name="SettingsTransferFileName" xml:space="preserve">
+    <value>dna-entropy-graph-settings.json</value>
+  </data>
+  <data name="SettingsTransferExportDone" xml:space="preserve">
+    <value>Saved your settings to {0}. Send that file to a colleague, who can load it with Import settings.</value>
+  </data>
+  <data name="SettingsTransferExportFailed" xml:space="preserve">
+    <value>The settings file could not be saved. Choose a different folder, then select Export settings again.</value>
+  </data>
+  <data name="SettingsTransferImportNotSettings" xml:space="preserve">
+    <value>That file is not a settings file from this app. Choose a file that was made with Export settings, then try again.</value>
+  </data>
+  <data name="SettingsTransferImportNewer" xml:space="preserve">
+    <value>That settings file was made by a newer version of the app. Install the latest version from the About group on this page, then select Import settings again.</value>
+  </data>
+  <data name="SettingsTransferImportNothing" xml:space="preserve">
+    <value>Nothing in that file would change your settings. Choose a different file if you expected changes.</value>
+  </data>
+  <data name="SettingsTransferImportReadFailed" xml:space="preserve">
+    <value>That file could not be read. Check that no other program has it open, then select Import settings again.</value>
+  </data>
+  <data name="SettingsTransferImportLocked" xml:space="preserve">
+    <value>The settings could not be saved because another copy of the app has the settings file open. Close the other copies of the app, then select Apply these changes again.</value>
+  </data>
+  <data name="SettingsTransferImportDone" xml:space="preserve">
+    <value>Imported {0} settings and {1} presets. If a page is already open, switch to another page and back to see them.</value>
+  </data>
+  <data name="SettingsTransferPreviewSummary" xml:space="preserve">
+    <value>This file would change {0} settings and add {1} presets. Nothing is saved until you select Apply these changes.</value>
+  </data>
+  <data name="SettingsTransferPreviewSkipped" xml:space="preserve">
+    <value>{0} entries in the file were skipped because they are not valid on this computer.</value>
+  </data>
+  <data name="SettingsTransferValueDefault" xml:space="preserve">
+    <value>not set</value>
+  </data>
+  <data name="SettingsTransferValueOn" xml:space="preserve">
+    <value>On</value>
+  </data>
+  <data name="SettingsTransferValueOff" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="SettingsKeyLabel_Theme" xml:space="preserve">
+    <value>Theme</value>
+  </data>
+  <data name="SettingsKeyLabel_NotifyWhenDone" xml:space="preserve">
+    <value>Notify when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_OpenFolderWhenDone" xml:space="preserve">
+    <value>Open the results folder when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_OpenResultsWhenDone" xml:space="preserve">
+    <value>Open the results when a run finishes</value>
+  </data>
+  <data name="SettingsKeyLabel_UpdateChannel" xml:space="preserve">
+    <value>Update channel</value>
+  </data>
+  <data name="SettingsKeyLabel_UpdateCheckOnLaunch" xml:space="preserve">
+    <value>Check for updates at start</value>
+  </data>
+  <data name="SettingsKeyLabel_IdleStoppedVmHours" xml:space="preserve">
+    <value>Hours a stopped rented computer may sit idle</value>
+  </data>
+  <data name="SettingsKeyLabel_ResultsRetentionDays" xml:space="preserve">
+    <value>Days to keep results in the cloud</value>
+  </data>
+  <data name="SettingsKeyLabel_OutputFilesGenBank" xml:space="preserve">
+    <value>Output files for GenBank inputs</value>
+  </data>
+  <data name="SettingsKeyLabel_OutputFilesSequence" xml:space="preserve">
+    <value>Output files for pasted or FASTA inputs</value>
+  </data>
+  <data name="SettingsKeyLabel_RunTarget" xml:space="preserve">
+    <value>Where runs happen</value>
+  </data>
+  <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
+    <value>IGV connection number</value>
+  </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
   <data name="ViewerIndexFailed_Title" xml:space="preserve">
     <value>The viewer could not prepare this sequence file</value>
@@ -2436,7 +2448,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
   </data>
   <data name="RunError_input_accession_too_large" xml:space="preserve">
-    <value>That NCBI record is larger than one run can read. Ask for a smaller range of it (the From base and To base boxes), then start the run again.</value>
+    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
@@ -2826,107 +2838,8 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
   </data>
-  <data name="SettingsTransferHeader.Text" xml:space="preserve">
-    <value>Share settings</value>
-  </data>
-  <data name="SettingsTransferExplainer.Text" xml:space="preserve">
-    <value>Save your defaults to a file, or load a file a colleague saved, so a whole lab starts from the same settings. The file holds your defaults and presets only. It never holds your sign-in, your folders or your program locations.</value>
-  </data>
-  <data name="SettingsTransferExportButton.Content" xml:space="preserve">
-    <value>Export settings</value>
-  </data>
-  <data name="SettingsTransferImportButton.Content" xml:space="preserve">
-    <value>Import settings</value>
-  </data>
-  <data name="SettingsTransferApplyButton.Content" xml:space="preserve">
-    <value>Apply these changes</value>
-  </data>
-  <data name="SettingsTransferCancelButton.Content" xml:space="preserve">
-    <value>Cancel</value>
-  </data>
-  <data name="SettingsTransferArrow.Text" xml:space="preserve">
-    <value>becomes</value>
-  </data>
-  <data name="SettingsFileTypeLabel" xml:space="preserve">
-    <value>Settings file</value>
-  </data>
-  <data name="SettingsTransferFileName" xml:space="preserve">
-    <value>dna-entropy-graph-settings.json</value>
-  </data>
-  <data name="SettingsTransferExportDone" xml:space="preserve">
-    <value>Saved your settings to {0}. Send that file to a colleague, who can load it with Import settings.</value>
-  </data>
-  <data name="SettingsTransferExportFailed" xml:space="preserve">
-    <value>The settings file could not be saved. Choose a different folder, then select Export settings again.</value>
-  </data>
-  <data name="SettingsTransferImportNotSettings" xml:space="preserve">
-    <value>That file is not a settings file from this app. Choose a file that was made with Export settings, then try again.</value>
-  </data>
-  <data name="SettingsTransferImportNewer" xml:space="preserve">
-    <value>That settings file was made by a newer version of the app. Install the latest version from the About group on this page, then select Import settings again.</value>
-  </data>
-  <data name="SettingsTransferImportNothing" xml:space="preserve">
-    <value>Nothing in that file would change your settings. Choose a different file if you expected changes.</value>
-  </data>
-  <data name="SettingsTransferImportReadFailed" xml:space="preserve">
-    <value>That file could not be read. Check that no other program has it open, then select Import settings again.</value>
-  </data>
-  <data name="SettingsTransferImportLocked" xml:space="preserve">
-    <value>The settings could not be saved because another copy of the app has the settings file open. Close the other copies of the app, then select Apply these changes again.</value>
-  </data>
-  <data name="SettingsTransferImportDone" xml:space="preserve">
-    <value>Imported {0} settings and {1} presets. If a page is already open, switch to another page and back to see them.</value>
-  </data>
-  <data name="SettingsTransferPreviewSummary" xml:space="preserve">
-    <value>This file would change {0} settings and add {1} presets. Nothing is saved until you select Apply these changes.</value>
-  </data>
-  <data name="SettingsTransferPreviewSkipped" xml:space="preserve">
-    <value>{0} entries in the file were skipped because they are not valid on this computer.</value>
-  </data>
-  <data name="SettingsTransferValueDefault" xml:space="preserve">
-    <value>not set</value>
-  </data>
-  <data name="SettingsTransferValueOn" xml:space="preserve">
-    <value>On</value>
-  </data>
-  <data name="SettingsTransferValueOff" xml:space="preserve">
-    <value>Off</value>
-  </data>
-  <data name="SettingsKeyLabel_Theme" xml:space="preserve">
-    <value>Theme</value>
-  </data>
-  <data name="SettingsKeyLabel_NotifyWhenDone" xml:space="preserve">
-    <value>Notify when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_OpenFolderWhenDone" xml:space="preserve">
-    <value>Open the results folder when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_OpenResultsWhenDone" xml:space="preserve">
-    <value>Open the results when a run finishes</value>
-  </data>
-  <data name="SettingsKeyLabel_UpdateChannel" xml:space="preserve">
-    <value>Update channel</value>
-  </data>
-  <data name="SettingsKeyLabel_UpdateCheckOnLaunch" xml:space="preserve">
-    <value>Check for updates at start</value>
-  </data>
-  <data name="SettingsKeyLabel_IdleStoppedVmHours" xml:space="preserve">
-    <value>Hours a stopped rented computer may sit idle</value>
-  </data>
-  <data name="SettingsKeyLabel_ResultsRetentionDays" xml:space="preserve">
-    <value>Days to keep results in the cloud</value>
-  </data>
-  <data name="SettingsKeyLabel_OutputFilesGenBank" xml:space="preserve">
-    <value>Output files for GenBank inputs</value>
-  </data>
-  <data name="SettingsKeyLabel_OutputFilesSequence" xml:space="preserve">
-    <value>Output files for pasted or FASTA inputs</value>
-  </data>
-  <data name="SettingsKeyLabel_RunTarget" xml:space="preserve">
-    <value>Where runs happen</value>
-  </data>
-  <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
-    <value>IGV connection number</value>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
   </data>
   <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
     <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
@@ -3021,66 +2934,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
     <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
   </data>
-  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
-    <value>Earlier version</value>
-  </data>
-  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
-    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
-  </data>
-  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
-    <value>Look for earlier runs</value>
-  </data>
-  <data name="PrototypeImportTitle" xml:space="preserve">
-    <value>Earlier runs found</value>
-  </data>
-  <data name="PrototypeImportBody" xml:space="preserve">
-    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
-  </data>
-  <data name="PrototypeImportZoneLine" xml:space="preserve">
-    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
-  </data>
-  <data name="PrototypeImportSshLine" xml:space="preserve">
-    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
-  </data>
-  <data name="PrototypeImportDone" xml:space="preserve">
-    <value>Added {0} earlier runs to Runs.</value>
-  </data>
-  <data name="PrototypeImportNothingFound" xml:space="preserve">
-    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
-  </data>
-  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
-    <value>Every earlier run found is already in Runs.</value>
-  </data>
-  <data name="PrototypeImportFailed" xml:space="preserve">
-    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
-    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
-    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
-  <data name="PageTitle_RunProgress" xml:space="preserve">
-    <value>Run progress</value>
-  </data>
-  <data name="PageTitle_Viewer" xml:space="preserve">
-    <value>Viewer</value>
-  </data>
-  <data name="PageTitle_Results" xml:space="preserve">
-    <value>Results</value>
-  </data>
-  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
-    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
-  </data>
-  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
-    <value>Open cloud activity log</value>
-  </data>
-  <data name="CloudActivityLogNone" xml:space="preserve">
-    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
-  </data>
-  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
-    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
-  </data>
   <data name="RunError_proxy_blocked" xml:space="preserve">
     <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
   </data>
@@ -3141,6 +2994,18 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
     <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
   </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
   <data name="Results_NotesSaved" xml:space="preserve">
     <value>Saved.</value>
   </data>
@@ -3175,7 +3040,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
   </data>
   <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder inside your output folder (usually Downloads), named after the run followed by "exports" and a short code. Check that your output folder is still there and has free space, then choose Save picture again.</value>
   </data>
   <data name="Results_ExportPngNoFolder" xml:space="preserve">
     <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
@@ -3204,17 +3069,17 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="CloudPage_ProjectChanged" xml:space="preserve">
     <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
-  <data name="NewRunNameTemplate.Header" xml:space="preserve">
-    <value>Run name</value>
+  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
   </data>
-  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
-    <value>{file}</value>
+  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
+    <value>Open cloud activity log</value>
   </data>
-  <data name="NewRunNameHelp.Text" xml:space="preserve">
-    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  <data name="CloudActivityLogNone" xml:space="preserve">
+    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
   </data>
-  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
-    <value>This run will be named</value>
+  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
+    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
   </data>
   <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
     <value>Cloud copy only partly deleted</value>
@@ -3338,5 +3203,146 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
     <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="SettingsBudgetHeader.Text" xml:space="preserve">
+    <value>Budget alert</value>
+  </data>
+  <data name="SettingsBudgetExplainer.Text" xml:space="preserve">
+    <value>Google can email you when this project's spending nears an amount you choose: at 50%, 90% and 100% of it each month. The emails go to the people who administer your billing account. This is Google's own count, so it is a good check on the estimate this app shows. The amount is in the currency of your billing account.</value>
+  </data>
+  <data name="BudgetAmountBox.Header" xml:space="preserve">
+    <value>Monthly amount</value>
+  </data>
+  <data name="BudgetSaveButton.Content" xml:space="preserve">
+    <value>Create or update the alert</value>
+  </data>
+  <data name="BudgetRemoveButton.Content" xml:space="preserve">
+    <value>Remove the alert</value>
+  </data>
+  <data name="BudgetOpenConsoleLink.Content" xml:space="preserve">
+    <value>Open the matching Google page</value>
+  </data>
+  <data name="BudgetCopyRequestButton.Content" xml:space="preserve">
+    <value>Copy a request for my administrator</value>
+  </data>
+  <data name="BudgetNeedsProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen yet. Finish the setup steps first, then come back here to create the alert.</value>
+  </data>
+  <data name="BudgetStatusNone" xml:space="preserve">
+    <value>There is no budget alert yet. Press Create or update the alert to make one.</value>
+  </data>
+  <data name="BudgetStatusExists" xml:space="preserve">
+    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {1} of {0} a month.</value>
+  </data>
+  <data name="BudgetSaved" xml:space="preserve">
+    <value>Done. Google will email your billing administrators when spending reaches {1} of {0} a month.</value>
+  </data>
+  <data name="BudgetRemoved" xml:space="preserve">
+    <value>The budget alert was removed.</value>
+  </data>
+  <data name="BudgetRemovedNone" xml:space="preserve">
+    <value>There was no budget alert left to remove. Press Create or update the alert if you want one.</value>
+  </data>
+  <data name="BudgetStatusExistsNoAmount" xml:space="preserve">
+    <value>Your budget alert is on. Google emails your billing administrators when spending reaches {0} of the amount that budget follows (last month's spend), so no fixed amount is shown here. To set a fixed amount instead, type one in the box and press Create or update the alert.</value>
+  </data>
+  <data name="BudgetStatusNoThresholdsNoAmount" xml:space="preserve">
+    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. To add them, type a monthly amount in the box and press Create or update the alert.</value>
+  </data>
+  <data name="BudgetStatusNoThresholds" xml:space="preserve">
+    <value>Your budget alert is on, but it has no email thresholds, so Google sends no warnings. Press Create or update the alert to add them.</value>
+  </data>
+  <data name="BudgetThresholdItem" xml:space="preserve">
+    <value>{0}%</value>
+  </data>
+  <data name="BudgetThresholdsJoiner" xml:space="preserve">
+    <value>, </value>
+  </data>
+  <data name="BudgetThresholdsAnd" xml:space="preserve">
+    <value>{0} and {1}</value>
+  </data>
+  <data name="BudgetError_ApiEnablePermission" xml:space="preserve">
+    <value>Your Google account is not allowed to switch on the Cloud Billing Budget API for this project. Open the matching Google page and switch it on there, then press Create or update the alert again.</value>
+  </data>
+  <data name="BudgetError_ApiReadPermission" xml:space="preserve">
+    <value>Your Google account is not allowed to see which Google services are switched on for this project, so nothing was saved. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
+  </data>
+  <data name="BudgetError_PermissionRemove" xml:space="preserve">
+    <value>Your Google account is not allowed to remove budgets on this billing account. Open the matching Google page and remove the alert there.</value>
+  </data>
+  <data name="BudgetAmountInvalid" xml:space="preserve">
+    <value>The monthly amount must be a number of 1 or more. Type an amount such as 50 and press the button again.</value>
+  </data>
+  <data name="BudgetError_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to create budgets on this billing account. Press Copy a request for my administrator and send it to your billing administrator.</value>
+  </data>
+  <data name="BudgetError_NoBilling" xml:space="preserve">
+    <value>This project has no billing account yet, so there is nothing to put a budget on. Open the matching Google page and link a billing account to the project.</value>
+  </data>
+  <data name="BudgetError_Network" xml:space="preserve">
+    <value>Google could not be reached. Check your internet connection and press the button again.</value>
+  </data>
+  <data name="BudgetError_Other" xml:space="preserve">
+    <value>Google did not accept the budget. Press the button to try again.</value>
+  </data>
+  <data name="BudgetRequestText" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. Please create a monthly budget of {1} on our billing account with email alerts at 50%, 90% and 100% of it. Or give me the Billing Account Costs Manager role on the account so I can create it myself. Thank you.</value>
+  </data>
+  <data name="BudgetRequestCopied" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to your billing administrator.</value>
+  </data>
+  <data name="BudgetStatusApiReadNoAccess" xml:space="preserve">
+    <value>Your Google account is not allowed to see which Google services are switched on for this project, so the app cannot check for a budget alert and Create or update is turned off. Press Copy a request for my administrator and send it to a project owner, who can give you the Service Usage Viewer role.</value>
+  </data>
+  <data name="BudgetRequestCopied_ApiRead" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to a project owner of your Google Cloud project.</value>
+  </data>
+  <data name="BudgetRequestCopied_OrgPolicy" xml:space="preserve">
+    <value>The request is copied. Paste it into an email to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetRequestCopyFailed" xml:space="preserve">
+    <value>The request could not be copied. Press Copy a request for my administrator again in a moment.</value>
+  </data>
+  <data name="BudgetStatusNoAccess" xml:space="preserve">
+    <value>This Google account cannot see budgets on your billing account, so an existing alert is not shown and Create or update is turned off. Ask your billing administrator to give you the Billing Account Costs Manager role, then open Settings again.</value>
+  </data>
+  <data name="BudgetStatusBillingReadNoAccess" xml:space="preserve">
+    <value>Your Google account is not allowed to see which billing account this project uses, so the app cannot check for a budget alert and Create or update is turned off. Ask a project owner to give you access to the project, then open Settings again.</value>
+  </data>
+  <data name="BudgetStatusBilling" xml:space="preserve">
+    <value>Billing looks switched off for this project, so the app cannot check for a budget alert and Create or update is turned off. Open the matching Google page and turn billing back on.</value>
+  </data>
+  <data name="BudgetStatusOrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization blocked checking for a budget alert, so Create or update is turned off. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetStatusApiDisabled" xml:space="preserve">
+    <value>A Google service the app needs to check for a budget alert is switched off for this project, so Create or update is turned off. Open the matching Google page and switch it on.</value>
+  </data>
+  <data name="BudgetStatusNetwork" xml:space="preserve">
+    <value>Google could not be reached, so the app could not check for a budget alert and Create or update is turned off. Check your internet connection, then open Settings again.</value>
+  </data>
+  <data name="BudgetError_BillingReadPermission" xml:space="preserve">
+    <value>Your Google account is not allowed to see which billing account this project uses, so nothing was saved. Ask a project owner to give you access to the project, then press the button again.</value>
+  </data>
+  <data name="BudgetStatusCouldNotCheck" xml:space="preserve">
+    <value>The app could not check for an existing budget alert, so Create or update is turned off for now. Open Settings again to check once more.</value>
+  </data>
+  <data name="BudgetError_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization blocked this budget. Press Copy a request for my administrator and send it to whoever manages your organization's Google Cloud.</value>
+  </data>
+  <data name="BudgetError_ApiDisabled" xml:space="preserve">
+    <value>Google is still switching on the budget service for this project. Wait a minute, then press Create or update the alert again.</value>
+  </data>
+  <data name="BudgetError_BillingDisabled" xml:space="preserve">
+    <value>Billing is switched off for this project, so a budget cannot be made. Open the matching Google page to turn it back on.</value>
+  </data>
+  <data name="BudgetRequestText_ApiRead" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. The app cannot check which Google services are switched on for this project. Please give my Google account the Service Usage Viewer role on the project so I can set up a budget alert. Thank you.</value>
+  </data>
+  <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
+    <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
+  </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
   </data>
 </root>

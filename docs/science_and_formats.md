@@ -597,7 +597,7 @@ never re-annotate" rule apply unchanged. Mechanics:
   `accession` (resolved) and `requested`.
 - **Deadline and size.** The body is read as it streams: 120 s in total, however slowly it drips
   in (each single wait 30 s), and at most 64 MiB (the app's own input ceiling); over either, the
-  fetch is refused and nothing is cached. A bigger record needs `--accession-range`.
+  fetch is refused and nothing is cached. A bigger record needs a range: the app's From base and To base boxes followed by Fetch record, or `--accession-range` on the command line (the message names both, issue #948).
 - **Failures** each have their own message and one action: 429 (wait, or use an API key), 5xx (try
   again in a few minutes), 400 and 404 (check the accession and range), 401 and 403 (check the API
   key), a timeout, a too-large record, any other network failure. Only 429 and 5xx are retried,
