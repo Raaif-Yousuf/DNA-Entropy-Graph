@@ -74,7 +74,7 @@ public sealed record InstallationInventory(
 /// </summary>
 public sealed class InstallationCleanup
 {
-    private const string ManifestName = "manifest.json";
+    private const string ManifestName = ResultsBucket.ManifestObject;
 
     private readonly IComputeGateway _compute;
     private readonly IStorageGateway _storage;

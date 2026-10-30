@@ -39,7 +39,7 @@ public sealed class ProxyPolicy : IProxyPolicy
     /// <param name="restoreFailed">Told about a failure while rolling back a failed <see cref="Apply"/> (the original error is still the one thrown); defaults to a trace line with the class only.</param>
     public ProxyPolicy(ISettingsStore settings, IProxyCredentialStore credentials, Action<Exception>? restoreFailed = null)
     {
-        _restoreFailed = restoreFailed ?? (ex => System.Diagnostics.Trace.TraceWarning("Proxy policy rollback failed: " + ex.GetType().Name));
+        _restoreFailed = restoreFailed ?? (ex => System.Diagnostics.Trace.TraceWarning($"Proxy policy rollback failed: {ex.GetType().Name}"));
         _store = new ProxySettingsStore(settings);
         _credentials = credentials;
     }

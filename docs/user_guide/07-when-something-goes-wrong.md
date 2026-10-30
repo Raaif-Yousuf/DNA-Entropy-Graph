@@ -16,7 +16,7 @@ Open **Settings**, find **Diagnostics**, and choose **Save diagnostics**. Pick w
 the zip (it starts in Downloads, named `dna-entropy-diagnostics-<date>.zip`), then choose
 **Open folder** to find it and attach it to your issue or email.
 
-The file includes the logs from your runs, your run history (run ids, states, error codes and times),
+The file includes the logs from your runs and the app's own log, your run history (run ids, states, error codes and times),
 the status and result files the app keeps for each run (with names and paths removed), settings that
 are safe to share, version numbers and this installation's id. It never includes your sequences, your
 input file names, your results, your email address or your sign-in. Any path on your computer appears

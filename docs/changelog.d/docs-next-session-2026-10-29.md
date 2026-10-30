@@ -1,0 +1,1 @@
+- Handoff for the 2026-10-28b/29 wave: NEXT_SESSION.md rewritten (queue, held work, measured lessons, owner asks).
