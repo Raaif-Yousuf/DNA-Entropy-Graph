@@ -50,8 +50,13 @@ Runner = Callable[[list[str], dict[str, str], Path, "float | None"], int]
 def default_runner(argv: list[str], env: dict[str, str], cwd: Path, timeout: float | None = None) -> int:
     """Run the gate with inherited stdio. On timeout or Ctrl-C the tree THIS call started (by PID) is killed first."""
     job = wt_venv.create_kill_job()  # Windows: the whole tree dies with the job, even if heavy.py exits before we kill it
-    proc = subprocess.Popen(argv, env=env, cwd=cwd, start_new_session=os.name != "nt")  # POSIX: its own process group
-    if os.name == "nt" and (job is None or not job.assign(proc)):
+    try:
+        proc, assigned = wt_venv.spawn_in_job(argv, env, cwd, job)
+    except BaseException:
+        if job is not None:
+            job.close()
+        raise
+    if os.name == "nt" and not assigned:
         print("WARNING: no job object for the gate tree; falling back to taskkill /T by PID (a Ctrl-C may orphan grandchildren)")
         if job is not None:
             job.close()
@@ -188,6 +193,9 @@ def main(argv: Sequence[str] | None = None, *, runner: Runner = default_runner) 
     ap.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS, help="seconds before the gate tree is killed (default 7200)")
     ap.add_argument("extra", nargs="*", help="further premerge.py arguments, after --")
     args = ap.parse_args(argv)
+    if args.timeout <= 0:
+        print("ERROR: --timeout must be a positive number of seconds")
+        return EXIT_REFUSED
     wt = Path.cwd().resolve()
     if not (wt / "scripts" / "premerge.py").is_file():
         print("ERROR: run this from a worktree root (scripts/premerge.py not found here)")

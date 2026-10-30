@@ -6,6 +6,7 @@ A fake runner is injected, so these tests never run the real gate. NTFS junction
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -290,7 +291,7 @@ def test_default_runner_kills_the_tree_on_ctrl_c_then_reraises(monkeypatch):
         def wait(self, timeout: float | None = None) -> int:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(pmw.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(wt_venv, "spawn_in_job", lambda argv, env, cwd, job: (FakeProc(), False))
     monkeypatch.setattr(wt_venv, "create_kill_job", lambda: None)
     monkeypatch.setattr(wt_venv, "kill_tree", lambda proc: killed.append(proc))
     with pytest.raises(KeyboardInterrupt):
@@ -309,12 +310,31 @@ def test_a_stub_heavy_script_wraps_premerge_in_the_documented_argv_order(world):
     assert argv[5:] == [py, str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", py, "--fast", "--only", "x"]
 
 
-def test_land_wt_and_premerge_wt_build_the_same_premerge_argv(world):
+def test_land_wt_and_premerge_wt_build_the_same_premerge_argv(world, monkeypatch):
     wt, venv = world
+    import land_wt as lw
+
     py = venv / _py_rel()
     fast = wt_venv.premerge_argv(wt, py, full=False, lane_prefix="premerge")
     assert fast == [str(py), str(wt / "scripts" / "premerge.py"), "--root", str(wt), "--python", str(py), "--fast"]
     assert "--fast" not in wt_venv.premerge_argv(wt, py, full=True, lane_prefix="land")
+    # land_wt's own builder, called for real with run_bounded faked: same argv, "land" lane
+    land_py = wt / "worker" / ".venv" / _py_rel()
+    land_py.parent.mkdir(parents=True)
+    land_py.write_bytes(b"fake\n")
+    (wt / "scripts" / "heavy.py").write_text("# stub\n", encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def fake_run_bounded(argv, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(lw, "run_bounded", fake_run_bounded)
+    for full in (False, True):
+        lw.run_premerge(wt, venv, full)
+        assert seen[-1] == wt_venv.premerge_argv(wt, land_py, full=full, lane_prefix="land")
+        assert seen[-1][:5] == [str(land_py), str(wt / "scripts" / "heavy.py"), "--lane", f"land-{wt.name}", "--"]
+        assert ("--fast" in seen[-1]) is (not full)
 
 
 def _main_world(monkeypatch, world):
@@ -401,8 +421,11 @@ def test_a_timeout_kills_the_child_and_its_grandchild(tmp_path: Path):
     import time
 
     pids = tmp_path / "pids.txt"
-    code = pmw.default_runner([sys.executable, "-c", GRANDCHILD, str(pids)], dict(os.environ), Path.cwd(), 6.0)
+    code = pmw.default_runner([sys.executable, "-c", GRANDCHILD, str(pids)], dict(os.environ), Path.cwd(), 12.0)
     assert code == pmw.EXIT_TIMEOUT
+    wait_for = time.monotonic() + 15
+    while time.monotonic() < wait_for and not (pids.is_file() and len(pids.read_text(encoding="utf-8").split()) == 2):
+        time.sleep(0.1)
     child, grandchild = (int(x) for x in pids.read_text(encoding="utf-8").split())
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and (_alive(child) or _alive(grandchild)):
@@ -480,3 +503,103 @@ def test_venv_resolving_through_a_stale_worktree_junction_is_refused_and_the_tar
     assert pmw.run(wt, link, runner=r) == pmw.EXIT_REFUSED
     assert r.calls == [] and _survives(venv)
     wt_venv.unlink_dir_link(link)
+
+
+# ---- fix round 3 ------------------------------------------------------------
+
+PID_SCRIPT = "import os, sys, time\nopen(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(120)\n"
+
+
+def _wait_for_pid_file(f: Path) -> int:
+    import time
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if f.is_file() and f.read_text(encoding="utf-8").strip():
+            return int(f.read_text(encoding="utf-8"))
+        time.sleep(0.05)
+    raise AssertionError(f"{f} never appeared")
+
+
+def _wait_dead(pid: int, seconds: float = 10.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not _alive(pid):
+            return True
+        time.sleep(0.1)
+    return not _alive(pid)
+
+
+@needs_windows
+def test_a_hard_kill_of_the_owner_leaves_no_real_interpreter_behind_n_runs(tmp_path: Path):
+    """The owner dies (job handle closed, no taskkill, no kill_all): the REAL interpreter behind the venv launcher must die.
+    MEASURED 2026-10-30 against the old assign-after-start code: 0 of 20 escaped. Kept as a pin of the guarantee."""
+    escaped: list[int] = []
+    for i in range(20):
+        f = tmp_path / f"pid{i}.txt"
+        job = wt_venv.create_kill_job()
+        assert job is not None
+        proc, assigned = wt_venv.spawn_in_job([sys.executable, "-c", PID_SCRIPT, str(f)], dict(os.environ), Path.cwd(), job)
+        try:
+            assert assigned
+            real = _wait_for_pid_file(f)
+            job.close()
+            if not _wait_dead(real):
+                escaped.append(real)
+        finally:
+            job.close()
+            if proc.poll() is None:
+                proc.kill()
+            for pid in escaped:
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+    assert escaped == []
+
+
+@needs_windows
+def test_spawn_in_job_resumes_the_child_even_when_assignment_fails(tmp_path: Path):
+    class RefusingJob:
+        def assign(self, proc: object) -> bool:
+            return False
+
+    f = tmp_path / "pid.txt"
+    proc, assigned = wt_venv.spawn_in_job([sys.executable, "-c", PID_SCRIPT, str(f)], dict(os.environ), Path.cwd(), RefusingJob())  # type: ignore[arg-type]
+    try:
+        assert assigned is False
+        real = _wait_for_pid_file(f)  # it ran: it was resumed
+        assert _alive(real)
+    finally:
+        wt_venv.kill_tree(proc)
+
+
+def test_the_job_handle_is_closed_when_popen_raises(monkeypatch):
+    closed: list[bool] = []
+
+    class FakeJob:
+        def assign(self, proc: object) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            pass
+
+        def close(self) -> None:
+            closed.append(True)
+
+    def boom(*a: object, **k: object) -> object:
+        raise FileNotFoundError("no such exe")
+
+    monkeypatch.setattr(wt_venv, "create_kill_job", lambda: FakeJob())
+    monkeypatch.setattr(pmw.subprocess, "Popen", boom)
+    monkeypatch.setattr(wt_venv.subprocess, "Popen", boom)
+    with pytest.raises(FileNotFoundError):
+        pmw.default_runner(["nope"], {}, Path.cwd(), 5.0)
+    assert closed
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_a_non_positive_timeout_is_refused(monkeypatch, world, bad, capsys):
+    wt, venv = _main_world(monkeypatch, world)
+    r = Runner(wt)
+    assert pmw.main(["--venv", str(venv), "--timeout", bad], runner=r) == pmw.EXIT_REFUSED
+    assert r.calls == [] and "--timeout" in capsys.readouterr().out

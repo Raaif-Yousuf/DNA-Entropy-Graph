@@ -100,8 +100,8 @@ def premerge_argv(wt: Path, py: Path, *, full: bool, lane_prefix: str, extra: Se
 
 class KillJob:
     """A Windows Job Object with KILL_ON_JOB_CLOSE: every process assigned to it, and the ones those start, die on
-    `terminate()` or when the last handle closes, even if the owner is hard-killed. A child that spawned a grandchild
-    before `assign` returned is not covered (the assignment follows Popen by microseconds; python start-up takes far longer)."""
+    `terminate()` or when the last handle closes, even if the owner is hard-killed. Start the child with `spawn_in_job`
+    (suspended, assigned, then resumed) so it cannot start a grandchild before it is inside the job."""
 
     KILL_ON_JOB_CLOSE = 0x2000
     EXTENDED_LIMIT_INFORMATION = 9
@@ -126,6 +126,77 @@ class KillJob:
         if self._handle is not None:
             handle, self._handle = self._handle, None
             self._k32.CloseHandle(handle)
+
+
+def resume_process_threads(pid: int) -> int:
+    """Resume every thread owned by `pid` (a CREATE_SUSPENDED process has exactly one, suspended once). Returns how many
+    were resumed; every handle is closed. Windows only."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class ThreadEntry(ctypes.Structure):
+        _fields_ = (
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ThreadID", wintypes.DWORD),
+            ("th32OwnerProcessID", wintypes.DWORD),
+            ("tpBasePri", wintypes.LONG),
+            ("tpDeltaPri", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+        )
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    k32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(ThreadEntry)]
+    k32.Thread32First.restype = wintypes.BOOL
+    k32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(ThreadEntry)]
+    k32.Thread32Next.restype = wintypes.BOOL
+    k32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenThread.restype = ctypes.c_void_p
+    k32.ResumeThread.argtypes = [ctypes.c_void_p]
+    k32.ResumeThread.restype = wintypes.DWORD
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    k32.CloseHandle.restype = wintypes.BOOL
+    snapshot = k32.CreateToolhelp32Snapshot(0x4, 0)  # TH32CS_SNAPTHREAD
+    if snapshot is None or snapshot == ctypes.c_void_p(-1).value:
+        return 0
+    resumed = 0
+    try:
+        entry = ThreadEntry()
+        entry.dwSize = ctypes.sizeof(ThreadEntry)
+        more = k32.Thread32First(snapshot, ctypes.byref(entry))
+        while more:
+            if entry.th32OwnerProcessID == pid:
+                thread = k32.OpenThread(0x2, False, entry.th32ThreadID)  # THREAD_SUSPEND_RESUME
+                if thread:
+                    try:
+                        if k32.ResumeThread(thread) != 0xFFFFFFFF:
+                            resumed += 1
+                    finally:
+                        k32.CloseHandle(thread)
+            more = k32.Thread32Next(snapshot, ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(snapshot)
+    return resumed
+
+
+def spawn_in_job(argv: Sequence[str], env: dict[str, str], cwd: Path, job: KillJob | None) -> tuple[subprocess.Popen[bytes], bool]:
+    """Start `argv` with inherited stdio and put it in `job` BEFORE it runs (Windows: CREATE_SUSPENDED, assign, resume), so
+    nothing it starts can be outside the job. Returns (process, assigned). An assignment that fails still resumes the child
+    (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job."""
+    if os.name != "nt":
+        return subprocess.Popen(list(argv), env=env, cwd=cwd, start_new_session=True), False
+    proc = subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4)  # CREATE_SUSPENDED
+    try:
+        assigned = job.assign(proc) if job is not None else False
+    except BaseException:
+        proc.kill()
+        raise
+    if resume_process_threads(proc.pid) == 0:
+        proc.kill()  # it would sit suspended forever
+        raise OSError(f"could not resume the suspended process {proc.pid}")
+    return proc, assigned
 
 
 def create_kill_job() -> KillJob | None:
