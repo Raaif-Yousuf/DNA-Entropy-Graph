@@ -3192,4 +3192,16 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_ExportPng_YAxis" xml:space="preserve">
     <value>Entropy (bits, 0 to 2)</value>
   </data>
+  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
+  </data>
+  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
+    <value>Open cloud activity log</value>
+  </data>
+  <data name="CloudActivityLogNone" xml:space="preserve">
+    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
+  </data>
+  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
+    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
+  </data>
 </root>

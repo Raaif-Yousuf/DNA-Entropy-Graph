@@ -53,7 +53,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, compute: compute);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -290,6 +290,99 @@ public class JobReconcilerLifecycleTests
         outcomes.Count(o => o.Action == LifecycleAction.VmDeleted).ShouldBe(1);
         var left = (await rig.VmsAsync("job-hang-a")).Count + (await rig.VmsAsync("job-hang-b")).Count;
         left.ShouldBe(1, "one delete was deferred; the other VM was not skipped because of it");
+    }
+
+    [Fact]
+    public async Task A_reconciler_mutation_that_hits_the_apps_own_deadline_is_audited_as_timeout_not_cancelled()
+    {
+        // Issue #245 review round 4 (M): the reconciler's own deadline token reached the audited gateway without the caller scope, so the app's timeout read "cancelled".
+        var rig = new Rig(g => g.WithFirstDeleteDelay(TimeSpan.FromSeconds(30)));
+        await rig.SeedFinishedAsync("job-audit-timeout", AfterTaskAction.Delete);
+        var entries = new List<DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry>();
+        var auditor = new DnaEntropyGraph.Core.Cloud.Audit.CloudAuditor(new ListLog(entries), () => "install-1", TimeProvider.System);
+        var audited = new AuditedComputeGateway(rig.Gcp, auditor);
+
+        // The lookup window is wide so a slow machine cannot turn the cheap lookups into Deferred; the delete never completes, so the short mutation window still fires.
+        var outcomes = await rig.Reconciler(lookupTimeout: TimeSpan.FromSeconds(10), mutationTimeout: TimeSpan.FromMilliseconds(200), compute: audited).EnforceLifecycleAsync(CancellationToken.None);
+
+        outcomes.ShouldContain(o => o.JobId == "job-audit-timeout" && o.Action == LifecycleAction.Deferred);
+        for (var i = 0; i < 500 && !entries.Any(e => e.Operation == "Compute.DeleteVm" && e.Phase == "finished"); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        entries.Single(e => e.Operation == "Compute.DeleteVm" && e.Phase == "finished").Outcome.ShouldBe("timeout");
+    }
+
+    /// <summary>The delete registers a callback that throws on the token it was handed, then waits for that token (a callee with a throwing cancellation callback).</summary>
+    private sealed class ThrowingCallbackCompute(FakeGcp inner, TaskCompletionSource reached) : IComputeGateway
+    {
+        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
+        {
+            cancellationToken.Register(() => throw new InvalidOperationException("callee callback"));
+            reached.TrySetResult();
+            return Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+
+        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+
+        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+
+        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+    }
+
+    [Fact]
+    public async Task A_user_cancel_during_a_delete_is_not_recorded_as_a_failure_when_the_deleting_call_has_a_throwing_cancellation_callback()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-cancel-throw", AfterTaskAction.Delete);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconciler = rig.Reconciler(lookupTimeout: TimeSpan.FromSeconds(10), mutationTimeout: TimeSpan.FromSeconds(30), compute: new ThrowingCallbackCompute(rig.Gcp, reached));
+        using var cts = new CancellationTokenSource();
+
+        var pass = reconciler.EnforceLifecycleAsync(cts.Token);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        // MEASURED 2026-10-29 (PR #944 CI, Release, twice): the callee's throwing callback used to surface out of THIS call. Synchronous Cancel runs every relay inline, so it is deterministic.
+        Should.NotThrow(() => cts.Cancel());
+
+        IReadOnlyList<LifecycleOutcome> outcomes;
+        try
+        {
+            outcomes = await pass;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        outcomes.ShouldNotContain(o => o.Action == LifecycleAction.Failed, "the user's cancel is not a cloud failure of that row");
+    }
+
+    private sealed class ListLog(List<DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry> entries) : DnaEntropyGraph.Core.Cloud.Audit.ICloudAuditLog
+    {
+        public void Record(DnaEntropyGraph.Core.Cloud.Audit.CloudAuditEntry entry)
+        {
+            lock (entries)
+            {
+                entries.Add(entry);
+            }
+        }
     }
 
     [Fact]
