@@ -1,0 +1,1 @@
+- Fix a flaky DiagnosticsTraceListenerTests blank-message test (#994): MEASURED 2026-10-30, a concurrent neighbouring class calling Trace.* adds lines to the log the test counts (716 foreign lines with a 200k-call neighbour). The class now runs in a non-parallel collection; TraceNoiseNeighbourTests is the deterministic neighbour that keeps it honest.
