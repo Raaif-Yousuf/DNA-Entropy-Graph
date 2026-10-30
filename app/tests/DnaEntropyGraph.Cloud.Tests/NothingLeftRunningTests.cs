@@ -183,7 +183,7 @@ public class NothingLeftRunningTests
 
         public async Task<VmDescriptor> CreateVmAsync(string installation, string job, TimeSpan maxRun)
         {
-            var spec = new VmSpec("p", installation, job, "evo2_7b", "0.1.0", "stop", "g2-standard-8", maxRun, "DELETE");
+            var spec = new VmSpec("my-project", installation, job, "evo2_7b", "0.1.0", "stop", "g2-standard-8", maxRun, "DELETE");
             return await Gcp.CreateVmAsync(spec, Zone, CancellationToken.None);
         }
 
@@ -231,8 +231,8 @@ public class NothingLeftRunningTests
         var labels = new Dictionary<string, string> { ["app"] = "dna-entropy-graph", ["installation-id"] = "inst-other", ["job-id"] = "job-x" };
         var theirs = new VmDescriptor("deg-job-x", Zone, "RUNNING", Labels: labels, CreatedAt: Start, MachineType: "g2-standard-8", MaxRunDuration: TimeSpan.FromMinutes(90));
         var stub = Substitute.For<IComputeGateway>();
-        stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([theirs]));
-        stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        stub.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([theirs]));
+        stub.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([new DiskDescriptor("deg-job-x", Zone, 150, "READY", labels)]));
         var scanner = new LeftRunningScanner(stub, rig.Settings, rig.Runs, rig.Pricing, rig.Clock);
         var guard = rig.NewGuard(scanner, new InstallationCleanup(stub, rig.Gcp, rig.Runs));
@@ -243,9 +243,9 @@ public class NothingLeftRunningTests
 
         report.IsClean.ShouldBeTrue();
         await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-        await stub.DidNotReceive().StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await stub.DidNotReceive().EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
-        await stub.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().StopVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -337,9 +337,9 @@ public class NothingLeftRunningTests
         await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
         rig.Choice = 0;
         var failing = Substitute.For<IComputeGateway>();
-        failing.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        failing.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        failing.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new IOException("boom"));
+        failing.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.ArgAt<CloudScope>(0), call.ArgAt<string>(1), CancellationToken.None));
+        failing.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.ArgAt<CloudScope>(0), call.ArgAt<string>(1), CancellationToken.None));
+        failing.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new IOException("boom"));
         var guard = rig.NewGuard(new LeftRunningScanner(failing, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(failing, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeFalse();
@@ -352,7 +352,7 @@ public class NothingLeftRunningTests
     {
         var rig = new Rig();
         var broken = Substitute.For<IComputeGateway>();
-        broken.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
+        broken.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
         var guard = rig.NewGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs));
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
@@ -364,7 +364,7 @@ public class NothingLeftRunningTests
         var rig = new Rig();
         var log = Substitute.For<IDiagnosticsLog>();
         var broken = Substitute.For<IComputeGateway>();
-        broken.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
+        broken.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new IOException("offline"));
         var guard = new LeftRunningGuard(new LeftRunningScanner(broken, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(broken, rig.Gcp, rig.Runs), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock, rig.Gcp);
 
         (await guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
@@ -378,7 +378,7 @@ public class NothingLeftRunningTests
     {
         var rig = new Rig();
         var hung = Substitute.For<IComputeGateway>();
-        hung.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        hung.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new TaskCompletionSource<IReadOnlyList<VmDescriptor>>().Task);
         var guard = rig.NewGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs));
 
@@ -396,7 +396,7 @@ public class NothingLeftRunningTests
         await rig.CreateVmAsync(rig.Installation, "job-1", TimeSpan.FromMinutes(90));
         rig.Choice = 0;
         var hung = Forwarding(rig);
-        hung.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
+        hung.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
         var guard = rig.NewGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock));
 
         var closing = guard.ConfirmExitAsync(CancellationToken.None);
@@ -409,9 +409,9 @@ public class NothingLeftRunningTests
     private static IComputeGateway Forwarding(Rig rig)
     {
         var stub = Substitute.For<IComputeGateway>();
-        stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.Arg<string>(), CancellationToken.None));
-        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.EndVmAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<bool>(2), call.ArgAt<Action?>(3), call.ArgAt<CancellationToken>(4)));
+        stub.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListByInstallationAsync(call.ArgAt<CloudScope>(0), call.ArgAt<string>(1), CancellationToken.None));
+        stub.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.ListDisksByInstallationAsync(call.ArgAt<CloudScope>(0), call.ArgAt<string>(1), CancellationToken.None));
+        stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call => rig.Gcp.EndVmAsync(call.ArgAt<CloudScope>(0), call.ArgAt<string>(1), call.ArgAt<string>(2), call.ArgAt<bool>(3), call.ArgAt<Action?>(4), call.ArgAt<CancellationToken>(5)));
         return stub;
     }
 
@@ -431,7 +431,7 @@ public class NothingLeftRunningTests
         await rig.Clock.FireNextTimeoutAsync(InstallationCleanup.DriverStopWait);
 
         (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
-        await stub.Received(1).EndVmAsync(vm.Name, Zone, false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        await stub.Received(1).EndVmAsync(Arg.Any<CloudScope>(), vm.Name, Zone, false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
         rig.LatestPhase("job-live").ShouldBe(JobPhase.Cancelled);
         rig.LatestErrorCode("job-live").ShouldBe(RunErrorCodes.StoppedByCleanup);
     }
@@ -490,9 +490,9 @@ public class NothingLeftRunningTests
         (await cleanup.EndVmAsync(rig.Installation, theirs, true, null, CancellationToken.None)).ShouldBe(VmEndResult.Failed);
         (await cleanup.EndVmAsync(rig.Installation, theirs, false, null, CancellationToken.None)).ShouldBe(VmEndResult.Failed);
 
-        await stub.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await stub.DidNotReceive().StopVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await stub.DidNotReceive().EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().StopVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await stub.DidNotReceive().EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -502,7 +502,7 @@ public class NothingLeftRunningTests
         var log = Substitute.For<IDiagnosticsLog>();
         var late = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
         var hung = Substitute.For<IComputeGateway>();
-        hung.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(late.Task);
+        hung.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(late.Task);
         var guard = new LeftRunningGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock, rig.Gcp);
 
         var closing = guard.ConfirmExitAsync(CancellationToken.None);
@@ -552,8 +552,8 @@ public class NothingLeftRunningTests
         var labels = new Dictionary<string, string> { ["app"] = "dna-entropy-graph", ["installation-id"] = rig.Installation, ["job-id"] = "job-n" };
         var noLimit = new VmDescriptor("deg-job-n", Zone, "RUNNING", Labels: labels, CreatedAt: Start, MachineType: "g2-standard-8");
         var stub = Substitute.For<IComputeGateway>();
-        stub.ListByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([noLimit]));
-        stub.ListDisksByInstallationAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
+        stub.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([noLimit]));
+        stub.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
         var guard = rig.NewGuard(new LeftRunningScanner(stub, rig.Settings, rig.Runs, rig.Pricing, rig.Clock), new InstallationCleanup(stub, rig.Gcp, rig.Runs));
 
         await guard.ConfirmExitAsync(CancellationToken.None);
@@ -711,7 +711,7 @@ public class NothingLeftRunningTests
         })!;
         await driverStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // its cancel callback is registered: a cancel is seen at once
         var refusing = Substitute.For<IComputeGateway>();
-        refusing.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw Forbidden());
+        refusing.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw Forbidden());
         var cleanup = new InstallationCleanup(refusing, rig.Gcp, rig.Runs, active, clock: rig.Clock);
 
         var result = await cleanup.EndVmAsync(rig.Installation, await OnlyVmAsync(rig), false, null, CancellationToken.None);
@@ -741,9 +741,9 @@ public class NothingLeftRunningTests
         Action? accept = null;
         var operation = new TaskCompletionSource();
         var stub = Substitute.For<IComputeGateway>();
-        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
-            accept = call.ArgAt<Action?>(3);
+            accept = call.ArgAt<Action?>(4);
             return operation.Task;
         });
         var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, active, clock: rig.Clock);
@@ -817,7 +817,7 @@ public class NothingLeftRunningTests
         var delete = cleanup.EndVmAsync(rig.Installation, descriptor, true, null, CancellationToken.None);
         await WaitUntilAsync(() => rig.LatestErrorCode("job-live") == RunErrorCodes.DeletedByCleanup);
 
-        await stub.Received(1).EndVmAsync(vm.Name, Zone, true, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        await stub.Received(1).EndVmAsync(Arg.Any<CloudScope>(), vm.Name, Zone, true, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
         rig.Gcp.ReleaseEndVmCompletion();
         var results = await Task.WhenAll(stop, delete).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         results.ShouldAllBe(r => r == VmEndResult.Done);
@@ -832,7 +832,7 @@ public class NothingLeftRunningTests
         await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
         await rig.AddRunAsync("job-live", JobPhase.Running);
         var stub = Substitute.For<IComputeGateway>();
-        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
+        stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(new TaskCompletionSource().Task);
         var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
         var descriptor = await OnlyVmAsync(rig);
 
@@ -846,10 +846,10 @@ public class NothingLeftRunningTests
     }
 
     private static void AcceptingStub(IComputeGateway stub, Func<bool, Task> operation)
-        => stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        => stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
-            call.ArgAt<Action?>(3)?.Invoke();
-            return operation(call.ArgAt<bool>(2));
+            call.ArgAt<Action?>(4)?.Invoke();
+            return operation(call.ArgAt<bool>(3));
         });
 
     [Fact]
@@ -918,7 +918,7 @@ public class NothingLeftRunningTests
         await rig.CreateVmAsync(rig.Installation, "job-live", TimeSpan.FromMinutes(90));
         await rig.AddRunAsync("job-live", JobPhase.Running);
         var stub = Substitute.For<IComputeGateway>();
-        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromCanceled(new CancellationToken(true)));
+        stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(_ => Task.FromCanceled(new CancellationToken(true)));
         var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
         var accepted = false;
         var descriptor = await OnlyVmAsync(rig);
@@ -968,7 +968,7 @@ public class NothingLeftRunningTests
         await rig.AddRunAsync("job-live", JobPhase.Running);
         var firstAttempt = new TaskCompletionSource();
         var stub = Substitute.For<IComputeGateway>();
-        stub.EndVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(firstAttempt.Task, Task.CompletedTask);
+        stub.EndVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(firstAttempt.Task, Task.CompletedTask);
         var cleanup = new InstallationCleanup(stub, rig.Gcp, rig.Runs, new ActiveRuns(), clock: rig.Clock);
         var descriptor = await OnlyVmAsync(rig);
 

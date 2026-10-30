@@ -219,9 +219,13 @@ public sealed class JobReconciler
     /// </summary>
     private static readonly TimeSpan LifecycleLookback = TimeSpan.FromDays(14);
 
+    /// <summary>Issue #830: the scopes the installation-wide sweeps cover besides those of recent runs (the scope selected now: a VM of this installation with no history row is found there).</summary>
+    private readonly Func<IEnumerable<CloudScope>> _additionalSweepScopes;
+
     /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
     /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
+    /// <param name="additionalSweepScopes">Issue #830: the scopes, besides those of every recent run row, the installation-wide sweeps (idle sweep) list in; the app passes the selected scope, so a VM no row names is still found.</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
         CloudJobRunner runner,
@@ -238,8 +242,10 @@ public sealed class JobReconciler
         TimeSpan? lookupTimeout = null,
         TimeSpan? mutationTimeout = null,
         IDiagnosticsLog? log = null,
-        TimeSpan? cancelSettleTimeout = null)
+        TimeSpan? cancelSettleTimeout = null,
+        Func<IEnumerable<CloudScope>>? additionalSweepScopes = null)
     {
+        _additionalSweepScopes = additionalSweepScopes ?? (() => []);
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
@@ -359,7 +365,8 @@ public sealed class JobReconciler
         }
 
         // Issue #830: the idle sweep lists in every scope a recent finished run of this installation was made in, never in whatever is selected now.
-        foreach (var scope in finished.Select(ScopeOf).Distinct())
+        var sweepScopes = finished.Select(ScopeOf).Concat(_additionalSweepScopes()).Distinct().ToList();
+        foreach (var scope in sweepScopes)
         {
             await SweepIdleAsync(scope, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
         }

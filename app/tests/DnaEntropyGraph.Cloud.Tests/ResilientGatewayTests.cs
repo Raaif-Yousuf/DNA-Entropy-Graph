@@ -247,7 +247,7 @@ public class ResilientGatewayTests
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
                 if (method.Name == nameof(IStorageGateway.DeletePrefixAsync))
                 {
-                    args[1] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
+                    args[Array.FindIndex(method.GetParameters(), p => p.Name == "prefix")] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
                 }
 
                 var task = (Task)method.Invoke(gateway, args)!;

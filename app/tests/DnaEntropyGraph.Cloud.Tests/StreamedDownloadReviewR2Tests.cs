@@ -222,9 +222,9 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
         }
 
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync("b", "k", path, Arg.Any<CancellationToken>()).Returns(async ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), "b", "k", path, Arg.Any<CancellationToken>()).Returns(async ci =>
         {
-            await Task.Delay(1500, ci.ArgAt<CancellationToken>(3));
+            await Task.Delay(1500, ci.ArgAt<CancellationToken>(4));
             return true;
         });
 
@@ -238,9 +238,9 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
     public async Task A_probe_that_keeps_failing_still_ends_in_the_stall_deadline_not_a_hang()
     {
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async ci =>
         {
-            await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(3));
+            await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(4));
             return true;
         });
 

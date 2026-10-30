@@ -321,16 +321,16 @@ public class CloudAuditTests
         var log = new MemoryLog();
         var inner = Substitute.For<IComputeGateway>();
         var accepted = 0;
-        inner.EndVmAsync("deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        inner.EndVmAsync(Arg.Any<CloudScope>(), "deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
-            call.ArgAt<Action?>(3)?.Invoke();
+            call.ArgAt<Action?>(4)?.Invoke();
             return Task.CompletedTask;
         });
 
         await new AuditedComputeGateway(inner, new CloudAuditor(log, () => "i", TimeProvider.System)).EndVmAsync("deg-job-7", "z", delete: false, () => accepted++, CancellationToken.None);
 
         accepted.ShouldBe(1);
-        await inner.Received(1).EndVmAsync("deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
+        await inner.Received(1).EndVmAsync(Arg.Any<CloudScope>(), "deg-job-7", "z", false, Arg.Any<Action?>(), Arg.Any<CancellationToken>());
         var entry = log.Entries.Single();
         entry.Operation.ShouldBe("Compute.StopVm");
         entry.JobId.ShouldBe("job-7");
@@ -543,7 +543,7 @@ public class CloudAuditTests
         var log = new MemoryLog();
         var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
         var storage = Substitute.For<IStorageGateway>();
-        storage.EnsureBucketAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("b");
+        storage.EnsureBucketAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns("b");
         var ct = CancellationToken.None;
 
         await new AuditedStorageGateway(storage, auditor).EnsureBucketAsync("p", ct);
@@ -564,7 +564,7 @@ public class CloudAuditTests
         var log = new MemoryLog();
         var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
         var storage = Substitute.For<IStorageGateway>();
-        storage.EnsureBucketAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns("b");
+        storage.EnsureBucketAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns("b");
         var ct = CancellationToken.None;
 
         await new AuditedStorageGateway(storage, auditor).EnsureBucketAsync("p", ct);
@@ -582,7 +582,7 @@ public class CloudAuditTests
         var auditor = new CloudAuditor(log, () => "i", TimeProvider.System);
         var gate = new TaskCompletionSource<VmDescriptor>();
         var compute = Substitute.For<IComputeGateway>();
-        compute.CreateVmAsync(Arg.Any<VmSpec>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
+        compute.CreateVmAsync(Arg.Any<CloudScope>(), Arg.Any<VmSpec>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
         var audited = new AuditedComputeGateway(compute, auditor);
 
         var pending = audited.CreateVmAsync(Spec("job-8"), "z", CancellationToken.None);

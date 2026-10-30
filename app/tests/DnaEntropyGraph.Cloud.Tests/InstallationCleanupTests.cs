@@ -270,28 +270,28 @@ public class InstallationCleanupTests
     {
         var compute = Substitute.For<IComputeGateway>();
         var storage = Substitute.For<IStorageGateway>();
-        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(
+        compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(
         [
             new VmDescriptor("deg-ours", Zone, "RUNNING", Labels: Labels(Mine)),
             new VmDescriptor("deg-other-installation", Zone, "RUNNING", Labels: Labels(Theirs)),
             new VmDescriptor("deg-no-labels", Zone, "RUNNING"),
             new VmDescriptor("deg-other-app", Zone, "RUNNING", Labels: new Dictionary<string, string> { ["app"] = "x", ["installation-id"] = Mine }),
         ]);
-        compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
-        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(
+        compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
+        compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(
         [
             Disk("d-ours"),
             Disk("d-theirs", Theirs),
             new DiskDescriptor("d-none", Zone, 1, "READY", new Dictionary<string, string>()),
         ]);
-        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([]);
+        storage.ListBucketsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns([]);
 
         var report = await new InstallationCleanup(compute, storage).DeleteAllAsync(Project, Mine, CancellationToken.None);
 
-        await compute.Received(1).DeleteVmAsync("deg-ours", Zone, Arg.Any<CancellationToken>());
-        await compute.Received(1).DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await compute.Received(1).DeleteDiskAsync("d-ours", Zone, Arg.Any<CancellationToken>());
-        await compute.Received(1).DeleteDiskAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-ours", Zone, Arg.Any<CancellationToken>());
+        await compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await compute.Received(1).DeleteDiskAsync(Arg.Any<CloudScope>(), "d-ours", Zone, Arg.Any<CancellationToken>());
+        await compute.Received(1).DeleteDiskAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         report.Items.Count(i => i.Outcome == CleanupOutcome.Skipped).ShouldBe(5);
     }
 
@@ -302,15 +302,15 @@ public class InstallationCleanupTests
         // which lets the body's exception reach the caller). The sweep must not abort: it reports the first as deleted, the second as failed, and still does the disk.
         var compute = Substitute.For<IComputeGateway>();
         var storage = Substitute.For<IStorageGateway>();
-        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(
+        compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(
         [
             new VmDescriptor("deg-one", Zone, "RUNNING", Labels: new Dictionary<string, string>(Labels(Mine)) { ["job-id"] = "one" }),
             new VmDescriptor("deg-two", Zone, "RUNNING", Labels: new Dictionary<string, string>(Labels(Mine)) { ["job-id"] = "two" }),
         ]);
-        compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
-        compute.DeleteVmAsync("deg-two", Zone, Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
-        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([Disk("d-1")]);
-        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([]);
+        compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
+        compute.DeleteVmAsync(Arg.Any<CloudScope>(), "deg-two", Zone, Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
+        compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns([Disk("d-1")]);
+        storage.ListBucketsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns([]);
 
         var report = await new InstallationCleanup(compute, storage, new InMemoryRunRepository(), new ActiveRuns()).DeleteAllAsync(Project, Mine, CancellationToken.None);
 
@@ -318,7 +318,7 @@ public class InstallationCleanupTests
         var two = report.Items.Single(i => i.Name == "deg-two");
         two.Outcome.ShouldBe(CleanupOutcome.Failed);
         two.Detail.ShouldBe(nameof(InvalidOperationException), "the error class only, never the message");
-        await compute.Received(1).DeleteDiskAsync("d-1", Zone, Arg.Any<CancellationToken>());
+        await compute.Received(1).DeleteDiskAsync(Arg.Any<CloudScope>(), "d-1", Zone, Arg.Any<CancellationToken>());
         report.Complete.ShouldBeFalse();
     }
 
@@ -331,14 +331,14 @@ public class InstallationCleanupTests
         var storage = Substitute.For<IStorageGateway>();
         var shown = new VmDescriptor("deg-x", Zone, "RUNNING", CreatedAt: created, Labels: Labels(Mine));
         var now = new VmDescriptor("deg-x", Zone, "RUNNING", CreatedAt: created.AddHours(1), Labels: Labels(Mine));
-        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([now]);
-        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([]);
-        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([]);
+        compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns([now]);
+        compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns([]);
+        storage.ListBucketsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns([]);
         var confirmed = new InstallationInventory([shown], [], null, new PrefixUsage(0, 0));
 
         var report = await new InstallationCleanup(compute, storage).DeleteAllAsync(Project, Mine, CancellationToken.None, confirmed);
 
-        await compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, Arg.Any<CancellationToken>());
+        await compute.DidNotReceiveWithAnyArgs().DeleteVmAsync(default!, default!, default!, Arg.Any<CancellationToken>());
         report.Items.Single().Detail.ShouldBe(InstallationCleanup.NotConfirmedCode);
     }
 
@@ -387,23 +387,23 @@ public class InstallationCleanupTests
         var storage = Substitute.For<IStorageGateway>();
         var disk = Disk("d-1");
         var listCalls = 0;
-        compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns([]);
-        compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(_ =>
+        compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns([]);
+        compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(_ =>
         {
             // 1: the up-front listing, 2: the one after the VMs, 3: the read back after the disk delete (fails).
             listCalls++;
             return listCalls >= 3 ? throw new CloudOperationException(new CloudError("X", 503, "boom"), CloudErrorKind.Network) : Task.FromResult<IReadOnlyList<DiskDescriptor>>([disk]);
         });
-        storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns([new BucketDescriptor("b", "US", new Dictionary<string, string>(), null)]);
-        storage.ListChildPrefixesAsync("b", ResultsBucket.JobsPrefix, Arg.Any<CancellationToken>()).Returns(["jobs/a/"]);
-        storage.TryDownloadAsync("b", "jobs/a/manifest.json", Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult<Stream?>(new MemoryStream(Manifest(Mine))));
-        storage.GetPrefixUsageAsync("b", "jobs/a/", Arg.Any<CancellationToken>()).Returns<Task<PrefixUsage>>(_ => throw new CloudOperationException(new CloudError("X", 503, "boom"), CloudErrorKind.Network));
+        storage.ListBucketsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns([new BucketDescriptor("b", "US", new Dictionary<string, string>(), null)]);
+        storage.ListChildPrefixesAsync(Arg.Any<CloudScope>(), "b", ResultsBucket.JobsPrefix, Arg.Any<CancellationToken>()).Returns(["jobs/a/"]);
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), "b", "jobs/a/manifest.json", Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult<Stream?>(new MemoryStream(Manifest(Mine))));
+        storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), "b", "jobs/a/", Arg.Any<CancellationToken>()).Returns<Task<PrefixUsage>>(_ => throw new CloudOperationException(new CloudError("X", 503, "boom"), CloudErrorKind.Network));
 
         var report = await new InstallationCleanup(compute, storage).DeleteAllAsync(Project, Mine, CancellationToken.None);
 
         report.Items.Single(i => i.Kind == CleanupKind.Disk).Outcome.ShouldBe(CleanupOutcome.NotVerified, Describe(report));
         report.Items.Single(i => i.Kind == CleanupKind.JobData).Outcome.ShouldBe(CleanupOutcome.NotVerified, Describe(report));
-        await storage.Received(1).DeletePrefixAsync("b", "jobs/a/", Arg.Any<CancellationToken>());
+        await storage.Received(1).DeletePrefixAsync(Arg.Any<CloudScope>(), "b", "jobs/a/", Arg.Any<CancellationToken>());
     }
 
     [Fact]

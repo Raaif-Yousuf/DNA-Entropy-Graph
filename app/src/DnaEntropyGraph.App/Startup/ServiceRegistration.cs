@@ -404,7 +404,8 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
-                log: sp.GetRequiredService<IDiagnosticsLog>());
+                log: sp.GetRequiredService<IDiagnosticsLog>(),
+                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().SelectedScope() is { } selected ? [selected] : []);
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.

@@ -204,22 +204,22 @@ public class GoogleComputeGatewayTests
     [Fact]
     public async Task A_create_for_a_project_other_than_the_selected_one_is_refused_by_name_before_any_request()
     {
-        var rig = new GoogleGatewayHarness(selectedProjectId: "another-project");
+        var rig = new GoogleGatewayHarness();
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None));
+        // Issue #830: the scope the call is made in (not whatever is selected) must name the spec's project.
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(new CloudScope("another-project"), Spec(), Zone, CancellationToken.None));
 
         ex.Error.Code.ShouldBe("PROJECT_MISMATCH");
         rig.Handler.Requests.ShouldBeEmpty();
     }
 
     [Fact]
-    public async Task A_create_with_no_selected_project_is_refused_by_name_before_any_request()
+    public async Task A_create_in_a_scope_with_no_project_is_refused_before_any_request()
     {
-        var rig = new GoogleGatewayHarness(selectedProjectId: null);
+        var rig = new GoogleGatewayHarness();
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.CreateVmAsync(Spec(), Zone, CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.CreateVmAsync(new CloudScope(string.Empty), Spec(), Zone, CancellationToken.None));
 
-        ex.Error.Code.ShouldBe("PROJECT_MISMATCH");
         rig.Handler.Requests.ShouldBeEmpty();
     }
 
@@ -1125,10 +1125,11 @@ public class GoogleComputeGatewayTests
     [Fact]
     public async Task Calls_that_need_a_project_fail_loudly_when_none_is_selected()
     {
-        var rig = new GoogleGatewayHarness(selectedProjectId: null);
+        var rig = new GoogleGatewayHarness();
+        var none = new CloudScope(string.Empty);
 
-        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.GetVmAsync("deg-job1", Zone, CancellationToken.None));
-        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.ListByInstallationAsync("install-1", CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.GetVmAsync(none, "deg-job1", Zone, CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.ListByInstallationAsync(none, "install-1", CancellationToken.None));
 
         rig.Handler.Requests.ShouldBeEmpty();
     }

@@ -135,7 +135,8 @@ public class JobReconcilerTests
             clock ?? new FixedClock(Launch),
             lookupTimeout,
             mutationTimeout,
-            log ?? Log);
+            log ?? Log,
+            additionalSweepScopes: () => [new CloudScope(Project)]);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -767,7 +768,7 @@ public class JobReconcilerTests
             guard.Advance("same");
         });
         var compute = Substitute.For<IComputeGateway>();
-        compute.FindByJobIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw stuck);
+        compute.FindByJobIdAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw stuck);
         var reconciler = new JobReconciler(env.Runner, compute, env.Gcp, env.Repo, env.Inputs, env.Images, env.Active, env.Settings, (id, phase) => env.Notified.Add((id, phase)), () => Path.Combine(env.AppData, "downloads"), new FixedClock(Launch), null, null, env.Log);
         var before = env.Repo.AllRecordedInOrder.Count;
 

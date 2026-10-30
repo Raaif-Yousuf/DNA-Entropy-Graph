@@ -21,6 +21,14 @@ public static class CallAccount
     public static IDisposable Use(CloudScope scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
+
+        // Issue #830: the one funnel every Google gateway method passes through. A scope with no project never reaches Google: a request built for it
+        // would address no project, or (worse) a default one, and the old "no project selected" guarantee (fail loudly, send nothing) holds per call.
+        if (string.IsNullOrWhiteSpace(scope.ProjectId))
+        {
+            throw new InvalidOperationException("The call has no Google Cloud project in its scope, so nothing was sent.");
+        }
+
         var previous = Value.Value;
         Value.Value = scope.AccountSub;
         return new Restore(previous);
