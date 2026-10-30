@@ -63,6 +63,8 @@ Test frameworks, linters, and `worker`'s own `[dev]` extra. Never installed into
 | hypothesis | pypi | 6.168.0 | MPL-2.0 |
 | jsonschema | pypi | 4.26.0 | MIT |
 | pytest | pypi | 9.1.1 | MIT |
+| pytest-timeout | pypi | 2.4.0 | MIT |
+| pytest-xdist | pypi | 3.8.0 | MIT |
 
 ## Vendored web assets (app installer payload, `app/src/DnaEntropyGraph.App/Assets/viewer/`)
 
