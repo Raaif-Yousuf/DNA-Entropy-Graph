@@ -60,7 +60,7 @@ public partial class LateCreateAfterCancelTests
     public async Task R7_M2_a_resume_whose_only_labelled_VM_is_a_stopped_donor_adopts_it_and_creates_no_new_VM_billed_without_a_startup_script()
     {
         // Round 8 H1+M1: round 7 skipped the stopped donor and provisioned a NEW VM (no startup script, stale status.json, a silently replaced lost VM). The donor is adopted: the existing
-        // judgment (heartbeat deadline, status.json) then fails the run, the donor ends stopped, and no new VM is billed.
+        // judgment (the wait on an already-stopped VM is Lost at once and reads result.json and status.json) then fails the run, the donor ends stopped, and no new VM is billed.
         var gcp = new FakeGcp();
         var rig = new Rig(gcp);
         var donor = await SeedStoppedDonorAsync(gcp, rig, "job-oldr7m2");

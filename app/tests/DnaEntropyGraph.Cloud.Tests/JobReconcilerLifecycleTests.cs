@@ -273,6 +273,42 @@ public class JobReconcilerLifecycleTests
         (await rig.Gcp.GetVmAsync("deg-job-donor8", Zone, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
     }
     [Theory]
+    [InlineData("RUNNING")]
+    [InlineData("STOPPED")]
+    public async Task A_completed_run_on_a_reused_VM_with_lifecycle_delete_has_that_VM_deleted_on_the_next_launch(string state)
+    {
+        // Round 9 M2: the user's own after-run Delete of a run that COMPLETED on a borrowed VM is the one exception to "never delete a VM the run did not create".
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor9", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor9");
+        var request = await rig.Env.SeedAsync("job-done9", JobPhase.Completed, vm: false, after: AfterTaskAction.Delete, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-donor9", Zone = Zone, VmReused = true });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor9", Zone, CancellationToken.None);
+        if (state == "STOPPED")
+        {
+            await rig.Gcp.StopVmAsync("deg-job-donor9", Zone, CancellationToken.None);
+        }
+
+        var outcomes = await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.Gcp.GetVmAsync("deg-job-donor9", Zone, CancellationToken.None)).ShouldBeNull("the app died before the live delete; the launch finishes the user's choice");
+        outcomes.ShouldContain(o => o.JobId == "job-done9" && o.Action == LifecycleAction.VmDeleted);
+    }
+
+    [Fact]
+    public async Task A_completed_run_whose_row_names_another_VM_does_not_get_a_relabelled_donor_deleted()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-donor9b", AfterTaskAction.Stop);
+        await rig.StopAsync("job-donor9b");
+        var request = await rig.Env.SeedAsync("job-done9b", JobPhase.Completed, vm: false, after: AfterTaskAction.Delete, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-done9b", Zone = Zone });
+        await rig.Gcp.ReuseVmAsync(request.Spec, "deg-job-donor9b", Zone, CancellationToken.None);
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.DeleteAttempts.ShouldBeEmpty("the row's own VM is a different one");
+        (await rig.Gcp.GetVmAsync("deg-job-donor9b", Zone, CancellationToken.None)).ShouldNotBeNull();
+    }
+    [Theory]
     [InlineData(RunErrorCodes.StoppedByCleanup)]
     [InlineData(RunErrorCodes.DeletedByCleanup)]
     public async Task A_run_the_user_ended_with_Stop_or_Delete_from_the_exit_window_keeps_its_stopped_VM_as_the_user_chose(string code)

@@ -152,8 +152,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         var existing = await calls.CallAsync(token => compute.FindByJobIdAsync(request.JobId, token), cancellationToken).ConfigureAwait(false);
 
         // Round 8 H1+M1 (DECISION, reversible): a VM found under the job id is ALWAYS adopted, even a stopped donor a failed reuse left relabelled for this job (restoring its labels is #970).
-        // Skipping it provisioned a new VM with no startup script and stale status.json/progress.jsonl, and silently replaced a lost VM. The existing judgment (heartbeat deadline, status.json)
-        // fails the run, and the donor is stopped, never deleted (ownOnly).
+        // Skipping it provisioned a new VM with no startup script and stale status.json/progress.jsonl, and silently replaced a lost VM. Round 9 L1 (code read 2026-10-30): the wait on an already-stopped VM
+        // is BootOutcome.Lost at once (ResultWaiter), which reads result.json and status.json and fails the run (no heartbeat deadline is waited out); the donor is stopped, never deleted (ownOnly).
         progress.VmAdopted = false;
         if (existing.Count > 0)
         {

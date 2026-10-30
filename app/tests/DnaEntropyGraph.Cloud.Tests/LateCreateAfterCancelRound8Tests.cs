@@ -90,4 +90,26 @@ public partial class LateCreateAfterCancelTests
         gcp.DeleteAttempts.ShouldBeEmpty();
         (await gcp.GetVmAsync(donor.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBe("RUNNING");
     }
+
+    [Fact]
+    public async Task R9_L2_with_the_own_VM_stopped_and_the_donor_running_the_own_VM_is_kept_and_the_donor_is_stopped_never_deleted()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var donor = await SeedStoppedDonorAsync(gcp, rig, "job-oldr9l2");
+        var spec = Spec("job-r9l2");
+        gcp.SimulateExternalRelabel(donor.VmName, ZoneA, spec.ToLabels());
+        await gcp.StartVmAsync(donor.VmName, ZoneA, CancellationToken.None);
+        await gcp.CreateVmAsync(spec, ZoneB, CancellationToken.None);
+        await gcp.StopVmAsync(spec.VmName, ZoneB, CancellationToken.None);
+        var owned = await gcp.FindByJobIdAsync("job-r9l2", CancellationToken.None);
+        owned.ShouldContain(v => v.Name == donor.VmName && v.Status == "RUNNING");
+
+        var (kept, note) = await rig.Provisioner.KeepOneOwnedVmAsync(TestInputs.Request("job-r9l2", spec, zones: [ZoneA, ZoneB]), owned, CancellationToken.None);
+
+        note.ShouldBeNull();
+        kept.Name.ShouldBe("deg-job-r9l2", "DECISION (reversible): the own VM wins over a running borrowed one");
+        gcp.DeleteAttempts.ShouldBeEmpty();
+        (await gcp.GetVmAsync(donor.VmName, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+    }
 }

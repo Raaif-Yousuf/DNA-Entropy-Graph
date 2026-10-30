@@ -429,8 +429,10 @@ public sealed class JobReconciler
         var want = WantedByLifecycleCore(row, vm, options, installation, now);
 
         // Round 8 M3: a VM that is not the row's own deg-<job> is another run's (a failed or cancelled reuse relabelled it), whatever the row's state or the lifecycle label says:
-        // stopped at most, never deleted.
-        return want == VmWant.Delete && vm.Name != VmTerminator.OwnVmName(row.JobId) ? (vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave) : want;
+        // stopped at most, never deleted. Round 9 M2 (DECISION, reversible): the one exception is the user's own after-run Delete (or keep-alive-then-Delete) of a run that COMPLETED on that VM,
+        // the VM the row records as its own (VmName); the app died before the live delete, so the launch finishes it.
+        var completedOnIt = row.Phase == JobPhase.Completed && row.VmName is not null && row.VmName == vm.Name;
+        return want == VmWant.Delete && !completedOnIt && vm.Name != VmTerminator.OwnVmName(row.JobId) ? (vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave) : want;
     }
 
     private static VmWant WantedByLifecycleCore(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
