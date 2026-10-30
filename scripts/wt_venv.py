@@ -12,6 +12,7 @@ import signal
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 VENV_REL = Path("worker") / ".venv"
 
@@ -95,3 +96,91 @@ def premerge_argv(wt: Path, py: Path, *, full: bool, lane_prefix: str, extra: Se
     if heavy.is_file():
         argv = [str(py), str(heavy), "--lane", f"{lane_prefix}-{wt.name}"[:64], "--", *argv]
     return argv
+
+
+class KillJob:
+    """A Windows Job Object with KILL_ON_JOB_CLOSE: every process assigned to it, and the ones those start, die on
+    `terminate()` or when the last handle closes, even if the owner is hard-killed. A child that spawned a grandchild
+    before `assign` returned is not covered (the assignment follows Popen by microseconds; python start-up takes far longer)."""
+
+    KILL_ON_JOB_CLOSE = 0x2000
+    EXTENDED_LIMIT_INFORMATION = 9
+
+    def __init__(self, handle: int, k32: Any) -> None:  # noqa: ANN401  (a ctypes library object)
+        self._handle: int | None = handle
+        self._k32 = k32
+
+    def assign(self, proc: subprocess.Popen[bytes]) -> bool:
+        if self._handle is None:
+            return False
+        child = getattr(proc, "_handle", None)  # the Popen's own process handle, no OpenProcess race
+        if child is None:
+            return False
+        return bool(self._k32.AssignProcessToJobObject(self._handle, int(child)))
+
+    def terminate(self) -> None:
+        if self._handle is not None:
+            self._k32.TerminateJobObject(self._handle, 1)
+
+    def close(self) -> None:
+        if self._handle is not None:
+            handle, self._handle = self._handle, None
+            self._k32.CloseHandle(handle)
+
+
+def create_kill_job() -> KillJob | None:
+    """A kill-on-close job object, or None (not Windows, or the API refused: the caller falls back to taskkill /T)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = (
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            )
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = tuple((name, ctypes.c_uint64) for name in ("ro", "wo", "oo", "rb", "wb", "ob"))
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = (
+                ("BasicLimitInformation", BasicLimits),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            )
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        k32.SetInformationJobObject.restype = wintypes.BOOL
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k32.TerminateJobObject.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.CloseHandle.restype = wintypes.BOOL
+        handle = k32.CreateJobObjectW(None, None)
+        if not handle:
+            return None
+        info = ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = KillJob.KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(handle, KillJob.EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(handle)
+            return None
+        return KillJob(int(handle), k32)
+    except (OSError, AttributeError, ValueError):
+        return None

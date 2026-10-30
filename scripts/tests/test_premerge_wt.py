@@ -43,9 +43,11 @@ class Runner:
         self.wt, self.code, self.raises = wt, code, raises
         self.calls: list[tuple[list[str], dict[str, str]]] = []
         self.link_seen: bool | None = None
+        self.timeouts: list[float | None] = []
 
     def __call__(self, argv: list[str], env: dict[str, str], cwd: Path, timeout: float | None = None) -> int:
         self.calls.append((argv, env))
+        self.timeouts.append(timeout)
         self.link_seen = os.path.lexists(self.wt / "worker" / ".venv")
         if self.raises:
             raise self.raises
@@ -270,6 +272,7 @@ def test_default_runner_kills_the_tree_it_started_on_timeout(monkeypatch):
         proc.kill()  # type: ignore[attr-defined]
 
     monkeypatch.setattr(wt_venv, "kill_tree", kill)
+    monkeypatch.setattr(wt_venv, "create_kill_job", lambda: None)  # the taskkill /T fallback path
     code = pmw.default_runner([sys.executable, "-c", "import time; time.sleep(60)"], dict(os.environ), Path.cwd(), 1.0)
     assert code == pmw.EXIT_TIMEOUT
     assert len(killed) == 1
@@ -288,6 +291,7 @@ def test_default_runner_kills_the_tree_on_ctrl_c_then_reraises(monkeypatch):
             raise KeyboardInterrupt
 
     monkeypatch.setattr(pmw.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(wt_venv, "create_kill_job", lambda: None)
     monkeypatch.setattr(wt_venv, "kill_tree", lambda proc: killed.append(proc))
     with pytest.raises(KeyboardInterrupt):
         pmw.default_runner(["x"], {}, Path.cwd(), None)
@@ -359,3 +363,120 @@ def test_primary_venv_git_failure_is_a_named_refusal(monkeypatch, world, capsys)
     r = Runner(wt)
     assert pmw.main([], runner=r) == pmw.EXIT_REFUSED
     assert r.calls == [] and "--venv" in capsys.readouterr().out
+
+
+# ---- fix round 2 ------------------------------------------------------------
+
+
+def _alive(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.GetExitCodeProcess.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        k32.CloseHandle(handle)
+
+
+GRANDCHILD = (
+    "import os, subprocess, sys, time\n"
+    "gc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+    "open(sys.argv[1], 'w').write(str(os.getpid()) + ' ' + str(gc.pid))\n"
+    "time.sleep(120)\n"
+)
+
+
+@needs_windows
+def test_a_timeout_kills_the_child_and_its_grandchild(tmp_path: Path):
+    import time
+
+    pids = tmp_path / "pids.txt"
+    code = pmw.default_runner([sys.executable, "-c", GRANDCHILD, str(pids)], dict(os.environ), Path.cwd(), 6.0)
+    assert code == pmw.EXIT_TIMEOUT
+    child, grandchild = (int(x) for x in pids.read_text(encoding="utf-8").split())
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and (_alive(child) or _alive(grandchild)):
+        time.sleep(0.2)
+    assert not _alive(child)
+    assert not _alive(grandchild)
+
+
+@needs_windows
+def test_a_job_object_kill_on_close_ends_an_assigned_process():
+    import subprocess as sp
+
+    job = wt_venv.create_kill_job()
+    assert job is not None
+    proc = sp.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        job.assign(proc)
+        job.close()  # KILL_ON_JOB_CLOSE
+        proc.wait(timeout=15)
+        assert not _alive(proc.pid)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+@needs_windows
+def test_a_failed_job_creation_falls_back_to_taskkill_and_says_so(monkeypatch, capsys):
+    monkeypatch.setattr(wt_venv, "create_kill_job", lambda: None)
+    code = pmw.default_runner([sys.executable, "-c", "import sys; sys.exit(0)"], dict(os.environ), Path.cwd(), 30.0)
+    assert code == 0
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_run_forwards_the_default_timeout_and_main_forwards_the_cli_value(monkeypatch, world):
+    wt, venv = _main_world(monkeypatch, world)
+    r = Runner(wt)
+    pmw.run(wt, venv, runner=r)
+    assert r.timeouts == [pmw.TIMEOUT_SECONDS] and pmw.TIMEOUT_SECONDS == 7200.0
+    r2 = Runner(wt)
+    pmw.main(["--venv", str(venv)], runner=r2)
+    assert r2.timeouts == [7200.0]
+    r3 = Runner(wt)
+    pmw.main(["--venv", str(venv), "--timeout", "99"], runner=r3)
+    assert r3.timeouts == [99.0]
+
+
+def test_default_mode_forwards_premerges_code_when_a_real_dir_appears_during_the_run(world, capsys):
+    wt, venv = world
+    link = wt / "worker" / ".venv"
+
+    def plant(argv: list[str], env: dict[str, str], cwd: Path, timeout: float | None = None) -> int:
+        link.mkdir()
+        (link / "keep.txt").write_bytes(b"mine\n")
+        return 3
+
+    assert pmw.run(wt, venv, runner=plant) == 3
+    assert (link / "keep.txt").is_file()
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_venv_pointing_at_the_worktrees_own_link_path_is_refused(world):
+    wt, venv = world
+    r = Runner(wt)
+    assert pmw.run(wt, wt / "worker" / ".venv", runner=r) == pmw.EXIT_REFUSED
+    assert pmw.run(wt, wt / "worker" / ".venv" / "Scripts", runner=r) == pmw.EXIT_REFUSED
+    assert r.calls == []
+
+
+@needs_windows
+def test_venv_resolving_through_a_stale_worktree_junction_is_refused_and_the_target_survives(world):
+    wt, venv = world
+    link = wt / "worker" / ".venv"
+    wt_venv.make_dir_link(link, venv)
+    r = Runner(wt)
+    assert pmw.run(wt, link, runner=r) == pmw.EXIT_REFUSED
+    assert r.calls == [] and _survives(venv)
+    wt_venv.unlink_dir_link(link)

@@ -49,20 +49,33 @@ Runner = Callable[[list[str], dict[str, str], Path, "float | None"], int]
 
 def default_runner(argv: list[str], env: dict[str, str], cwd: Path, timeout: float | None = None) -> int:
     """Run the gate with inherited stdio. On timeout or Ctrl-C the tree THIS call started (by PID) is killed first."""
-    proc = subprocess.Popen(argv, env=env, cwd=cwd, **({} if os.name == "nt" else {"start_new_session": True}))  # type: ignore[arg-type]
+    job = wt_venv.create_kill_job()  # Windows: the whole tree dies with the job, even if heavy.py exits before we kill it
+    proc = subprocess.Popen(argv, env=env, cwd=cwd, start_new_session=os.name != "nt")  # POSIX: its own process group
+    if os.name == "nt" and (job is None or not job.assign(proc)):
+        print("WARNING: no job object for the gate tree; falling back to taskkill /T by PID (a Ctrl-C may orphan grandchildren)")
+        if job is not None:
+            job.close()
+        job = None
+
+    def kill_all() -> None:
+        if job is not None:
+            job.terminate()
+        wt_venv.kill_tree(proc)  # by PID /T too: covers anything that escaped the job, and the POSIX process group
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        wt_venv.kill_tree(proc)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)
+        kill_all()
         print(f"ERROR: premerge timed out after {int(timeout or 0)} s and its process tree was killed")
         return EXIT_TIMEOUT
     except BaseException:
-        wt_venv.kill_tree(proc)  # Ctrl-C or anything else: no orphan gate keeps running after the link is gone
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)
+        kill_all()  # Ctrl-C or anything else: no orphan gate keeps running after the link is gone
         raise
+    finally:
+        if job is not None:
+            job.close()
 
 
 def is_primary_checkout(root: Path) -> bool:
@@ -79,6 +92,17 @@ def primary_venv(root: Path) -> Path:
     except (subprocess.CalledProcessError, OSError) as err:
         raise wt_venv.LinkError(f"could not ask git for the primary checkout ({err})") from err
     return Path(out.stdout.strip()).parent / wt_venv.VENV_REL
+
+
+def _through_link(venv: Path, link: Path, wt: Path) -> bool:
+    """Is `venv` the worktree's own link path (or under it, or resolving into the worktree)? Checked as spelled AND resolved,
+    because a stale junction at the link path resolves to the shared venv and would hide the spelling."""
+    spelled = os.path.normcase(os.path.abspath(venv))
+    own = os.path.normcase(os.path.abspath(link))
+    if spelled == own or spelled.startswith(own + os.sep):
+        return True
+    real_wt = os.path.normcase(os.path.realpath(wt))
+    return os.path.normcase(os.path.realpath(venv)).startswith(real_wt + os.sep)
 
 
 def _say_gone(venv: Path) -> None:
@@ -100,6 +124,10 @@ def run(
     shared_py = wt_venv.venv_python(venv)
     if shared_py is None:
         print(f"ERROR: no python in the shared venv {venv}. Create it in the primary checkout: {_RECREATE}")
+        return EXIT_REFUSED
+    if _through_link(venv, link, wt):
+        print(f"ERROR: --venv {venv} is inside this worktree's own {wt_venv.VENV_REL} path, which this script links and unlinks.")
+        print("Pass the PRIMARY checkout's venv instead")
         return EXIT_REFUSED
     try:
         wt_venv.unlink_dir_link(link)  # a stale junction from a killed run; refuses a real directory
@@ -133,7 +161,10 @@ def run(
                 print("ERROR: interrupted")
                 code = EXIT_INTERRUPTED
     finally:
-        if junction or os.path.lexists(link):
+        is_link = os.path.isjunction(link) or os.path.islink(link)
+        if not junction and os.path.lexists(link) and not is_link:
+            print(f"WARNING: a real directory appeared at {link} during the run; left untouched, premerge's code is forwarded")
+        elif junction or is_link:
             try:
                 wt_venv.unlink_dir_link(link)
             except wt_venv.LinkError as err:
