@@ -40,6 +40,7 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
     public async Task<BudgetInfo?> FindAsync(string billingAccountId, string installationId, string projectId, CancellationToken cancellationToken)
     {
         var quotaProject = _selectedProjectId();
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -62,15 +63,8 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
                 return ToInfo(ours, billingAccountId);
             }
 
-            var next = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
-            if (next is not null && next == pageToken)
-            {
-                throw new CloudOperationException(
-                    new CloudError("LIST_PAGINATION_STUCK", null, "The Budget API returned the same page token twice, so the budget list may be incomplete."),
-                    CloudErrorKind.Network);
-            }
+            pageToken = paging.Advance(page.NextPageToken);
 
-            pageToken = next;
         }
         while (pageToken is not null);
 

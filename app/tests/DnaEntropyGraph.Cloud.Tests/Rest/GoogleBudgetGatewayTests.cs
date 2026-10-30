@@ -79,6 +79,23 @@ public class GoogleBudgetGatewayTests
     }
 
     [Fact]
+    public async Task Finding_fails_with_the_stuck_listing_code_when_a_page_token_comes_round_again_not_only_when_it_repeats_at_once()
+    {
+        // A, B, A: the last-token comparison the gateway used to make cannot see this cycle; the shared PageTokenGuard remembers every token (#933).
+        var other = BudgetJson(Account + "/budgets/other", "Someone else's budget", "20");
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, ListPath, 200, ListJson(other, "pA"))
+            .Returns(Get, ListPath, 200, ListJson(other, "pB"))
+            .Returns(Get, ListPath, 200, ListJson(other, "pA"))
+            .Returns(Get, ListPath, 200, ListJson(other, "pB"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Budget.FindAsync(Account, "inst-a", "my-lab", CancellationToken.None));
+
+        ex.Error.Code.ShouldBe(CloudErrorCodes.ListPaginationStuck);
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+    }
+    [Fact]
     public async Task Finding_follows_the_page_token_and_answers_none_when_no_budget_is_ours()
     {
         var rig = new GoogleGatewayHarness();
