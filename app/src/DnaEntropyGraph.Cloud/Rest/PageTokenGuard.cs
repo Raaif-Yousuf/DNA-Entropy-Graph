@@ -21,7 +21,7 @@ namespace DnaEntropyGraph.Cloud.Rest;
 internal sealed class PageTokenGuard
 {
     /// <summary>The error code a walk that repeats a page token fails with.</summary>
-    public const string StuckCode = "LIST_PAGINATION_STUCK";
+    public const string StuckCode = CloudErrorCodes.ListPaginationStuck;
 
     private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
 

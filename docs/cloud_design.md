@@ -288,7 +288,7 @@ classifier at all.
 Every Google list loop in `DnaEntropyGraph.Cloud/Rest` (billing accounts, projects, price catalog, buckets, objects, region quotas, quota preferences,
 VMs, disks, accelerator zones, zone operations: 11 loops) reads the next page token through one helper, `PageTokenGuard.Advance`
 (`app/src/DnaEntropyGraph.Cloud/Rest/PageTokenGuard.cs`), one guard per walk. It remembers every token it was given, not only the last, so the same
-token for ever and a cycle (A, B, A) both fail on the first repeat, with `LIST_PAGINATION_STUCK`, one extra request after the first page (A, B, A: the third).
+token for ever and a cycle (A, B, A) both fail on the first repeat, with `CloudErrorCodes.ListPaginationStuck` (`LIST_PAGINATION_STUCK`, the one constant `PageTokenGuard.StuckCode` and the delete copy both read), one extra request after the first page (A, B, A: the third).
 A short list must never read as a complete one: an empty VM list reads as "no VM" (a duplicate or a leak), an empty quota table as "no quota".
 `Guards.Tests/PageTokenGuardWiringTests` scans every `Rest/*.cs` (comments removed, strings blanked) and fails on a next page token read outside `.Advance(`, a string that names the JSON member, a hand comparison of a token, or a `PageTokenGuard` built inside a loop.
 Before this, `GoogleStorageGateway.ListOursAsync` looped for ever on a repeated token, the billing and project listings had no guard, and the accelerator
@@ -909,7 +909,7 @@ network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). A
 by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
 rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
-**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.1.log` (about 2 MB on disk at most), and swallows every exception but a fatal one,
 because it is called from inside the reconciler's catch blocks. A rotation that cannot move the file (the copy is held open or read-only) keeps appending up to twice the cap, then drops lines until a rotation works, so a failing rotation cannot grow the log without bound; every control character and the Unicode line and paragraph separators in a field become a space, so one event is always one line. A lifecycle step that throws no longer orphans the reattach: `EnforceLifecycleAsync` itself rethrows, and `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
 `WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
 (#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
@@ -986,8 +986,8 @@ it); a non-seekable stream gets one attempt and no 401 replay.
 
 Every retry is reported to `ICloudCallObserver` (operation, attempt, delay, status, kind,
 the API error text, never a sequence, file name or email). `CloudRetryLog` keeps the last
-200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
-not in the diagnostics zip; when it is, forward `OnRetry` there.
+200 in memory. MEASURED 2026-10-29: Serilog is not wired into the app; the
+log is not in the diagnostics zip. `logs\app.log` (`FileDiagnosticsLog`, `DiagnosticsTraceListener`) is; forward `OnRetry` there when wanted.
 
 The pipeline's kind is kept end to end: `VmProvisioner.ProvisionAsync` uses the kind the
 gateway threw instead of re-classifying the error text (which turned `network` into `other`,
@@ -1393,7 +1393,7 @@ the running app calls this class yet.
 - **Find and list.** `instances.aggregatedList` with `filter=(labels.app = "dna-entropy-graph") AND (labels.job-id = "<id>")`
   (or `labels.installation-id`), with `returnPartialSuccess=true` (added to the query by hand: `Google.Apis.Compute.v1` has no typed property for it; THEORY
   (unverified) that without it Compute fails the whole list instead of filling `unreachables`), following `nextPageToken` across every zone (a repeated token fails
-  with `LIST_PAGINATION_STUCK`, `network`, never a silent truncation; see Paging in section 5); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
+  with `CloudErrorCodes.ListPaginationStuck` (`LIST_PAGINATION_STUCK`), kind `network` so the reconciler reads it as no answer, never a silent truncation; the delete copy reads the code and does not tell the user to check the internet); a value no label can hold (matched with `\A...\z`, so a trailing newline is refused) returns nothing
   without a request, and each returned VM's labels are re-checked client-side. A page that lists `unreachables` (zones Compute could not read) fails
   the WHOLE listing with `ZONES_UNREACHABLE` (`network`, retryable) and never returns the partial list: an empty answer feeds `VmTerminator` ("confirmed gone") and
   the runner ("adopt or create"), and one unreachable zone would otherwise leak or duplicate a billable VM. Zone is parsed from the instance's zone URL;
@@ -1508,6 +1508,29 @@ What the Cloud page stands on, in `Core/Cloud` interfaces, the Google gateways, 
   `manifest.json` has `createdBy.installationId` equal to it. **DECISION (agent-made, reversible):** ownership is read from the manifest, not guessed from a
   job id list on this PC (the Cloud page must see another PC's data), and a folder with no readable manifest belongs to nobody and is never deleted.
   `DeletePrefixAsync` refuses any prefix that is not a folder path (`StoragePrefixes.RequireDeletable`: not empty, not the root, ends in `/`, no `..`).
+- `JobObjectDeleter` (Core/Runs, issues #262 and #534): the real `IJobObjectDeleter` behind the Runs page "Delete cloud copy" (replaces the stand-in that always said
+  "not connected"). It deletes exactly `jobs/<job id>/` and nothing else: the bucket must be a `deg-` bucket and the prefix must match `^jobs/[a-z0-9_-]{1,63}/$`
+  (so `jobs/`, `cache/`, an empty or partial prefix, a nested path or a `..` is refused with no request, `CloudDeleteRefusedException(NotAJobFolder)`), and
+  `RunCloudResults.DeleteAsync` has already checked the stored prefix equals `jobs/<run's own job id>/`. **Ownership:** when the folder has objects, its
+  `manifest.json` must name this installation (`createdBy.installationId`, the `InstallationCleanup` test); another computer's run (an imported row, #111) is `CloudDeleteRefusal.OtherComputer` -> `CloudResultsStatus.OtherComputer`; a missing, unreadable or
+  wrong-shaped manifest, or an unreadable installation id, is `Unconfirmed` -> `NotConfirmed` (its own copy, "could not confirm this run is yours"); both leave
+  everything untouched and offer Open storage page. `DeletePrefixAsync` (Google and Fake) deletes `jobs/<id>/manifest.json` LAST: Cloud Storage lists lexicographically,
+  so otherwise the manifest would go before `output/`, `result.json` and `status.json`, and a sweep that died after it would strand the rest behind a false refusal
+  on the retry. (THEORY, unverified: persisting a "verified" flag on the run row would also survive an outside deletion of the manifest; not built, it needs a
+  migration.) The installation id is a write-once file untouched by Reset all settings (`SettingsStore.cs:172-191`, #558/#565), and manifests have carried
+  `createdBy.installationId` since `69707244` (2026-10-02, #460), before any release. An empty prefix is success only when the bucket listing succeeded; a 404 bucket is
+  `StorageNotFound` and the row is not changed. The shared name of the manifest object is `ResultsBucket.ManifestObject`.
+  Known limits (no code): (1) an object written under the prefix after the manifest was deleted (a late worker write) is stranded, and a later Delete cloud copy
+  answers `NotConfirmed` (the manifest is gone), so that leftover is removed from Open storage page; (2) `StorageNotFound` offers no storage button, so a user whose
+  bucket is in another project looks at the Cloud page instead. Open storage page links are only built for a `jobs/<id>/` folder in a bucket-shaped name, with each segment escaped. It then calls `DeletePrefixAsync` and reads the prefix back with `GetPrefixUsageAsync`, comparing with the count before:
+  none left is success even if the call threw afterwards; the same count left means nothing was deleted, so the real classified error surfaces
+  (`CloudDeleteResult.ErrorKind`: permission, billing and API-off each have their own Runs copy, anything else the general one); only some-gone-some-left throws
+  `PartialCloudDeleteException(Remaining)` -> `PartiallyDeleted` with the count (singular copy for one). The classified cause rides along in `CloudDeleteResult.ErrorKind` whatever the count, and `CloudDeleteResult.SweepCompleted` says the sweep itself finished without error (a flag `PartialCloudDeleteException.SweepCompleted` set at each place the exception is made, not inferred from its inner exception). Every toast states only what the app knows (sweep completed? count known? cause?): sweep completed with an unreadable count says the delete finished but could not be confirmed empty and to choose Delete cloud copy again to check (`Runs_DeleteCloud_PartialUnconfirmed_*`, the row stays unmarked); sweep stopped with an unknown count says "may" (never that files remain) and names the cause's action, or the plain "stopped and could not count" copy when no cause was classified; a known count with a cause that pressing again cannot fix (permission, organization policy, billing, API off, request limit) states the count and that cause's action (`Runs_DeleteCloud_PartialKnown_Body_*`, "Files still in your Google Cloud storage: N") instead of only "choose Delete cloud copy again"; any other known count uses the count copy. `GoogleStorageGateway.DeletePrefixAsync` itself classifies a raw `IOException` or `SocketException` from the sweep as `Network` (code `TRANSPORT_FAILED`); it has no arm for `HttpRequestException`, which `CloudCallPipeline` maps and owns, `RunCloudResults` treats an `IOException`, `HttpRequestException` or `SocketException` inner exception of a partial delete as `Network`, and a cause whose code is `CloudErrorCodes.ListPaginationStuck` (a listing that repeated a page token) is read as `Other` with `CloudDeleteResult.ListingStuck` set by `RunCloudResults` whatever kind the gateway gave it, and the page shows `Runs_DeleteCloud_ListingStuck_*` (one action: Save diagnostics in Settings; it does not say to try again, because the same listing repeats). A failed delete (the listing stuck before any delete) uses `Runs_DeleteCloud_ListingStuckNothing_Body` ("nothing was deleted", the app cannot see what is stored); only a partial delete says "some files may have been deleted". The storage, compute and quota gateways keep their own `Network` classification for it (`JobReconciler.IsNoAnswer` treats `Network` as no answer and defers). The
+  run row is marked `CloudResultsDeleted` only on a clean read-back, so the button stays offered and the next press finishes it (a repeat delete of an empty prefix is
+  success). Deleted objects are not recoverable beyond the bucket's soft-delete window, which the confirm dialog does not promise either way.
+  The `cache/` model weights have their own lifecycle rule (`matchesPrefix: ["cache/"]`, 365 days or longer) separate from the `jobs/` rule, so neither the retention
+  rule nor this delete can reach the other prefix (`GoogleStorageGatewayTests` pins both rules by prefix). `FakeGcp.WithPrefixDeleteFailingAfter(n, kind)` scripts a
+  sweep that dies after n objects.
 - `InstallationCleanup` (Core): `InventoryAsync` (this installation's VMs, disks, job-data size and count, and the shared model cache size, reported but
   never deleted) and `DeleteAllAsync` (VMs first, then disks re-listed so a deleted VM's disks are seen detached, then the job folders). Label-scoped on
   every item (a stray one a gateway hands over is `Skipped`), every listing happens before the first delete (a failed listing aborts with nothing deleted),

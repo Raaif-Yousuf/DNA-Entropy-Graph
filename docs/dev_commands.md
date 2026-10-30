@@ -438,7 +438,9 @@ contributes no read, so the fix for a false UNREAD is an annotation, not an allo
 the exact resolution rules.
 
 `check_app_wiring.py` takes `--verbose` (also print what it read and which
-pages it skipped), `--json`, and `--root` (default `app`). Its allowlist is
+pages it skipped), `--json`, and `--root` (default `app`). A run over the real tree
+takes about 5 s (MEASURED 2026-10-29; it was 50 to 64 s before #844 indexed the tokens
+once per run). Its allowlist is
 `scripts/app_wiring_allowlist.json`, keyed `"CODE:Symbol"` with a reason
 string, and is checked in both directions: an entry whose finding stopped
 firing fails the run, so the file cannot rot into a list of things that used

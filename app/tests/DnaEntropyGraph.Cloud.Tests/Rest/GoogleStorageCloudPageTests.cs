@@ -74,6 +74,39 @@ public class GoogleStorageCloudPageTests
     }
 
     [Fact]
+    public async Task DeletePrefix_cut_by_an_IOException_after_one_real_delete_is_a_network_failure()
+    {
+        // Only GoogleApiException was classified, so a raw IOException left the sweep with no cause. (An HttpRequestException is mapped by CloudCallPipeline, which owns it.)
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/a", 1), ObjectJson("jobs/j1/b", 1)]))
+            .Returns(Delete, ObjectPath("jobs/j1/a"), 204, "{}")
+            .Calls(Delete, ObjectPath("jobs/j1/b"), _ => throw new IOException("connection reset"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        rig.Handler.Requests.Count(r => r.Method == Delete).ShouldBe(2, "the first object really was deleted");
+    }
+
+    [Fact]
+    public async Task DeletePrefix_cut_by_an_HttpRequestException_reaches_the_caller_as_a_network_failure_through_the_pipeline()
+    {
+        // The sweep catches IOException and SocketException itself (TRANSPORT_FAILED) but has no arm for HttpRequestException: CloudCallPipeline maps that one. The code is not the sweep's TRANSPORT_FAILED, which would mean a second classifier answered.
+        var rig = new GoogleGatewayHarness(retries: 0);
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/a", 1), ObjectJson("jobs/j1/b", 1)]))
+            .Returns(Delete, ObjectPath("jobs/j1/a"), 204, "{}")
+            .Calls(Delete, ObjectPath("jobs/j1/b"), _ => throw new HttpRequestException("no route"));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None));
+
+        ex.Kind.ShouldBe(CloudErrorKind.Network);
+        ex.Error.Code.ShouldNotBe("TRANSPORT_FAILED");
+        rig.Handler.Requests.Count(r => r.Method == Delete).ShouldBe(2, "the first object really was deleted, then the second was cut");
+    }
+
+    [Fact]
     public async Task ChildPrefixes_asks_for_a_slash_delimited_view_and_returns_the_prefixes_across_pages()
     {
         var rig = new GoogleGatewayHarness();
@@ -103,6 +136,46 @@ public class GoogleStorageCloudPageTests
         deleted.ShouldBe(2);
         HttpUtility.ParseQueryString(rig.Handler.To(Get, Objects).Single().Uri.Query)["prefix"].ShouldBe("jobs/j1/");
         rig.Handler.Requests.Count(r => r.Method == Delete).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task DeletePrefix_deletes_the_manifest_last_even_though_the_listing_sorts_it_first()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/manifest.json", 1), ObjectJson("jobs/j1/output/a.txt", 2), ObjectJson("jobs/j1/result.json", 2)]))
+            .Returns(Delete, ObjectPath("jobs/j1/manifest.json"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/output/a.txt"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/result.json"), 204, "{}");
+
+        var deleted = await rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None);
+
+        deleted.ShouldBe(3);
+        var order = rig.Handler.Requests.Where(r => r.Method == Delete).Select(r => r.Uri.AbsolutePath).ToList();
+        order.Count.ShouldBe(3);
+        order[^1].ShouldContain("manifest.json");
+    }
+
+    [Fact]
+    public async Task DeletePrefix_deletes_the_manifest_last_when_it_is_on_page_one_and_other_objects_come_on_page_two()
+    {
+        // Issue #262 review: the manifest is held back across pages, not only within one page.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, Objects, 200, ListJson("p2", [ObjectJson("jobs/j1/manifest.json", 1), ObjectJson("jobs/j1/output/a.txt", 2)]))
+            .Returns(Get, Objects, 200, ListJson(null, [ObjectJson("jobs/j1/result.json", 2), ObjectJson("jobs/j1/status.json", 2)]))
+            .Returns(Delete, ObjectPath("jobs/j1/manifest.json"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/output/a.txt"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/result.json"), 204, "{}")
+            .Returns(Delete, ObjectPath("jobs/j1/status.json"), 204, "{}");
+
+        var deleted = await rig.Gateways.Storage.DeletePrefixAsync("deg-b", "jobs/j1/", CancellationToken.None);
+
+        deleted.ShouldBe(4);
+        var order = rig.Handler.Requests.Where(r => r.Method == Delete).Select(r => r.Uri.AbsolutePath).ToList();
+        order.Count.ShouldBe(4);
+        order[^1].ShouldContain("manifest.json");
+        HttpUtility.ParseQueryString(rig.Handler.To(Get, Objects)[1].Uri.Query)["pageToken"].ShouldBe("p2");
     }
 
     [Fact]
