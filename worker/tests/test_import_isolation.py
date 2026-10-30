@@ -80,18 +80,24 @@ def layout(tmp_path: Path) -> dict[str, Path]:
         f"sys.path.append({str(other_src)!r})\n"
     )
     (site / "sitecustomize.py").write_text(hook, encoding="utf-8", newline="\n")
-    return {"mine": mine, "other": other, "site": site, "tests": tests}
+    made = {"mine": mine, "other": other, "site": site, "tests": tests}
+    # Hermetic default: an editable install made from another checkout, whatever the real venv looks like.
+    _dist_info(made, '{"url": "file:///elsewhere/worker", "dir_info": {"editable": true}}')
+    return made
 
 
 def _dist_info(layout: dict[str, Path], direct_url: str | None) -> None:
     """A fake `dna-entropy` dist on the site dir; `direct_url` is its direct_url.json text (None: no file)."""
     info = layout["site"] / "dna_entropy-0.0.1.dist-info"
-    info.mkdir()
+    info.mkdir(exist_ok=True)
     (info / "METADATA").write_text(
         "Metadata-Version: 2.1\nName: dna-entropy\nVersion: 0.0.1\n", encoding="utf-8", newline="\n"
     )
-    if direct_url is not None:
-        (info / "direct_url.json").write_text(direct_url, encoding="utf-8", newline="\n")
+    target = info / "direct_url.json"
+    if direct_url is None:
+        target.unlink(missing_ok=True)
+    else:
+        target.write_text(direct_url, encoding="utf-8", newline="\n")
 
 
 def _pytest(
@@ -200,6 +206,34 @@ def test_the_opt_out_variable_tests_the_installed_package_even_with_no_install_m
         layout, env_extra={"DEG_TEST_INSTALLED": "0"}
     )  # "0" is not an opt-out: this checkout's src wins
     assert zero.returncode != 0, zero.stdout
+
+
+@pytest.mark.parametrize(
+    "direct_url",
+    ["[]", '"x"', "7", "null", '{"dir_info": null}', '{"dir_info": []}', '{"dir_info": {"editable": "yes"}}'],
+)
+def test_a_malformed_direct_url_is_not_editable_and_does_not_crash_conftest(
+    layout: dict[str, Path], direct_url: str
+) -> None:
+    _dist_info(layout, direct_url)
+    _installed_layout(layout)
+    done = _pytest(layout)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "AttributeError" not in done.stdout + done.stderr
+
+
+def test_the_header_names_the_mode_and_the_resolved_file(layout: dict[str, Path]) -> None:
+    done = _pytest(layout, "-v")
+    mine_pkg = str((layout["mine"] / "worker" / "src" / "dna_entropy" / "__init__.py").resolve())
+    line = next(ln for ln in done.stdout.splitlines() if ln.startswith("dna_entropy tested from"))
+    assert "development layout" in line and mine_pkg in line
+    _dist_info(layout, '{"dir_info": {}}')
+    _installed_layout(layout)
+    other_pkg = str((layout["other"] / "worker" / "src" / "dna_entropy" / "__init__.py").resolve())
+    line = next(
+        ln for ln in _pytest(layout, "-v").stdout.splitlines() if ln.startswith("dna_entropy tested from")
+    )
+    assert "as installed" in line and other_pkg in line
 
 
 def test_a_namespace_package_is_named_not_a_traceback_about_none(layout: dict[str, Path]) -> None:

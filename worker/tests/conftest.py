@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import sys
@@ -78,7 +79,8 @@ def _dev_layout() -> bool:
         info = json.loads(dist.read_text("direct_url.json") or "{}")
     except ValueError:
         return False
-    return bool(info.get("dir_info", {}).get("editable"))
+    dir_info = info.get("dir_info") if isinstance(info, dict) else None
+    return isinstance(dir_info, dict) and dir_info.get("editable") is True
 
 
 _DEV_LAYOUT = _dev_layout()
@@ -93,7 +95,12 @@ def pytest_report_header(config: pytest.Config) -> str:
         if _DEV_LAYOUT
         else "the installed package (as installed)"
     )
-    return f"dna_entropy tested from: {mode}"
+    module = sys.modules.get("dna_entropy")
+    where = getattr(module, "__file__", None)
+    if where is None:  # not imported yet (installed mode imports it in the first test module): ask the finder
+        spec = importlib.util.find_spec("dna_entropy")
+        where = spec.origin if spec and spec.origin else "not found"
+    return f"dna_entropy tested from: {mode}; resolved to {where}"
 
 
 @pytest.fixture
