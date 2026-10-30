@@ -186,11 +186,13 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     [RelayCommand]
     private async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        if (_account.SelectedProjectId is not { Length: > 0 } project)
+        if (_account.SelectedScope() is not { ProjectId.Length: > 0 } scope)
         {
             ErrorText = Format("CloudPage_NoProject");
             return;
         }
+
+        var project = scope.ProjectId;
 
         IsBusy = true;
         var generation = Volatile.Read(ref _projectGeneration);
@@ -200,8 +202,8 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         try
         {
             var installation = InstallationId.GetOrCreate(_settings);
-            var inventory = await _cleanup.InventoryAsync(project, installation, cts.Token);
-            var everyone = await _compute.ListAppVmsAsync(cts.Token);
+            var inventory = await _cleanup.InventoryAsync(scope, installation, cts.Token);
+            var everyone = await _compute.ListAppVmsAsync(scope, cts.Token);
             var pricing = LoadPricing();
 
             // The project changed while Google was answering: these lists belong to the old one. Show nothing of them and say why here (the account-changed
@@ -218,7 +220,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             Vms.Clear();
             foreach (var vm in inventory.Vms)
             {
-                Vms.Add(OwnRow(vm, inventory.Disks, pricing, project));
+                Vms.Add(OwnRow(vm, inventory.Disks, pricing, scope));
             }
 
             var ownNames = inventory.Vms.Select(v => (v.Name, v.Zone)).ToHashSet();
@@ -262,11 +264,13 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
     [RelayCommand]
     private async Task DeleteEverythingAsync(CancellationToken cancellationToken)
     {
-        if (_account.SelectedProjectId is not { Length: > 0 } project)
+        if (_account.SelectedScope() is not { ProjectId.Length: > 0 } scope)
         {
             ErrorText = Format("CloudPage_NoProject");
             return;
         }
+
+        var project = scope.ProjectId;
 
         // The last delete's report belongs to that delete: never leave it under a new error or a declined dialog (#740).
         ReportLines.Clear();
@@ -280,7 +284,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             InstallationInventory inventory;
             try
             {
-                inventory = await _cleanup.InventoryAsync(project, installation, cancellationToken);
+                inventory = await _cleanup.InventoryAsync(scope, installation, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -307,7 +311,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             {
                 attempted = true;
                 // Only what the dialog named: a computer, disk or folder that appeared meanwhile is left alone and reported (#740).
-                report = await _cleanup.DeleteAllAsync(project, installation, cancellationToken, inventory);
+                report = await _cleanup.DeleteAllAsync(scope, installation, cancellationToken, inventory);
             }
             catch (CloudOperationException)
             {
@@ -365,8 +369,9 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
         };
     }
 
-    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing, string listedProject)
+    private CloudVmRow OwnRow(VmDescriptor vm, IReadOnlyList<DiskDescriptor> disks, PricingTable? pricing, CloudScope listedScope)
     {
+        var listedProject = listedScope.ProjectId;
         var running = IsRunning(vm);
         var stopped = !running && IsStopped(vm);
         var cost = string.Empty;
@@ -386,14 +391,15 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
 
         return new CloudVmRow(vm.Name, vm.Zone, StatusOf(vm), cost, string.Empty, isAnotherComputer: false)
         {
-            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StopVmAsync(vm.Name, vm.Zone, ct), ct), () => running),
-            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StartVmAsync(vm.Name, vm.Zone, ct), ct), () => stopped),
-            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, listedProject, ct)),
+            StopCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StopVmAsync(listedScope, vm.Name, vm.Zone, ct), ct), () => running),
+            StartCommand = new AsyncRelayCommand(ct => ActAsync(vm, listedProject, () => _compute.StartVmAsync(listedScope, vm.Name, vm.Zone, ct), ct), () => stopped),
+            DeleteCommand = new AsyncRelayCommand(ct => DeleteOneAsync(vm, listedScope, ct)),
         };
     }
 
-    private async Task DeleteOneAsync(VmDescriptor vm, string listedProject, CancellationToken cancellationToken)
+    private async Task DeleteOneAsync(VmDescriptor vm, CloudScope listedScope, CancellationToken cancellationToken)
     {
+        var listedProject = listedScope.ProjectId;
         if (!StillListedProject(listedProject))
         {
             return;
@@ -404,7 +410,7 @@ public sealed partial class CloudResourcesViewModel : ObservableObject
             return;
         }
 
-        await ActAsync(vm, listedProject, () => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), cancellationToken);
+        await ActAsync(vm, listedProject, () => _compute.DeleteVmAsync(listedScope, vm.Name, vm.Zone, cancellationToken), cancellationToken);
     }
 
     /// <summary>One button's call, then a fresh listing so the row shows what Google says now. A refusal names the computer and the action.</summary>

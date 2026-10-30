@@ -196,14 +196,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
                         continue;
                     }
 
-                    await DeleteObjectAsync(bucket, item.Name, cancellationToken).ConfigureAwait(false);
+                    await DeleteObjectAsync(scope, bucket, item.Name, cancellationToken).ConfigureAwait(false);
                     deleted++;
                 }
             }
 
             if (manifestListed)
             {
-                await DeleteObjectAsync(bucket, manifestKey, cancellationToken).ConfigureAwait(false);
+                await DeleteObjectAsync(scope, bucket, manifestKey, cancellationToken).ConfigureAwait(false);
                 deleted++;
             }
         }

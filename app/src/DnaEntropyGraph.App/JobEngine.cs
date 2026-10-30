@@ -91,8 +91,11 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             return jobId;
         }
 
-        var projectId = _account.SelectedProjectId;
-        if (string.IsNullOrWhiteSpace(projectId))
+        // Issue #830: the project AND account the run is made in, read together ONCE here. The request carries it, so the run (and every later stop, delete or cancel of it)
+        // acts in this scope whatever is selected when those happen.
+        var scope = _account.SelectedScope();
+        var projectId = scope?.ProjectId;
+        if (scope is null || string.IsNullOrWhiteSpace(projectId))
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.NoProject, cancellationToken).ConfigureAwait(false);
             return jobId;
@@ -208,7 +211,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
             AppVersion(),
             image.Reference,
             uploads,
-            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
+            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder) with { Scope = scope };
 
         // Write-ahead (docs/architecture.md section 6): the row exists
         // before the first network call, so a crash right after Run still
@@ -250,7 +253,21 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
         // Stop and await whatever drives this run (one the engine started or one the reconciler reattached) before the
         // cancel writes its own phase, so there is one writer at a time.
-        await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(jobId, cancellationToken)).ConfigureAwait(false);
+        // Issue #830: the run's own project and account, from its row, never the current selection.
+        var scope = await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false);
+        if (scope is null)
+        {
+            return;
+        }
+
+        await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(scope, jobId, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>Issue #830: the scope a run's resources live in, from its row; null when this history has no such run (nothing of it exists to act on).</summary>
+    private async Task<CloudScope?> ScopeOfRunAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var rows = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        return rows.LastOrDefault(r => r.JobId == jobId) is { } row ? RunScope.Of(row) : null;
     }
 
     private async Task<bool> IsLocalRunAsync(string jobId, CancellationToken cancellationToken)
@@ -259,9 +276,21 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         return RunTargets.IsLocalRecord(rows.LastOrDefault(r => r.JobId == jobId)?.Target);
     }
 
-    public Task StopVmAsync(string jobId, CancellationToken cancellationToken) => _runner.StopVmAsync(jobId, cancellationToken);
+    public async Task StopVmAsync(string jobId, CancellationToken cancellationToken)
+    {
+        if (await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false) is { } scope)
+        {
+            await _runner.StopVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-    public Task DeleteVmAsync(string jobId, CancellationToken cancellationToken) => _runner.DeleteVmAsync(jobId, cancellationToken);
+    public async Task DeleteVmAsync(string jobId, CancellationToken cancellationToken)
+    {
+        if (await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false) is { } scope)
+        {
+            await _runner.DeleteVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>The staged copy of the chosen input, or null when there is no input or it cannot be read (the caller records <see cref="RunErrorCodes.InputMissing"/>).</summary>
     private async Task<StagedInput?> StageInputAsync(string jobId, RunOptions options, CancellationToken cancellationToken)

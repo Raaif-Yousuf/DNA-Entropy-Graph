@@ -22,10 +22,10 @@ public sealed class ResilientComputeGateway : IComputeGateway
     }
 
     public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.CreateVm", token => _inner.CreateVmAsync(spec, zone, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.CreateVm", token => _inner.CreateVmAsync(scope, spec, zone, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.ListAcceleratorZones", token => _inner.ListAcceleratorZonesAsync(acceleratorType, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.ListAcceleratorZones", token => _inner.ListAcceleratorZonesAsync(scope, acceleratorType, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
         // A composite (claim, scheduling, metadata, start): replaying it after a transient failure of its last step meets a VM that already
@@ -35,39 +35,39 @@ public sealed class ResilientComputeGateway : IComputeGateway
     // Issue #105. A start is idempotent (starting a running VM is accepted) and is new work, so it keeps the breaker; listing and deleting our
     // disks is cleanup that stops the meter, so it bypasses it like stop and delete of a VM.
     public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.StartVm", token => _inner.StartVmAsync(vmName, zone, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.StartVm", token => _inner.StartVmAsync(scope, vmName, zone, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.ListDisksByInstallation", token => _inner.ListDisksByInstallationAsync(installationId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.ListDisksByInstallation", token => _inner.ListDisksByInstallationAsync(scope, installationId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.DeleteDisk", token => _inner.DeleteDiskAsync(diskName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.DeleteDisk", token => _inner.DeleteDiskAsync(scope, diskName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(vmName, zone, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.GetVm", token => _inner.GetVmAsync(scope, vmName, zone, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(vmName, zone, incarnation, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(scope, vmName, zone, incarnation, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(scope, vmName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.DeleteVm", token => _inner.DeleteVmAsync(vmName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.DeleteVm", token => _inner.DeleteVmAsync(scope, vmName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     // Issue #113: stop/delete that says when the request was accepted. Like StopVm and DeleteVm it is cleanup that stops the meter, so it bypasses the breaker;
     // a replayed attempt re-sends an idempotent stop or delete and may call onAccepted again (it must be idempotent).
     public Task EndVmAsync(CloudScope scope, string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.EndVm", token => _inner.EndVmAsync(vmName, zone, delete, onAccepted, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.EndVm", token => _inner.EndVmAsync(scope, vmName, zone, delete, onAccepted, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.FindByJobId", token => _inner.FindByJobIdAsync(jobId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.FindByJobId", token => _inner.FindByJobIdAsync(scope, jobId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.ListByInstallation", token => _inner.ListByInstallationAsync(installationId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.ListByInstallation", token => _inner.ListByInstallationAsync(scope, installationId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Compute.ListAppVms", token => _inner.ListAppVmsAsync(token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Compute.ListAppVms", token => _inner.ListAppVmsAsync(scope, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 }
 
 public sealed class ResilientStorageGateway : IStorageGateway
@@ -82,7 +82,7 @@ public sealed class ResilientStorageGateway : IStorageGateway
     }
 
     public Task<string> EnsureBucketAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.EnsureBucket", token => _inner.EnsureBucketAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.EnsureBucket", token => _inner.EnsureBucketAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task UploadAsync(CloudScope scope, string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
     {
@@ -106,26 +106,26 @@ public sealed class ResilientStorageGateway : IStorageGateway
     }
 
     public Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.Download", token => _inner.DownloadAsync(bucket, objectKey, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.Download", token => _inner.DownloadAsync(scope, bucket, objectKey, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.TryDownload", token => _inner.TryDownloadAsync(bucket, objectKey, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.TryDownload", token => _inner.TryDownloadAsync(scope, bucket, objectKey, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<bool> TryDownloadToFileAsync(CloudScope scope, string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.TryDownloadToFile", token => _inner.TryDownloadToFileAsync(bucket, objectKey, destinationPath, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.TryDownloadToFile", token => _inner.TryDownloadToFileAsync(scope, bucket, objectKey, destinationPath, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.ListBuckets", token => _inner.ListBucketsAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.ListBuckets", token => _inner.ListBucketsAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     // Issue #105: the Cloud page's reads and the cleanup. All are idempotent (a replayed prefix delete finds fewer objects), and the cleanup bypasses the breaker.
     public Task<PrefixUsage> GetPrefixUsageAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.GetPrefixUsage", token => _inner.GetPrefixUsageAsync(bucket, prefix, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.GetPrefixUsage", token => _inner.GetPrefixUsageAsync(scope, bucket, prefix, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<IReadOnlyList<string>> ListChildPrefixesAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.ListChildPrefixes", token => _inner.ListChildPrefixesAsync(bucket, prefix, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.ListChildPrefixes", token => _inner.ListChildPrefixesAsync(scope, bucket, prefix, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task DeleteObjectAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Storage.DeleteObject", token => _inner.DeleteObjectAsync(bucket, objectKey, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Storage.DeleteObject", token => _inner.DeleteObjectAsync(scope, bucket, objectKey, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
     public Task<int> DeletePrefixAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken)
     {
@@ -149,16 +149,16 @@ public sealed class ResilientProjectSetupGateway : IProjectSetupGateway
     }
 
     public Task<ProjectLifecycleState> GetProjectStateAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectSetup.GetProjectState", token => _inner.GetProjectStateAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("ProjectSetup.GetProjectState", token => _inner.GetProjectStateAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<bool> IsBillingEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectSetup.IsBillingEnabled", token => _inner.IsBillingEnabledAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("ProjectSetup.IsBillingEnabled", token => _inner.IsBillingEnabledAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<bool> IsComputeApiEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectSetup.IsComputeApiEnabled", token => _inner.IsComputeApiEnabledAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("ProjectSetup.IsComputeApiEnabled", token => _inner.IsComputeApiEnabledAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task EnableComputeApiAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("ProjectSetup.EnableComputeApi", token => _inner.EnableComputeApiAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("ProjectSetup.EnableComputeApi", token => _inner.EnableComputeApiAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 }
 
 public sealed class ResilientBillingGateway : IBillingGateway
@@ -194,15 +194,15 @@ public sealed class ResilientQuotaGateway : IQuotaGateway
     }
 
     public Task<int> GetGpuQuotaAsync(CloudScope scope, string region, string acceleratorType, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Quota.GetGpuQuota", token => _inner.GetGpuQuotaAsync(scope.ProjectId, region, acceleratorType, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Quota.GetGpuQuota", token => _inner.GetGpuQuotaAsync(scope, region, acceleratorType, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<QuotaReadResult> ReadQuotaAsync(CloudScope scope, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Quota.ReadQuota", token => _inner.ReadQuotaAsync(scope.ProjectId, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Quota.ReadQuota", token => _inner.ReadQuotaAsync(scope, token), cancellationToken, accountSub: scope.AccountSub);
 
     // Issue #99. The create carries a caller-chosen preference id, so a replay after a lost answer is an already-exists answer, never a second request.
     public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(CloudScope scope, string metric, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Quota.GetQuotaIncreaseEligibility", token => _inner.GetQuotaIncreaseEligibilityAsync(scope.ProjectId, metric, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Quota.GetQuotaIncreaseEligibility", token => _inner.GetQuotaIncreaseEligibilityAsync(scope, metric, token), cancellationToken, accountSub: scope.AccountSub);
 
     public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(CloudScope scope, QuotaIncreaseRequest request, CancellationToken cancellationToken)
-        => _pipeline.ExecuteAsync("Quota.RequestQuotaIncrease", token => _inner.RequestQuotaIncreaseAsync(scope.ProjectId, request, token), cancellationToken, accountSub: scope.AccountSub);
+        => _pipeline.ExecuteAsync("Quota.RequestQuotaIncrease", token => _inner.RequestQuotaIncreaseAsync(scope, request, token), cancellationToken, accountSub: scope.AccountSub);
 }

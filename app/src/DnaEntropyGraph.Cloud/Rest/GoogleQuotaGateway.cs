@@ -303,7 +303,7 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
                 new CloudError("QUOTA_ACCELERATOR_UNKNOWN", null, $"No quota metric is known for the accelerator type '{acceleratorType}'."),
                 CloudErrorKind.Other);
 
-        var result = await ReadQuotaAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var result = await ReadQuotaAsync(scope, cancellationToken).ConfigureAwait(false);
         if (result.GpuRemaining(region, metric) is not { } remaining)
         {
             // Unknown is an error to the caller, never a 0 that a preflight would read as "no quota".

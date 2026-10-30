@@ -360,7 +360,7 @@ public static class ServiceRegistration
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
         // Issue #99: the wizard's GPU step asks Google for the L4 and project-wide GPU quota through this (the app lane binds it).
-        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>()));
+        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>(), sp.GetRequiredService<IGcpAccount>()));
         // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
         services.AddSingleton<InstallationCleanup>(sp =>
         {
@@ -388,7 +388,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<IToastService>(),
             sp.GetRequiredService<IStringResourceProvider>(),
             sp.GetRequiredService<IDiagnosticsLog>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IGcpAccount>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();

@@ -34,13 +34,15 @@ public sealed class LeftRunningGuard : IDisposable
     private readonly IStringResourceProvider _strings;
     private readonly IDiagnosticsLog _log;
     private readonly TimeProvider _clock;
+    private readonly IGcpAccount _account;
     private readonly HashSet<(string Name, string Zone)> _announced = [];
     private readonly object _gate = new();
     private ITimer? _timer;
     private bool _scanning;
 
-    public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock)
+    public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock, IGcpAccount account)
     {
+        _account = account;
         _scanner = scanner;
         _cleanup = cleanup;
         _settings = settings;
@@ -81,7 +83,13 @@ public sealed class LeftRunningGuard : IDisposable
 
     private async Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
     {
-        var scan = _scanner.ScanAsync(cancellationToken);
+        // Issue #830: the scan lists in the project and account selected NOW (the selection path); what it finds carries that scope, and every stop or delete below uses it.
+        if (_account.SelectedScope() is not { } scope)
+        {
+            return new LeftRunningReport([], []);
+        }
+
+        var scan = _scanner.ScanAsync(scope, cancellationToken);
         try
         {
             return await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
@@ -220,7 +228,14 @@ public sealed class LeftRunningGuard : IDisposable
             Task<VmEndResult>? work = null;
             try
             {
-                work = _cleanup.EndVmAsync(installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken);
+                // Issue #830: each computer is ended in the scope it was found in, never in whatever is selected by the time the user clicks.
+                var scope = vm.Scope ?? _account.SelectedScope();
+                if (scope is null)
+                {
+                    return (vm, EndResult.Failed);
+                }
+
+                work = _cleanup.EndVmAsync(scope, installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken);
                 var result = await work.WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
                 return (vm, result switch
                 {

@@ -139,9 +139,9 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.AcceleratorTypesScopedList>())
+            foreach (var (placeKey, scoped) in page.Items ?? new Dictionary<string, ComputeData.AcceleratorTypesScopedList>())
             {
-                if (scoped?.AcceleratorTypes is { Count: > 0 } found && found.Any(a => string.Equals(a.Name, acceleratorType, StringComparison.Ordinal)) && ZoneName(scope) is { Length: > 0 } zone)
+                if (scoped?.AcceleratorTypes is { Count: > 0 } found && found.Any(a => string.Equals(a.Name, acceleratorType, StringComparison.Ordinal)) && ZoneName(placeKey) is { Length: > 0 } zone)
                 {
                     zones.Add(zone);
                 }
@@ -371,7 +371,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                     CloudErrorKind.Network);
             }
 
-            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.DisksScopedList>())
+            foreach (var (placeKey, scoped) in page.Items ?? new Dictionary<string, ComputeData.DisksScopedList>())
             {
                 foreach (var disk in scoped?.Disks ?? [])
                 {
@@ -381,7 +381,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                     {
                         found.Add(new DiskDescriptor(
                             disk.Name,
-                            ZoneName(disk.Zone ?? disk.Region) ?? ZoneName(scope) ?? string.Empty,
+                            ZoneName(disk.Zone ?? disk.Region) ?? ZoneName(placeKey) ?? string.Empty,
                             (int)Math.Min(disk.SizeGb ?? 0, int.MaxValue),
                             disk.Status ?? string.Empty,
                             new Dictionary<string, string>(labels),
@@ -586,7 +586,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                     CloudErrorKind.Network);
             }
 
-            foreach (var (scope, scoped) in page.Items ?? new Dictionary<string, ComputeData.InstancesScopedList>())
+            foreach (var (placeKey, scoped) in page.Items ?? new Dictionary<string, ComputeData.InstancesScopedList>())
             {
                 foreach (var instance in scoped?.Instances ?? [])
                 {
@@ -595,7 +595,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                         && labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                         && (labelKey is null || (labels.TryGetValue(labelKey, out var value) && value == labelValue)))
                     {
-                        found.Add(ToDescriptor(instance, ZoneName(scope) ?? string.Empty));
+                        found.Add(ToDescriptor(instance, ZoneName(placeKey) ?? string.Empty));
                     }
                 }
             }
