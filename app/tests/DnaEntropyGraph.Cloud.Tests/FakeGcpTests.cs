@@ -50,6 +50,116 @@ public class FakeGcpTests
 
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string file = "") => file;
 
+    private sealed record VmScan(List<string> Violations, int Marked, int Markers, int HelperWrites, int UpdateVmCalls);
+
+    private static string BlankComments(string text)
+        => System.Text.RegularExpressions.Regex.Replace(text, @"//[^\n]*|/\*.*?\*/", m => new string(' ', m.Length), System.Text.RegularExpressions.RegexOptions.Singleline);
+
+    // The body of a helper method, by brace counting on the comment-free text: (start, end) or (-1, -1).
+    private static (int Start, int End) BodyOf(string code, string signature)
+    {
+        var start = code.IndexOf(signature, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return (-1, -1);
+        }
+
+        // Past the parameter list: an expression body (`=>`) ends at its `;`, a block body at its closing brace. Brace counting alone would run an expression-bodied member into the next one.
+        var paren = code.IndexOf('(', start);
+        var parenDepth = 0;
+        var afterParams = paren;
+        for (var i = paren; i < code.Length; i++)
+        {
+            parenDepth += code[i] == '(' ? 1 : code[i] == ')' ? -1 : 0;
+            if (parenDepth == 0)
+            {
+                afterParams = i + 1;
+                break;
+            }
+        }
+
+        if (code[afterParams..].TrimStart().StartsWith("=>", StringComparison.Ordinal))
+        {
+            var semicolon = code.IndexOf(';', afterParams);
+            return semicolon < 0 ? (-1, -1) : (start, semicolon);
+        }
+
+        var open = code.IndexOf('{', afterParams);
+        var depth = 0;
+        for (var i = open; i < code.Length; i++)
+        {
+            depth += code[i] == '{' ? 1 : code[i] == '}' ? -1 : 0;
+            if (depth == 0)
+            {
+                return (start, i);
+            }
+        }
+
+        return (-1, -1);
+    }
+
+    private static VmScan ScanVmRowWrites(string text, string label)
+    {
+        var assignment = new System.Text.RegularExpressions.Regex(@"_vms\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*(?:\?\?|[-+*/%&|^]|<<|>>)?=(?<rhs>[^=][^;]*)");
+        var violations = new List<string>();
+        var helperWrites = 0;
+        var marked = 0;
+        var updateVmCalls = System.Text.RegularExpressions.Regex.Matches(text, @"\bUpdateVm\(").Count;
+        // Comments blanked to spaces of the same length, so a match's index still addresses the original text (and the marker comment).
+        var code = BlankComments(text);
+        var markers = System.Text.RegularExpressions.Regex.Matches(text, "vm-row-create").Count;
+        var updateBody = BodyOf(code, "VmDescriptor? UpdateVm(");
+        var insertBody = BodyOf(code, "bool TryInsertVm(");
+
+        // #918: EVERY mention of the dictionary must be a shape that cannot change a row behind the helpers' back: a read, a removal, a foreach, the declaration, the marked create below,
+        // or the one compare-and-swap (TryUpdate) / one insert (TryAdd) inside their own helper. An alias (`var d = _vms;`), a cast, a ref, `.Clear()`, `.AddOrUpdate(...)` are none of these.
+        var allowedMember = new System.Text.RegularExpressions.Regex(@"^\s*\.\s*(?<member>\w+)");
+        var readMembers = new HashSet<string> { "TryGetValue", "TryRemove", "Values", "Keys", "ContainsKey", "Count", "IsEmpty" };
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(code, @"(?<!\w)_vms\b"))
+        {
+            var before = code[..m.Index].TrimEnd();
+            var rest = code[(m.Index + m.Length)..];
+            var member = allowedMember.Match(rest);
+            var name = member.Success ? member.Groups["member"].Value : null;
+            var ok = (System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*=\s*new\b") && before.EndsWith('>'))
+                || (System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*\)") && System.Text.RegularExpressions.Regex.IsMatch(before, @"\bforeach\s*\((?:[^()]|\([^()]*\))*\bin$"))
+                || System.Text.RegularExpressions.Regex.IsMatch(rest, @"^\s*\[")
+                || (name is not null && readMembers.Contains(name));
+            if (!ok && name == "TryUpdate" && updateBody.Start >= 0 && m.Index > updateBody.Start && m.Index < updateBody.End)
+            {
+                ok = true;
+                helperWrites++;
+            }
+            else if (!ok && name == "TryAdd" && insertBody.Start >= 0 && m.Index > insertBody.Start && m.Index < insertBody.End)
+            {
+                ok = true;
+                helperWrites++;
+            }
+
+            if (!ok)
+            {
+                violations.Add(label + ": " + code.Substring(m.Index, Math.Min(60, code.Length - m.Index)).Replace('\n', ' ').Trim());
+            }
+        }
+        foreach (System.Text.RegularExpressions.Match m in assignment.Matches(code))
+        {
+            var before = text[Math.Max(0, m.Index - 300)..m.Index];
+            var at = before.LastIndexOf("vm-row-create", StringComparison.Ordinal);
+            var rhs = m.Groups["rhs"].Value.TrimStart();
+            var insertsNewRow = rhs.StartsWith("new VmDescriptor(", StringComparison.Ordinal) || rhs.Trim() == "vm";
+            if (at >= 0 && !before[at..].Contains(';', StringComparison.Ordinal) && insertsNewRow)
+            {
+                marked++;
+            }
+            else
+            {
+                violations.Add(label + ": " + m.Value);
+            }
+        }
+
+        return new VmScan(violations, marked, markers, helperWrites, updateVmCalls);
+    }
+
     [Fact]
     public void Only_a_marked_create_may_assign_a_vm_row_directly_every_change_goes_through_UpdateVm()
     {
@@ -59,75 +169,46 @@ public class FakeGcpTests
         var dir = Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "..", "src", "DnaEntropyGraph.Cloud");
         var files = Directory.GetFiles(dir, "FakeGcp*.cs");
         files.Length.ShouldBeGreaterThan(3); // vacuity: the partial files were found
-        var assignment = new System.Text.RegularExpressions.Regex(@"_vms\s*\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*=(?<rhs>[^=][^;]*)");
-        var writer = new System.Text.RegularExpressions.Regex(@"_vms\s*\.\s*(AddOrUpdate|GetOrAdd|TryAdd|TryUpdate)\b");
-        var unmarked = new List<string>();
-        var writesOutsideHelper = new List<string>();
-        var updateVmCalls = 0;
-        var marked = 0;
-        var markers = 0;
-        var helperWrites = 0;
-        foreach (var file in files)
-        {
-            var text = File.ReadAllText(file);
-            updateVmCalls += System.Text.RegularExpressions.Regex.Matches(text, @"\bUpdateVm\(").Count;
-            // Comments blanked to spaces of the same length, so a match's index still addresses the original text (and the marker comment).
-            var code = System.Text.RegularExpressions.Regex.Replace(text, @"//[^\n]*|/\*.*?\*/", m => new string(' ', m.Length), System.Text.RegularExpressions.RegexOptions.Singleline);
-            markers += System.Text.RegularExpressions.Regex.Matches(text, "vm-row-create").Count;
+        var scans = files.Select(f => ScanVmRowWrites(File.ReadAllText(f), Path.GetFileName(f))).ToList();
 
-            // The body of UpdateVm, by brace counting on the comment-free text.
-            var helperStart = code.IndexOf("VmDescriptor? UpdateVm(", StringComparison.Ordinal);
-            var helperEnd = -1;
-            if (helperStart >= 0)
-            {
-                var open = code.IndexOf('{', helperStart);
-                var depth = 0;
-                for (var i = open; i < code.Length; i++)
-                {
-                    depth += code[i] == '{' ? 1 : code[i] == '}' ? -1 : 0;
-                    if (depth == 0)
-                    {
-                        helperEnd = i;
-                        break;
-                    }
-                }
-            }
+        scans.SelectMany(s => s.Violations).ShouldBeEmpty();
+        scans.Sum(s => s.Marked).ShouldBeGreaterThan(0); // vacuity: the creates were found
+        scans.Sum(s => s.Markers).ShouldBe(scans.Sum(s => s.Marked)); // every marker sits on a create, and no marker is left on something else
+        scans.Sum(s => s.HelperWrites).ShouldBeGreaterThan(0); // vacuity: the helper's own swap was found
+        scans.Sum(s => s.UpdateVmCalls).ShouldBeGreaterThan(5); // vacuity: the helper is really used
+    }
 
-            foreach (System.Text.RegularExpressions.Match m in writer.Matches(code))
-            {
-                if (helperStart >= 0 && m.Index > helperStart && m.Index < helperEnd)
-                {
-                    helperWrites++;
-                }
-                else
-                {
-                    writesOutsideHelper.Add(Path.GetFileName(file) + ": " + m.Value);
-                }
-            }
+    [Theory]
+    [InlineData("aliasing the dictionary", "void M() { var d = _vms; d[key] = new VmDescriptor(); }")]
+    [InlineData("clearing it", "void M() { _vms.Clear(); }")]
+    [InlineData("a cast to an interface", "void M() { ((IDictionary<(string, string), VmDescriptor>)_vms)[key] = row; }")]
+    [InlineData("a bare indexer assignment", "void M() { _vms[key] = row; }")]
+    [InlineData("a TryUpdate outside the helper", "void M() { _vms.TryUpdate(key, a, b); }")]
+    [InlineData("passing it by reference", "void M() { Interlocked.Exchange(ref _vms, other); }")]
+    [InlineData("a this-qualified clear", "void M() { this._vms.Clear(); }")]
+    [InlineData("a this-qualified alias", "void M() { var d = this._vms; }")]
+    [InlineData("a null-coalescing indexer assignment", "void M() { _vms[key] ??= row; }")]
+    [InlineData("passing it as an in argument", "void M() { Take(in _vms); }")]
+    [InlineData("a TryAdd outside the helper", "bool TryInsertVm(k, r) => _vms.TryAdd(k, r); void Other() { _vms.TryAdd(k, r); }")]
+    [InlineData("a TryAdd in the member after a block-bodied helper", "bool TryInsertVm(k, r) { return true; } void Other() { _vms.TryAdd(k, r); }")]
+    public void The_vm_row_guard_catches_every_bypass_shape(string shape, string code)
+    {
+        var scan = ScanVmRowWrites("class C { private readonly ConcurrentDictionary<(string, string), VmDescriptor> _vms = new(); " + code + " }", "planted.cs");
 
-            foreach (System.Text.RegularExpressions.Match m in assignment.Matches(code))
-            {
-                var before = text[Math.Max(0, m.Index - 300)..m.Index];
-                var at = before.LastIndexOf("vm-row-create", StringComparison.Ordinal);
-                var rhs = m.Groups["rhs"].Value.TrimStart();
-                var insertsNewRow = rhs.StartsWith("new VmDescriptor(", StringComparison.Ordinal) || rhs.Trim() == "vm";
-                if (at >= 0 && !before[at..].Contains(';', StringComparison.Ordinal) && insertsNewRow)
-                {
-                    marked++;
-                }
-                else
-                {
-                    unmarked.Add(Path.GetFileName(file) + ": " + m.Value);
-                }
-            }
-        }
+        scan.Violations.ShouldNotBeEmpty(shape);
+    }
 
-        unmarked.ShouldBeEmpty();
-        writesOutsideHelper.ShouldBeEmpty();
-        marked.ShouldBeGreaterThan(0); // vacuity: the creates were found
-        markers.ShouldBe(marked); // every marker sits on a create, and no marker is left on something else
-        helperWrites.ShouldBeGreaterThan(0); // vacuity: the helper's own swap was found
-        updateVmCalls.ShouldBeGreaterThan(5); // vacuity: the helper is really used
+    [Theory]
+    [InlineData("a read", "void M() { _vms.TryGetValue(key, out var v); var x = _vms.Values; foreach (var (k, vm) in _vms) { } }")]
+    [InlineData("a removal", "void M() { _vms.TryRemove(key, out _); _vms.TryRemove(new KeyValuePair<int, int>(key, row)); }")]
+    [InlineData("a marked create", "void M() { // vm-row-create: a new row\n _vms[key] = new VmDescriptor(a); }")]
+    [InlineData("the TryAdd inside an expression-bodied helper", "bool TryInsertVm(k, r) => _vms.TryAdd(k, r);")]
+    [InlineData("the TryAdd inside a block-bodied helper", "bool TryInsertVm(k, r) { return _vms.TryAdd(k, r); }")]
+    public void The_vm_row_guard_lets_reads_removals_and_a_marked_create_through(string shape, string code)
+    {
+        var scan = ScanVmRowWrites("class C { private readonly ConcurrentDictionary<(string, string), VmDescriptor> _vms = new(); " + code + " }", "planted.cs");
+
+        scan.Violations.ShouldBeEmpty(shape);
     }
     [Fact]
     public async Task A_delete_that_lands_before_a_plain_start_writes_leaves_the_vm_deleted_and_the_start_says_gone()
@@ -478,8 +559,12 @@ public class FakeGcpTests
         var created = await gcp.CreateVmAsync(ValidSpec("job-1"), Zone, CancellationToken.None);
         await gcp.StopVmAsync(created.Name, created.Zone, CancellationToken.None);
         var manifestAlwaysReadable = true;
+        var midFlightReads = 0;
         gcp.BeforeStartWrite = () =>
         {
+            // Mid-flight (the worker has run, the start has not landed): the manifest is readable here too, not only after the failure (#918).
+            manifestAlwaysReadable &= gcp.TryDownloadAsync(bucket, "jobs/job-2/manifest.json", CancellationToken.None).GetAwaiter().GetResult() is not null;
+            midFlightReads++;
             gcp.PutObject(bucket, "jobs/job-2/cancel.marker", "x"u8.ToArray()); // an app write that lands while the reuse is in flight
             gcp.DeleteVmAsync(created.Name, created.Zone, CancellationToken.None).GetAwaiter().GetResult();
         };
@@ -488,6 +573,7 @@ public class FakeGcpTests
         manifestAlwaysReadable &= await gcp.TryDownloadAsync(bucket, "jobs/job-2/manifest.json", CancellationToken.None) is not null;
 
         gcp.ObjectKeys(bucket).Where(k => k.StartsWith("jobs/job-2/", StringComparison.Ordinal)).Order().ShouldBe(["jobs/job-2/cancel.marker", "jobs/job-2/manifest.json"]);
+        midFlightReads.ShouldBe(1); // vacuity: the in-flight read really ran
         manifestAlwaysReadable.ShouldBeTrue();
     }
 

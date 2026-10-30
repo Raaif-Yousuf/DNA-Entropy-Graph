@@ -91,7 +91,28 @@
                                                 <TextBlock Text="{x:Bind ReasonText}" Visibility="{x:Bind HasReason}" TextWrapping="Wrap" />
                                                 <TextBlock Text="{x:Bind ImportedText}" Visibility="{x:Bind HasImportedText}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <TextBlock Text="{x:Bind PresetText}" Visibility="{x:Bind HasPreset}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                <!-- Issue #141: the run's tags as chips and its note, edited on the Results page. -->
+                                                <ItemsControl ItemsSource="{x:Bind Tags}" Visibility="{x:Bind HasTags}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <StackPanel Orientation="Horizontal" Spacing="6" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="x:String">
+                                                            <Border
+                                                                AutomationProperties.Name="{x:Bind}"
+                                                                Padding="8,2"
+                                                                CornerRadius="10"
+                                                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                                                <TextBlock Text="{x:Bind}" Style="{StaticResource CaptionTextBlockStyle}" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock Text="{x:Bind NotesText}" Visibility="{x:Bind HasNotes}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <Button x:Uid="RunsCopyOwnerRequestButton" Command="{x:Bind CopyOwnerRequestCommand}" Visibility="{x:Bind HasOwnerRequest}" HorizontalAlignment="Left" />
+                                                <Button x:Uid="RunsOpenStoragePageButton" Command="{x:Bind OpenStoragePageCommand}" Visibility="{x:Bind ShowStoragePage}" HorizontalAlignment="Left" />
                                                 <!-- Issue #92: offered by a run that failed for want of a graphics card. -->
                                                 <TextBlock x:Uid="RunsWaitForGpuHint" Visibility="{x:Bind HasWaitForGpu}" TextWrapping="Wrap" />
                                                 <Button x:Uid="RunsWaitForGpuButton" Command="{x:Bind WaitForGpuCommand}" Visibility="{x:Bind HasWaitForGpu}" HorizontalAlignment="Left" />

@@ -37,21 +37,21 @@ public class CloudErrorClassifierTests
         return fixture!;
     }
 
-    public static IEnumerable<object[]> FixtureCases()
+    public static IEnumerable<object?[]> FixtureCases()
     {
         foreach (var c in LoadFixture().Cases)
         {
-            yield return new object[] { c.Id, c.Stderr, c.ExpectedBucket };
+            yield return new object?[] { c.Id, c.Stderr, c.ExpectedBucket, c.HttpStatus };
         }
     }
 
     [Theory]
     [MemberData(nameof(FixtureCases))]
-    public void Every_recorded_fixture_case_classifies_to_its_expected_bucket(string id, string stderr, string expectedBucket)
+    public void Every_recorded_fixture_case_classifies_to_its_expected_bucket(string id, string stderr, string expectedBucket, int? httpStatus)
     {
         var expectedKind = BucketToKind[expectedBucket];
 
-        var actual = CloudErrorClassifier.Classify(new CloudError(Code: null, HttpStatus: null, Message: stderr));
+        var actual = CloudErrorClassifier.Classify(new CloudError(Code: null, HttpStatus: httpStatus, Message: stderr));
 
         actual.ShouldBe(expectedKind, $"case '{id}': stderr '{stderr}' should classify as '{expectedBucket}' but got '{actual}'.");
     }
@@ -100,6 +100,90 @@ public class CloudErrorClassifierTests
         CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(expected);
     }
 
+    // Issue #772. THEORY (unverified, no live project): the documented text Compute answers an insert with when the zone does not offer the machine type.
+    [Theory]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-c/machineTypes/a2-ultragpu-1g' was not found")]
+    [InlineData("notFound", 404, "The resource 'projects/my-iam-project/zones/us-east4-c/machineTypes/a3-highgpu-1g' was not found")]
+    [InlineData("notFound", 404, "The resource 'projects/williams-lab/zones/us-east4-c/machineTypes/a3-highgpu-1g' was not found")]
+    [InlineData(null, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")]
+    public void A_machine_type_the_zone_does_not_offer_is_a_per_zone_stockout_so_the_ladder_moves_on(string? code, int? httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(CloudErrorKind.Stockout);
+    }
+
+    [Theory]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/instances/deg-job-1' was not found")]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/zones/us-central1-a/disks/deg-job-1' was not found")]
+    [InlineData("NOT_FOUND", 404, "The resource 'projects/my-project/global/images/family-x' was not found")]
+    public void Any_other_missing_resource_is_not_a_stockout_and_stays_other(string code, int httpStatus, string message)
+    {
+        CloudErrorClassifier.Classify(new CloudError(code, httpStatus, message)).ShouldBe(CloudErrorKind.Other);
+    }
+
+    [Fact]
+    public void A_machine_type_not_found_without_an_http_status_is_not_decided_by_the_machine_type_rule()
+    {
+        // A status-less message is the substring stage's to judge (the only route to billing, API-off, permission and quota for it); the machine-type rule is for a real 404 only.
+        CloudErrorClassifier.Classify(new CloudError(null, null, "The resource 'projects/my-project/zones/us-central1-c/machineTypes/a2-ultragpu-1g' was not found"))
+            .ShouldBe(CloudErrorKind.Other);
+    }
+
+    [Theory]
+    [InlineData(404, "Billing account for project p is disabled: the resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.Billing)]
+    [InlineData(null, "Billing account for project p is disabled: the resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.Billing)]
+    [InlineData(404, "Compute Engine API has not been used in project p before or it is disabled. The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.ApiDisabled)]
+    [InlineData(null, "Compute Engine API has not been used in project p before or it is disabled. The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.ApiDisabled)]
+    [InlineData(404, "Quota 'NVIDIA_L4_GPUS' exceeded. The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.Quota)]
+    [InlineData(null, "Quota 'NVIDIA_L4_GPUS' exceeded. The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found", CloudErrorKind.Quota)]
+    public void A_machine_type_not_found_never_hides_a_project_wide_refusal_in_the_same_message(int? httpStatus, string message, CloudErrorKind expected)
+    {
+        CloudErrorClassifier.Classify(new CloudError(null, httpStatus, message)).ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("IAM_PERMISSION_DENIED")]
+    [InlineData("QUOTA_EXCEEDED")]
+    [InlineData("ALREADY_EXISTS")]
+    public void A_404_whose_structured_code_says_something_else_is_not_decided_by_the_machine_type_rule(string code)
+    {
+        var kind = CloudErrorClassifier.Classify(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found"));
+
+        kind.ShouldNotBe(CloudErrorKind.Stockout);
+    }
+
+    [Fact]
+    public void A_404_with_the_permission_code_is_left_to_the_other_rules_and_stays_other_not_a_stockout()
+    {
+        CloudErrorClassifier.Classify(new CloudError("IAM_PERMISSION_DENIED", 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found"))
+            .ShouldBe(CloudErrorKind.Other);
+    }
+
+    [Theory]
+    [InlineData("RESOURCE_NOT_FOUND")]
+    [InlineData("notFound")]
+    [InlineData("NOT_FOUND")]
+    [InlineData(null)]
+    public void A_404_with_a_not_found_code_or_none_is_a_machine_type_miss(string? code)
+    {
+        CloudErrorClassifier.IsMachineTypeNotFound(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")).ShouldBeTrue();
+        CloudErrorClassifier.Classify(new CloudError(code, 404, "The resource 'projects/p/zones/z/machineTypes/g2-standard-8' was not found")).ShouldBe(CloudErrorKind.Stockout);
+    }
+    [Fact]
+    public void A_403_that_names_a_machine_type_is_still_a_permission_error()
+    {
+        // The 403 rules run first: a refusal that happens to name a machine type is still a permission error.
+        CloudErrorClassifier.Classify(new CloudError("IAM_PERMISSION_DENIED", 403, "Permission 'compute.machineTypes.get' denied on machineTypes/g2-standard-8; resource was not found"))
+            .ShouldBe(CloudErrorKind.Permission);
+    }
+
+    [Fact]
+    public void The_772_fixture_entries_carry_a_404_and_say_they_are_not_recorded_payloads()
+    {
+        var cases = LoadFixture().Cases.Where(c => c.Id.EndsWith("-772", StringComparison.Ordinal)).ToList();
+
+        cases.Count.ShouldBe(3);
+        cases.ShouldAllBe(c => c.HttpStatus == 404 && c.Recorded == false);
+    }
     // Issue #539: a permission denial that names a billing permission is a missing role, not "billing is off".
     [Theory]
     [InlineData("IAM_PERMISSION_DENIED", 403, "Permission 'billing.resourceAssociations.create' denied on resource '//cloudbilling.googleapis.com/billingAccounts/AAA'.")]
@@ -232,7 +316,9 @@ public class CloudErrorClassifierTests
     private sealed record FixtureCase(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("stderr")] string Stderr,
-        [property: JsonPropertyName("expected_bucket")] string ExpectedBucket);
+        [property: JsonPropertyName("expected_bucket")] string ExpectedBucket,
+        [property: JsonPropertyName("http_status")] int? HttpStatus = null,
+        [property: JsonPropertyName("recorded")] bool? Recorded = null);
 
     private sealed record FixtureFile(
         [property: JsonPropertyName("cases")] FixtureCase[] Cases,

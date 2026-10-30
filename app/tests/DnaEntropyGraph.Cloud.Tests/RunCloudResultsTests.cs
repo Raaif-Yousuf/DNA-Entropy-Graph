@@ -156,6 +156,17 @@ public sealed class RunCloudResultsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_drive_root_output_folder_never_makes_a_recorded_folder_below_it_writable()
+    {
+        PutResult();
+        var folder = Path.Combine(_root, "sample");
+        var run = Run(folder) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.GetPathRoot(_base) }) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+    [Fact]
     public async Task A_recorded_folder_outside_the_output_root_is_refused_before_anything_is_written()
     {
         PutResult();
@@ -465,6 +476,68 @@ public sealed class RunCloudResultsTests : IDisposable
         (await Make().DeleteAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.NotConnected);
 
         _runs.AllRecordedInOrder.ShouldBeEmpty();
+    }
+
+    private static CloudOperationException Stuck() => new(new CloudError(CloudErrorCodes.ListPaginationStuck, null, "same token twice"), CloudErrorKind.Network);
+
+    [Fact]
+    public async Task A_failed_delete_whose_listing_repeated_a_page_token_is_not_told_to_check_the_internet()
+    {
+        // The storage gateway keeps its Network classification (the reconciler treats Network as no-answer); the delete copy chooses by the CODE.
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw Stuck());
+
+        var result = await Make().DeleteAsync(Run(), CancellationToken.None);
+
+        result.Status.ShouldBe(CloudResultsStatus.Failed);
+        result.ErrorKind.ShouldBe(CloudErrorKind.Other);
+        result.ListingStuck.ShouldBeTrue("the page picks the stuck-listing copy by this flag");
+    }
+
+    [Fact]
+    public async Task A_failure_that_is_not_a_stuck_listing_does_not_set_the_stuck_flag()
+    {
+        var dropped = new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "dropped"), CloudErrorKind.Network);
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw dropped);
+
+        (await Make().DeleteAsync(Run(), CancellationToken.None)).ListingStuck.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(3)]
+    public async Task A_partial_delete_whose_listing_repeated_a_page_token_carries_the_other_cause(int? remaining)
+    {
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw new PartialCloudDeleteException(remaining, sweepCompleted: false, Stuck()));
+
+        var result = await Make().DeleteAsync(Run(), CancellationToken.None);
+
+        result.ErrorKind.ShouldBe(CloudErrorKind.Other);
+        result.ListingStuck.ShouldBeTrue();
+        result.ObjectsLeft.ShouldBe(remaining);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_real_network_failure_is_still_a_network_cause_in_both_shapes(bool partial)
+    {
+        var dropped = new CloudOperationException(new CloudError("TRANSPORT_FAILED", null, "dropped"), CloudErrorKind.Network);
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw (partial ? new PartialCloudDeleteException(null, sweepCompleted: false, dropped) : dropped));
+
+        (await Make().DeleteAsync(Run(), CancellationToken.None)).ErrorKind.ShouldBe(CloudErrorKind.Network);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Whether_the_sweep_completed_is_what_the_exception_says_not_inferred_from_its_inner_exception(bool completed)
+    {
+        // A cause can ride along with a completed sweep and a stopped sweep can have none; the flag is set where the exception is made.
+        _deleter.DeleteJobObjectsAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task>(_ => throw new PartialCloudDeleteException(2, completed, completed ? new IOException("x") : null));
+
+        var result = await Make().DeleteAsync(Run(), CancellationToken.None);
+
+        result.SweepCompleted.ShouldBe(completed);
     }
 
     [Fact]

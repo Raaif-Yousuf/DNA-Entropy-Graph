@@ -196,6 +196,9 @@
   <data name="RunError_worker_no_heartbeat" xml:space="preserve">
     <value>The rented computer started but the analysis program on it never reported in, so we shut it down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_stage_stuck" xml:space="preserve">
+    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
   </data>
@@ -276,6 +279,9 @@
   </data>
   <data name="RunError_worker_identity_not_applied" xml:space="preserve">
     <value>Google accepted the worker identity (a service account) but its access does not read back as the app asked, so the app did not start the run. Choose Run again and the app will repair it.</value>
+  </data>
+  <data name="RunError_cleanup_deleted" xml:space="preserve">
+    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
   <data name="RunError_other" xml:space="preserve">
     <value>Something went wrong while running in the cloud. Choose Save diagnostics in Settings and send the file to support.</value>
@@ -755,7 +761,7 @@
     <value>This removes the run from this list only. Its files and cloud copy are not deleted. Choose Continue to go ahead.</value>
   </data>
   <data name="RunsSearchBox.PlaceholderText" xml:space="preserve">
-    <value>Search by name, file or id</value>
+    <value>Search by name, file, note or tag</value>
   </data>
   <data name="RunsSearchBox.AutomationProperties.Name" xml:space="preserve">
     <value>Search runs</value>
@@ -765,45 +771,6 @@
   </data>
   <data name="RunsRefreshButton.Content" xml:space="preserve">
     <value>Refresh</value>
-  </data>
-  <data name="RunsImportButton.Content" xml:space="preserve">
-    <value>Find runs from other computers</value>
-  </data>
-  <data name="Runs_Import_Running" xml:space="preserve">
-    <value>Looking in your cloud results for runs from other computers...</value>
-  </data>
-  <data name="Runs_Import_None" xml:space="preserve">
-    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
-  </data>
-  <data name="Runs_Import_Done_One" xml:space="preserve">
-    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
-  </data>
-  <data name="Runs_Import_Done_Many" xml:space="preserve">
-    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
-  </data>
-  <data name="Runs_Import_NoProject" xml:space="preserve">
-    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed" xml:space="preserve">
-    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
-  </data>
-  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
-    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
-  </data>
-  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
-    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
-  </data>
-  <data name="Runs_Import_Failed_Network" xml:space="preserve">
-    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
-  </data>
-  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
-    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
-  </data>
-  <data name="Runs_Imported_Badge" xml:space="preserve">
-    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
   </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>
@@ -1047,12 +1014,6 @@
   </data>
   <data name="Results_ExportPngFailed" xml:space="preserve">
     <value>The picture could not be saved. Check that the results folder still exists and has free space, then choose Save picture again.</value>
-  </data>
-  <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
-  </data>
-  <data name="Results_ExportPngNoFolder" xml:space="preserve">
-    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
   </data>
   <data name="ResultsExportPngButton.Content" xml:space="preserve">
     <value>Save picture</value>
@@ -2135,8 +2096,137 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenWithPortable" xml:space="preserve">
     <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
   </data>
-  <data name="RunError_worker_stage_stuck" xml:space="preserve">
-    <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
+  <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
+    <value>Cloud copy only partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body" xml:space="preserve">
+    <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
+    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Title" xml:space="preserve">
+    <value>Cloud copy delete not confirmed</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Body" xml:space="preserve">
+    <value>The delete finished, but the app could not confirm that this run's folder in your Google Cloud storage is empty. Choose Delete cloud copy again to check.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Files still in your Google Cloud storage: {0}. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Files still in your Google Cloud storage: {0}. Ask your organization's administrator to allow deleting files in Google Cloud Storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Files still in your Google Cloud storage: {0}. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Files still in your Google Cloud storage: {0}. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Files still in your Google Cloud storage: {0}. Wait a few minutes, then choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
+    <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
+    <value>Cloud copy may be partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
+    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
+    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
+    <value>Could not finish checking your Google Cloud storage</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Body" xml:space="preserve">
+    <value>This run was made on another computer, so this app will not delete its files. Choose Open storage page, then delete this run's folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Title" xml:space="preserve">
+    <value>Could not confirm this run is yours</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Body" xml:space="preserve">
+    <value>This app could not confirm that this run's files belong to this installation, so nothing was deleted. Choose Open storage page and check the folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Title" xml:space="preserve">
+    <value>Storage not found</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Body" xml:space="preserve">
+    <value>The Google Cloud storage for this run was not found, so nothing was changed. Open the Cloud page to check which project and storage this app is using.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Title" xml:space="preserve">
+    <value>Blocked by your organization</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
+    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
+    <value>Google is limiting requests</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Body" xml:space="preserve">
+    <value>Google's request limit for your project was reached, so the delete stopped. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Body" xml:space="preserve">
+    <value>Something unexpected stopped the delete, and nothing was deleted. Try Delete cloud copy again. Choose Save diagnostics in Settings if it keeps happening, and send us the file.</value>
+  </data>
+  <data name="RunsOpenStoragePageButton.Content" xml:space="preserve">
+    <value>Open storage page</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Title" xml:space="preserve">
+    <value>Not allowed to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Body" xml:space="preserve">
+    <value>Google did not allow the delete, and nothing was deleted. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Body" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project, so nothing was deleted. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
     <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
@@ -2324,9 +2414,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="StallDialog_KeepWaiting" xml:space="preserve">
     <value>Keep waiting</value>
   </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
   <data name="RunError_input_accession_invalid" xml:space="preserve">
     <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
   </data>
@@ -2338,9 +2425,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
-  </data>
-  <data name="RunError_cleanup_deleted" xml:space="preserve">
-    <value>This run ended because you deleted everything the app made in your Google Cloud project, including its rented computer. Choose Run to start the run again.</value>
   </data>
   <data name="NewRunPillKind_Ncbi" xml:space="preserve">
     <value>NCBI record</value>
@@ -2676,14 +2760,47 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
   </data>
+  <data name="RunsImportButton.Content" xml:space="preserve">
+    <value>Find runs from other computers</value>
+  </data>
+  <data name="Runs_Import_Running" xml:space="preserve">
+    <value>Looking in your cloud results for runs from other computers...</value>
+  </data>
+  <data name="Runs_Import_None" xml:space="preserve">
+    <value>No new runs found. A run from another computer shows up here once it has finished and uploaded its results.</value>
+  </data>
+  <data name="Runs_Import_Done_One" xml:space="preserve">
+    <value>Added 1 run from another computer. It is read-only here: choose Download again to get its files.</value>
+  </data>
+  <data name="Runs_Import_Done_Many" xml:space="preserve">
+    <value>Added runs from other computers. They are read-only here: choose Download again to get a run's files.</value>
+  </data>
+  <data name="Runs_Import_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen. Choose one on the Cloud page, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed" xml:space="preserve">
+    <value>Could not look for runs from other computers. Choose Find runs from other computers to try again, and if it keeps failing, save a diagnostics file from Settings.</value>
+  </data>
+  <data name="Runs_Import_Failed_Permission" xml:space="preserve">
+    <value>Your Google account is not allowed to read this project's cloud results. Ask the project owner to give you access, or choose another project on the Cloud page.</value>
+  </data>
+  <data name="Runs_Import_Failed_Setup" xml:space="preserve">
+    <value>This Google Cloud project is not ready: billing or a needed service is off. Open the Cloud page and fix it there, then try again.</value>
+  </data>
+  <data name="Runs_Import_Failed_Network" xml:space="preserve">
+    <value>Could not reach Google Cloud. Check your internet connection, then choose Find runs from other computers again.</value>
+  </data>
+  <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
+    <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
+  </data>
+  <data name="Runs_Imported_Badge" xml:space="preserve">
+    <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
+    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+  </data>
   <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
     <value>Drag along the strip to open the viewer at that part of the sequence.</value>
-  </data>
-  <data name="ViewerIndexFailed_Title" xml:space="preserve">
-    <value>The viewer could not prepare this sequence file</value>
-  </data>
-  <data name="ViewerIndexFailed_Body" xml:space="preserve">
-    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="DatabaseNewerThanApp" xml:space="preserve">
     <value>Your run history was saved by a newer version of DNA Entropy Graph (it uses format {0}; this version understands up to {1}). Your history has not been changed. Install the latest version of DNA Entropy Graph.</value>
@@ -2693,81 +2810,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="DatabaseUnusable" xml:space="preserve">
     <value>The app could not open its run history in {0}. Your history has not been changed. Make sure that folder is not read-only, then start the app again.</value>
-  </data>
-  <data name="Results_ExportPng_Title" xml:space="preserve">
-    <value>Entropy of {0}, record {1}</value>
-  </data>
-  <data name="Results_ExportPng_XAxis" xml:space="preserve">
-    <value>Position (bases)</value>
-  </data>
-  <data name="Results_ExportPng_YAxis" xml:space="preserve">
-    <value>Entropy (bits, 0 to 2)</value>
-  </data>
-  <data name="Results_GenesTruncated" xml:space="preserve">
-    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
-  </data>
-  <data name="Results_GenesUnreadable" xml:space="preserve">
-    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
-  </data>
-  <data name="Results_GenesSortedAscending" xml:space="preserve">
-    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
-  </data>
-  <data name="Results_GenesSortedDescending" xml:space="preserve">
-    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
-  </data>
-  <data name="Results_GeneColumn_contig" xml:space="preserve">
-    <value>Record</value>
-  </data>
-  <data name="Results_GeneColumn_gene" xml:space="preserve">
-    <value>Gene</value>
-  </data>
-  <data name="Results_GeneColumn_begin" xml:space="preserve">
-    <value>Start</value>
-  </data>
-  <data name="Results_GeneColumn_end" xml:space="preserve">
-    <value>End</value>
-  </data>
-  <data name="Results_GeneColumn_strand" xml:space="preserve">
-    <value>Strand</value>
-  </data>
-  <data name="Results_GeneColumn_length" xml:space="preserve">
-    <value>Length</value>
-  </data>
-  <data name="Results_GeneColumn_mean" xml:space="preserve">
-    <value>Mean entropy</value>
-  </data>
-  <data name="Results_GeneColumn_min" xml:space="preserve">
-    <value>Lowest entropy</value>
-  </data>
-  <data name="Results_GeneColumn_max" xml:space="preserve">
-    <value>Highest entropy</value>
-  </data>
-  <data name="Results_GeneColumn_low" xml:space="preserve">
-    <value>Low-entropy share</value>
-  </data>
-  <data name="Viewer_SmoothedToggle" xml:space="preserve">
-    <value>Smoothed over {0} bases</value>
-  </data>
-  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
-    <value>Smoothed entropy, {0} bases (bits)</value>
-  </data>
-  <data name="ResultsGenesHeading.Text" xml:space="preserve">
-    <value>Genes</value>
-  </data>
-  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
-    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
-  </data>
-  <data name="Results_GenesRowsSkipped" xml:space="preserve">
-    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
-  </data>
-  <data name="Results_GenesOrderFile" xml:space="preserve">
-    <value>in the file's order</value>
-  </data>
-  <data name="Results_GenesOrderSorted" xml:space="preserve">
-    <value>sorted by {0}</value>
-  </data>
-  <data name="Viewer_TrackFailed" xml:space="preserve">
-    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
   </data>
   <data name="SettingsTransferHeader.Text" xml:space="preserve">
     <value>Share settings</value>
@@ -2871,6 +2913,99 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="SettingsKeyLabel_IgvPort" xml:space="preserve">
     <value>IGV connection number</value>
   </data>
+  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
+    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
+  </data>
+  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
+    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
+    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
+    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
+  </data>
+  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
+    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
+  </data>
+  <data name="RunError_stockout_waited" xml:space="preserve">
+    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
+  </data>
+  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
+    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
+  </data>
+  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
+    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
+  </data>
+  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
+    <value>Wait for a graphics card</value>
+  </data>
+  <data name="Results_GenesTruncated" xml:space="preserve">
+    <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
+  </data>
+  <data name="Results_GenesUnreadable" xml:space="preserve">
+    <value>{0} gene table(s) could not be read, so they are not shown: {1}. Choose Open next to each one in the file list to look at it yourself.</value>
+  </data>
+  <data name="Results_GenesRowsSkipped" xml:space="preserve">
+    <value>{0} row(s) of the gene table {1} could not be read and are left out. Choose Open next to that file in the file list to see them.</value>
+  </data>
+  <data name="Results_GenesOrderFile" xml:space="preserve">
+    <value>in the file's order</value>
+  </data>
+  <data name="Results_GenesOrderSorted" xml:space="preserve">
+    <value>sorted by {0}</value>
+  </data>
+  <data name="Results_GenesSortedAscending" xml:space="preserve">
+    <value>Sorted by {0}, lowest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GenesSortedDescending" xml:space="preserve">
+    <value>Sorted by {0}, highest first. Choose the same heading again to reverse it.</value>
+  </data>
+  <data name="Results_GeneColumn_contig" xml:space="preserve">
+    <value>Record</value>
+  </data>
+  <data name="Results_GeneColumn_gene" xml:space="preserve">
+    <value>Gene</value>
+  </data>
+  <data name="Results_GeneColumn_begin" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Results_GeneColumn_end" xml:space="preserve">
+    <value>End</value>
+  </data>
+  <data name="Results_GeneColumn_strand" xml:space="preserve">
+    <value>Strand</value>
+  </data>
+  <data name="Results_GeneColumn_length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="Results_GeneColumn_mean" xml:space="preserve">
+    <value>Mean entropy</value>
+  </data>
+  <data name="Results_GeneColumn_min" xml:space="preserve">
+    <value>Lowest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_max" xml:space="preserve">
+    <value>Highest entropy</value>
+  </data>
+  <data name="Results_GeneColumn_low" xml:space="preserve">
+    <value>Low-entropy share</value>
+  </data>
+  <data name="Viewer_TrackFailed" xml:space="preserve">
+    <value>The smoothed track over {0} bases could not be drawn. Tick it again to try again.</value>
+  </data>
+  <data name="Viewer_SmoothedToggle" xml:space="preserve">
+    <value>Smoothed over {0} bases</value>
+  </data>
+  <data name="Viewer_SmoothedTrackName" xml:space="preserve">
+    <value>Smoothed entropy, {0} bases (bits)</value>
+  </data>
+  <data name="ResultsGenesHeading.Text" xml:space="preserve">
+    <value>Genes</value>
+  </data>
+  <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
+    <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
+  </data>
   <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
     <value>Earlier version</value>
   </data>
@@ -2909,33 +3044,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
     <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAmbiguousName" xml:space="preserve">
-    <value>More than one sequence file is named like {0}, so it was not paired with any of them. Select the FASTA file it belongs to in the list, then choose Add GFF3.</value>
-  </data>
-  <data name="NewRunStatusAnnotationNamedInvalid" xml:space="preserve">
-    <value>{0} is named like {1}, but {1} did not pass its check, so {0} was not paired with any file. Fix or remove {1} in the list, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationFallbackRefused" xml:space="preserve">
-    <value>{0} was not paired: {1} already goes with the annotation file that has its name. To use {0} instead, select {1}, choose Remove GFF3, then add {0} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationAlreadyPaired" xml:space="preserve">
-    <value>{0} already has an annotation file ({1}), so {2} was not paired. To use {2} instead, select {0}, choose Remove GFF3, then add {2} again.</value>
-  </data>
-  <data name="NewRunStatusAnnotationPairedOnly" xml:space="preserve">
-    <value>Paired {0} with {1}, the only FASTA file here, although the names differ. If that is not right, select {1} and choose Remove GFF3.</value>
-  </data>
-  <data name="RunError_stockout_waited" xml:space="preserve">
-    <value>Google did not find a free graphics card in the time we waited. Press Run again to try once more, or start the run again later in the day.</value>
-  </data>
-  <data name="RunNotice_WaitingForGpu" xml:space="preserve">
-    <value>Waiting for Google to free up a graphics card. This can take from a few minutes to a few hours, and the app has to stay open. Press Cancel to stop waiting.</value>
-  </data>
-  <data name="RunsWaitForGpuHint.Text" xml:space="preserve">
-    <value>Or let Google keep looking for a free graphics card for you. This may take a while, and the app has to stay open.</value>
-  </data>
-  <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
-    <value>Wait for a graphics card</value>
   </data>
   <data name="PageTitle_RunProgress" xml:space="preserve">
     <value>Run progress</value>
@@ -3020,5 +3128,65 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
     <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
+  <data name="NewRunNameTemplate.Header" xml:space="preserve">
+    <value>Run name</value>
+  </data>
+  <data name="NewRunNameTemplate.PlaceholderText" xml:space="preserve">
+    <value>{file}</value>
+  </data>
+  <data name="NewRunNameHelp.Text" xml:space="preserve">
+    <value>You can use {file}, {date}, {time}, {model} and {n} in the name. It names the folder your results are saved in. The date and time are taken when you press Run.</value>
+  </data>
+  <data name="NewRunNamePreviewLabel.Text" xml:space="preserve">
+    <value>This run will be named</value>
+  </data>
+  <data name="Results_NotesSaved" xml:space="preserve">
+    <value>Saved.</value>
+  </data>
+  <data name="Results_NotesSaveFailed" xml:space="preserve">
+    <value>Could not save your note. Press Save notes to try again; if it keeps failing, close any other window of this app and try once more.</value>
+  </data>
+  <data name="ResultsNotesHeading.Text" xml:space="preserve">
+    <value>Your notes</value>
+  </data>
+  <data name="ResultsNotesBox.Header" xml:space="preserve">
+    <value>Note</value>
+  </data>
+  <data name="ResultsNotesBox.PlaceholderText" xml:space="preserve">
+    <value>For example: the clone that failed sequencing</value>
+  </data>
+  <data name="ResultsTagsBox.Header" xml:space="preserve">
+    <value>Tags (separate with commas)</value>
+  </data>
+  <data name="ResultsTagsBox.PlaceholderText" xml:space="preserve">
+    <value>For example: clone7, redo</value>
+  </data>
+  <data name="ResultsSaveNotesButton.Content" xml:space="preserve">
+    <value>Save notes</value>
+  </data>
+  <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
+    <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
+  </data>
+  <data name="Results_NotesEditedDuringSave" xml:space="preserve">
+    <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>
+  </data>
+  <data name="Results_NotesRunGone" xml:space="preserve">
+    <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
+  </data>
+  <data name="Results_ExportPngFailedInExports" xml:space="preserve">
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPngNoFolder" xml:space="preserve">
+    <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
+  </data>
+  <data name="Results_ExportPng_Title" xml:space="preserve">
+    <value>Entropy of {0}, record {1}</value>
+  </data>
+  <data name="Results_ExportPng_XAxis" xml:space="preserve">
+    <value>Position (bases)</value>
+  </data>
+  <data name="Results_ExportPng_YAxis" xml:space="preserve">
+    <value>Entropy (bits, 0 to 2)</value>
   </data>
 </root>

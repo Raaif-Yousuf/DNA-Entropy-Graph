@@ -41,4 +41,64 @@ public class FileLogTailReaderTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void A_job_id_that_leaves_the_runs_folder_reads_nothing()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}");
+        var root = Path.Combine(parent, "runs");
+        Directory.CreateDirectory(root);
+        var outside = Path.Combine(parent, "outside");
+        PlantLog(outside);
+        var reader = new FileLogTailReader(root);
+
+        try
+        {
+            reader.ReadLines(Path.Combine("..", "outside")).ShouldBeEmpty();
+            reader.ReadLines(outside).ShouldBeEmpty("an absolute job id (C:\\... form) discards the runs folder in Path.Combine");
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("x\\..")]
+    [InlineData("x\\..\\y")]
+    [InlineData("y\\.")]
+    public void A_job_id_that_is_not_one_plain_name_reads_no_log_even_when_it_resolves_inside_the_runs_folder(string jobId)
+    {
+        // "x\..\y" resolves to <runs>\y, another job's log, and "" or "." to <runs>\logs: neither is the named job.
+        var root = Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}");
+        PlantLog(Path.Combine(root, "y"));
+        PlantLog(root);
+        var reader = new FileLogTailReader(root);
+
+        try
+        {
+            reader.ReadLines(jobId).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void PlantLog(string folder)
+    {
+        Directory.CreateDirectory(Path.Combine(folder, "logs"));
+        File.WriteAllLines(Path.Combine(folder, "logs", "worker.log"), ["SECRET"]);
+    }
+    [Theory]
+    [InlineData("a\0b")]
+    [InlineData("a:stream")]
+    public void A_job_id_with_a_nul_or_a_colon_that_names_no_log_returns_empty_and_does_not_throw(string jobId)
+    {
+        var reader = new FileLogTailReader(Path.Combine(Path.GetTempPath(), $"deg-logtail-{Guid.NewGuid():n}"));
+
+        Should.NotThrow(() => reader.ReadLines(jobId)).ShouldBeEmpty();
+    }
 }

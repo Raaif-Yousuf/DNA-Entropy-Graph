@@ -41,6 +41,33 @@ public sealed partial class ResultsViewModel : ObservableObject
     private RunRecord? _run;
     private readonly ResultsExportRoot? _exportRoot;
     private int _loadGeneration;
+    private readonly IRunAnnotations? _annotations;
+    private string? _annotationsJobId;
+
+    // Issue #141: the run's own notes and tags, edited here. TagsText is the one-line form ("clone7, redo").
+    [ObservableProperty]
+    private string _notesText = string.Empty;
+
+    [ObservableProperty]
+    private string _tagsText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAnnotationsStatus))]
+    private string _annotationsStatusText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SaveAnnotationsCommand))]
+    private bool _canEditAnnotations;
+
+    // A "Saved" left on screen after the next keystroke would be a lie.
+    partial void OnNotesTextChanged(string value) => AnnotationsStatusText = string.Empty;
+
+    partial void OnTagsTextChanged(string value) => AnnotationsStatusText = string.Empty;
+
+    /// <summary>How many characters the note box accepts (the page binds its <c>MaxLength</c> to this; a save cuts to it as well).</summary>
+    public int NotesMaxLength => RunTags.MaxNotesLength;
+
+    public bool HasAnnotationsStatus => AnnotationsStatusText.Length > 0;
 
     [ObservableProperty]
     private string _title = string.Empty;
@@ -70,8 +97,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         IEntropyOverviewSource? overviewSource = null,
         IOverviewImageExporter? imageExporter = null,
         IGeneTableSource? geneTables = null,
-        ResultsExportRoot? exportRoot = null)
+        ResultsExportRoot? exportRoot = null,
+        IRunAnnotations? annotations = null)
     {
+        _annotations = annotations;
         _geneTables = geneTables;
         _exportRoot = exportRoot;
         _overviewSource = overviewSource;
@@ -146,6 +175,12 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
             _run = run;
+
+            // Issue #141: the note belongs to the run, not to its folder, so it shows (and saves) even when the folder is gone.
+            _annotationsJobId = run.JobId;
+            NotesText = run.Notes ?? string.Empty;
+            TagsText = RunTags.Format(RunTags.Parse(run.TagsJson));
+            CanEditAnnotations = _annotations is not null;
             var folder = run.OutputDir;
 
             // Listing a folder and reading its summaries is disk work (maybe a network drive): off the UI thread.
@@ -195,6 +230,11 @@ public sealed partial class ResultsViewModel : ObservableObject
         _run = null;
         _outputFiles = [];
         Title = string.Empty;
+        _annotationsJobId = null;
+        NotesText = string.Empty;
+        TagsText = string.Empty;
+        AnnotationsStatusText = string.Empty;
+        CanEditAnnotations = false;
         Overview = null;
         NoticeText = string.Empty;
         StatsNoticeText = string.Empty;
@@ -466,7 +506,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
             // Only the class name is traced: a message can carry a path or a file name (Hard Rule 14, no names in logs).
-            System.Diagnostics.Trace.TraceWarning("Save picture failed: " + ex.GetType().Name);
+            System.Diagnostics.Trace.TraceWarning($"Save picture failed: {ex.GetType().Name}");
             written = false;
         }
 
@@ -488,8 +528,98 @@ public sealed partial class ResultsViewModel : ObservableObject
         return safe.Length == 0 ? "entropy" : safe.Replace("..", "_");
     }
 
+    /// <summary>
+    /// Issue #141: saves the note and tags of this run. Writes only those two columns (through <see cref="IRunAnnotations"/>), so a
+    /// phase change landing at the same moment is never overwritten. A failure keeps what was typed and says so.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanSaveAnnotations), AllowConcurrentExecutions = false)]
+    private async Task SaveAnnotationsAsync(CancellationToken cancellationToken)
+    {
+        if (_annotations is null || _annotationsJobId is not { } jobId)
+        {
+            return;
+        }
+
+        // Not re-entrant (cold review round 4): two writes in flight could finish out of order and leave the older text stored. The command's
+        // own concurrency option is not relied on alone; this flag also refuses a call that arrives through Execute or ExecuteAsync directly.
+        // The button cannot reach this (CanExecute is false while saving); a direct call is told, not ignored: its text is not stored by the save in flight.
+        if (Interlocked.Exchange(ref _saveInFlight, 1) == 1)
+        {
+            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesEditedDuringSave);
+            return;
+        }
+
+        SaveAnnotationsCommand.NotifyCanExecuteChanged();
+        try
+        {
+            await SaveAnnotationsCoreAsync(jobId, cancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref _saveInFlight, 0);
+            SaveAnnotationsCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private int _saveInFlight;
+
+    private bool CanSaveAnnotations() => CanEditAnnotations && Volatile.Read(ref _saveInFlight) == 0;
+
+    private async Task SaveAnnotationsCoreAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var annotations = _annotations!;
+        var generation = Volatile.Read(ref _loadGeneration);
+        var capturedNotesText = NotesText;
+        var capturedTagsText = TagsText;
+        var notes = string.IsNullOrWhiteSpace(NotesText) ? null : RunTags.ClampNotes(NotesText.Trim());
+        var tags = RunTags.ParseInput(TagsText);
+        bool found;
+        try
+        {
+            found = await annotations.UpdateAsync(jobId, notes, RunTags.Serialize(tags), cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (IsStillShowing(jobId, generation))
+            {
+                AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesSaveFailed);
+            }
+
+            return;
+        }
+
+        // The page may have moved on to another run while the write was in flight: that run's box and message are not ours to touch.
+        if (!IsStillShowing(jobId, generation))
+        {
+            return;
+        }
+
+        if (!found)
+        {
+            AnnotationsStatusText = _strings.GetString(ResultsCopy.NotesRunGone);
+            return;
+        }
+
+        // Tidy a box only when it still holds what was saved: anything typed while the write ran is the user's, not ours to replace.
+        // Then the page must not say "Saved." about text it did not store, so it says what was stored and what to do about the rest.
+        var notesUnchanged = string.Equals(NotesText, capturedNotesText, StringComparison.Ordinal);
+        var tagsUnchanged = string.Equals(TagsText, capturedTagsText, StringComparison.Ordinal);
+        if (notesUnchanged)
+        {
+            NotesText = notes ?? string.Empty;
+        }
+
+        if (tagsUnchanged)
+        {
+            TagsText = RunTags.Format(tags);
+        }
+
+        AnnotationsStatusText = _strings.GetString(notesUnchanged && tagsUnchanged ? ResultsCopy.NotesSaved : ResultsCopy.NotesEditedDuringSave);
+    }
+
+    private bool IsStillShowing(string jobId, int generation)
+        => generation == Volatile.Read(ref _loadGeneration) && string.Equals(_annotationsJobId, jobId, StringComparison.Ordinal);
+
     [RelayCommand]
     private void ShowRuns() => _navigator.NavigateTo("Runs");
 }
-
-

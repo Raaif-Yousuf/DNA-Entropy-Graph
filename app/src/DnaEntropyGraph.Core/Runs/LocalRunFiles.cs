@@ -79,7 +79,7 @@ public sealed class LocalRunFiles : ILocalRunFiles
         {
             root = RunOutputRoot.Resolve(run, _defaultOutputParent);
             folder = Path.GetFullPath(run.OutputDir);
-            if (!RunOutputRoot.IsStrictlyInside(folder, root) || _protectedPaths.Any(p => RunOutputRoot.Overlaps(folder, p)))
+            if (!RunOutputRoot.IsSafelyInside(folder, root) || _protectedPaths.Any(p => RunOutputRoot.Overlaps(folder, p)))
             {
                 return new(LocalDeleteStatus.Refused);
             }

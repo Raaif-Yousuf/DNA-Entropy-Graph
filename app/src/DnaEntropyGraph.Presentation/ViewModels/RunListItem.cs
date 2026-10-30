@@ -136,6 +136,16 @@ public sealed partial class RunListItem : ObservableObject
 
     public bool HasPreset => PresetText is not null;
 
+    /// <summary>The run's tags (issue #141), shown as chips; empty for a run with none.</summary>
+    public IReadOnlyList<string> Tags { get; init; } = [];
+
+    public bool HasTags => Tags.Count > 0;
+
+    /// <summary>The run's note (issue #141); null when there is none.</summary>
+    public string? NotesText { get; init; }
+
+    public bool HasNotes => NotesText is not null;
+
     public IAsyncRelayCommand OpenCommand { get; }
 
     public IAsyncRelayCommand RerunCommand { get; }
@@ -155,6 +165,12 @@ public sealed partial class RunListItem : ObservableObject
     public IRelayCommand? CopyOwnerRequestCommand { get; }
 
     public bool HasOwnerRequest => CopyOwnerRequestCommand is not null;
+
+    /// <summary>Opens this run's folder on Google's storage page (the action after a delete this app refused to do); set by the list.</summary>
+    public IRelayCommand? OpenStoragePageCommand { get; init; }
+
+    /// <summary>True after a Delete cloud copy that was refused as not this installation's, so the Open storage page button is offered.</summary>
+    public bool ShowStoragePage { get; init; }
 
     /// <summary>
     /// Issue #92: "Wait for a graphics card", the action of a run that failed because Google had none free: starts the same run again, queued by Google until a card is free.

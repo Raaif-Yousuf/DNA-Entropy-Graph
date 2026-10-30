@@ -17,6 +17,9 @@ public static class ResultsBucket
     /// <summary>The object at the bucket root that records what created the bucket and which retention it was asked for.</summary>
     public const string ConfigObject = "app-config.json";
 
+    /// <summary>A job folder's manifest object (<c>jobs/&lt;id&gt;/manifest.json</c>): the proof of which installation made the folder, so a prefix delete removes it last.</summary>
+    public const string ManifestObject = "manifest.json";
+
     /// <summary>Every job's objects live under this prefix; the retention rule applies to it.</summary>
     public const string JobsPrefix = "jobs/";
 
