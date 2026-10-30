@@ -16,13 +16,21 @@ Open **Settings**, find **Diagnostics**, and choose **Save diagnostics**. Pick w
 the zip (it starts in Downloads, named `dna-entropy-diagnostics-<date>.zip`), then choose
 **Open folder** to find it and attach it to your issue or email.
 
-The file includes the logs from your runs, your run history (run ids, states, error codes and times),
+The file includes the logs from your runs and the app's own log, your run history (run ids, states, error codes and times),
 the status and result files the app keeps for each run (with names and paths removed), settings that
 are safe to share, version numbers and this installation's id. It never includes your sequences, your
 input file names, your results, your email address or your sign-in. Any path on your computer appears
 as `<user>` or `<path>`. If the app finds anything in the file that looks like sequence data or a
 sign-in code it refuses to save and tells you so; describe the problem in the issue without a file
 instead. The app does not write its own log file yet; when it does, the same button will include it.
+
+## What the app did in your Google Cloud project
+
+If you want to see exactly what the app changed in your project (and when), open **Settings**, find **Diagnostics**, and choose
+**Open cloud activity log**. Each line is one change: starting, stopping or deleting a rented computer, creating or writing to the
+results storage bucket, or turning on a Google service. It shows the time, which run it was for, whether it worked, and how long it took.
+It never holds your sequences, your file names or your email address. Changes made by the developer-only command line tool (not part of the installed app) are not listed. The same file is included inside the zip when you choose
+**Save diagnostics**, so support can see it. If nothing is listed yet, no cloud run has made a change on this computer.
 
 ## Signing in
 
@@ -41,6 +49,11 @@ browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
 **"Google signed you in, but the permission this app needs was not ticked"**, Google lets you
 untick permissions on its page. Click **Sign in again and allow access** and leave every box ticked;
 the app cannot create or start your rented computer without it. *(`CONSENT_INCOMPLETE`)*
+
+**"The app could not open its saved list of accounts"**, another program or another copy of the app is
+using the file where the app keeps your account list, so it cannot tell whether you are signed in. Nothing
+was changed. Close other copies of the app, then click **Try again**. Your account appears as soon as the
+file can be read. *(`ACCOUNTS_FILE_LOCKED`)*
 
 **"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
 online, then click **Try again**. *(`SIGNIN_NETWORK`)*

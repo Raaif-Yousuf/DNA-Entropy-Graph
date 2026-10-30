@@ -3069,4 +3069,139 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="CloudPage_ProjectChanged" xml:space="preserve">
     <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
   </data>
+  <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
+    <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
+  </data>
+  <data name="CloudActivityLogOpenButton.Content" xml:space="preserve">
+    <value>Open cloud activity log</value>
+  </data>
+  <data name="CloudActivityLogNone" xml:space="preserve">
+    <value>Nothing has been recorded yet. Start a cloud run, then choose Open cloud activity log again.</value>
+  </data>
+  <data name="CloudActivityLogOpenFailed" xml:space="preserve">
+    <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
+    <value>Cloud copy only partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body" xml:space="preserve">
+    <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
+    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Title" xml:space="preserve">
+    <value>Cloud copy delete not confirmed</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Body" xml:space="preserve">
+    <value>The delete finished, but the app could not confirm that this run's folder in your Google Cloud storage is empty. Choose Delete cloud copy again to check.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Files still in your Google Cloud storage: {0}. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Files still in your Google Cloud storage: {0}. Ask your organization's administrator to allow deleting files in Google Cloud Storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Files still in your Google Cloud storage: {0}. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Files still in your Google Cloud storage: {0}. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Files still in your Google Cloud storage: {0}. Wait a few minutes, then choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
+    <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
+    <value>Cloud copy may be partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
+    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
+    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
+    <value>Could not finish checking your Google Cloud storage</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Body" xml:space="preserve">
+    <value>This run was made on another computer, so this app will not delete its files. Choose Open storage page, then delete this run's folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Title" xml:space="preserve">
+    <value>Could not confirm this run is yours</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Body" xml:space="preserve">
+    <value>This app could not confirm that this run's files belong to this installation, so nothing was deleted. Choose Open storage page and check the folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Title" xml:space="preserve">
+    <value>Storage not found</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Body" xml:space="preserve">
+    <value>The Google Cloud storage for this run was not found, so nothing was changed. Open the Cloud page to check which project and storage this app is using.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Title" xml:space="preserve">
+    <value>Blocked by your organization</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
+    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
+    <value>Google is limiting requests</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Body" xml:space="preserve">
+    <value>Google's request limit for your project was reached, so the delete stopped. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Body" xml:space="preserve">
+    <value>Something unexpected stopped the delete, and nothing was deleted. Try Delete cloud copy again. Choose Save diagnostics in Settings if it keeps happening, and send us the file.</value>
+  </data>
+  <data name="RunsOpenStoragePageButton.Content" xml:space="preserve">
+    <value>Open storage page</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Title" xml:space="preserve">
+    <value>Not allowed to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Body" xml:space="preserve">
+    <value>Google did not allow the delete, and nothing was deleted. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Body" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project, so nothing was deleted. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
 </root>

@@ -55,8 +55,7 @@ internal sealed class GoogleServiceUsageGateway : IServiceEnablementGateway
         // the same timeout code the poll reports.
         var clock = _options.TimeProvider;
         var started = clock.GetTimestamp();
-        using var deadlineSource = new CancellationTokenSource(_options.OperationDeadline, clock);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineSource.Token);
+        using var linked = new DnaEntropyGraph.Core.Cloud.Audit.DeadlineSource(cancellationToken, _options.OperationDeadline, clock);
 
         // The mutating call alone goes through the retrying pipeline (batchEnable is idempotent: enabling an enabled
         // service is a no-op).
@@ -79,7 +78,7 @@ internal sealed class GoogleServiceUsageGateway : IServiceEnablementGateway
                 },
                 linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadlineSource.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && linked.Token.IsCancellationRequested)
         {
             var timeout = OperationPoller.TimeoutError(_options.OperationDeadline);
             throw new CloudOperationException(timeout, CloudErrorClassifier.Classify(timeout));

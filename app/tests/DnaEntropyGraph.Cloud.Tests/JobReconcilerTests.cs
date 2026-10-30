@@ -121,9 +121,9 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null) => new(
             Runner,
-            Gcp,
+            compute ?? Gcp,
             Gcp,
             Repo,
             Inputs,
@@ -750,6 +750,34 @@ public class JobReconcilerTests
 
         outcome.Action.ShouldBe(ReattachAction.Deferred);
         env.Repo.AllRecordedInOrder.Count.ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task A_stuck_listing_looking_for_a_live_VM_defers_the_run_and_leaves_the_row_and_the_VM_alone()
+    {
+        // Issue #933 DECISION: LIST_PAGINATION_STUCK is kind Network, so the reconciler defers (no answer). Kind Other would hand the run to the
+        // runner, whose own lookup fails the same way, ends the row Failed and cannot find the VM to end: a live, billing VM orphaned.
+        var env = new Env();
+        await env.SeedAsync("job-st", JobPhase.Running, vm: true);
+        var stuck = Should.Throw<CloudOperationException>(() =>
+        {
+            var guard = new DnaEntropyGraph.Cloud.Rest.PageTokenGuard();
+            guard.Advance("same");
+            guard.Advance("same");
+        });
+        var compute = Substitute.For<IComputeGateway>();
+        compute.FindByJobIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw stuck);
+        var reconciler = new JobReconciler(env.Runner, compute, env.Gcp, env.Repo, env.Inputs, env.Images, env.Active, env.Settings, (id, phase) => env.Notified.Add((id, phase)), () => Path.Combine(env.AppData, "downloads"), new FixedClock(Launch), null, null, env.Log);
+        var before = env.Repo.AllRecordedInOrder.Count;
+
+        var outcome = await OneAsync(reconciler, "job-st");
+
+        stuck.Error.Code.ShouldBe("LIST_PAGINATION_STUCK");
+        outcome.Action.ShouldBe(ReattachAction.Deferred);
+        reconciler.HasDeferred.ShouldBeTrue("the reconnect probe asks again");
+        env.Repo.AllRecordedInOrder.Count.ShouldBe(before, "a deferred row writes nothing");
+        env.Row("job-st").Phase.ShouldBe(JobPhase.Running);
+        (await env.Gcp.FindByJobIdAsync("job-st", CancellationToken.None)).Count.ShouldBe(1, "the VM is not ended");
     }
 
     // ---- cold review: a failed look is not evidence, and a look never creates anything ----

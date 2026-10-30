@@ -34,6 +34,7 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
     public async Task<IReadOnlyList<ProjectSummary>> ListActiveProjectsAsync(CancellationToken cancellationToken)
     {
         var projects = new List<ProjectSummary>();
+        var paging = new PageTokenGuard();
         string? pageToken = null;
         do
         {
@@ -58,7 +59,7 @@ internal sealed class GoogleProjectCatalogGateway : IProjectCatalogGateway
                 cancellationToken).ConfigureAwait(false);
 
             projects.AddRange((page.Projects ?? []).Select(Summarize));
-            pageToken = string.IsNullOrEmpty(page.NextPageToken) ? null : page.NextPageToken;
+            pageToken = paging.Advance(page.NextPageToken);
         }
         while (pageToken is not null);
 

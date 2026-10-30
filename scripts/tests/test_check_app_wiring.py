@@ -1168,3 +1168,97 @@ def test_pathological_generic_input_is_scanned_in_linear_time(tmp_path, name):
     )
     assert result.returncode == 0, result.stderr
     assert float(result.stdout.strip()) < 2.0, f"{name} took {result.stdout.strip()}s"
+
+
+# --- #844: one index per run, not a regex compile + full scan per name -------------------------------------
+
+
+def _ref_strip(text: str) -> str:
+    return caw._COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
+
+
+def _ref_mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
+    """The pre-#844 implementation, verbatim: the golden reference."""
+    import re
+
+    pattern = re.compile(rf"\b{re.escape(identifier)}\b")
+    return [p for p, t in texts.items() if pattern.search(t)]
+
+
+def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | None, class_names: frozenset[str]) -> list[Path]:
+    """The pre-#844 implementation, verbatim (strip + regex per file per call)."""
+    import re
+
+    pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
+    hits: list[Path] = []
+    for path, text in texts.items():
+        for match in pattern.finditer(_ref_strip(text)):
+            recv = match.group("recv")
+            other_type = owner is not None and recv in class_names and recv != owner
+            if owner is not None and recv and not other_type:
+                declared = re.search(rf"(?<![\w.])([A-Z]\w*)(?:<[^>;]*>)?\??\s+{re.escape(recv)}\b", _ref_strip(text))
+                other_type = bool(declared) and declared.group(1) in class_names and declared.group(1) != owner
+            if match.group("access").startswith("nameof"):
+                other_type = False
+            if other_type:
+                continue
+            hits.append(path)
+            break
+    return hits
+
+
+def test_comment_stripping_runs_once_per_file_not_once_per_candidate():
+    """The observable: strip work is cached, so it cannot scale with candidates x files."""
+    caw._strip_comments.cache_clear()
+    texts = {Path(f"f{i}.cs"): f"class C{i} {{ void M() {{ x.Name{i}(); }} }} // note {i}" for i in range(20)}
+    for n in range(50):
+        caw._member_mentions(f"Name{n % 20}", texts, "Z", frozenset({"Z"}))
+    assert caw._strip_comments.cache_info().misses == len(texts)
+
+
+def test_indexed_mentions_equal_the_reference_on_awkward_names():
+    texts = {
+        Path("a.cs"): 'var s = loader.Get("Run.Title.Text"); var t = "Run.Title.Text2";',
+        Path("b.cs"): "Run.Title.Text.Foo and Other_Name and xRun.Title.Text",
+        Path("c.cs"): "nothing here",
+    }
+    for ident in ["Run.Title.Text", "Run", "Title", "Other_Name", "Text2", "Missing", "Run.Title", "x", "-weird", "A B"]:
+        assert caw._mentions(ident, texts) == _ref_mentions(ident, texts), ident
+
+
+def test_indexed_checks_equal_the_reference_on_the_real_tree():
+    """Golden comparison: every identifier the checks ask about gets the same answer as the old code."""
+    app = REPO_ROOT / "app"
+    if not app.exists():
+        return
+    scan = caw.read_tree(app)
+    class_names = frozenset(m.group(1) for t in scan.cs_files.values() for m in caw._CLASS_DECL.finditer(t))
+    production = {p: t for p, t in scan.cs_files.items() if not caw._is_test_path(p)}
+    names = {m.group(1) for t in scan.resw_files.values() for m in caw._RESW_DATA.finditer(t)}
+    names |= {n.split(".")[0] for n in names}
+    assert names, "vacuous: no resource names read"
+    for name in sorted(names):
+        assert caw._mentions(name, production) == _ref_mentions(name, production), name
+    idents = {i for t in production.values() for i in caw._members_of(t)}
+    assert idents, "vacuous: no members read"
+    for ident in sorted(idents)[:150]:
+        got = caw._member_mentions(ident, production, "Zzz", class_names)
+        assert got == _ref_member_mentions(ident, production, "Zzz", class_names), ident
+
+
+def test_a_planted_unbound_member_and_orphan_resource_are_still_reported_after_indexing(tmp_path):
+    root = _wired(tmp_path)
+    _tree(
+        root,
+        {
+            "src/Demo.Presentation/ViewModels/OtherViewModel.cs": (
+                "public sealed partial class OtherViewModel : ObservableObject\n{\n    [ObservableProperty]\n    private string? _lonely;\n}\n"
+            ),
+            "src/Demo.App/Strings/en-US/Resources.resw": RESW.replace(
+                "</root>", '  <data name="Nobody.Reads.This" xml:space="preserve"><value>x</value></data>\n</root>'
+            ),
+        },
+    )
+    got = {(f.code, f.symbol) for f in _findings(root)}
+    assert ("UNBOUND-OBSERVABLE", "OtherViewModel.Lonely") in got
+    assert ("ORPHAN-RESOURCE", "Nobody.Reads.This") in got

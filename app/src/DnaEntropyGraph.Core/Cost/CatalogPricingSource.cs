@@ -178,8 +178,7 @@ public sealed class CatalogPricingSource : IPricingSource, IPricingStatus, IPric
             IReadOnlyList<CatalogSku> skus;
             try
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(_readTimeout);
+                using var timeout = new Cloud.Audit.DeadlineSource(cancellationToken, _readTimeout, _time);
                 skus = await _gateway.ListComputeSkusAsync(timeout.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

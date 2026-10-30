@@ -20,7 +20,24 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
 
     private readonly Dictionary<(string Method, string Path), Queue<int>> _midBodyFailures = new();
 
+    private readonly Dictionary<(string Method, string Path), Func<int, string>> _fallbacks = new();
+
     public List<RecordedRequest> Requests { get; } = [];
+
+    /// <summary>
+    /// What a route answers once its queued responses are used up: <paramref name="body"/> gets the 0-based number of this fallback answer. A listing that
+    /// never ends (the same page token for ever) needs this; without it the route would answer 599 after the queue and the test could not tell "stuck" from "unscripted".
+    /// It stops after <see cref="FallbackLimit"/> answers (a 599 then), so a gateway with no guard fails a test instead of hanging it.
+    /// </summary>
+    public ScriptedHttpHandler Repeats(HttpMethod method, string absolutePath, Func<int, string> body)
+    {
+        _fallbacks[(method.Method, absolutePath)] = body;
+        return this;
+    }
+
+    public const int FallbackLimit = 25;
+
+    private readonly Dictionary<(string Method, string Path), int> _fallbackCalls = new();
 
     /// <summary>
     /// Queues a transport failure for the next unanswered request to this route: the handler reads only the first
@@ -110,6 +127,17 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
         if (_standing.TryGetValue((request.Method.Method, request.RequestUri!.AbsolutePath), out var standing))
         {
             return await standing(request, cancellationToken);
+        }
+
+        var routeKey = (request.Method.Method, request.RequestUri!.AbsolutePath);
+        if (_fallbacks.TryGetValue(routeKey, out var fallback))
+        {
+            var n = _fallbackCalls.GetValueOrDefault(routeKey);
+            _fallbackCalls[routeKey] = n + 1;
+            if (n < FallbackLimit)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(fallback(n), Encoding.UTF8, "application/json") };
+            }
         }
 
         return new HttpResponseMessage((HttpStatusCode)599)
