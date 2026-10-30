@@ -534,7 +534,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             // The picture is a convenience: whatever the exporter or the disk threw, the answer is the same notice and the same retry.
             // Only the class name is traced: a message can carry a path or a file name (Hard Rule 14, no names in logs).
-            System.Diagnostics.Trace.TraceWarning("Save picture failed: " + ex.GetType().Name);
+            System.Diagnostics.Trace.TraceWarning($"Save picture failed: {ex.GetType().Name}");
             written = false;
         }
 

@@ -1,0 +1,1 @@
+- test_land_wt: `_dead_pid()` returns a pid no process can hold (0x7FFFFFFC) instead of a reaped child's pid, which Windows reused under load and made `test_proc_start_time_is_stable_for_a_live_pid_and_none_for_a_dead_one` fail in a landing (MEASURED 2026-10-29, 772-r3); the dead-lock sweep test used the same helper.

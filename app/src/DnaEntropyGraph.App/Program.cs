@@ -1,4 +1,5 @@
 using DnaEntropyGraph.App.Startup;
+using DnaEntropyGraph.Core.Diagnostics;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Velopack;
@@ -47,6 +48,10 @@ public static class Program
             Environment.ExitCode = StartupExitCodes.DataFolderUnusable;
             return;
         }
+
+        // Issue #923: from here on every Trace.TraceWarning/TraceError lands in <data folder>\logs\app.log (the diagnostics zip reads it).
+        // Not covered: the Velopack hooks above (the uninstaller's own process, no data folder yet), which keep the debugger-only default.
+        DiagnosticsTraceListener.Install(StartupDataRoot.Current.Path);
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
 

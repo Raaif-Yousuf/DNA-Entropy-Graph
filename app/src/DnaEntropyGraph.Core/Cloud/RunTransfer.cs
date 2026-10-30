@@ -75,7 +75,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             await calls.CallAsync(
                 async token =>
                 {
-                    await storage.UploadAsync(bucket, prefix + "manifest.json", manifestStream, token).ConfigureAwait(false);
+                    await storage.UploadAsync(bucket, prefix + ResultsBucket.ManifestObject, manifestStream, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken,

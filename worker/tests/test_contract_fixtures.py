@@ -58,6 +58,16 @@ def test_error_classification_fixture_is_well_formed() -> None:
         ids.add(case["id"])
         assert isinstance(case["stderr"], str) and case["stderr"]
         assert case["expected_bucket"] in ERROR_BUCKETS
+        # Optional fields the C# replay reads: the HTTP status a structured error carried, and whether
+        # the stderr is a recorded payload.
+        assert "http_status" not in case or isinstance(case["http_status"], int)
+        assert "recorded" not in case or isinstance(case["recorded"], bool)
+        # An entry that calls itself a THEORY is a documented text, not a recording: the structured
+        # field must say so.
+        if "THEORY (unverified" in case.get("note", ""):
+            assert case.get("recorded") is False, (
+                f"case {case['id']!r} is a THEORY but is not marked recorded: false"
+            )
 
 
 def test_error_classification_fixture_covers_every_prototype_test_case() -> None:

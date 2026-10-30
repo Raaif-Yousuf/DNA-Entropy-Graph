@@ -354,6 +354,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             PresetText = PresetLine(run),
             CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
+            OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
+            ShowStoragePage = _storagePageOffered.Contains(run.JobId) && HasStoragePageLink(run),
             Tags = RunTags.Parse(run.TagsJson),
             NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
             DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
@@ -361,6 +363,31 @@ public sealed partial class HistoryViewModel : ObservableObject
             ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
         };
+    }
+
+    // Job ids whose last Delete cloud copy was refused as not this installation's: their row offers Open storage page until the list is reopened.
+    private readonly HashSet<string> _storagePageOffered = new(StringComparer.Ordinal);
+
+    // A row imported from another computer can carry any text: only a plain jobs/<id>/ folder in a bucket-shaped name is ever put in a link.
+    private static readonly System.Text.RegularExpressions.Regex StorageJobFolder = new(@"\Ajobs/[a-z0-9_-]{1,63}/\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex StorageBucketName = new(@"\A[a-z0-9][a-z0-9._-]{0,62}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool HasStoragePageLink(RunRecord run)
+        => run.Bucket is not null && run.JobPrefix is not null && StorageBucketName.IsMatch(run.Bucket) && StorageJobFolder.IsMatch(run.JobPrefix);
+
+    private void OpenStoragePage(RunRecord run)
+    {
+        if (!HasStoragePageLink(run))
+        {
+            return;
+        }
+
+        var folder = string.Join('/', run.JobPrefix!.TrimEnd('/').Split('/').Select(Uri.EscapeDataString));
+        if (!_launcher.OpenUrl($"https://console.cloud.google.com/storage/browser/{Uri.EscapeDataString(run.Bucket!)}/{folder}/"))
+        {
+            Toast(RunsCopy.OpenMissing);
+        }
     }
 
     private static string ShortInstallation(string? id) => string.IsNullOrWhiteSpace(id) ? "?" : id.Length > 8 ? id[..8] : id;
@@ -535,9 +562,60 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return null;
             }
 
-            return RunsCopy.DeleteCloud(await _cloud.DeleteAsync(run, CancellationToken.None));
+            var result = await _cloud.DeleteAsync(run, CancellationToken.None);
+            if (result.Status is CloudResultsStatus.OtherComputer or CloudResultsStatus.NotConfirmed)
+            {
+                _storagePageOffered.Add(run.JobId);
+            }
+
+            // A listing that never finished: the app cannot tell what is left and pressing the button again meets the same listing, so the copy says so and names the diagnostics file.
+            // Failed means the listing got stuck before any delete was requested, so nothing was deleted; only a partial delete may have removed some files.
+            if (result.ListingStuck && result.Status == CloudResultsStatus.Failed)
+            {
+                return RunsCopy.DeleteCloudListingStuckNothingDeleted;
+            }
+
+            if (result.ListingStuck && result.Status == CloudResultsStatus.PartiallyDeleted)
+            {
+                return RunsCopy.DeleteCloudListingStuck;
+            }
+
+            if (result.Status == CloudResultsStatus.Failed)
+            {
+                return RunsCopy.DeleteCloudFailed(result.ErrorKind);
+            }
+
+            if (result.Status != CloudResultsStatus.PartiallyDeleted)
+            {
+                return RunsCopy.DeleteCloud(result.Status);
+            }
+
+            // Every copy below says only what the app knows: was the sweep completed, is the count known, what was the cause.
+            if (result.ObjectsLeft is not { } left)
+            {
+                // The sweep finished without error and only the read-back failed: say so, not that the delete stopped.
+                if (result.SweepCompleted)
+                {
+                    return RunsCopy.DeleteCloudPartialUnconfirmed;
+                }
+
+                // The sweep stopped and the count could not be read: some files may be gone, and a known cause picks the one action to take.
+                return result.ErrorKind is { } cause ? RunsCopy.DeleteCloudPartialMaybe(cause) : RunsCopy.DeleteCloudPartialUnknown;
+            }
+
+            // A known count with a cause that pressing the button again cannot fix (a refused permission, a blocking organization rule, billing off, a service off, a request limit):
+            // the count AND that cause's own action, or the user is told to repeat what will fail the same way.
+            if (result.ErrorKind is { } known && RunsCopy.DeleteCloudPartialKnown(known) is { } withAction)
+            {
+                Toast(withAction, left);
+                return null;
+            }
+
+            // Partway through: say how many are left and that the same button finishes it.
+            Toast(left == 1 ? RunsCopy.DeleteCloudPartialOne : RunsCopy.DeleteCloud(CloudResultsStatus.PartiallyDeleted), left);
+            return null;
         },
-        RunsCopy.DeleteCloud(CloudResultsStatus.Failed));
+        RunsCopy.DeleteCloudFailed(null));
 
     private Task DeleteLocalAsync(RunRecord run) => ActAsync(
         async () =>
