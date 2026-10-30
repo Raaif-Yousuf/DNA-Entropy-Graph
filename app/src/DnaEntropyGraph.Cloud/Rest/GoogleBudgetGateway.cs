@@ -64,7 +64,6 @@ internal sealed class GoogleBudgetGateway : IBudgetGateway
             }
 
             pageToken = paging.Advance(page.NextPageToken);
-
         }
         while (pageToken is not null);
 

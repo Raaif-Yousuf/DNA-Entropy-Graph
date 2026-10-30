@@ -94,6 +94,7 @@ public class GoogleBudgetGatewayTests
 
         ex.Error.Code.ShouldBe(CloudErrorCodes.ListPaginationStuck);
         ex.Kind.ShouldBe(CloudErrorKind.Network);
+        rig.Handler.To(Get, ListPath).Count.ShouldBe(3, "the walk stops at the repeated token (the third page), not because the scripted responses ran out");
     }
     [Fact]
     public async Task Finding_follows_the_page_token_and_answers_none_when_no_budget_is_ours()
