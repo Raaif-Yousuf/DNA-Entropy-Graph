@@ -442,7 +442,7 @@ public class JobReconcilerLifecycleTests
     [Fact]
     public async Task A_relabel_that_lands_between_the_re_read_and_the_delete_is_a_documented_residual_and_the_delete_lands()
     {
-        // Round 11 M2: pins the residual behaviour cloud_design.md states: the re-read narrows the window, it cannot close it. The delete lands; that other run's reuse then fails and falls to the create ladder (not asserted here).
+        // Round 11 M2, round 12 L2: this pins that the delete LANDS (the residual window), NOT that it is harmless: the re-read narrows the window and cannot close it. What then happens to that other run (its reuse fails and falls to the create ladder) is a THEORY (unverified) and is not asserted here.
         var rig = new Rig();
         await rig.SeedFinishedAsync("job-race11", AfterTaskAction.Delete);
         await rig.StopAsync("job-race11");
@@ -453,6 +453,68 @@ public class JobReconcilerLifecycleTests
 
         rig.Gcp.DeleteAttempts.ShouldContain(d => d.Name == vm.Name, "Compute's delete has no label precondition");
         (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None)).ShouldBeNull();
+    }
+
+    /// <summary>A gateway whose GetVm answer is rewritten by <paramref name="map"/> (the re-read of round 12): null VM, or the VM with its labels removed.</summary>
+    private sealed class GetVmMappedCompute(FakeGcp inner, Func<VmDescriptor?, VmDescriptor?> map) : IComputeGateway
+    {
+        public async Task<VmDescriptor?> GetVmAsync(string n, string z, CancellationToken ct) => map(await inner.GetVmAsync(n, z, ct));
+
+        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string z, CancellationToken ct) => inner.ReuseVmAsync(spec, existingVmName, z, ct);
+
+        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string z, CancellationToken ct) => inner.CreateVmAsync(spec, z, ct);
+
+        public Task StopVmAsync(string n, string z, CancellationToken ct) => inner.StopVmAsync(n, z, ct);
+
+        public Task DeleteVmAsync(string n, string z, CancellationToken ct) => inner.DeleteVmAsync(n, z, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken ct) => inner.FindByJobIdAsync(jobId, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string i, CancellationToken ct) => inner.ListByInstallationAsync(i, ct);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken ct) => inner.ListAppVmsAsync(ct);
+
+        public Task StartVmAsync(string n, string z, CancellationToken ct) => inner.StartVmAsync(n, z, ct);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string i, CancellationToken ct) => inner.ListDisksByInstallationAsync(i, ct);
+
+        public Task DeleteDiskAsync(string d, string z, CancellationToken ct) => inner.DeleteDiskAsync(d, z, ct);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string a, CancellationToken ct) => inner.ListAcceleratorZonesAsync(a, ct);
+    }
+
+    [Fact]
+    public async Task A_running_VM_relabelled_to_another_job_between_the_listing_and_the_re_read_is_not_stopped_and_the_skip_is_logged()
+    {
+        // Round 12 M1: the Stop path re-reads too.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-stop12", AfterTaskAction.Stop);
+        var vm = (await rig.VmsAsync("job-stop12")).Single();
+        vm.Status.ShouldBe("RUNNING");
+        var otherLabels = new Dictionary<string, string>(vm.Labels!) { ["job-id"] = "job-someone-else", ["lifecycle"] = "keep" };
+        var log = NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog>();
+
+        await rig.Reconciler(log: log, compute: new RelabelAfterListingCompute(rig.Gcp, vm.Name, vm.Zone, otherLabels)).EnforceLifecycleAsync(CancellationToken.None);
+
+        log.Received().Warning("reconciler", "job-stop12", "stop-skipped-vm-relabelled");
+        (await rig.Gcp.GetVmAsync(vm.Name, vm.Zone, CancellationToken.None))!.Status.ShouldBe("RUNNING", "the VM now belongs to another run and must not be stopped under it");
+    }
+
+    [Theory]
+    [InlineData("gone", "delete-skipped-vm-gone")]
+    [InlineData("unlabelled", "delete-skipped-vm-unlabelled")]
+    public async Task A_re_read_that_finds_the_VM_gone_or_without_labels_skips_the_delete_and_logs_it(string how, string logged)
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-skip12" + how, AfterTaskAction.Delete);
+        await rig.StopAsync("job-skip12" + how);
+        var log = NSubstitute.Substitute.For<DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog>();
+        var compute = new GetVmMappedCompute(rig.Gcp, vm => how == "gone" ? null : vm! with { Labels = null });
+
+        await rig.Reconciler(log: log, compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+
+        log.Received().Warning("reconciler", "job-skip12" + how, logged);
+        rig.Gcp.DeleteAttempts.ShouldBeEmpty();
     }
 
     [Theory]

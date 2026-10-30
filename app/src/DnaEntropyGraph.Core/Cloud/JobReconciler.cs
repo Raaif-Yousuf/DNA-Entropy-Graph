@@ -401,28 +401,29 @@ public sealed class JobReconciler
                         continue;
                     }
 
-                    if (want == VmWant.Delete)
+                    // Round 10 M1, round 11 M1, round 12 M1 (code read 2026-10-30): the listing is a snapshot, and another run's reuse may have relabelled this VM since, so before ANY delete or stop it is read
+                    // again and skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete and stop have no label precondition, so a reuse's setLabels that
+                    // lands between this read and the call still affects the VM. Consequence (THEORY, unverified): for a delete, that run's reuse then fails (the VM is gone) and falls to the create ladder,
+                    // so no VM leaks and the run proceeds. Round 12 M2: null labels on a VM just found BY label mean the labels were removed (GoogleComputeGateway.ToDescriptor line 719 maps the API's
+                    // absent label map to null), not "unread", so they skip like a mismatch. A VM that is gone is nothing to act on.
+                    try
                     {
-                        // Round 10 M1, round 11 M1 (code read 2026-10-30): the listing is a snapshot, and another run's reuse may have relabelled this VM since, so it is read again right before the delete and
-                        // skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete has no label precondition, so a reuse's setLabels that lands between
-                        // this read and the delete still loses the VM. Consequence (THEORY, unverified): that run's reuse then fails (the VM is gone) and falls to the create ladder, so no VM leaks and the run proceeds.
-                        // Round 11 L2: labels not read (null) say nothing against the VM, as IsOurs does (its job id already matched the row), so the delete goes ahead; a VM that is gone is nothing to delete.
-                        try
+                        var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        string? skip = fresh is null ? "vm-gone"
+                            : fresh.Labels is null ? "vm-unlabelled"
+                            : !fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId ? "vm-relabelled"
+                            : null;
+                        if (skip is not null)
                         {
-                            var fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
-                            var relabelled = fresh is not null && fresh.Labels is not null && (!fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId);
-                            if (fresh is null || relabelled)
-                            {
-                                // Round 11 L1: observable (ids and states only, never a name).
-                                _log.Warning("reconciler", row.JobId, fresh is null ? "delete-skipped-vm-gone" : "delete-skipped-vm-relabelled");
-                                continue;
-                            }
-                        }
-                        catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
-                        {
-                            Record(outcomes, row.JobId, vm.Name, ex);
+                            // Observable (ids and states only, never a name).
+                            _log.Warning("reconciler", row.JobId, (want == VmWant.Delete ? "delete-skipped-" : "stop-skipped-") + skip);
                             continue;
                         }
+                    }
+                    catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                    {
+                        Record(outcomes, row.JobId, vm.Name, ex);
+                        continue;
                     }
 
                     await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
