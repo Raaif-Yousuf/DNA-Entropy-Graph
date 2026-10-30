@@ -173,6 +173,8 @@ current status of each. No count is stated here on purpose (`docs/README.
 md`'s house-style rule: a number in prose goes stale — run the guard project
 itself to get the current count).
 
+`DecoratorMembersGuardTests` (#909) is the guard for decorators over interfaces with default interface methods: every class in app/src that implements an interface and takes it in its constructor must declare every member of that interface itself, or inheriting the default body silently bypasses the inner implementation. Its allowlist needs a reason per entry and fails when an entry goes stale.
+
 ## Flaky-test policy
 
 There is no flaky-test runner or retry policy, and none is wanted yet. Flakes have

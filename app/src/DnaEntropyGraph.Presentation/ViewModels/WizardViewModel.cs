@@ -26,9 +26,29 @@ public sealed partial class WizardViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotSignedIn))]
+    [NotifyPropertyChangedFor(nameof(ShowSignInButton))]
     private bool _isSignedIn;
 
     public bool IsNotSignedIn => !IsSignedIn;
+
+    /// <summary>
+    /// Issue #624: the saved account list could not be read at launch (another program or copy of the app holds it), so "not signed in" would be
+    /// a guess. The card shows <see cref="AccountsFileLockedText"/> and a Try again button instead of Sign in.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowSignInButton))]
+    private bool _isAccountsFileLocked;
+
+    /// <summary>The ACCOUNTS_FILE_LOCKED message, in the user's words naming one action; empty unless <see cref="IsAccountsFileLocked"/>.</summary>
+    [ObservableProperty]
+    private string _accountsFileLockedText = string.Empty;
+
+    /// <summary>The label of the Try again button for the locked list; empty unless <see cref="IsAccountsFileLocked"/>.</summary>
+    [ObservableProperty]
+    private string _accountsFileRetryText = string.Empty;
+
+    /// <summary>Sign in is offered when signed out and the list could be read; with the list locked, Try again is the action (signing in would not help and may be unneeded).</summary>
+    public bool ShowSignInButton => IsNotSignedIn && !IsAccountsFileLocked;
 
     /// <summary>What went wrong, in the user's words and naming one action (Hard Rule 13); empty when the last sign-in did not fail.</summary>
     [ObservableProperty]
@@ -109,6 +129,7 @@ public sealed partial class WizardViewModel : ObservableObject
         _navigator = navigator;
         _isSignedIn = gcpAccount.IsSignedIn;
         _selectedProjectId = gcpAccount.SelectedProjectId;
+        ApplyAccountsFileState(gcpAccount.IsAccountsFileLocked);
 
         // A sign-in, a switch or a sign-out changes whose project this is; the event is not guaranteed to be on the UI thread.
         // Like ShellViewModel, this lives as long as the account service, so there is nothing to unsubscribe.
@@ -124,7 +145,25 @@ public sealed partial class WizardViewModel : ObservableObject
         SelectedProjectId = _gcpAccount.SelectedProjectId;
         ProjectErrorText = string.Empty;
         ProjectActionText = string.Empty;
+        var wasLocked = IsAccountsFileLocked;
+        ApplyAccountsFileState(_gcpAccount.IsAccountsFileLocked);
+        if (wasLocked && !IsAccountsFileLocked)
+        {
+            // The list can be read now: show what it holds.
+            IsSignedIn = _gcpAccount.IsSignedIn;
+        }
     }
+
+    private void ApplyAccountsFileState(bool locked)
+    {
+        IsAccountsFileLocked = locked;
+        AccountsFileLockedText = locked ? _strings.GetString(AuthErrorCodes.ResourceKey(AuthErrorCodes.AccountsFileLocked)) : string.Empty;
+        AccountsFileRetryText = locked && AuthErrorCodes.ActionResourceKey(AuthErrorCodes.AccountsFileLocked) is { } actionKey ? _strings.GetString(actionKey) : string.Empty;
+    }
+
+    /// <summary>Try again for a locked account list: reads it again (the service raises AccountChanged if it can be read now) and never opens the browser.</summary>
+    [RelayCommand]
+    private void RetryAccountsFile() => _gcpAccount.RecheckAccountsFile();
 
     /// <summary>Stores the project the user picked (or just created) on the current account (issue #520).</summary>
     [RelayCommand]

@@ -112,6 +112,7 @@
                                                 </ItemsControl>
                                                 <TextBlock Text="{x:Bind NotesText}" Visibility="{x:Bind HasNotes}" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <Button x:Uid="RunsCopyOwnerRequestButton" Command="{x:Bind CopyOwnerRequestCommand}" Visibility="{x:Bind HasOwnerRequest}" HorizontalAlignment="Left" />
+                                                <Button x:Uid="RunsOpenStoragePageButton" Command="{x:Bind OpenStoragePageCommand}" Visibility="{x:Bind ShowStoragePage}" HorizontalAlignment="Left" />
                                                 <!-- Issue #92: offered by a run that failed for want of a graphics card. -->
                                                 <TextBlock x:Uid="RunsWaitForGpuHint" Visibility="{x:Bind HasWaitForGpu}" TextWrapping="Wrap" />
                                                 <Button x:Uid="RunsWaitForGpuButton" Command="{x:Bind WaitForGpuCommand}" Visibility="{x:Bind HasWaitForGpu}" HorizontalAlignment="Left" />

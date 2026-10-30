@@ -16,7 +16,7 @@ Open **Settings**, find **Diagnostics**, and choose **Save diagnostics**. Pick w
 the zip (it starts in Downloads, named `dna-entropy-diagnostics-<date>.zip`), then choose
 **Open folder** to find it and attach it to your issue or email.
 
-The file includes the logs from your runs, your run history (run ids, states, error codes and times),
+The file includes the logs from your runs and the app's own log, your run history (run ids, states, error codes and times),
 the status and result files the app keeps for each run (with names and paths removed), settings that
 are safe to share, version numbers and this installation's id. It never includes your sequences, your
 input file names, your results, your email address or your sign-in. Any path on your computer appears
@@ -41,6 +41,11 @@ browser window that opens. *(`SIGNIN_TIMEOUT`, `SIGNIN_CANCELLED`)*
 **"Google signed you in, but the permission this app needs was not ticked"**, Google lets you
 untick permissions on its page. Click **Sign in again and allow access** and leave every box ticked;
 the app cannot create or start your rented computer without it. *(`CONSENT_INCOMPLETE`)*
+
+**"The app could not open its saved list of accounts"**, another program or another copy of the app is
+using the file where the app keeps your account list, so it cannot tell whether you are signed in. Nothing
+was changed. Close other copies of the app, then click **Try again**. Your account appears as soon as the
+file can be read. *(`ACCOUNTS_FILE_LOCKED`)*
 
 **"Google could not be reached"**, your sign-in is unchanged. Check that the computer is
 online, then click **Try again**. *(`SIGNIN_NETWORK`)*

@@ -312,8 +312,8 @@ template, every call of a detected wrapper helper `Name(string key, params objec
 siblings; conditional keys check each branch), that every placeholder template is referenced by a literal or a used
 const, and that no file ends inside a string or comment (LEX-DESYNC). Stays dynamic, with exact counts in
 `KNOWN_DYNAMIC`: variable, `switch` or ambiguous-const keys, array-typed sole arguments (a params spread),
-unparseable calls, and helper calls whose first argument is not a literal key. MEASURED 2026-10-29: 110 sites
-checked, 11 dynamic.
+unparseable calls, helper calls whose first argument is not a literal key, and the trace listener's application of a caller's own format string (`DiagnosticsTraceListener`). MEASURED 2026-10-29: 110 sites
+checked, 12 dynamic (the 11 above plus the listener).
 Defence in depth: the csharp filter-sarif step also drops `app/tests/**` and the config ignores `worker/tests/**` and
 `scripts/tests/**` for Python (`test_codeql_workflow.py` asserts both). DECISION (agent-made, reversible): `cs/path-combine`
 and `cs/catch-of-all-exceptions` stay on for product code; MEASURED 2026-10-29: 80 and 75 open product hits, many joining

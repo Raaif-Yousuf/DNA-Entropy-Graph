@@ -34,7 +34,7 @@ row under Worker below**, and `DECISION` issue #301.
 | Google.Cloud.* / Google.Apis.Auth | Apache-2.0 | Every real Google Cloud call, confined to `DnaEntropyGraph.Cloud` (Hard Rule 7) | THEORY (unverified) |
 | Velopack | MIT | Installer / self-update | THEORY (unverified) |
 | Microsoft.Data.Sqlite + Dapper | MIT / Apache-2.0 | Run history | THEORY (unverified) |
-| Serilog | Apache-2.0 | Logging | THEORY (unverified) |
+| Serilog | Apache-2.0 | Logging (not wired yet, #164; today `logs\app.log` via `FileDiagnosticsLog` and `DiagnosticsTraceListener`, #923) | THEORY (unverified) |
 | xUnit v3 | Apache-2.0 | Test framework | THEORY (unverified) |
 | Shouldly | BSD-3-Clause | Assertion library — chosen specifically to avoid FluentAssertions 8+'s commercial licence, see `fluentassertions-8-is-commercial` memory seed | THEORY (unverified) |
 | NSubstitute | BSD-3-Clause | Mocking, chosen to avoid Moq's SponsorLink history | THEORY (unverified) |
