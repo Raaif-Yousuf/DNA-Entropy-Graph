@@ -124,6 +124,21 @@ public class SetupCheckServiceTests
         result.Status.ShouldBe(SetupStatus.NeedsAction);
         result.Action.Kind.ShouldBe(SetupActionKind.PickBillingAccount);
         result.Accounts.Select(a => a.AccountId).ShouldBe(["a1", "a2"]);
+        result.Code.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_linked_but_off_account_with_other_accounts_to_pick_names_why_with_BILLING_STILL_OFF()
+    {
+        var accounts = new[] { new BillingAccountSummary("a1", "One"), new BillingAccountSummary("a2", "Two") };
+        _billing.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "a1"));
+        _billing.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>()).Returns(accounts);
+
+        var result = await NewService().CheckBillingAsync(Project, TestContext.Current.CancellationToken);
+
+        result.Action.Kind.ShouldBe(SetupActionKind.PickBillingAccount);
+        result.Code.ShouldBe(SetupErrorCodes.BillingStillOff);
+        result.Accounts.Select(a => a.AccountId).ShouldBe(["a2"]);
     }
 
     [Fact]

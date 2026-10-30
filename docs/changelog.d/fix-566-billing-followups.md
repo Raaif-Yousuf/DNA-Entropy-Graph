@@ -1,0 +1,1 @@
+- Billing step (#566): a failure listing accounts after a successful link now returns the fix-your-account outcome instead of throwing; a project linked to an account that is off, with other accounts to pick, now carries the BILLING_STILL_OFF message; a ToTest row covers a real suspended account; the gateway timing test was already exact on a fake clock (#567).

@@ -40,6 +40,8 @@ public sealed record BillingOutcome(
         BillingOutcomeKind.NeedsAccount => SetupErrorCodes.NoBilling,
         BillingOutcomeKind.LinkedButStillOff => SetupErrorCodes.BillingStillOff,
         BillingOutcomeKind.FixLinkedAccount => SetupErrorCodes.BillingAccountOff,
+        // A project linked to an account that is off, with other accounts to pick (issue #566); a plain several-accounts choice has an empty AccountId and nothing is wrong.
+        BillingOutcomeKind.ChooseAccount when !string.IsNullOrEmpty(AccountId) => SetupErrorCodes.BillingStillOff,
         _ => null,
     };
 }
@@ -97,7 +99,17 @@ public sealed class BillingSetup
         }
 
         // Still off: "pick another" is only an action when there is another to pick.
-        var accounts = await _gateway.ListOpenBillingAccountsAsync(cancellationToken).ConfigureAwait(false);
+        // The link succeeded, so a failure to list the other accounts must not read as a failed link (issue #566): with no list, the one action left is to fix this account.
+        IReadOnlyList<BillingAccountSummary> accounts;
+        try
+        {
+            accounts = await _gateway.ListOpenBillingAccountsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException)
+        {
+            accounts = [];
+        }
+
         var others = Others(accounts, billingAccountId);
         return others.Count == 0
             ? FixLinked(projectId, billingAccountId)
