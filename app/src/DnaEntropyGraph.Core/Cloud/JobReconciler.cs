@@ -875,7 +875,7 @@ public sealed class JobReconciler
         var request = CloudJobRequestFactory.Create(
             options,
             row.JobId,
-            row.ProjectId,
+            ScopeOf(row),
             row.InstallationId,
             appVersion,
             image.Status == WorkerImageStatus.Available ? image.Reference : null,

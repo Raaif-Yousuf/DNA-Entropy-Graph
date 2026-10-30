@@ -155,7 +155,7 @@ public class JobReconcilerTests
             var vmName = "deg-" + jobId;
             if (uploaded)
             {
-                var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
+                var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
                 await Runner.UploadInputsAsync(request, CancellationToken.None);
                 vmName = request.Spec.VmName;
             }
@@ -220,7 +220,7 @@ public class JobReconcilerTests
                 AnnotationPath = annotationOriginal,
                 OutputFolder = TestInputs.OutputParent(jobId),
             };
-            var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, annotationCopy is null ? [copy] : [copy, annotationCopy], options.OutputFolder!);
+            var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", Image, annotationCopy is null ? [copy] : [copy, annotationCopy], options.OutputFolder!);
             if (uploaded)
             {
                 await Runner.UploadInputsAsync(request, CancellationToken.None);
@@ -282,6 +282,20 @@ public class JobReconcilerTests
         Directory.EnumerateFiles(env.Row("job-a").OutputDir!, "*", SearchOption.AllDirectories).ShouldNotBeEmpty("the track must reach the output folder");
         env.Notified.ShouldContain(("job-a", JobPhase.Completed), "the Runs page is told through the same callback a live run uses");
         request.JobId.ShouldBe("job-a");
+    }
+
+    [Fact]
+    public async Task A_resumed_run_acts_in_the_project_its_row_names_and_never_in_the_one_selected_now()
+    {
+        // Issue #830, the observable: with another project selected at launch, every call the resumed run makes still goes to the project of its row.
+        var env = new Env(new FakeGcp().WithSelectedProject("selected-later"));
+        await env.SeedAsync("job-scope", JobPhase.Running, vm: true);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-scope");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed);
+        var projects = env.Gcp.Calls.Select(c => c.ProjectId).Distinct().ToList();
+        projects.ShouldBe([Project], "the row names " + Project + "; the selection must not leak into a resumed run");
     }
 
     [Fact]

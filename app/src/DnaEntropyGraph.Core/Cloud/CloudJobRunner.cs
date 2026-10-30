@@ -29,9 +29,10 @@ public sealed record CloudJobRequest(
 {
     /// <summary>
     /// Issue #830: the project and Google account every call of this run is made in. <see cref="JobEngine"/> captures it ONCE when the run
-    /// is created; a request built without one (a test, or a legacy caller) acts in the spec's project as the current account (null sub).
+    /// is created, and <see cref="JobReconciler"/> takes it from the run row when it resumes a run; <see cref="CloudJobRequestFactory.Create"/> requires one.
+    /// A request without one (only a hand-built record can lack it) throws here: a run never falls back to the spec's project as whatever account is current.
     /// </summary>
-    public CloudScope ResolvedScope => Scope ?? new CloudScope(Spec.ProjectId);
+    public CloudScope ResolvedScope => Scope ?? throw new InvalidOperationException("The job request has no scope (project and account), so it cannot act in the cloud.");
 }
 
 /// <summary>The phase a run ended in, plus - when it did not reach a happy terminal phase - which class of error stopped it and why.</summary>

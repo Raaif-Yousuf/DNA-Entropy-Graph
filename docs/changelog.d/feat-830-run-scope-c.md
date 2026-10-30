@@ -1,0 +1,1 @@
+- Issue #830 (continuation): a resumed run now acts in its row's project (the request is always built with a scope; CloudJobRequest.ResolvedScope throws instead of guessing the spec's project), the idle sweep also covers the selected scope, and a scope with no project never reaches Google.

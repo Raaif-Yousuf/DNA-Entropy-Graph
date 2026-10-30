@@ -32,7 +32,7 @@ public static class CloudJobRequestFactory
     public static CloudJobRequest Create(
         RunOptions options,
         string jobId,
-        string projectId,
+        CloudScope scope,
         string installationId,
         string appVersion,
         string? workerImage,
@@ -41,6 +41,7 @@ public static class CloudJobRequestFactory
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(inputs);
+        ArgumentNullException.ThrowIfNull(scope);
         if (inputs.Count == 0)
         {
             // A request with nothing to upload is the stub this issue removed (#460): refuse it here.
@@ -56,7 +57,7 @@ public static class CloudJobRequestFactory
         var modelId = options is { ModelId: var id } ? id : string.Empty;
 
         var spec = new VmSpec(
-            ProjectId: projectId,
+            ProjectId: scope.ProjectId,
             InstallationId: installationId,
             JobId: jobId,
             Model: modelId.ToLowerInvariant(),
@@ -79,7 +80,8 @@ public static class CloudJobRequestFactory
             Inputs: inputs,
             OutputFolder: outputFolder,
             AfterTask: options.AfterTask,
-            WorkerImage: workerImage);
+            WorkerImage: workerImage,
+            Scope: scope);
     }
 
     /// <summary>The <c>lifecycle</c> label value (<c>delete</c>, <c>keep</c>, <c>stop</c>) a VM for a run with this after-task choice carries.</summary>

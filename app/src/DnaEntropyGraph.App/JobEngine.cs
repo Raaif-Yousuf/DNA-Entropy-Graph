@@ -206,12 +206,12 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         var request = CloudJobRequestFactory.Create(
             options,
             jobId,
-            projectId,
+            scope,
             installationId,
             AppVersion(),
             image.Reference,
             uploads,
-            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder) with { Scope = scope };
+            string.IsNullOrWhiteSpace(options.OutputFolder) ? RunOutputFolders.DefaultParent(_downloadsFolder) : options.OutputFolder);
 
         // Write-ahead (docs/architecture.md section 6): the row exists
         // before the first network call, so a crash right after Run still

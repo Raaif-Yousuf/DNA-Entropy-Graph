@@ -56,8 +56,8 @@ public class FlexStartProvisioningTests
     public void The_wait_option_reaches_the_VmSpec_and_is_off_by_default()
     {
         var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
-        var on = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
-        var off = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
+        var on = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true }, "20260101-000000-abcdef", new CloudScope(Project), "install-1", "0.1.0", null, inputs, @"C:\out");
+        var off = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }, "20260101-000000-abcdef", new CloudScope(Project), "install-1", "0.1.0", null, inputs, @"C:\out");
 
         on.Spec.FlexStart.ShouldBeTrue();
         on.Spec.FlexStartWait.ShouldBe(TimeSpan.FromMinutes(new RunOptions { ModelId = "x", RunTarget = "Cloud" }.WaitForGpuMinutes));
@@ -266,7 +266,7 @@ public class FlexStartProvisioningTests
         Should.NotThrow(() => Spec("job-f17", flex: true, wait: TimeSpan.FromHours(5)).EnsurePreconditions());
 
         var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
-        var request = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true, MaxRunDurationMinutes = 30, WaitForGpuMinutes = 600 }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
+        var request = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", WaitForGpu = true, MaxRunDurationMinutes = 30, WaitForGpuMinutes = 600 }, "20260101-000000-abcdef", new CloudScope(Project), "install-1", "0.1.0", null, inputs, @"C:\out");
 
         request.Spec.FlexStartWait.ShouldBe(TimeSpan.FromMinutes(600));
         request.Spec.MaxRunDuration.ShouldBeLessThan(request.Spec.FlexStartWait!.Value);

@@ -81,7 +81,7 @@ public class ReattachOnStartupTests : IDisposable
         var copy = await inputs.StageAsync(jobId, original, CancellationToken.None);
         var output = Path.Combine(_root, "out");
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = after, InputPath = original, OutputFolder = output };
-        var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", null, [copy], output);
+        var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", null, [copy], output);
         if (vm)
         {
             var gcp = provider.GetRequiredService<FakeGcp>();

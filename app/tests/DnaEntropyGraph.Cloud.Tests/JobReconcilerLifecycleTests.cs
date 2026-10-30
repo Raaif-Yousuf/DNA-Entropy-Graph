@@ -718,7 +718,7 @@ public class JobReconcilerLifecycleTests
         // A finished keep-alive run whose finish time makes the expiry arithmetic throw: the one unexpected error a single row can raise.
         await rig.SeedFinishedAsync("job-bad", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, tweak: row => row with { FinishedAt = DateTimeOffset.MaxValue });
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
-        var orphan = CloudJobRequestFactory.Create(options, "job-idle-orphan", Project, "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        var orphan = CloudJobRequestFactory.Create(options, "job-idle-orphan", new CloudScope(Project), "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
         await rig.Gcp.CreateVmAsync(orphan.Spec, Zone, CancellationToken.None);
         await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
         rig.Clock.Advance(TimeSpan.FromDays(10));
@@ -734,7 +734,7 @@ public class JobReconcilerLifecycleTests
     {
         var rig = new Rig();
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Delete };
-        var foreign = CloudJobRequestFactory.Create(options, "job-x", Project, "install-2", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        var foreign = CloudJobRequestFactory.Create(options, "job-x", new CloudScope(Project), "install-2", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
         await rig.Gcp.CreateVmAsync(foreign.Spec, Zone, CancellationToken.None);
         await rig.Env.Repo.UpsertAsync(
             new RunRecord("job-x", JobPhase.Completed, Launch.AddHours(-1), ProjectId: Project, OptionsJson: RunOptionsJson.Serialize(options), InstallationId: "install-1", FinishedAt: Launch.AddMinutes(-10)),
@@ -868,7 +868,7 @@ public class JobReconcilerLifecycleTests
     {
         var rig = new Rig();
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
-        var foreign = CloudJobRequestFactory.Create(options, "job-other", Project, "install-2", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        var foreign = CloudJobRequestFactory.Create(options, "job-other", new CloudScope(Project), "install-2", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
         await rig.Gcp.CreateVmAsync(foreign.Spec, Zone, CancellationToken.None);
         await rig.Gcp.StopVmAsync(foreign.Spec.VmName, Zone, CancellationToken.None);
         rig.Gcp.WithAlreadyExists("deg-unlabelled", Zone, "STOPPED");
@@ -900,7 +900,7 @@ public class JobReconcilerLifecycleTests
     {
         var rig = new Rig();
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
-        var orphan = CloudJobRequestFactory.Create(options, "job-orphan", Project, "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        var orphan = CloudJobRequestFactory.Create(options, "job-orphan", new CloudScope(Project), "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
         await rig.Gcp.CreateVmAsync(orphan.Spec, Zone, CancellationToken.None);
         await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
         rig.Clock.Advance(TimeSpan.FromDays(10));
@@ -1292,7 +1292,7 @@ public class JobReconcilerLifecycleTests
         await rig.SeedFinishedAsync("job-del-late", AfterTaskAction.Delete);
         await rig.StopAsync("job-del-late");
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = AfterTaskAction.Stop };
-        var orphan = CloudJobRequestFactory.Create(options, "job-orphan-late", Project, "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
+        var orphan = CloudJobRequestFactory.Create(options, "job-orphan-late", new CloudScope(Project), "install-1", "0.1.0", null, [new StagedInput("seq.gb", "seq.gb")], "out");
         await rig.Gcp.CreateVmAsync(orphan.Spec, Zone, CancellationToken.None);
         await rig.Gcp.StopVmAsync(orphan.Spec.VmName, Zone, CancellationToken.None);
         rig.Clock.Advance(TimeSpan.FromDays(10));
