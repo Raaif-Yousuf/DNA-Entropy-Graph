@@ -23,6 +23,7 @@ public class SetupStepsViewModelTests
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         Ok(SetupStep.Billing, _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()));
         Ok(SetupStep.Services, _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()));
         Ok(SetupStep.Storage, _service.EnsureStorageAsync(Project, Arg.Any<CancellationToken>()));
@@ -79,6 +80,7 @@ public class SetupStepsViewModelTests
     public async Task Without_a_chosen_project_nothing_is_called()
     {
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         var viewModel = NewViewModel();
 
         await viewModel.RunAllCommand.ExecuteAsync(null);

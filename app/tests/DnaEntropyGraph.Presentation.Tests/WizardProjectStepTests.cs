@@ -23,6 +23,7 @@ public class WizardProjectStepTests
     {
         var account = Substitute.For<IGcpAccount>();
         account.SelectedProjectId.Returns((string?)null);
+        account.SelectedScope().Returns(TestScopes.Of(null));
         return account;
     }
 
@@ -35,6 +36,7 @@ public class WizardProjectStepTests
         var account = NewAccount();
         account.SelectProjectAsync("my-project-1", Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         account.SelectedProjectId.Returns("my-project-1");
+        account.SelectedScope().Returns(TestScopes.Of("my-project-1"));
         var viewModel = NewViewModel(account);
 
         await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
@@ -72,6 +74,8 @@ public class WizardProjectStepTests
         viewModel.ProjectErrorText.ShouldNotBeEmpty();
 
         account.SelectedProjectId.Returns("my-project-1");
+
+        account.SelectedScope().Returns(TestScopes.Of("my-project-1"));
         await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
 
         viewModel.ProjectErrorText.ShouldBeEmpty();
@@ -89,6 +93,7 @@ public class WizardProjectStepTests
         dispatcher.When(d => d.Enqueue(Arg.Any<Action>())).Do(call => queued.Add(call.Arg<Action>()));
         var viewModel = NewViewModel(account, dispatcher);
         account.SelectedProjectId.Returns("my-project-1");
+        account.SelectedScope().Returns(TestScopes.Of("my-project-1"));
 
         await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
 
@@ -105,10 +110,14 @@ public class WizardProjectStepTests
         viewModel.SelectedProjectId.ShouldBeNull();
 
         account.SelectedProjectId.Returns("second-project");
+
+        account.SelectedScope().Returns(TestScopes.Of("second-project"));
         account.AccountChanged += Raise.Event();
         viewModel.SelectedProjectId.ShouldBe("second-project");
 
         account.SelectedProjectId.Returns((string?)null);
+
+        account.SelectedScope().Returns(TestScopes.Of(null));
         account.AccountChanged += Raise.Event();
         viewModel.SelectedProjectId.ShouldBeNull();
     }
@@ -138,6 +147,8 @@ public class WizardProjectStepTests
         var viewModel = NewViewModel(account, dispatcher);
 
         account.SelectedProjectId.Returns("second-project");
+
+        account.SelectedScope().Returns(TestScopes.Of("second-project"));
         account.AccountChanged += Raise.Event();
 
         viewModel.SelectedProjectId.ShouldBeNull("the property must not change off the UI thread");
@@ -162,6 +173,7 @@ public class WizardProjectStepTests
     {
         var account = NewAccount();
         account.SelectedProjectId.Returns("my-project-1");
+        account.SelectedScope().Returns(TestScopes.Of("my-project-1"));
 
         NewViewModel(account).SelectedProjectId.ShouldBe("my-project-1");
     }
