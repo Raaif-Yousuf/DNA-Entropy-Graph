@@ -909,7 +909,7 @@ network class (no connection, `CloudErrorKind.Network`, or a lookup deadline). A
 by error class, row untouched, left for the next launch, and it does not keep the probe alive. A lifecycle pass that throws sets deferred by the same rule and
 rethrows. A deferred run that later became terminal (cancelled, deleted) is pruned from the deferred set at the start of the next pass.
 
-**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.log.1` (about 2 MB on disk at most), and swallows every exception but a fatal one,
+**Reconciler follow-ups (issue #575)**: `FileDiagnosticsLog` caps `logs\app.log` at 1 MB and keeps one rotated `app.1.log` (about 2 MB on disk at most), and swallows every exception but a fatal one,
 because it is called from inside the reconciler's catch blocks. A rotation that cannot move the file (the copy is held open or read-only) keeps appending up to twice the cap, then drops lines until a rotation works, so a failing rotation cannot grow the log without bound; every control character and the Unicode line and paragraph separators in a field become a space, so one event is always one line. A lifecycle step that throws no longer orphans the reattach: `EnforceLifecycleAsync` itself rethrows, and `BeginReconcileAsync` logs the error class and still returns the task for the reattached runs, so
 `WhenIdleAsync` waits for them. Item 4 (the "handed off" claim) was already delivered by #559, not #575: the outer pass task ends only after every candidate run has been looked at and registered as a driver in `ActiveRuns`
 (#559's `judged` signal), so two passes' reattach listings do not overlap, and `TryStart` stays the backstop against a double drive; the test for it is a regression guard, green before #575. Item 5 is fixed, not accepted: `ReconcileOnReconnect` keeps one task per pass whose runs are still going and drops it when they end, instead of nesting `WhenAll`.
@@ -986,8 +986,8 @@ it); a non-seekable stream gets one attempt and no 401 replay.
 
 Every retry is reported to `ICloudCallObserver` (operation, attempt, delay, status, kind,
 the API error text, never a sequence, file name or email). `CloudRetryLog` keeps the last
-200 in memory. THEORY (unverified): Serilog is not wired into the app yet, so the log is
-not in the diagnostics zip; when it is, forward `OnRetry` there.
+200 in memory. MEASURED 2026-10-29: Serilog is not wired into the app; the
+log is not in the diagnostics zip. `logs\app.log` (`FileDiagnosticsLog`, `DiagnosticsTraceListener`) is; forward `OnRetry` there when wanted.
 
 The pipeline's kind is kept end to end: `VmProvisioner.ProvisionAsync` uses the kind the
 gateway threw instead of re-classifying the error text (which turned `network` into `other`,

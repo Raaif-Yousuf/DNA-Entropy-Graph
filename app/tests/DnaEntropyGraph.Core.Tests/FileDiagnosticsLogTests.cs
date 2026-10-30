@@ -7,6 +7,8 @@ namespace DnaEntropyGraph.Core.Tests;
 
 public class FileDiagnosticsLogTests
 {
+    private static string Rolled(string path) => Path.Combine(Path.GetDirectoryName(path)!, "app.1.log");
+
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
@@ -60,8 +62,8 @@ public class FileDiagnosticsLogTests
         }
 
         new FileInfo(path).Length.ShouldBeLessThanOrEqualTo(400 + 120, "one appended line past the cap at most");
-        File.Exists(path + ".1").ShouldBeTrue("the previous file is kept once, not deleted");
-        new FileInfo(path + ".1").Length.ShouldBeLessThanOrEqualTo(400 + 120);
+        File.Exists(Rolled(path)).ShouldBeTrue("the previous file is kept once, not deleted");
+        new FileInfo(Rolled(path)).Length.ShouldBeLessThanOrEqualTo(400 + 120);
         Directory.GetFiles(Path.Combine(root, "logs")).Length.ShouldBe(2, "never more than the log and one rotated copy");
         File.ReadAllText(path).ShouldContain("job=job-99 ", Case.Sensitive, "the newest line is in the live file");
     }
@@ -69,14 +71,14 @@ public class FileDiagnosticsLogTests
     [Fact]
     public void A_rotation_that_cannot_move_the_file_still_appends_lines_up_to_twice_the_cap_instead_of_dropping_them()
     {
-        // The diagnostics zip (or anything) holding app.log.1 open makes the rotating Move throw; a brief overshoot of the cap beats lost lines,
+        // The diagnostics zip (or anything) holding app.1.log open makes the rotating Move throw; a brief overshoot of the cap beats lost lines,
         // but only a brief one (see the next test).
         var root = Path.Combine(Path.GetTempPath(), "deg-log-held-" + Guid.NewGuid().ToString("N"));
         var log = new FileDiagnosticsLog(root, new FixedClock(new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero)), maxBytes: 400);
         var path = Path.Combine(root, "logs", "app.log");
         Directory.CreateDirectory(Path.Combine(root, "logs"));
-        File.WriteAllText(path + ".1", "old\n");
-        using var held = new FileStream(path + ".1", FileMode.Open, FileAccess.Read, FileShare.None);
+        File.WriteAllText(Rolled(path), "old\n");
+        using var held = new FileStream(Rolled(path), FileMode.Open, FileAccess.Read, FileShare.None);
 
         for (var i = 0; i < 8; i++)
         {
@@ -93,14 +95,14 @@ public class FileDiagnosticsLogTests
     [Fact]
     public void A_rotation_that_fails_for_good_cannot_make_the_log_grow_without_bound()
     {
-        // Issue #575 review: app.log.1 is read-only, so the rotating Move fails on every write; the old behaviour appended forever.
+        // Issue #575 review: app.1.log is read-only, so the rotating Move fails on every write; the old behaviour appended forever.
         var root = Path.Combine(Path.GetTempPath(), "deg-log-stuck-" + Guid.NewGuid().ToString("N"));
         const long cap = 400;
         var log = new FileDiagnosticsLog(root, new FixedClock(new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero)), maxBytes: cap);
         var path = Path.Combine(root, "logs", "app.log");
         Directory.CreateDirectory(Path.Combine(root, "logs"));
-        File.WriteAllText(path + ".1", "old\n");
-        File.SetAttributes(path + ".1", FileAttributes.ReadOnly);
+        File.WriteAllText(Rolled(path), "old\n");
+        File.SetAttributes(Rolled(path), FileAttributes.ReadOnly);
         try
         {
             for (var i = 0; i < 200; i++)
@@ -112,7 +114,7 @@ public class FileDiagnosticsLogTests
         }
         finally
         {
-            File.SetAttributes(path + ".1", FileAttributes.Normal);
+            File.SetAttributes(Rolled(path), FileAttributes.Normal);
         }
 
         log.Warning("reconciler", "job-after", "InvalidOperationException");
