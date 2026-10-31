@@ -19,6 +19,12 @@ public interface ICostLedgerRepository
     /// an edit of history.
     /// </summary>
     Task<CostLedgerEntry> AppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Like <see cref="AppendAsync"/>, but a row for the same (RunId, Kind) that already exists makes this a no-op that returns null
+    /// (migration 0003's unique index with INSERT OR IGNORE), so concurrent writers book a run once. Rows with no RunId always insert.
+    /// </summary>
+    Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken);
 }
 
 /// <summary>One row of the <c>CostLedger</c> table. <see cref="Id"/> is 0 until <see cref="ICostLedgerRepository.AppendAsync"/> assigns it.</summary>
