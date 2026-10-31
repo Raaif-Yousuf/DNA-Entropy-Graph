@@ -98,6 +98,13 @@ Two more rules of this house:
   follow-up (Hard Rule 16). A branch in flight writes
   [`docs/changelog.d/<branch-name>.md`](changelog.d/README.md) instead of
   editing `sprint_log.md` directly.
+- Numbered `## N.` sections in a doc (cloud_design.md, ui_conventions.md and others) must stay
+  unique and ascending: two branches that both append "the next section" collide on the same
+  number and git merges them silently. `scripts/check_doc_headings.py` (premerge and CI) fails
+  on a duplicate or descending number and names file:line; when it fires, renumber your section
+  to the next free number and fix every `section N` reference to it (grep `docs/`, `CLAUDE.md`,
+  and `app/` and `worker/` comments). Only `##` headings count; `###` numbering and fenced code
+  are ignored (#883).
 - Template skeletons for a new spec, decision record, runbook, or research
   note live at the bottom of this section so a new doc starts from a known
   shape rather than a blank page (also in Appendix C §3 of the design spec,
