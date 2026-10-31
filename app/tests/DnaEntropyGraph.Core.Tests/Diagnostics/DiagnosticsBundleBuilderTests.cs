@@ -162,7 +162,7 @@ public class DiagnosticsBundleBuilderTests
     }
 
     private static Dictionary<string, string> BuildSeeded(Dictionary<string, string>? folder = null) =>
-        Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder ?? SeededFolder()), [Run], Info));
+        Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder ?? SeededFolder()), [Run], Info, null));
 
     // The test's own view of "is a sequence in there": letters only, upper case, U read as T, across line breaks.
     private static string Squash(string text) =>
@@ -289,7 +289,7 @@ public class DiagnosticsBundleBuilderTests
     {
         var folder = SeededFolder();
         folder["settings.json"] = """{"Theme":"Dark","proxy_mode":"manual","proxy_address":"proxy.secret-uni.edu:8080"}""";
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), [Run], Info with { ProxyMode = "manual" }, null));
 
         using var document = JsonDocument.Parse(entries["versions.json"]);
         document.RootElement.GetProperty("proxyMode").GetString().ShouldBe("manual");
@@ -407,7 +407,7 @@ public class DiagnosticsBundleBuilderTests
     [Fact]
     public void A_bundle_with_no_logs_at_all_is_still_built()
     {
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [], Info, null));
 
         entries.ShouldContainKey("versions.json");
         entries.ShouldContainKey("run-history.json");
@@ -419,7 +419,7 @@ public class DiagnosticsBundleBuilderTests
     {
         var vanishing = new VanishingSource(new MemorySource(new Dictionary<string, string> { ["logs/gone.log"] = "x" }));
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(vanishing, [], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(vanishing, [], Info, null));
 
         entries.Keys.ShouldNotContain("files/logs/log-01.log");
     }
@@ -440,7 +440,7 @@ public class DiagnosticsBundleBuilderTests
             ["runs/20261001-080000-abc234/status.json"] = "{\"schema\":1,\"stage\":\"running\"}",
         };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 20), [], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 20), [], Info, null));
 
         entries["files/logs/log-01.log"].ShouldStartWith("[truncated:");
         entries["files/logs/log-01.log"].ShouldContain("line three");
@@ -530,7 +530,7 @@ public class DiagnosticsBundleBuilderTests
         // token, is the one place the redactor does not rewrite: the final scan must still stop it.
         foreach (var leaky in new[] { Run with { ErrorCode = Sequence }, Run with { ErrorCode = Credentials[0] } })
         {
-            var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [leaky], Info));
+            var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [leaky], Info, null));
 
             ex.EntryName.ShouldBe("run-history.json");
         }
@@ -539,7 +539,7 @@ public class DiagnosticsBundleBuilderTests
     // ---- Round 3 (issue #106 cold review) ----
 
     private static Dictionary<string, string> BuildWith(Dictionary<string, string> folder, DiagnosticsInfo info, params RunRecord[] runs) =>
-        Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), runs, info));
+        Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder), runs, info, null));
 
     private static string Entries(Dictionary<string, string> entries) => string.Join('\n', entries.Select(e => e.Key + "\n" + e.Value));
 
@@ -593,7 +593,7 @@ public class DiagnosticsBundleBuilderTests
         // Run history is copied as it is: an error code carrying the Windows user name is a miss only the scan can catch.
         var info = Info with { SensitiveValues = ["jsmith"] };
 
-        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [Run with { ErrorCode = "jsmith-1" }], info));
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [Run with { ErrorCode = "jsmith-1" }], info, null));
 
         ex.EntryName.ShouldBe("run-history.json");
     }
@@ -603,7 +603,7 @@ public class DiagnosticsBundleBuilderTests
     {
         var run = Run with { ErrorCode = "pUC19secret-9", ManifestJson = JsonSerializer.Serialize(new { inputs = new[] { new { name = "pUC19secret-9" } } }) };
 
-        Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info))
+        Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, null))
             .EntryName.ShouldBe("run-history.json");
     }
 
@@ -623,9 +623,69 @@ public class DiagnosticsBundleBuilderTests
         // when that field is the app's own id: the standard shape round-trips as it is.
         var run = Run with { JobId = jobId, Name = name, JobPrefix = jobPrefix };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, null));
 
         entries["run-history.json"].ShouldContain(jobId);
+    }
+
+    [Fact]
+    public void A_cloud_runs_booked_cost_and_VM_seconds_come_from_the_ledger_figure_and_the_booked_span_not_the_empty_run_row_columns()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, BookedRun> { [run.JobId] = new(1.25, 1800) }));
+
+        var row = JsonDocument.Parse(entries["run-history.json"]).RootElement[0];
+        row.GetProperty("estimatedCostUsd").GetDouble().ShouldBe(1.25);
+        row.GetProperty("vmSeconds").GetInt64().ShouldBe(1800);
+    }
+
+    [Fact]
+    public void A_run_with_no_ledger_entry_and_no_booked_span_shows_null_not_zero()
+    {
+        var run = Run with { EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = null, FinishedAt = null };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, BookedRun>()));
+
+        var row = JsonDocument.Parse(entries["run-history.json"]).RootElement[0];
+        row.GetProperty("estimatedCostUsd").ValueKind.ShouldBe(JsonValueKind.Null);
+        row.GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void A_runs_VM_seconds_are_the_span_the_ledger_entry_froze_not_one_derived_from_the_row()
+    {
+        // The row says 10 h; the entry (clamped to the 4 h run limit plus the 15 minute grace when it was booked) says 255 minutes. The zip shows the entry's.
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddHours(10) };
+        var booked = (long)TimeSpan.FromMinutes(240 + 15).TotalSeconds;
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, BookedRun> { [run.JobId] = new(4.3, booked) }));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe(booked, "the figure beside the cost is the span the cost was booked for");
+    }
+
+    [Fact]
+    public void A_run_with_a_span_but_no_ledger_entry_an_unpriced_run_shows_null_VM_seconds()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "cloud", MachineType = null, EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, BookedRun>()));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null, "nothing was booked, so no span is claimed");
+    }
+
+    [Fact]
+    public void A_This_PC_run_shows_null_VM_seconds()
+    {
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        var run = Run with { Target = "local", EstimatedCostUsd = null, VmSeconds = null, VmReadyAt = start, FinishedAt = start.AddMinutes(30) };
+
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, new Dictionary<string, BookedRun>()));
+
+        JsonDocument.Parse(entries["run-history.json"]).RootElement[0].GetProperty("vmSeconds").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
     [Theory]
@@ -636,7 +696,7 @@ public class DiagnosticsBundleBuilderTests
         // The owner's real run has a non-standard id equal to its name; an imported or hand-edited row could hold a patient.
         var run = Run with { JobId = id, Name = id, ManifestJson = "{}", OptionsJson = "{}" };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, null));
 
         entries.Count.ShouldBeGreaterThan(3, "vacuity: the bundle was built");
         Entries(entries).ShouldNotContain(id, Case.Insensitive);
@@ -805,7 +865,7 @@ public class DiagnosticsBundleBuilderTests
         };
         var run = Run with { JobId = "job7", Name = "n", ManifestJson = "{}", OptionsJson = "{}" };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 28), [run], Info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource(folder, cap: 28), [run], Info, null));
 
         var log = entries["files/runs/withheldid1/logs/log-01.log"];
         log.ShouldStartWith("[truncated:");
@@ -916,7 +976,7 @@ public class DiagnosticsBundleBuilderTests
         var info = Info with { SensitiveValues = ["jsmith"] };
         var run = Run with { JobId = "jsmith-1", Name = "jsmith-1" };
 
-        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], info));
+        var entries = Unzip(DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], info, null));
 
         // A non-standard id is withheld, so the name never reaches the history; the zip is built and clean.
         Entries(entries).ShouldNotContain("jsmith", Case.Insensitive);
@@ -928,7 +988,7 @@ public class DiagnosticsBundleBuilderTests
         // The exemption is for equality with the job id only: a different name holds user text and stays on the scrub list.
         var run = Run with { JobId = StandardId, Name = "Patient 42 run", ErrorCode = "Patient 42 run" };
 
-        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info));
+        var ex = Should.Throw<DiagnosticsLeakException>(() => DiagnosticsBundleBuilder.Build(new MemorySource([]), [run], Info, null));
 
         ex.Rule.ShouldBe(LeakRules.Identifier);
     }

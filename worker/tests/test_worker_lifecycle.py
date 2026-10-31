@@ -136,6 +136,7 @@ def test_apply_lifecycle_unknown_action_is_rejected_without_any_request() -> Non
 
 def test_apply_lifecycle_http_error_from_compute_api_raises_lifecycle_error() -> None:
     import urllib.error
+    from email.message import Message
 
     opener = _RecordingOpener(
         [
@@ -143,7 +144,7 @@ def test_apply_lifecycle_http_error_from_compute_api_raises_lifecycle_error() ->
             _text("projects/1/zones/us-central1-a"),
             _text("deg-job1"),
             _token(),
-            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+            urllib.error.HTTPError("url", 403, "Forbidden", Message(), None),
         ]
     )
     with pytest.raises(LifecycleError):

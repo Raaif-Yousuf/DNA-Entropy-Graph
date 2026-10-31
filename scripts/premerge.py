@@ -534,21 +534,33 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+# A gate's kill-on-close job object, by the pid of the gate's direct child (#930). Only `_run_capture` writes it.
+_GATE_JOBS: dict[int, wt_venv.KillJob] = {}
+
+
 def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
     """Kill the gate's whole process tree. `uv run ... pytest` is uv -> python -> workers; killing
     only the direct child leaves a grandchild holding the output pipe, so the gate would block.
+    Windows: terminate the gate's Job Object first (it holds a grandchild whose parent already exited, which
+    `taskkill /T` cannot reach: MEASURED 2026-10-30, a detached grandchild of an exited child survived it),
+    then `taskkill /T` by PID as a belt. The kill counts as done when Windows accepted TerminateJobObject OR taskkill exited 0.
     Never raises; returns False when the tree kill itself did not work."""
     ok = True
+    job = _GATE_JOBS.get(proc.pid)
+    job_terminated = False
+    if job is not None:
+        with contextlib.suppress(Exception):  # ctypes.ArgumentError / TypeError too: "never raises"
+            job_terminated = job.terminate()
     try:
         if os.name == "nt":
             done = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
-            ok = done.returncode == 0
+            ok = job_terminated or done.returncode == 0  # taskkill finds nothing once the direct child has exited
         else:
             os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # the group was already gone: nothing survived
     except (OSError, subprocess.SubprocessError):
-        ok = False
+        ok = job_terminated
     finally:
         with contextlib.suppress(OSError):
             proc.kill()
@@ -570,14 +582,25 @@ class Captured:
 def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]) -> Captured:
     """Run argv, capture stdout+stderr. On timeout the whole tree is killed and the output the tree
     wrote before then is returned. Any other exception (KeyboardInterrupt) also kills the tree."""
-    proc = subprocess.Popen(
-        argv,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        start_new_session=os.name != "nt",
-    )
+    job = wt_venv.create_kill_job()  # Windows only; None elsewhere (the POSIX process group does the job)
+    try:
+        proc, assigned = wt_venv.spawn_in_job(argv, env, cwd, job, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except BaseException:
+        if job is not None:
+            job.close()
+        raise
+    if wt_venv.needs_taskkill_fallback(assigned):
+        print(
+            "WARNING: no job object for a gate tree; falling back to taskkill /T by PID "
+            "(a grandchild whose parent exited may survive a timeout)",
+            file=sys.stderr,
+            flush=True,
+        )
+        if job is not None:
+            job.close()
+        job = None
+    if job is not None:
+        _GATE_JOBS[proc.pid] = job
     try:
         try:
             out, err = proc.communicate(timeout=timeout)
@@ -599,6 +622,10 @@ def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]
     except BaseException:
         _kill_tree(proc)
         raise
+    finally:
+        _GATE_JOBS.pop(proc.pid, None)
+        if job is not None:
+            job.close()  # KILL_ON_JOB_CLOSE: anything the gate left behind (an MSBuild node) ends with it
 
 
 _PYTEST_PROGRESS_LINE = re.compile(r"^([.FEsxX]+)(?:\s+\[\s*\d+%\])?\s*$", re.MULTILINE)

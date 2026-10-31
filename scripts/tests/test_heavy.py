@@ -96,9 +96,9 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _kill_pid(pid: int) -> None:
+def _kill_pid(pid: int, tree: bool = False) -> None:
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+        subprocess.run(["taskkill", "/F", *(["/T"] if tree else []), "/PID", str(pid)], capture_output=True, check=False)
     else:
         import signal
 
@@ -524,3 +524,373 @@ def test_unstartable_command_message_is_ascii_and_exit_127(tmp_path):
     )
     assert r.returncode == 127
     assert "ERROR:" in r.stderr and r.stderr.isascii()
+
+
+# --- #996: --status and the periodic "still queued" line ---------------------------------------
+
+
+def _status(lock_dir: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(HEAVY), "--status", "--slots", "2", "--lock-dir", str(lock_dir), *extra],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_status_with_no_slots_held_exits_zero_and_says_every_slot_is_free(tmp_path):
+    out = _status(tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.isascii()
+    assert out.stdout.lower().count("free") == 2
+
+
+def test_status_lists_a_live_holder_with_pid_lane_age_alive_and_cpu(tmp_path):
+    gate = tmp_path / "gate"
+    p = _spawn(tmp_path, _gated(gate), "--lane", "statuslane", slots=2)
+    try:
+        _Lines(p).wait_for("S ")
+        time.sleep(1.2)  # the age must be visibly nonzero
+        out = _status(tmp_path)
+        assert out.returncode == 0, out.stderr
+        line = next(ln for ln in out.stdout.splitlines() if "statuslane" in ln)
+        holder_pid = heavy._read_info(tmp_path / "slot-0.info")["pid"]  # not p.pid: a venv python.exe is a launcher that re-spawns
+        assert f"pid {holder_pid}" in line and heavy.pid_alive(int(holder_pid))
+        assert "alive yes" in line
+        assert "cpu " in line and "cpu ?" not in line
+        age = int(line.split("age ")[1].split("s")[0])
+        assert age >= 1
+        assert out.stdout.isascii()
+    finally:
+        gate.write_text("go", encoding="utf-8", newline="\n")
+        p.wait(timeout=30)
+
+
+def test_slot_status_fields_for_a_held_slot(tmp_path):
+    held = heavy.try_acquire(tmp_path, 2)
+    assert held is not None
+    try:
+        heavy.write_info(tmp_path, held.index, lane="mine", command=["echo"])
+        rows = heavy.slot_status(tmp_path, 2)
+    finally:
+        held.release()
+    by_slot = {r["slot"]: r for r in rows}
+    assert by_slot["1"]["state"] == "free"
+    row = by_slot["0"]
+    assert (row["state"], row["pid"], row["lane"], row["alive"]) == ("held", os.getpid(), "mine", True)
+    assert row["age_s"] is not None and 0 <= row["age_s"] < 60
+    assert row["cpu_s"] is not None and row["cpu_s"] > 0  # this very test process has used CPU
+
+
+def test_slot_status_marks_a_dead_pid_not_alive_and_without_cpu(tmp_path):
+    held = heavy.try_acquire(tmp_path, 1)
+    assert held is not None
+    try:
+        (tmp_path / "slot-0.info").write_text("pid=4194301\nlane=ghost\nstart=2020-01-01T00:00:00\ncmd=x\n", encoding="ascii", newline="\n")
+        row = heavy.slot_status(tmp_path, 1)[0]
+    finally:
+        held.release()
+    assert row["alive"] is False and row["cpu_s"] is None and row["age_s"] is not None and row["age_s"] > 3600
+
+
+def test_tree_cpu_counts_a_grandchild_through_its_child(tmp_path):
+    """child -> grandchild burner. `_descendants(child)` must contain the grandchild (a version returning only {root} fails here)
+    and the tree's CPU must be at least what the grandchild alone has used."""
+    pidfile = tmp_path / "gc.pid"
+    burner = "x = 0\nfor i in range(4_000_000): x += i\nimport time; time.sleep(60)"
+    child_code = (
+        "import subprocess, sys, time\n"
+        f"p = subprocess.Popen([sys.executable, '-c', {burner!r}])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    child = subprocess.Popen([sys.executable, "-c", child_code])
+    gc_pid = 0
+    try:
+        deadline = time.time() + 30
+        while not pidfile.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        while (not pidfile.exists() or not pidfile.read_text().strip()) and time.time() < deadline:
+            time.sleep(0.1)  # the file exists before the child has written the pid into it
+        gc_pid = int(pidfile.read_text().strip())
+        time.sleep(2.0)  # let the burner run
+        table = heavy._win_process_table() if heavy.IS_WINDOWS else {c: v[0] for c, v in heavy._posix_process_table().items()}
+        assert gc_pid in heavy._descendants(child.pid, table)
+        gc_cpu = heavy.tree_cpu_seconds(gc_pid)
+        tree = heavy.tree_cpu_seconds(child.pid)
+        assert gc_cpu is not None and gc_cpu > 0
+        assert tree is not None and tree >= gc_cpu
+    finally:
+        _kill_pid(child.pid, tree=True)  # /T: the venv launcher's real child is under it
+        if gc_pid:
+            _kill_pid(gc_pid)
+
+
+def test_descendants_walks_several_levels_whatever_the_table_order():
+    parents = {5: 4, 4: 3, 3: 1, 9: 8}  # 5 -> 4 -> 3 -> 1, listed child-first; 9 is someone else's
+    assert heavy._descendants(1, parents) == {1, 3, 4, 5}
+    assert heavy._descendants(7, parents) == {7}
+
+
+def test_waiting_line_says_how_long_the_holder_has_held_the_slot():
+    start = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 125))
+    held = [{"slot": "0", "pid": "123", "lane": "other", "cmd": "", "start": start}]
+    line = heavy.describe_wait(1, held)
+    assert "other" in line and "pid 123" in line and "for 2m" in line and line.isascii()
+
+
+def test_acquire_slot_ticks_while_waiting_and_not_before_the_interval(tmp_path):
+    held = heavy.try_acquire(tmp_path, 1)
+    assert held is not None
+    ticks: list[float] = []
+    waits: list[object] = []
+
+    def release_later():
+        time.sleep(1.3)
+        held.release()
+
+    threading.Thread(target=release_later, daemon=True).start()
+    slot = heavy.acquire_slot(tmp_path, 1, poll=0.05, on_wait=waits.append, on_tick=lambda h, waited: ticks.append(waited), tick_interval=0.5)
+    slot.release()
+    assert len(waits) == 1
+    assert ticks, "no tick while queued past the interval"
+    assert ticks == sorted(ticks) and ticks[0] >= 0.5  # never before the interval
+    assert len(ticks) < ticks[-1] / 0.5 + 1  # never faster than one per interval (no upper bound on lateness: load makes it flaky)
+
+
+def test_the_waiting_line_goes_to_stderr_not_stdout(tmp_path):
+    gate = tmp_path / "gate"
+    p1 = _spawn(tmp_path, _gated(gate), "--lane", "holder")
+    _Lines(p1).wait_for("S ")
+    p2 = subprocess.Popen(
+        [sys.executable, str(HEAVY), "--slots", "1", "--lock-dir", str(tmp_path), "--poll", "0.05", "--", sys.executable, "-c", "print('x')"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    err_q: queue.Queue[str | None] = queue.Queue()
+
+    def pump_stderr() -> None:
+        assert p2.stderr is not None
+        for line in p2.stderr:
+            err_q.put(line)
+        err_q.put(None)
+
+    threading.Thread(target=pump_stderr, daemon=True).start()
+    try:
+        first = None
+        deadline = time.time() + 60
+        while time.time() < deadline:  # the waiting line itself, not a sleep, says it is queued; other stderr lines may precede it
+            line = err_q.get(timeout=max(0.1, deadline - time.time()))
+            if line is None or "heavy: waiting" in line:
+                first = line
+                break
+    finally:
+        gate.write_text("go", encoding="utf-8", newline="\n")
+    assert p2.stdout is not None
+    out = p2.stdout.read()  # not communicate(): the stderr thread owns that pipe
+    p2.wait(timeout=60)
+    p1.wait(timeout=30)
+    assert first is not None and "heavy: waiting" in first and "holder" in first
+    assert "waiting" not in out
+
+
+# --- #930: Ctrl-C ends the command's whole tree, not only the direct child -----------------------
+
+ORPHANING_CHILD = (
+    "import subprocess, sys\n"
+    "kw = {'creationflags': 0x8 | 0x200} if sys.platform == 'win32' else {}\n"
+    "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], **kw)\n"
+    "open(sys.argv[1], 'w').write(str(p.pid))\n"
+)
+
+
+def test_ctrl_c_ends_a_detached_grandchild_whose_parent_already_exited(tmp_path, monkeypatch):
+    """The command starts a DETACHED grandchild and exits, so `proc.kill()` on the direct child (the old code) and taskkill /T by the
+    child's pid both find nothing. Only the job (Windows) or the process group (POSIX) reaches it. In-process on purpose: the
+    wrapper's own process-wide job is stubbed out, so this proves the per-command job, not the wrapper's exit. Limit: a process
+    started with CREATE_BREAKAWAY_FROM_JOB escapes a job that allows breakaway."""
+    pidfile = tmp_path / "gc.pid"
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+
+    def interrupted_after_child_exits(proc):
+        proc.wait(timeout=30)
+        deadline = time.time() + 20
+        while not pidfile.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(heavy, "_wait_child", interrupted_after_child_exits)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path / "locks"), "--", sys.executable, "-c", ORPHANING_CHILD, str(pidfile)])
+    pid = int(pidfile.read_text())
+    try:
+        assert rc == 130
+        deadline = time.time() + 5
+        while _pid_alive(pid) and time.time() < deadline:
+            time.sleep(0.1)
+        assert not _pid_alive(pid), f"detached grandchild {pid} survived Ctrl-C"
+    finally:
+        _kill_pid(pid)
+
+
+# --- review round: pid_alive access denied, kill ordering, diagnostics on stderr, errno None -----
+
+
+@pytest.mark.skipif(not heavy.IS_WINDOWS, reason="OpenProcess is Windows only")
+@pytest.mark.parametrize(("last_error", "alive"), [(5, True), (87, False)])
+def test_pid_alive_treats_access_denied_as_alive_and_invalid_parameter_as_gone(monkeypatch, last_error, alive):
+    import ctypes
+
+    class K32:
+        @staticmethod
+        def OpenProcess(*_a):  # noqa: N802 (a ctypes name)
+            return 0
+
+    monkeypatch.setattr(heavy, "_win_k32", lambda: K32)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error)
+    assert heavy.pid_alive(4242) is alive
+
+
+class _FakeProc:
+    def __init__(self):
+        self.waited = False
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+
+class _FakeJob:
+    def __init__(self, result=True, raises=False):
+        self.result, self.raises, self.terminated, self.closed = result, raises, False, False
+
+    def close(self):
+        self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+        if self.raises:
+            raise OSError("boom")
+        return self.result
+
+
+def test_kill_child_tree_skips_taskkill_when_the_job_terminated(monkeypatch):
+    calls: list[object] = []
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda proc: calls.append(proc))
+    proc, job = _FakeProc(), _FakeJob(result=True)
+    heavy._kill_child_tree(proc, job)  # type: ignore[arg-type]
+    assert job.terminated and calls == [] and proc.waited
+
+
+def test_kill_child_tree_falls_back_to_kill_tree_when_the_job_failed_or_raised(monkeypatch):
+    for job in (_FakeJob(result=False), _FakeJob(raises=True), None):
+        calls: list[object] = []
+        monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda proc, calls=calls: calls.append(proc))
+        proc = _FakeProc()
+        heavy._kill_child_tree(proc, job)  # type: ignore[arg-type]
+        assert calls == [proc], f"kill_tree not reached for {job!r}"
+        assert proc.waited
+
+
+def test_kill_child_tree_still_waits_when_kill_tree_raises(monkeypatch):
+    def boom(_proc):
+        raise OSError("taskkill missing")
+
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", boom)
+    proc = _FakeProc()
+    heavy._kill_child_tree(proc, _FakeJob(result=False))  # type: ignore[arg-type]
+    assert proc.waited
+
+
+def test_ctrl_c_reaches_kill_tree_when_the_child_was_not_assigned_to_the_job(tmp_path, monkeypatch):
+    """spawn_in_job says assigned=False: the job is EMPTY, and TerminateJobObject on an empty job still returns TRUE.
+    Ctrl-C must not trust that TRUE; it has to fall back to kill_tree."""
+    fake_job, proc, calls = _FakeJob(result=True), _FakeProc(), []
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: fake_job)
+    monkeypatch.setattr(heavy.wt_venv, "spawn_in_job", lambda *_a, **_k: (proc, False))
+    monkeypatch.setattr(heavy.wt_venv, "needs_taskkill_fallback", lambda assigned: True)
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda p: calls.append(p))
+
+    def interrupted(_proc):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(heavy, "_wait_child", interrupted)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    assert rc == 130
+    assert calls == [proc], "an empty job's TRUE from terminate() suppressed the taskkill fallback"
+
+
+def test_the_no_job_note_goes_to_stderr(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: "CreateJobObject error 5")
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "heavy: note: no kill-on-close job" in captured.err
+    assert "heavy:" not in captured.out
+
+
+def test_an_oserror_without_errno_prints_its_message_not_errno_none(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+
+    def refuse(*_a, **_k):
+        raise OSError("could not resume the suspended process 99")
+
+    monkeypatch.setattr(heavy.wt_venv, "spawn_in_job", refuse)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    err = capsys.readouterr().err
+    assert rc == 127
+    assert "errno None" not in err
+    assert "could not resume the suspended process 99" in err
+    assert err.isascii()
+
+
+def test_an_oserror_with_an_errno_still_prints_it(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", str(tmp_path / "no-such-program-xyz")])
+    err = capsys.readouterr().err
+    assert rc == 127 and "errno 2" in err
+
+
+def test_kill_children_with_me_names_the_windows_error_number(monkeypatch):
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: None)
+    monkeypatch.setattr(heavy.wt_venv, "last_job_error", lambda: 5)
+    reason = heavy.kill_children_with_me()
+    assert reason is not None and "error 5" in reason and reason.isascii()
+
+
+def test_kill_children_with_me_joins_the_shared_job_helper(monkeypatch):
+    """No second ctypes job implementation: heavy asks wt_venv.create_kill_job and assigns its own process to it."""
+    events: list[str] = []
+
+    class Job:
+        def assign_self(self):
+            events.append("assign_self")
+            return True
+
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: Job())
+    monkeypatch.setattr(heavy, "_JOB_HANDLE", None)
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    assert heavy.kill_children_with_me() is None
+    assert events == ["assign_self"]
+
+
+def test_kill_children_with_me_reports_why_it_could_not(monkeypatch):
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: None)
+    assert "CreateJobObject" in (heavy.kill_children_with_me() or "")
+
+    class Job:
+        closed = False
+
+        def assign_self(self):
+            return False
+
+        def close(self):
+            Job.closed = True
+
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: Job())
+    assert "AssignProcessToJobObject" in (heavy.kill_children_with_me() or "")
+    assert Job.closed

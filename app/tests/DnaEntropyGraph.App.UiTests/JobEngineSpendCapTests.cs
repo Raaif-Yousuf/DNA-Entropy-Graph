@@ -10,6 +10,7 @@ using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.LocalEngine;
 using DnaEntropyGraph.Persistence;
 using DnaEntropyGraph.Presentation.Messaging;
+using DnaEntropyGraph.Presentation.Services;
 using Shouldly;
 using Xunit;
 
@@ -87,6 +88,9 @@ public class JobEngineSpendCapTests
                 return Task.FromResult<IReadOnlyList<CostLedgerEntry>>(_rows.ToList());
             }
         }
+
+        public async Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken)
+            => (await GetAllAsync(cancellationToken)).Where(r => r.Kind == kind).ToList();
 
         public Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
         {
@@ -218,8 +222,34 @@ public class JobEngineSpendCapTests
         var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
         run.VmReadyAt.ShouldNotBeNull("the runner records when the VM was known to exist, the start of what is booked");
         row.StartedUtc.ShouldBe(run.VmReadyAt!.Value);
-        run.EstimatedCostUsd.ShouldBe(row.UsdEst);
-        run.VmSeconds.ShouldNotBeNull();
+        // The run row carries no cost (nothing writes it); the figure the pages and the support zip show is the ledger entry, read through the cost source.
+        run.EstimatedCostUsd.ShouldBeNull();
+        (await new LedgerRunCostSource(h.Ledger).GetBookedAsync(CancellationToken.None))[jobId].ShouldBe(row.UsdEst!.Value, 1e-12);
+    }
+
+    [Fact]
+    public async Task The_Results_header_and_the_Runs_row_show_the_figure_the_ledger_booked_for_a_completed_run()
+    {
+        // Issues #100 and #557: one figure, booked once by the ledger decorator, read by both pages through the real view models.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        var booked = (await h.Ledger.GetAllAsync(CancellationToken.None)).Single().UsdEst.ShouldNotBeNull();
+        var amount = "$" + RunCostText.Money(booked);
+        var run = (await h.Inner.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        var strings = new EchoStrings();
+
+        var figure = (await new LedgerRunCostSource(h.Ledger).GetBookedAsync(CancellationToken.None))[jobId];
+        var header = RunCostText.Header(run, figure, strings);
+        var row = RunCostText.Short(run, figure, strings);
+
+        header.ShouldNotBeNull().ShouldContain(amount);
+        row.ShouldNotBeNull().ShouldContain(amount);
+    }
+
+    private sealed class EchoStrings : IStringResourceProvider
+    {
+        public string GetString(string key) => key + " ${0}";
     }
 
     [Fact]

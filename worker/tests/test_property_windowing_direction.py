@@ -245,6 +245,7 @@ def test_property_seam_matches_where_the_combiner_actually_switched(k: int, extr
         direction=Direction.BOTH_COMBINED,
     )
     assert combined.seam == k, (k, extra, seed)
+    assert separate.reverse_values is not None and separate.forward_values is not None
     assert np.allclose(combined.values[:k], separate.reverse_values[:k], atol=1e-4), (k, extra, seed)
     assert np.allclose(combined.values[k:], separate.forward_values[k:], atol=1e-4), (k, extra, seed)
 
@@ -263,11 +264,11 @@ class _OOMOnFirstPass:
         self._calls = 0
         self._mock = MockPredictor(seed=seed)
 
-    def predict(self, window: str) -> np.ndarray:
+    def predict(self, seq: str) -> np.ndarray:
         self._calls += 1
         if self._calls == self._oom_call:
             raise PredictorOOMError("simulated OOM")
-        return self._mock.predict(window)
+        return self._mock.predict(seq)
 
 
 @given(
@@ -287,15 +288,23 @@ def test_property_seam_follows_the_k_each_pass_actually_ran_with_after_an_oom_ha
     rev_k = k // 2 if oom_on == "reverse" else k
     # Always >= fwd_k + rev_k, so a clean seam is defined.
     seq = _adversarial_seq(fwd_k + rev_k + extra)
-    kwargs = {"context_length": k, "ceiling": 8192}
     n_forward = windowing_mod.plan_windows(len(seq), k, 8192).num_windows
     combined = direction_mod.analyze_direction(
-        _OOMOnFirstPass(oom_on, n_forward, seed), seq, direction=Direction.BOTH_COMBINED, **kwargs
+        _OOMOnFirstPass(oom_on, n_forward, seed),
+        seq,
+        direction=Direction.BOTH_COMBINED,
+        context_length=k,
+        ceiling=8192,
     )
     separate = direction_mod.analyze_direction(
-        _OOMOnFirstPass(oom_on, n_forward, seed), seq, direction=Direction.BOTH_SEPARATE, **kwargs
+        _OOMOnFirstPass(oom_on, n_forward, seed),
+        seq,
+        direction=Direction.BOTH_SEPARATE,
+        context_length=k,
+        ceiling=8192,
     )
     assert combined.seam == fwd_k, (k, extra, seed, oom_on)
+    assert separate.reverse_values is not None and separate.forward_values is not None
     assert np.allclose(combined.values[:fwd_k], separate.reverse_values[:fwd_k], atol=1e-4)
     assert np.allclose(combined.values[fwd_k:], separate.forward_values[fwd_k:], atol=1e-4)
 

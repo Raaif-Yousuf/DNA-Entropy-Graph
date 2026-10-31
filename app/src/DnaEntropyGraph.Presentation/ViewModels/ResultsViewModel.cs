@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -72,6 +73,11 @@ public sealed partial class ResultsViewModel : ObservableObject
     [ObservableProperty]
     private string _title = string.Empty;
 
+    /// <summary>The run's cost line (issues #100, #557): the booked estimate, or no cloud cost for a run on this PC; empty when the run booked nothing.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasCost))]
+    private string _costText = string.Empty;
+
     // Why the whole page has nothing to show (no such run, folder gone, unreadable): one reason, one action.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNoticeVisible))]
@@ -87,6 +93,12 @@ public sealed partial class ResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsActionNoticeVisible))]
     private string _actionNoticeText = string.Empty;
 
+    private readonly Func<string?, bool>? _hasSpotPrice;
+
+    private readonly IRunCostSource? _costs;
+
+    private readonly IDiagnosticsLog? _log;
+
     public ResultsViewModel(
         IRunRepository runRepository,
         IRunOutputReader outputReader,
@@ -98,11 +110,17 @@ public sealed partial class ResultsViewModel : ObservableObject
         IOverviewImageExporter? imageExporter = null,
         IGeneTableSource? geneTables = null,
         ResultsExportRoot? exportRoot = null,
+        IPricingSource? pricing = null,
+        IRunCostSource? costs = null,
+        IDiagnosticsLog? log = null,
         IRunAnnotations? annotations = null)
     {
         _annotations = annotations;
         _geneTables = geneTables;
         _exportRoot = exportRoot;
+        _costs = costs;
+        _log = log;
+        _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _overviewSource = overviewSource;
         _imageExporter = imageExporter;
         _runRepository = runRepository;
@@ -140,6 +158,8 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public ObservableCollection<ResultsFileItem> Files { get; } = [];
 
+    public bool HasCost => CostText.Length > 0;
+
     public bool IsNoticeVisible => NoticeText.Length > 0;
 
     public bool IsStatsNoticeVisible => StatsNoticeText.Length > 0;
@@ -175,6 +195,13 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
             _run = run;
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
+            CostText = RunCostText.Header(run, booked.TryGetValue(run.JobId, out var usd) ? usd : null, _strings, _hasSpotPrice) ?? string.Empty;
 
             // Issue #141: the note belongs to the run, not to its folder, so it shows (and saves) even when the folder is gone.
             _annotationsJobId = run.JobId;
@@ -230,6 +257,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _run = null;
         _outputFiles = [];
         Title = string.Empty;
+        CostText = string.Empty;
         _annotationsJobId = null;
         NotesText = string.Empty;
         TagsText = string.Empty;

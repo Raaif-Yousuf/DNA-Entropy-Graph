@@ -1084,6 +1084,43 @@ def test_run_bounded_kills_the_whole_tree_on_timeout(tmp_path):
     assert _pid_gone(int(pidfile.read_text()))
 
 
+ORPHANING_PARENT = """import subprocess, sys
+from pathlib import Path
+kw = {"creationflags": 0x8 | 0x200} if sys.platform == "win32" else {}
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=sys.stdout, stderr=sys.stderr, **kw)
+Path(sys.argv[1]).write_text(str(gc.pid))
+sys.exit(0)
+"""
+
+
+def test_run_bounded_with_a_job_kills_a_detached_grandchild_whose_parent_already_exited(tmp_path):
+    """#930. taskkill /T cannot find a grandchild whose parent is gone; the job object can. Limit: a process started with
+    CREATE_BREAKAWAY_FROM_JOB escapes a job that allows breakaway."""
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(ORPHANING_PARENT, encoding="utf-8", newline="\n")
+    with pytest.raises(subprocess.TimeoutExpired):
+        lw.run_bounded([sys.executable, str(script), str(pidfile)], timeout=5.0, job=True)
+    pid = int(pidfile.read_text())
+    try:
+        assert _pid_gone(pid), f"detached grandchild {pid} survived the timeout"
+    finally:
+        with contextlib.suppress(Exception):
+            lw._taskkill_tree(pid) if os.name == "nt" else os.kill(pid, 9)
+
+
+def test_run_premerge_runs_the_gate_in_a_job(tmp_path, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def spy(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(list(argv), 0, b"", b"")
+
+    monkeypatch.setattr(lw, "run_bounded", spy)
+    lw.run_premerge(tmp_path, tmp_path, full=False, timeout=5)
+    assert seen.get("job") is True
+
+
 def test_run_bounded_returns_output_and_stdin_like_run():
     proc = lw.run_bounded([sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read()); sys.exit(3)"], stdin=b"hi", timeout=30)
     assert proc.returncode == 3 and proc.stdout == b"hi"
