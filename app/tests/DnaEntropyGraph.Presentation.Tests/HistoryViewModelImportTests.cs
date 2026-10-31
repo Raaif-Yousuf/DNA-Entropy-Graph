@@ -2,6 +2,7 @@ using System.Text;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.PrototypeImport;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -167,6 +168,35 @@ public sealed class HistoryViewModelImportTests
 
         Items(vm).ShouldBeEmpty();
         vm.ImportStatusText.ShouldBe("Runs_Import_None");
+    }
+
+    /// <summary>Issue #915: removing a prototype row records its folder-derived id, so the Settings scan does not offer it again.</summary>
+    [Fact]
+    public async Task A_removed_prototype_run_is_not_offered_again_by_the_next_earlier_runs_scan()
+    {
+        var downloads = Path.Combine(Path.GetTempPath(), "deg-915-" + Guid.NewGuid().ToString("N"));
+        var folder = Path.Combine(downloads, "p1");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            File.WriteAllText(Path.Combine(folder, "p1.entropy.bedgraph"), "bedgraph");
+            var proto = new RunRecord(PrototypeImporter.JobIdFor(folder), JobPhase.Completed, Now, "p1", Target: DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, OutputDir: folder, FinishedAt: Now, Imported: true);
+            _rows.Add(proto);
+            var vm = Make();
+            await vm.RefreshCommand.ExecuteAsync(null);
+
+            await Items(vm).Single().RemoveCommand.ExecuteAsync(null);
+
+            Items(vm).ShouldBeEmpty();
+            var scan = PrototypeScanner.Scan(Path.Combine(downloads, "none.json"), downloads);
+            scan.Runs.Count.ShouldBe(1);
+            var importer = new PrototypeImporter(_repository, new ImportedRunDismissals(_settingsStore));
+            (await importer.NewRunsAsync(scan, CancellationToken.None)).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(downloads, recursive: true);
+        }
     }
 
     public static TheoryData<Exception, string> Failures => new()
