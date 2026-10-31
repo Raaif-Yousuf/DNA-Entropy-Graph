@@ -19,8 +19,8 @@ public class MessageHasSenderGuardTests
     // Send(new Ns.TMessage   or   Send<Ns.TMessage>(
     private static readonly Regex SenderPattern = new(@"\.Send(?:<([\w.]+)>\s*\(|\(\s*new\s+([\w.]+))", RegexOptions.Compiled);
 
-    /// <summary>Message type names (last segment) with a receiver and no sender across <paramref name="sources"/>, plus how many receivers and senders were seen.</summary>
-    internal static (IReadOnlyList<string> Orphans, int Receivers, int Senders) Scan(IEnumerable<string> sources)
+    /// <summary>Message type names (last segment) with a receiver and no sender across <paramref name="sources"/>, plus the type names seen received and sent.</summary>
+    internal static (IReadOnlyList<string> Orphans, IReadOnlySet<string> Received, IReadOnlySet<string> Sent) Scan(IEnumerable<string> sources)
     {
         var received = new HashSet<string>(StringComparer.Ordinal);
         var sent = new HashSet<string>(StringComparer.Ordinal);
@@ -37,7 +37,7 @@ public class MessageHasSenderGuardTests
             }
         }
 
-        return (received.Where(t => !sent.Contains(t)).OrderBy(t => t, StringComparer.Ordinal).ToList(), received.Count, sent.Count);
+        return (received.Where(t => !sent.Contains(t)).OrderBy(t => t, StringComparer.Ordinal).ToList(), received, sent);
     }
 
     private static string Last(string name) => name[(name.LastIndexOf('.') + 1)..];
@@ -49,9 +49,14 @@ public class MessageHasSenderGuardTests
     {
         var (orphans, receivers, senders) = Scan(RealSources());
 
-        // Vacuity: a scan that sees no receivers or no senders reports a clean tree for the wrong reason. MEASURED 2026-10-31: 6 message types are received, 4+ sent.
-        receivers.ShouldBeGreaterThanOrEqualTo(5, "the scan found almost no Register<...> sites; the pattern or the file list is broken");
-        senders.ShouldBeGreaterThanOrEqualTo(4, "the scan found almost no Send(new ...) sites; the pattern or the file list is broken");
+        // Vacuity: a scan that sees no receivers or no senders reports a clean tree for the wrong reason. Assert two known message types by NAME (a count floor drifts with the code):
+        // both have a Register<...> site and a Send(new ...) site in app/src.
+        foreach (var known in new[] { "RunProgressChangedMessage", "RunPhaseChangedMessage" })
+        {
+            receivers.ShouldContain(known, "the scan did not see this message's Register<...> site; the pattern or the file list is broken");
+            senders.ShouldContain(known, "the scan did not see this message's Send(new ...) site; the pattern or the file list is broken");
+        }
+
         orphans.ShouldBeEmpty("a receiver with no sender is wired to nothing: " + string.Join(", ", orphans));
     }
 
@@ -78,7 +83,7 @@ public class MessageHasSenderGuardTests
         var (orphans, receivers, senders) = Scan([receiver, "class B { void F(IMessenger m) { " + sendCall + " } }"]);
 
         orphans.ShouldBeEmpty();
-        receivers.ShouldBe(1);
-        senders.ShouldBe(1);
+        receivers.ShouldBe(["GhostMessage"]);
+        senders.ShouldBe(["GhostMessage"]);
     }
 }

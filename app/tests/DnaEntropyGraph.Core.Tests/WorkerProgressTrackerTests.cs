@@ -30,7 +30,7 @@ public class WorkerProgressTrackerTests
     }
 
     [Fact]
-    public void The_event_carries_the_stage_the_fraction_and_the_window_text_and_never_a_contig_or_input_name()
+    public void The_event_carries_data_only_the_stage_the_fraction_and_the_window_counts_and_never_a_contig_or_input_name()
     {
         var tracker = new WorkerProgressTracker();
 
@@ -39,8 +39,10 @@ public class WorkerProgressTrackerTests
         ev.ShouldNotBeNull();
         ev.Stage.ShouldBe("running");
         ev.FractionComplete.ShouldBe(0.425, 1e-9);
-        ev.Message.ShouldBe("Window 5 of 11");
-        ev.Message.ShouldNotContain("secret-name");
+        ev.Window.ShouldBe(5);
+        ev.Windows.ShouldBe(11);
+        ev.ToString().ShouldNotContain("secret-name");
+        ev.ToString().ShouldNotContain("in1");
     }
 
     [Fact]
@@ -52,11 +54,11 @@ public class WorkerProgressTrackerTests
         tracker.Next(status).ShouldNotBeNull();
         tracker.Next(status).ShouldBeNull("the same progress is not re-sent every poll");
         tracker.Next(status with { HeartbeatSeq = 4 }).ShouldBeNull("a heartbeat tick alone is not progress");
-        tracker.Next(status with { Percent = 50, Window = 6 })!.Message.ShouldBe("Window 6 of 11");
+        tracker.Next(status with { Percent = 50, Window = 6 })!.Window.ShouldBe(6);
     }
 
     [Fact]
-    public void A_stage_with_no_percent_reports_the_stage_and_keeps_the_last_fraction()
+    public void A_stage_change_with_no_percent_keeps_the_last_fraction_so_the_bar_never_goes_backwards()
     {
         var tracker = new WorkerProgressTracker();
         tracker.Next(WorkerStatusReader.TryParseStatus(Running42));
@@ -65,7 +67,8 @@ public class WorkerProgressTrackerTests
 
         ev.ShouldNotBeNull();
         ev.Stage.ShouldBe("uploading");
-        ev.Message.ShouldBe("uploading");
+        ev.Window.ShouldBeNull();
+        ev.Windows.ShouldBeNull();
         ev.FractionComplete.ShouldBe(0.425, 1e-9);
     }
 

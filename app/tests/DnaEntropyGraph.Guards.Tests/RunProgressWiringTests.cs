@@ -1,11 +1,15 @@
 using CommunityToolkit.Mvvm.Messaging;
+using DnaEntropyGraph.App;
 using DnaEntropyGraph.App.Startup;
+using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.LocalEngine;
+using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.LocalEngine;
+using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
@@ -81,6 +85,12 @@ public sealed class RunProgressWiringTests : IDisposable
         page.JobId = JobId;
         page.StatusDetailText.ShouldBeNullOrEmpty("nothing has been published yet");
 
+        var expectedText = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            provider.GetRequiredService<IStringResourceProvider>().GetString("ProgressAnalysingWindowCount"),
+            3,
+            10);
+        expectedText.ShouldNotContain("ProgressAnalysingWindowCount", Case.Sensitive, "the resw line must resolve, or this test proves nothing");
         var runner = provider.GetRequiredService<LocalJobRunner>();
         var run = runner.RunAsync(
             new LocalJobRequest(
@@ -92,7 +102,7 @@ public sealed class RunProgressWiringTests : IDisposable
                 Path.Combine(_root, "out")),
             CancellationToken.None);
         var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (page.StatusDetailText != "Window 3 of 10" && DateTime.UtcNow < deadline)
+        while (page.StatusDetailText != expectedText && DateTime.UtcNow < deadline)
         {
             await Task.Delay(25, TestContext.Current.CancellationToken);
         }
@@ -102,24 +112,73 @@ public sealed class RunProgressWiringTests : IDisposable
         worker.End(1);
         await run;
 
-        seenText.ShouldBe("Window 3 of 10");
+        seenText.ShouldBe(expectedText);
         seenFraction.ShouldBe(0.4, 1e-9);
     }
 
     [Fact]
-    public async Task The_production_cloud_runner_publishes_a_progress_event_to_the_run_page()
+    public async Task A_cloud_run_whose_worker_status_stage_advances_moves_the_run_pages_detail_line_through_the_real_container()
     {
+        // FakeGcp's status.json carries a stage and no percent or window counters (MEASURED 2026-10-31: WorkerStatusJson in FakeGcp.cs), so this proves the stage
+        // path end to end: FakeGcp bucket -> the container's CloudJobRunner poll -> OnProgress -> RunProgressViewModel -> a Resources.resw line (never the raw stage id).
+        const string project = "my-project";
+        const string zone = "us-central1-a";
+        const string jobId = "job-cloud-1";
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
+        services.AddSingleton<FakeGcp>(_ => new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading));
         await using var provider = services.BuildServiceProvider();
+        var gcp = provider.GetRequiredService<FakeGcp>();
+        using (var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection())
+        {
+            using var insert = connection.CreateCommand();
+            insert.CommandText = "INSERT OR IGNORE INTO Projects (ProjectId) VALUES ($id)";
+            insert.Parameters.AddWithValue("$id", project);
+            insert.ExecuteNonQuery();
+        }
+
+        var original = Path.Combine(_root, "user", "seq.gb");
+        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+        await File.WriteAllTextAsync(original, "LOCUS       seq\nORIGIN\n        1 acgtacgtac\n//\n", TestContext.Current.CancellationToken);
+        var copy = await provider.GetRequiredService<IRunInputStore>().StageAsync(jobId, original, TestContext.Current.CancellationToken);
+        var output = Path.Combine(_root, "out");
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = original, OutputFolder = output };
+        var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(project), "install-1", "0.1.0", null, [copy], output);
         var runner = provider.GetRequiredService<CloudJobRunner>();
-        var page = provider.GetRequiredService<RunProgressViewModel>();
-        page.JobId = "job-cloud-1";
-
         runner.OnProgress.ShouldNotBeNull("nothing in the app listened to the cloud runner's progress");
-        runner.OnProgress!("job-cloud-1", new ProgressEvent("running", 0.5, "Window 5 of 10"));
+        await runner.UploadInputsAsync(request, TestContext.Current.CancellationToken);
+        await gcp.CreateVmAsync(request.Spec, zone, TestContext.Current.CancellationToken);
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(
+            new RunRecord(
+                jobId,
+                JobPhase.Running,
+                DateTimeOffset.UtcNow.AddMinutes(-5),
+                Target: "cloud",
+                OptionsJson: RunOptionsJson.Serialize(options),
+                ProjectId: project,
+                Bucket: FakeGcp.BucketName(project),
+                VmName: request.Spec.VmName,
+                AppVersion: "0.1.0",
+                InstallationId: "install-1"),
+            TestContext.Current.CancellationToken);
+        var page = provider.GetRequiredService<RunProgressViewModel>();
+        page.JobId = jobId;
+        page.StatusDetailText.ShouldBeNullOrEmpty("nothing has been published yet");
+        var expected = provider.GetRequiredService<IStringResourceProvider>().GetString("ProgressModelLoading");
+        expected.ShouldNotBe("ProgressModelLoading", "the resw line must resolve, or this test proves nothing");
 
-        page.StatusDetailText.ShouldBe("Window 5 of 10");
-        page.FractionComplete.ShouldBe(0.5);
+        var launch = provider.GetRequiredService<JobReconciler>().ReattachAsync(TestContext.Current.CancellationToken);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (page.StatusDetailText != expected && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        var seen = page.StatusDetailText;
+        await provider.GetRequiredService<JobEngine>().CancelRunAsync(jobId, TestContext.Current.CancellationToken);
+        await launch.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        seen.ShouldBe(expected);
+        seen!.ShouldNotContain("model-loading");
     }
 }

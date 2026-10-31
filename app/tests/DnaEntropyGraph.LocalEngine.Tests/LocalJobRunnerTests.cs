@@ -347,7 +347,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         lock (published)
         {
             published.Select(p => p.JobId).ShouldAllBe(id => id == JobId);
-            published.Select(p => p.Event.Message).ShouldBe(["Window 2 of 8", "Window 4 of 8"]);
+            published.Select(p => (p.Event.Window, p.Event.Windows)).ShouldBe([(2, 8), (4, 8)]);
             published.Select(p => p.Event.FractionComplete).ShouldBe([0.25, 0.5]);
         }
     }
@@ -369,6 +369,9 @@ public sealed class LocalJobRunnerTests : IDisposable
 
         var run = runner.RunAsync(Request(), CancellationToken.None);
         await WaitUntilAsync(() => Volatile.Read(ref called) >= 1);
+        // The handler threw on that first event; a later, different progress must STILL reach it. That holds only if the throw was swallowed (an escaped one ends the poll loop).
+        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":60,\"heartbeatSeq\":2,\"worker\":{\"version\":\"0.0.1\"}}");
+        await WaitUntilAsync(() => Volatile.Read(ref called) >= 2);
         worker.End(1);
         var result = await run;
 

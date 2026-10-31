@@ -103,8 +103,10 @@ can subscribe without the runner needing a reference back to the UI.
 `ServiceRegistration`: `CloudJobRunner.OnProgress` (called by `ResultWaiter` for each poll of the
 worker's `status.json`) and the `onProgress` argument of `LocalJobRunner` (called from its 500 ms
 status poll). Both feed the snapshot through `WorkerProgressTracker` (Core/Contract), which gives an
-event only when the stage, percent or window text changed, so an unchanged file is not re-sent every
-poll. The message text is "Window N of M" or the stage name, never the input or contig name. A run
+event only when the stage, percent or window counts changed, so an unchanged file is not re-sent every
+poll. The event is data (stage id, fraction, window and windows); `RunProgressViewModel` maps it to a
+`Resources.resw` line, with a neutral line for an unknown stage, and ignores an event that arrives after
+the run's terminal phase. The input and contig name are never carried. A run
 reattached after a restart goes through the same `CloudJobRunner`, so it publishes too.
 `Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>`
 receiver and no `Send(new ...)` sender anywhere in `app/src`.

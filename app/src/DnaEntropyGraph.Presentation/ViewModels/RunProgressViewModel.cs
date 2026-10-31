@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -231,8 +232,13 @@ public sealed partial class RunProgressViewModel : ObservableObject
 
         _dispatcher.Enqueue(() =>
         {
+            if (IsTerminal(CurrentPhase))
+            {
+                return; // a late event after the run ended must not rewrite the finished page
+            }
+
             FractionComplete = message.Progress.FractionComplete;
-            StatusDetailText = message.Progress.Message;
+            StatusDetailText = ProgressText(message.Progress);
         });
     }
 
@@ -398,6 +404,18 @@ public sealed partial class RunProgressViewModel : ObservableObject
 
         LogTailText = string.Join(Environment.NewLine, _logTailReader.ReadLines(JobId));
     }
+
+    // Hard Rule 13: the page text for a worker stage comes from Resources.resw; an unknown stage gets the neutral line, never the raw id, and never an input or file name.
+    private string ProgressText(ProgressEvent progress) => progress.Stage switch
+    {
+        "model-loading" => _strings.GetString("ProgressModelLoading"),
+        "booting" => _strings.GetString("ProgressBooting"),
+        "uploading" => _strings.GetString("ProgressSaving"),
+        "running" when progress.Window is { } window && progress.Windows is { } windows
+            => string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("ProgressAnalysingWindowCount"), window, windows),
+        "running" => _strings.GetString("ProgressAnalysing"),
+        _ => _strings.GetString("ProgressGeneric"),
+    };
 
     private static string PhaseTitleKey(JobPhase phase) => phase switch
     {

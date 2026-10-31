@@ -142,6 +142,7 @@ public class CloudJobRunnerStallTests
     [Fact]
     public async Task A_progress_handler_that_throws_never_breaks_a_cloud_run()
     {
+        var thrown = 0;
         var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
         var clock = new VirtualTimeProvider();
         var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
@@ -155,12 +156,20 @@ public class CloudJobRunnerStallTests
             LifecycleTimeout = TimeSpan.FromMilliseconds(200),
             TimeProvider = clock,
             PollDelay = (span, token) => { token.ThrowIfCancellationRequested(); clock.Advance(span); return Task.CompletedTask; },
-            OnProgress = (_, _) => throw new InvalidOperationException("a broken UI"),
+            OnProgress = (_, _) =>
+            {
+                Interlocked.Increment(ref thrown);
+                throw new InvalidOperationException("a broken UI");
+            },
         };
 
         var result = await runner.RunAsync(TestInputs.Request("job-prog2", Spec("job-prog2")), CancellationToken.None);
 
+        // The handler really threw (not vacuous), and the run still reached its own normal outcome: the stuck stage ended it, the VM was stopped, and no UI exception replaced the failure code.
+        Volatile.Read(ref thrown).ShouldBeGreaterThanOrEqualTo(1);
         result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        (await VmStatusAsync(gcp, "job-prog2")).ShouldBe("STOPPED");
     }
 
     [Fact]

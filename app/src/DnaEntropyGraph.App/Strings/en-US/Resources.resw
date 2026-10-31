@@ -298,6 +298,24 @@
   <data name="PhaseRunning_Title" xml:space="preserve">
     <value>Analysing</value>
   </data>
+  <data name="ProgressModelLoading" xml:space="preserve">
+    <value>Loading the analysis model onto the computer...</value>
+  </data>
+  <data name="ProgressBooting" xml:space="preserve">
+    <value>The rented computer is starting up...</value>
+  </data>
+  <data name="ProgressSaving" xml:space="preserve">
+    <value>Saving your results to your cloud storage...</value>
+  </data>
+  <data name="ProgressAnalysing" xml:space="preserve">
+    <value>Analysing your sequence...</value>
+  </data>
+  <data name="ProgressAnalysingWindowCount" xml:space="preserve">
+    <value>Analysing your sequence: part {0} of {1}</value>
+  </data>
+  <data name="ProgressGeneric" xml:space="preserve">
+    <value>Working on your run...</value>
+  </data>
   <data name="PhaseFinalizing_Title" xml:space="preserve">
     <value>Saving results</value>
   </data>

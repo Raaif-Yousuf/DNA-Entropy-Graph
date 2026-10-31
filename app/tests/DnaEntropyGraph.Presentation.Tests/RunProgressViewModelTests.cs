@@ -179,16 +179,71 @@ public class RunProgressViewModelTests
         await vmActions.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public void A_progress_message_for_this_job_updates_the_fraction_and_detail_text()
+    private static RunProgressViewModel ProgressViewModel(out IMessenger messenger)
     {
-        var viewModel = CreateViewModel(out _, out _, out _, out _, out var messenger);
-        viewModel.JobId = "job-1";
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
+        strings.GetString("ProgressModelLoading").Returns("Loading the analysis model onto the computer...");
+        strings.GetString("ProgressGeneric").Returns("Working on your run...");
+        messenger = new WeakReferenceMessenger();
+        return new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger)
+        {
+            JobId = "job-1",
+        };
+    }
 
-        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, "SetTnpB - window 4 of 11, forward")));
+    [Fact]
+    public void A_running_progress_message_sets_the_fraction_and_a_resw_window_line_built_from_the_counts()
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, 4, 11)));
 
         viewModel.FractionComplete.ShouldBe(0.42);
-        viewModel.StatusDetailText.ShouldBe("SetTnpB - window 4 of 11, forward");
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 4 of 11");
+    }
+
+    [Fact]
+    public void The_model_loading_stage_shows_the_resw_line_never_the_raw_stage_id()
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("model-loading", 0.0)));
+
+        viewModel.StatusDetailText.ShouldBe("Loading the analysis model onto the computer...");
+    }
+
+    [Theory]
+    [InlineData("some-future-stage")]
+    [InlineData("queued")]
+    public void An_unknown_stage_shows_the_neutral_generic_line_never_the_raw_stage_id(string stage)
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.0)));
+
+        viewModel.StatusDetailText.ShouldBe("Working on your run...");
+        viewModel.StatusDetailText!.ShouldNotContain(stage);
+    }
+
+    [Theory]
+    [InlineData(JobPhase.Completed)]
+    [InlineData(JobPhase.Failed)]
+    [InlineData(JobPhase.Cancelled)]
+    [InlineData(JobPhase.PartiallyCompleted)]
+    public void A_late_progress_message_after_a_terminal_phase_is_ignored(JobPhase terminal)
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.5, 5, 10)));
+        messenger.Send(new RunPhaseChangedMessage("job-1", terminal));
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.9, 9, 10)));
+
+        viewModel.FractionComplete.ShouldBe(0.5);
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 5 of 10");
     }
 
     [Fact]
@@ -197,7 +252,7 @@ public class RunProgressViewModelTests
         var viewModel = CreateViewModel(out _, out _, out _, out _, out var messenger);
         viewModel.JobId = "job-1";
 
-        messenger.Send(new RunProgressChangedMessage("some-other-job", new ProgressEvent("running", 0.99, "should not apply")));
+        messenger.Send(new RunProgressChangedMessage("some-other-job", new ProgressEvent("running", 0.99, 1, 2)));
 
         viewModel.FractionComplete.ShouldBe(0);
         viewModel.StatusDetailText.ShouldBeNull();

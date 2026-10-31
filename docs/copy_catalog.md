@@ -115,6 +115,18 @@ narration for a quota gap discovered mid-ladder; the user-actionable version is
 | `ProgressAnalysingWindow` | {inputName}: record {i} of {n}, window {w} of {totalWindows}, {direction} |
 | `ProgressAnalysingReducedContext` | {inputName}: this part of the sequence is shorter than the context length, so results here use less context than usual. | (the `science_and_formats.md` section 3 "reduced context" notice, surfaced live) |
 
+Shipped in `Resources.resw` for the run page's detail line (issue #1086; `RunProgressViewModel` picks the key from the worker's stage, never showing the raw stage id, an input name or a file name):
+
+| Key | Text | Stage |
+|---|---|---|
+| `ProgressBooting` | The rented computer is starting up... | `booting` |
+| `ProgressSaving` | Saving your results to your cloud storage... | `uploading` |
+| `ProgressAnalysing` | Analysing your sequence... | `running`, before the first part finishes |
+| `ProgressAnalysingWindowCount` | Analysing your sequence: part {0} of {1} | `running`, with `detail.window` / `detail.windows` (a "window" is a part of the sequence; the plain word is used on screen) |
+| `ProgressGeneric` | Working on your run... | any other stage (the neutral line) |
+
+`ProgressAnalysingWindow` above (with `{inputName}`) is NOT used by the page: a line that names the input would put the user's file name on screen and in logs.
+
 ### Lifecycle (starting, stopping, deleting, keeping alive)
 
 | Key | Text |
