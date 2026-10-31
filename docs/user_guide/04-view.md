@@ -50,6 +50,7 @@ example), it is available as an Advanced option.
 When a run finishes, choose **View results** on the run page. You can also open any
 finished run later with **Open** on its row of the Runs page. The Results page shows:
 
+- **What the run cost.** A line under the title says about how much the run cost, for example "Estimated cost: about $0.42". It is an estimate worked out from the time the rented computer ran and its list price (the discounted Spot price for a Spot run), not your Google bill, which can differ. A run on your own PC says there was no cloud cost. A run whose rented computer never started shows no cost line.
 - **The entropy picture.** Under the buttons, a chart of entropy (0 to 2 bits) along the
   first sequence in your file, drawn straight from the track the run wrote, so it appears
   at once without opening the genome viewer. A dashed line, when there is one, marks the

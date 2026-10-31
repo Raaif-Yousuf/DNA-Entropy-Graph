@@ -7,6 +7,8 @@ on the **Runs** page, grouped by day. Each entry shows its name, what was in it,
 model and computer type were used, how long it took, roughly what it cost, and whether
 its results are still available in the cloud or only on your own computer.
 
+Next to its time, a run that used a rented computer shows its estimated cost (the same figure as the top of its Results page, worked out from the computer's running time and list price, not your Google bill). A run on your own PC says there was no cloud cost, and a run that never got a rented computer shows no cost.
+
 A finished run whose results are still on your computer also shows a small line on its row:
 its entropy along the first sequence, at a glance. The lines fill in a moment after the list
 appears. A run with no entropy track, or whose folder was moved or deleted, has no line.

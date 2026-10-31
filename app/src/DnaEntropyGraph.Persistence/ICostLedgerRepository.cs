@@ -12,6 +12,9 @@ public interface ICostLedgerRepository
 {
     Task<IReadOnlyList<CostLedgerEntry>> GetAllAsync(CancellationToken cancellationToken);
 
+    /// <summary>The rows of one <see cref="CostLedgerEntry.Kind"/>, filtered in the query: a reader of one kind (the run cost source) never pulls the others.</summary>
+    Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken);
+
     /// <summary>
     /// Inserts a new row and returns it with its DB-generated
     /// <see cref="CostLedgerEntry.Id"/> filled in. There is no Upsert here:
