@@ -653,7 +653,7 @@ public sealed class JobReconciler
     private static void Record(List<LifecycleOutcome> outcomes, string jobId, string vmName, Exception ex)
     {
         var noAnswer = IsNoAnswerException(ex);
-        var code = ex is CloudOperationException c ? c.Error.Code : "TIMEOUT";
+        var code = NoAnswerCode(ex);
         lock (outcomes)
         {
             outcomes.Add(new LifecycleOutcome(jobId, vmName, noAnswer ? LifecycleAction.Deferred : LifecycleAction.Failed, code));
@@ -666,9 +666,13 @@ public sealed class JobReconciler
         lock (outcomes)
         {
             // Issue #830: an account that is signed out is a named, fixable state (sign in as it), not an error nobody foresaw.
-            outcomes.Add(ex is AccountAuthException auth
-                ? new LifecycleOutcome(jobId, vmName, LifecycleAction.NeedsSignIn, auth.Code, auth.AccountSub)
-                : new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name));
+            // Only an expired sign-in has "Sign in" as its action (review M2); a lost connection or a locked accounts file is Deferred and the reconnect probe looks again.
+            outcomes.Add(ex switch
+            {
+                AccountAuthException auth when NeedsSignIn(auth) => new LifecycleOutcome(jobId, vmName, LifecycleAction.NeedsSignIn, auth.Code, auth.AccountSub),
+                AccountAuthException auth => new LifecycleOutcome(jobId, vmName, LifecycleAction.Deferred, auth.Code),
+                _ => new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name),
+            });
         }
     }
 
@@ -777,7 +781,7 @@ public sealed class JobReconciler
             // A failing repository or an unforeseen error must not stop the other runs from being reattached; the row is
             // left as it is and the next launch tries again. Only a missing answer from the cloud (network class) is Deferred and keeps the
             // reconnect probe alive; anything else is logged by class and left for the next launch (issue #559).
-            if (ex is AccountAuthException auth)
+            if (ex is AccountAuthException auth && NeedsSignIn(auth))
             {
                 _log.Warning("reconciler", row.JobId, "account-signed-out");
                 return new ReattachOutcome(row.JobId, ReattachAction.NeedsSignIn, null, auth.Code, auth.AccountSub);
@@ -785,7 +789,7 @@ public sealed class JobReconciler
 
             if (IsNoAnswerException(ex))
             {
-                return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, ex is CloudOperationException c ? c.Error.Code : "TIMEOUT");
+                return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, NoAnswerCode(ex));
             }
 
             _log.Warning("reconciler", row.JobId, ex.GetType().Name);
@@ -1131,7 +1135,17 @@ public sealed class JobReconciler
 
     /// <summary>The cloud gave no answer about the run: nothing is connected, or the network is down. That says nothing about the run itself.</summary>
     private static bool IsNoAnswerException(Exception ex)
-        => ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud));
+        => ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud)) || (ex is AccountAuthException auth && !NeedsSignIn(auth));
+
+    /// <summary>Issue #830 review M2: the one account failure whose action is Sign in (the stored sign-in was refused or is gone). Every other <see cref="AccountAuthException"/> (no connection, proxy, locked or unreadable accounts file, storage, a failed token answer) is a no-answer the reconnect probe retries.</summary>
+    private static bool NeedsSignIn(AccountAuthException ex) => ex.Code == AuthErrorCodes.SigninExpired;
+
+    private static string? NoAnswerCode(Exception ex) => ex switch
+    {
+        CloudOperationException cloud => cloud.Error.Code,
+        AccountAuthException auth => auth.Code,
+        _ => "TIMEOUT",
+    };
 
     private static bool IsNoAnswer(CloudOperationException ex)
         => ex.Error.Code == RunErrorCodes.NotConnectedGatewayCode || ex.Kind == CloudErrorKind.Network;

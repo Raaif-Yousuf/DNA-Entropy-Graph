@@ -315,6 +315,27 @@ public class JobReconcilerTests
         env.Gcp.Calls.Skip(callsBefore).Where(c => c.ProjectId != Project).ShouldBeEmpty("no call went to another project");
     }
 
+    [Theory]
+    [InlineData(AuthErrorCodes.NetworkUnavailable)]
+    [InlineData(AuthErrorCodes.SigninProxy)]
+    [InlineData(AuthErrorCodes.SigninCertificate)]
+    [InlineData(AuthErrorCodes.AccountsFileLocked)]
+    [InlineData(AuthErrorCodes.AccountsFileUnreadable)]
+    [InlineData(AuthErrorCodes.StorageFailed)]
+    [InlineData(AuthErrorCodes.SigninFailed)]
+    public async Task A_resumed_run_whose_account_cannot_be_used_for_another_reason_than_an_expired_sign_in_is_deferred_not_told_to_sign_in(string code)
+    {
+        // Issue #830 review M2: only an expired sign-in has "Sign in" as its action; a lost connection or a locked accounts file is retried by the reconnect probe.
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountFailure("sub-a", code));
+        await env.SeedAsync("job-fail", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+
+        var outcome = await OneAsync(env.Reconciler(), "job-fail");
+
+        outcome.Action.ShouldBe(ReattachAction.Deferred, outcome.ErrorCode);
+        outcome.ErrorCode.ShouldBe(code);
+        env.Row("job-fail").Phase.ShouldBe(JobPhase.Running);
+    }
+
     [Fact]
     public async Task A_run_killed_while_Downloading_whose_VM_is_long_gone_still_completes()
     {

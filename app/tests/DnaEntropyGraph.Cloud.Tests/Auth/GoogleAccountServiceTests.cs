@@ -354,6 +354,22 @@ public class GoogleAccountServiceTests
     }
 
     [Fact]
+    public async Task A_token_failure_of_a_known_account_names_that_account_so_a_run_surface_can_say_which()
+    {
+        // Issue #830 review M2: the sub rides on the failure (never the email) whenever it is known.
+        using var harness = new AuthHarness();
+        harness.Google.ExpiresInSeconds = 30;
+        await harness.SignedInAsync("1001", "first@example.test");
+        var service = harness.NewService();
+        harness.Google.TokenRequestsTimeOut = true;
+
+        var failure = await FailureOf(() => service.GetAccessTokenAsync(null, CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.NetworkUnavailable);
+        failure.AccountSub.ShouldBe("1001");
+    }
+
+    [Fact]
     public async Task An_unrelated_InvalidOperationException_during_a_refresh_surfaces_and_is_not_called_a_network_problem()
     {
         using var harness = new AuthHarness();

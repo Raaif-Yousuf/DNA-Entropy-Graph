@@ -815,6 +815,23 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
+    public async Task A_finished_run_whose_account_cannot_be_reached_is_deferred_not_told_to_sign_in_and_the_pass_goes_on()
+    {
+        // Issue #830 review M2: a lost connection is not an expired sign-in; the probe retries it.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable));
+        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        await rig.SeedFinishedAsync("job-mine", AfterTaskAction.Delete);
+
+        var reconciler = rig.Reconciler();
+        var outcomes = await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+
+        var deferred = outcomes.Single(o => o.JobId == "job-a");
+        deferred.Action.ShouldBe(LifecycleAction.Deferred, deferred.ErrorCode);
+        deferred.ErrorCode.ShouldBe(AuthErrorCodes.NetworkUnavailable);
+        outcomes.Single(o => o.JobId == "job-mine").Action.ShouldBe(LifecycleAction.VmDeleted);
+    }
+
+    [Fact]
     public async Task A_row_finished_long_ago_is_left_to_the_idle_sweep_not_looked_up()
     {
         var rig = new Rig();

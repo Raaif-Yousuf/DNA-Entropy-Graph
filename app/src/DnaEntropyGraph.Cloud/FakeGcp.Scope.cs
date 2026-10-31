@@ -29,6 +29,9 @@ public sealed partial class FakeGcp
 
         public bool SignedIn { get; set; } = true;
 
+        /// <summary>When set, every call scoped to this account throws <see cref="AccountAuthException"/> with this code (a failure that is not an expired sign-in).</summary>
+        public string? FailureCode { get; set; }
+
         public string? SelectedProject { get; set; }
     }
 
@@ -61,6 +64,13 @@ public sealed partial class FakeGcp
     public FakeGcp WithAccountSignedOut(string sub)
     {
         _modeled[sub].SignedIn = false;
+        return this;
+    }
+
+    /// <summary>The modeled account cannot be used for another reason than an expired sign-in (for example <see cref="AuthErrorCodes.NetworkUnavailable"/>): every call scoped to it throws <see cref="AccountAuthException"/> with <paramref name="code"/>, naming it.</summary>
+    public FakeGcp WithAccountFailure(string sub, string code)
+    {
+        _modeled[sub].FailureCode = code;
         return this;
     }
 
@@ -98,6 +108,11 @@ public sealed partial class FakeGcp
                 throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account of this call is signed out", accountSub: sub);
             }
 
+            if (account.FailureCode is { } failure)
+            {
+                throw new AccountAuthException(failure, "the account of this call cannot be used right now", accountSub: sub);
+            }
+
             if (!account.Projects.Contains(scope.ProjectId))
             {
                 throw Build(CloudErrorKind.Permission, "PERMISSION_DENIED", 403, "The signed-in account cannot use this project.");
@@ -114,7 +129,11 @@ public sealed partial class FakeGcp
         public void Dispose() => CallScope.Value = previous;
     }
 
-    /// <summary>A scope naming this project sees every project, like the unscoped overloads (test call sites that do not care which project they act in).</summary>
+    /// <summary>
+    /// A scope naming this "project" makes the FAKE list and act across every project (test call sites that do not care which project they act in). It is a fake-only
+    /// wildcard: it does not skip the account check above, and <see cref="CallAccount.Use"/> blocks only a blank project id, so a real gateway handed "*" would address a project
+    /// literally named "*" (Google refuses it), never every project.
+    /// </summary>
     public const string AnyProject = "*";
 
     private static bool InProject(VmDescriptor vm, CloudScope scope) => scope.ProjectId is AnyProject or "" || vm.Scope is null || string.Equals(vm.Scope.ProjectId, scope.ProjectId, StringComparison.Ordinal);
