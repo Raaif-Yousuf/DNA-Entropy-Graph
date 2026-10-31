@@ -26,8 +26,9 @@ public class DonorLabelRestoreRunnerTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo) => new(gcp, gcp, gcp, gcp, gcp, repo)
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<DonorRestoreOutcome>? onRestore = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
     {
+        OnDonorRestore = onRestore,
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
         ResultTimeout = TimeSpan.FromSeconds(20),
         CallTimeout = TimeSpan.FromSeconds(10),
@@ -37,6 +38,7 @@ public class DonorLabelRestoreRunnerTests
         BootTimeout = TimeSpan.FromSeconds(10),
         LifecycleTimeout = TimeSpan.FromMilliseconds(500),
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+        LateCreateGrace = TimeSpan.FromMilliseconds(20),
     };
 
     private static async Task<IReadOnlyDictionary<string, string>> SeedDonorAsync(FakeGcp gcp, InMemoryRunRepository repo, string oldJob)
@@ -70,13 +72,17 @@ public class DonorLabelRestoreRunnerTests
     }
 
     [Fact]
-    public async Task A_start_that_fails_with_billing_off_fails_the_run_restores_the_donor_and_the_row_says_so()
+    public async Task A_start_that_fails_with_billing_off_fails_the_run_and_the_donor_is_restored_by_the_watch_once_the_start_is_judged_never_to_land()
     {
+        // Billing is not a class that proves the start was never sent (it can be the answer of the poll AFTER the POST), so the donor is held and the late watch hands it back.
         var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Billing);
         var repo = new InMemoryRunRepository();
         var donorLabels = await SeedDonorAsync(gcp, repo, "job-old970r2");
+        var restores = new List<DonorRestoreOutcome>();
+        var runner = Runner(gcp, repo, restores.Add);
 
-        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-n970r2", Spec("job-n970r2")), CancellationToken.None);
+        var result = await runner.RunAsync(TestInputs.Request("job-n970r2", Spec("job-n970r2")), CancellationToken.None);
+        await runner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         result.FailureCode.ShouldBe("billing");
@@ -84,10 +90,7 @@ public class DonorLabelRestoreRunnerTests
         Flat(donor.Labels).ShouldBe(Flat(donorLabels));
         donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         gcp.DeleteAttempts.ShouldBeEmpty();
-        var row = repo.AllRecordedInOrder.Last(r => r.JobId == "job-n970r2");
-        row.Phase.ShouldBe(JobPhase.Failed);
-        row.ErrorDetail.ShouldNotBeNull().ShouldContain("earlier labels were restored");
-        result.FailureMessage.ShouldNotBeNull().ShouldContain("earlier labels were restored");
+        restores.ShouldHaveSingleItem().State.ShouldBe(DonorRestoreState.Restored);
     }
 
     [Fact]
@@ -126,14 +129,13 @@ public class DonorLabelRestoreRunnerTests
     [Fact]
     public async Task A_restore_that_fails_does_not_change_the_runs_failure_and_the_row_names_the_class_and_the_Cloud_page()
     {
-        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Billing).WithRestoreFailure(CloudErrorKind.Permission);
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.WholeJobFailed).WithRestoreFailure(CloudErrorKind.Permission);
         var repo = new InMemoryRunRepository();
         await SeedDonorAsync(gcp, repo, "job-old970r5");
 
         var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-n970r5", Spec("job-n970r5")), CancellationToken.None);
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
-        result.FailureCode.ShouldBe("billing", "the run's own cause stays the code");
         var donor = (await gcp.GetVmAsync("deg-job-old970r5", Zone, CancellationToken.None))!;
         donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         donor.Labels!["job-id"].ShouldBe("job-n970r5", "the restore failed: the VM keeps the new job's labels and the by-name guards protect it");

@@ -131,6 +131,9 @@ public sealed class CloudJobRunner
     /// <summary>Issue #938: how long after a cancel gave up on an in-flight create the app keeps watching to delete the VM that create makes when it lands (default 15 minutes).</summary>
     public TimeSpan LateCreateReapWindow { get => _settings.LateCreateReapWindow; init => _settings.LateCreateReapWindow = value; }
 
+    /// <summary>Issue #938: how long a stopped VM that carries a cancelled or failed job's labels is given, counted from the end of its unanswered start, before the app judges the start was never going to land (default 2 minutes).</summary>
+    public TimeSpan LateCreateGrace { get => _settings.LateCreateGrace; init => _settings.LateCreateGrace = value; }
+
     /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Called on a background task: a UI must marshal. A handler that throws is ignored.</summary>
     public Action<LateCreateOutcome>? OnLateCreate { get => _settings.OnLateCreate; init => _settings.OnLateCreate = value; }
 
@@ -260,6 +263,9 @@ public sealed class CloudJobRunner
             },
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Tests: completes when every watch over a failed run's unanswered reuse has ended.</summary>
+    internal Task WhenReuseWatchesEndedAsync() => _provisioner.WhenReuseWatchesEndedAsync();
 
     /// <summary>Tests: the terminator, to note a donor and read what became of its labels.</summary>
     internal VmTerminator TerminatorForTests => _terminator;

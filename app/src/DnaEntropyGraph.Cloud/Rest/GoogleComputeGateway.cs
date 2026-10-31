@@ -373,7 +373,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         {
             // The fingerprint moved: never overwrite on a stale read.
             var (now, _, vanished) = await ReadDiskLabelsAsync(project, disk, cancellationToken).ConfigureAwait(false);
-            if (vanished || LabelsEqual(now, target))
+            // The donor's labels are back when the disk equals them, or carries the donor's own job id (a disk's labels at creation need not be the instance's whole set).
+            if (vanished || LabelsEqual(now, target) || (target.TryGetValue("job-id", out var donorJob) && OwnedBy(now, donorJob)))
             {
                 return DiskRestore.Done;
             }
