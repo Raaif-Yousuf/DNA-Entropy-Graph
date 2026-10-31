@@ -74,6 +74,12 @@ public sealed class RunOutputReader : IRunOutputReader
 
         foreach (var entry in entries)
         {
+            // The app's own marker (issue #934) is not a result file and is never listed.
+            if (depth == 0 && RunFolderMarker.IsMarkerOf(root, entry))
+            {
+                continue;
+            }
+
             FileAttributes attributes;
             try
             {

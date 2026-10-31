@@ -29,6 +29,9 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly ILocalRunFiles _local;
     private readonly IJobEngine _engine;
     private readonly IDialogService _dialogs;
+
+    // Issue #934, #954: the refusals that name an Open folder button. Optional so a host without a window still shows the same text as a toast.
+    private readonly IChoiceDialogService? _choiceDialogs;
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
     private readonly IShellLauncher _launcher;
@@ -80,8 +83,10 @@ public sealed partial class HistoryViewModel : ObservableObject
         IRunCostSource? costs = null,
         IMessenger? messenger = null,
         IDispatcher? dispatcher = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        IChoiceDialogService? choiceDialogs = null)
     {
+        _choiceDialogs = choiceDialogs;
         _log = log;
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _costs = costs;
@@ -359,7 +364,9 @@ public sealed partial class HistoryViewModel : ObservableObject
             ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),
             Tags = RunTags.Parse(run.TagsJson),
             NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
-            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
+            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported)
+                : _local.OutputRootIsDriveRoot(run) ? _strings.GetString(RunsCopy.DeleteLocalHintDriveRoot) : null,
+            RedownloadHint = _local.OutputRootIsDriveRoot(run) ? _strings.GetString(RunsCopy.RedownloadHintDriveRoot) : null,
             IsImported = run.IsCloudImport,
             ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
@@ -553,6 +560,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 Toast(RunsCopy.RedownloadChangedKeptAside(result.ChangedKeptAside), result.ChangedKeptAside);
             }
 
+            // Issue #954: a run saved straight to a drive says why, and offers the one action (open the folder), instead of a bare refusal.
+            if (result.Status == CloudResultsStatus.DriveRootRefused)
+            {
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.Redownload(CloudResultsStatus.DriveRootRefused), RunsCopy.RedownloadDriveRootAsToast);
+            }
+
             // A cancelled run's partial outputs are the expected result of its cancel, not a warning that something is missing.
             return run.Phase == JobPhase.Cancelled && result.Status == CloudResultsStatus.Partial ? RunsCopy.RedownloadCancelledPartial : RunsCopy.Redownload(result.Status);
         },
@@ -636,14 +649,49 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.DeleteLocal(LocalDeleteStatus.Refused);
             }
 
-            var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
-            if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
+            // Issue #934, #954: decided before anything is asked, from the folder's marker. A folder another run owns, and a run saved straight to a drive, are refused with
+            // no question: nothing the user could confirm would make deleting it safe, so the one action is to open the folder and delete it themselves.
+            var plan = await Task.Run(() => _local.PlanDelete(run));
+            if (plan == LocalDeletePlan.OtherRunsFolder)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.OtherRunsFolder);
+            }
+
+            if (plan == LocalDeletePlan.DriveRoot)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.DriveRootRefused);
+            }
+
+            // An unmarked folder that is the user's own (Documents, their profile, ...) is never offered a "Continue".
+            if (plan == LocalDeletePlan.ProtectedFolder)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.ProtectedFolderRefused);
+            }
+
+            // DECISION (agent-made, reversible; issue #934): a folder with no marker (made before markers existed, or the user's own folder named by a damaged row) is asked about
+            // once, with its full path, and deleted only on a yes. This replaces the ordinary question rather than adding to it; Cancel deletes nothing. The alternative was to
+            // refuse every older run for good.
+            var unmarked = plan == LocalDeletePlan.AskFirst;
+            var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(unmarked ? RunsCopy.DeleteLocalUnmarkedConfirmBody : RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
+            if (!await _dialogs.ConfirmAsync(_strings.GetString(unmarked ? RunsCopy.DeleteLocalUnmarkedConfirmTitle : RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
             {
                 return null;
             }
 
             // Recursive disk work: off the UI thread.
-            var result = await Task.Run(() => _local.DeleteOutputFolder(run));
+            var result = await Task.Run(() => unmarked ? _local.DeleteUnmarkedOutputFolder(run) : _local.DeleteOutputFolder(run));
+            if (result.Status is LocalDeleteStatus.OtherRunsFolder or LocalDeleteStatus.DriveRootRefused or LocalDeleteStatus.ProtectedFolderRefused)
+            {
+                // The folder changed between the plan and the delete: the service refused, so this is the same refusal the plan would have given.
+                return await RefuseDeleteAsync(run, result.Status);
+            }
+
+            // A link met after some files were already deleted is not "nothing was deleted": say what went and offer the folder.
+            if (result.Status == LocalDeleteStatus.LinkRefused && result.FilesDeleted > 0)
+            {
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocalLinkPartial, RunsCopy.DeleteLocalLinkPartialAsToast);
+            }
+
             if (result.Status != LocalDeleteStatus.Partial)
             {
                 return RunsCopy.DeleteLocal(result.Status);
@@ -654,6 +702,39 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         },
         RunsCopy.DeleteLocal(LocalDeleteStatus.InUse));
+
+    /// <summary>
+    /// A refusal that names one action as a button (Hard Rule 13): the reason and an "Open folder" button that opens the run's folder so the user can deal with it themselves.
+    /// Without a dialog host (or without a recorded folder) it is the same reason as a toast, which names the action in words. Returns the toast to show, or null when the dialog was shown.
+    /// </summary>
+    private Task<RunsMessage?> RefuseDeleteAsync(RunRecord run, LocalDeleteStatus status)
+        => RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(status), RunsCopy.DeleteLocalAsToast(status));
+
+    /// <param name="toastReason">The reason worded for a toast, which has no Open folder button (it names the row's Open button). Shown whenever the dialog is not: no dialog host, or the host could not show it (no window, gate timeout), so the user always sees something.</param>
+    private async Task<RunsMessage?> RefuseWithOpenFolderAsync(RunRecord run, RunsMessage reason, RunsMessage toastReason)
+    {
+        if (_choiceDialogs is null || string.IsNullOrWhiteSpace(run.OutputDir))
+        {
+            return toastReason;
+        }
+
+        var pressed = await _choiceDialogs.ChooseAsync(
+            _strings.GetString(reason.Title),
+            _strings.GetString(reason.Body),
+            [_strings.GetString(RunsCopy.OpenFolderLabel), _strings.GetString(RunsCopy.CloseLabel)],
+            CancellationToken.None);
+        if (pressed is null)
+        {
+            return toastReason;
+        }
+
+        if (pressed == 0 && !_launcher.OpenFolder(run.OutputDir))
+        {
+            return RunsCopy.OpenMissing;
+        }
+
+        return null;
+    }
 
     private Task RemoveAsync(RunRecord run) => ActAsync(
         async () =>

@@ -183,10 +183,35 @@ public sealed class RunCloudResultsTests : IDisposable
         var folder = Path.Combine(_root, "sample");
         var run = Run(folder) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.GetPathRoot(_base) }) };
 
-        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+        // Issue #954: still nothing written, but the History is told it was the drive root, so it can say so and name the action.
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.DriveRootRefused);
 
         Directory.Exists(folder).ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_run_with_no_recorded_folder_gets_a_fresh_one_carrying_the_runs_marker()
+    {
+        // Issue #934: a folder this service creates is the run's own, so it is marked for the delete that will later require it.
+        PutResult();
+        var run = Run() with { OutputDir = null };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
+        File.Exists(Path.Combine(made, "sample.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_outside_the_output_root_is_plain_refused_even_when_the_root_is_a_drive_root_elsewhere()
+    {
+        PutResult();
+        var run = Run(Path.Combine(_base, "Documents", "sample")) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.Combine(_base, "Lab") }) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+    }
+
     [Fact]
     public async Task A_recorded_folder_outside_the_output_root_is_refused_before_anything_is_written()
     {
