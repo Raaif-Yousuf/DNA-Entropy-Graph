@@ -1228,6 +1228,9 @@
   <data name="OutputFolder_SaveFailed_Message" xml:space="preserve">
     <value>The folder was not changed, because another copy of the app has the settings file open. Close the other copies, then choose the folder again.</value>
   </data>
+  <data name="OutputFolder_PickFailed_Message" xml:space="preserve">
+    <value>The folder chooser did not open. Choose Change folder again. If it keeps failing, restart the app.</value>
+  </data>
   <data name="OutputFolderHeader.Text" xml:space="preserve">
     <value>Save results to</value>
   </data>

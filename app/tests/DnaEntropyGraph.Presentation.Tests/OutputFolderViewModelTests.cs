@@ -99,7 +99,7 @@ public sealed class OutputFolderViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Use_Downloads_clears_the_saved_choice()
+    public void Use_Downloads_clears_the_saved_choice()
     {
         _settings.Values[OutputFolderViewModel.SettingKey] = @"D:\Lab";
         var vm = NewVm();
@@ -108,7 +108,6 @@ public sealed class OutputFolderViewModelTests : IDisposable
 
         vm.FolderPath.ShouldBeNull();
         NewVm().FolderPath.ShouldBeNull("a new view model must not read the old folder back");
-        await Task.CompletedTask;
     }
 
     [Fact]
@@ -125,6 +124,21 @@ public sealed class OutputFolderViewModelTests : IDisposable
         vm.Message.ShouldBe("OutputFolder_SaveFailed_Message");
     }
 
+    [Fact]
+    public async Task A_picker_that_throws_keeps_the_old_folder_saves_nothing_names_an_action_and_logs_only_the_class()
+    {
+        _settings.Values[OutputFolderViewModel.SettingKey] = @"D:\Lab";
+        _picker.PickOutputFolderAsync(Arg.Any<CancellationToken>()).Returns<string?>(_ => throw new InvalidOperationException(@"E:\secret\path"));
+        var log = Substitute.For<IDiagnosticsLog>();
+        var vm = new OutputFolderViewModel(_settings, _picker, _strings, null, log);
+
+        await vm.ChangeCommand.ExecuteAsync(null);
+
+        vm.Message.ShouldBe("OutputFolder_PickFailed_Message");
+        vm.FolderPath.ShouldBe(@"D:\Lab");
+        _settings.Values[OutputFolderViewModel.SettingKey].ShouldBe(@"D:\Lab");
+        log.Received(1).Warning("output_folder_picker", null, nameof(InvalidOperationException));
+    }
     [Fact]
     public void An_unreadable_settings_file_means_the_default_not_a_crash()
     {

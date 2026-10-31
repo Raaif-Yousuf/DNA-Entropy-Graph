@@ -22,13 +22,15 @@ public sealed partial class OutputFolderViewModel : ObservableObject
     private readonly ISettingsStore _store;
     private readonly IFilePicker _picker;
     private readonly IStringResourceProvider _strings;
+    private readonly IDiagnosticsLog _log;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasMessage))]
     private string _message = string.Empty;
 
-    public OutputFolderViewModel(ISettingsStore store, IFilePicker picker, IStringResourceProvider strings, IMessenger? messenger = null)
+    public OutputFolderViewModel(ISettingsStore store, IFilePicker picker, IStringResourceProvider strings, IMessenger? messenger = null, IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _store = store;
         _picker = picker;
         _strings = strings;
@@ -47,7 +49,24 @@ public sealed partial class OutputFolderViewModel : ObservableObject
     [RelayCommand]
     private async Task ChangeAsync(CancellationToken cancellationToken)
     {
-        var picked = await _picker.PickOutputFolderAsync(cancellationToken);
+        string? picked;
+        try
+        {
+            picked = await _picker.PickOutputFolderAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            Message = string.Empty;
+            return;
+        }
+        catch (Exception ex)
+        {
+            // A picker that throws (a bad window handle, a COM failure) must not make the button silently do nothing. The class only, never the path.
+            _log.Warning("output_folder_picker", null, ex.GetType().Name);
+            Message = _strings.GetString("OutputFolder_PickFailed_Message");
+            return;
+        }
+
         Message = string.Empty;
         if (string.IsNullOrWhiteSpace(picked))
         {
