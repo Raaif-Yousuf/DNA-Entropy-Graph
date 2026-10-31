@@ -120,7 +120,8 @@ public sealed record RunRecord(
     string? Notes = null,
     string? TagsJson = null,
     int PreemptionCount = 0,
-    string? AccountSub = null)
+    string? AccountSub = null,
+    DateTimeOffset? VmEndConfirmedAt = null)
 {
     // Issue #141: a whole record can reach a log line or a failure message ($"{run}"), and the compiler's ToString prints every member.
     // The user's own free text prints as a fixed marker instead; every other member prints as before (a null as "null").

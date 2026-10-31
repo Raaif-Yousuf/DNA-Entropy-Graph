@@ -86,7 +86,7 @@ public sealed class LeftRunningGuard : IDisposable
     {
         // Issue #830: the scan lists in every scope a recent run of this installation was made in plus the selection (the selection path); what it finds carries the scope it was found in,
         // and every stop or delete below uses that one. A signed-out selection still scans the scopes of recent runs.
-        var scan = _scanner.ScanAllAsync(_account.SelectedScope(), cancellationToken);
+        var scan = _scanner.ScanAllAsync(SelectionForScan(), cancellationToken);
         try
         {
             var report = await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
@@ -112,6 +112,14 @@ public sealed class LeftRunningGuard : IDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// Round 4 M-A: the scope the exit scan treats as the selected one. A signed-out active account has no selected scope (it reads null), which would make an unreadable selection
+    /// invisible exactly when it matters, so the active account's own snapshot (account and project, from ONE read, also when it must sign in again) is used instead; for a signed-in account it is the same scope.
+    /// Null when no account or no project exists at all.
+    /// </summary>
+    private CloudScope? SelectionForScan()
+        => _account.ActiveSnapshot() is { ProjectId.Length: > 0 } snapshot ? new CloudScope(snapshot.ProjectId, snapshot.AccountSub) : null;
 
     /// <summary>Logs "some scope was unreadable" once per change of that state (and once again after it clears), not on every 5-minute tick.</summary>
     private void NoteUnread(int unread)

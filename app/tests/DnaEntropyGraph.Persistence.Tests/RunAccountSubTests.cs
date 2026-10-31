@@ -37,4 +37,20 @@ public sealed class RunAccountSubTests
         row.Phase.ShouldBe(JobPhase.Completed);
         row.AccountSub.ShouldBe("sub-b");
     }
+
+    [Fact]
+    public async Task The_time_a_computers_end_was_confirmed_survives_a_relaunch_and_a_stale_writers_record_never_erases_it()
+    {
+        // Round 4 M-B: the reconciler records it; the runner's own copy of the row (written later, knowing nothing of it) must not wipe it.
+        using var paths = new TempPaths();
+        var confirmed = new DateTimeOffset(2026, 10, 30, 9, 30, 0, TimeSpan.Zero);
+        var first = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        await first.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, VmEndConfirmedAt: confirmed), CancellationToken.None);
+        await first.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, Notes: null), CancellationToken.None);
+
+        var second = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+
+        (await second.GetAsync("job-c", CancellationToken.None))!.VmEndConfirmedAt.ShouldBe(confirmed);
+        (await second.GetAllAsync(CancellationToken.None)).Single().VmEndConfirmedAt.ShouldBe(confirmed);
+    }
 }

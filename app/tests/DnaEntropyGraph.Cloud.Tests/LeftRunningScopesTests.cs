@@ -524,21 +524,107 @@ public sealed class LeftRunningScopesTests
     // ---- Review L3 (round 3): the selected scope is always worth a prompt when it cannot be read ----
 
     [Fact]
-    public async Task An_unreadable_SELECTED_scope_is_prompted_for_even_with_no_run_rows_at_all()
+    public async Task An_unreadable_SELECTED_scope_with_no_run_rows_is_prompted_for_when_the_cause_is_an_expired_sign_in()
     {
+        // Round 4 M-A(1): the active account is signed out, so the selection reads null; its own snapshot (account and project, even when it must sign in) is still the scope this exit exists to look in.
         var rig = new Rig("project-b");
-        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountSignedOut("sub-a");
         await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+        rig.Gcp.SelectedScope().ShouldBeNull("the active account is signed out, so the plain selection is empty");
         IReadOnlyList<string>? buttons = null;
         rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             buttons = call.ArgAt<IReadOnlyList<string>>(2);
-            return Task.FromResult<int?>(0);
+            return Task.FromResult<int?>(1);
         });
 
         (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
 
-        buttons.ShouldBe(["LeftRunning_UnreadCloseAnyway"]);
+        buttons.ShouldBe(["LeftRunning_UnreadSignIn", "LeftRunning_UnreadCloseAnyway"]);
+    }
+
+    [Fact]
+    public async Task An_unreadable_SELECTED_scope_with_no_run_rows_that_is_only_offline_is_logged_and_never_prompted()
+    {
+        // Round 4 M-A(2): offline with nothing recorded is not worth a dialog at every exit; the log line is the trace.
+        var log = new CountingLog();
+        var rig = new Rig("project-b", log);
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        log.Lines.ShouldContain("left-running-scan/unread-scopes");
+    }
+
+    [Fact]
+    public async Task An_unreadable_SELECTED_scope_that_is_only_offline_but_has_an_unfinished_run_is_still_prompted_for()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    // ---- Round 4 M-B and L-1 ----
+
+    private static RunRecord KeepAliveRow(DateTimeOffset? confirmedEnd) => new("job-k", JobPhase.Completed, Start, ProjectId: "project-a", AccountSub: "sub-a", InstallationId: "inst", FinishedAt: Start,
+        OptionsJson: DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = DnaEntropyGraph.Core.AfterTaskAction.KeepAlive, KeepAliveMinutes = 30 }),
+        VmEndConfirmedAt: confirmedEnd);
+
+    [Fact]
+    public void A_keep_alive_row_whose_computer_was_confirmed_ended_has_no_obligation_and_an_unconfirmed_one_does()
+    {
+        RunObligations.HasObligation(KeepAliveRow(null), Start.AddHours(2)).ShouldBeTrue();
+        RunObligations.HasObligation(KeepAliveRow(Start.AddMinutes(31)), Start.AddHours(2)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_confirmed_end_older_than_the_runs_finish_belongs_to_an_earlier_attempt_and_does_not_count()
+    {
+        // The run was resumed and finished again after the earlier confirmation.
+        RunObligations.HasObligation(KeepAliveRow(Start.AddMinutes(-5)), Start.AddHours(2)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_confirmed_end_clears_an_earlier_unconfirmed_end_code_and_never_clears_an_unfinished_run()
+    {
+        var unconfirmed = new RunRecord("job-u", JobPhase.Failed, Start, ProjectId: "project-a", AccountSub: "sub-a", FinishedAt: Start, ErrorCode: RunErrorCodes.VmEndUnconfirmed);
+        RunObligations.HasObligation(unconfirmed, Start.AddMinutes(1)).ShouldBeTrue();
+        RunObligations.HasObligation(unconfirmed with { VmEndConfirmedAt = Start.AddMinutes(1) }, Start.AddMinutes(2)).ShouldBeFalse();
+        RunObligations.HasObligation(new RunRecord("job-r", JobPhase.Running, Start, VmEndConfirmedAt: Start.AddMinutes(1)), Start.AddMinutes(2)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_signed_out_account_whose_keep_alive_computer_the_reconciler_already_confirmed_ended_is_not_prompted_for_but_an_unconfirmed_one_is()
+    {
+        var confirmed = RigWithSignedOutAccountA();
+        await confirmed.Runs.UpsertAsync(KeepAliveRow(Start.AddMinutes(31)) with { InstallationId = confirmed.Installation }, CancellationToken.None);
+        confirmed.Clock.Advance(TimeSpan.FromHours(2));
+        await confirmed.Guard.ConfirmExitAsync(CancellationToken.None);
+        await confirmed.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+
+        var unconfirmed = RigWithSignedOutAccountA();
+        await unconfirmed.Runs.UpsertAsync(KeepAliveRow(null) with { InstallationId = unconfirmed.Installation }, CancellationToken.None);
+        unconfirmed.Clock.Advance(TimeSpan.FromHours(2));
+        await unconfirmed.Guard.ConfirmExitAsync(CancellationToken.None);
+        await unconfirmed.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void An_outcome_with_no_account_matches_only_rows_with_no_recorded_account()
+    {
+        var named = new RunRecord("job-n", JobPhase.Running, Start, ProjectId: "project-a", AccountSub: "sub-b", InstallationId: "inst");
+        var legacy = new RunRecord("job-l", JobPhase.Running, Start, ProjectId: "project-a", AccountSub: null, InstallationId: "inst");
+
+        RunObligations.ExistForAccount([named], null, "inst", Start).ShouldBeFalse("a row that names another account is not owed by an outcome that names none");
+        RunObligations.ExistForAccount([legacy], null, "inst", Start).ShouldBeTrue();
+        RunObligations.ExistForAccount([named, legacy], null, "inst", Start).ShouldBeTrue();
     }
 
     [Fact]

@@ -150,6 +150,51 @@ public class JobReconcilerLifecycleTests
         rig.Gcp.CallsTo("FindByJobId").Where(c => c.ProjectId == "project-b").ShouldBeEmpty("project-b was selected, but the run is not in it");
     }
 
+    // ---- Issue #830 review round 4 M-B: the reconciler records that a run's computer was confirmed ended, so a keep-alive row stops obliging the account ----
+
+    private static RunRecord Row(Rig rig, string jobId) => rig.Env.Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
+
+    [Fact]
+    public async Task A_keep_alive_VM_the_reconciler_ends_is_recorded_as_confirmed_ended_and_a_VM_it_leaves_running_is_not()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-ended", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, afterKeepAlive: AfterKeepAliveAction.Delete);
+        await rig.SeedFinishedAsync("job-held", AfterTaskAction.KeepAlive, keepAliveMinutes: 600, afterKeepAlive: AfterKeepAliveAction.Delete);
+        rig.Clock.Advance(TimeSpan.FromMinutes(21));
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        Row(rig, "job-ended").VmEndConfirmedAt.ShouldBe(Launch.AddMinutes(21), "the delete was accepted, so the end is confirmed at that time");
+        Row(rig, "job-held").VmEndConfirmedAt.ShouldBeNull("the window has not expired: the computer still runs, nothing is confirmed");
+        (await rig.VmsAsync("job-held")).Single().Status.ShouldBe("RUNNING");
+    }
+
+    [Fact]
+    public async Task A_finished_run_whose_VM_the_reconciler_finds_already_stopped_or_gone_is_recorded_as_confirmed_ended()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-stopped", AfterTaskAction.Stop);
+        await rig.StopAsync("job-stopped");
+        await rig.Env.SeedAsync("job-gone", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10) });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        Row(rig, "job-stopped").VmEndConfirmedAt.ShouldBe(Launch);
+        Row(rig, "job-gone").VmEndConfirmedAt.ShouldBe(Launch, "the account was reachable and the label listing shows no computer");
+    }
+
+    [Fact]
+    public async Task A_run_whose_VM_end_could_not_be_confirmed_is_not_recorded_as_ended()
+    {
+        // The account cannot be used: nothing was read, so nothing may be recorded.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.Env.SeedAsync("job-so", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ProjectId = "project-a", AccountSub = "sub-a" });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        Row(rig, "job-so").VmEndConfirmedAt.ShouldBeNull();
+    }
+
     [Theory]
     [InlineData(AfterKeepAliveAction.Delete, null)]
     [InlineData(AfterKeepAliveAction.Stop, "STOPPED")]

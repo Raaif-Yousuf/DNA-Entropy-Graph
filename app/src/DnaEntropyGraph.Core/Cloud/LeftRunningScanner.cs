@@ -99,13 +99,18 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             .ToList();
         var disks = ok.SelectMany(r => r.StoppedDisks).GroupBy(d => (Project: d.Scope?.ProjectId, d.Name, d.Zone)).Select(g => g.First()).ToList();
         var now = clock.GetUtcNow();
-        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }, IsSelected(f.Scope, selected) || RunObligations.Exist(allRows, f.Scope, installation, now), f.Error!.GetType().Name))]);
+        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }, HasObligation(f.Scope, f.Error!, selected, allRows, installation, now), f.Error!.GetType().Name))]);
     }
 
     /// <summary>
-    /// Review L3 (round 3): the selected scope is always worth a prompt when it cannot be read, whatever the rows say (history cleared, a run older than the lookback): it is the scope this scan
-    /// exists to look in for a computer no row records. Only its project and account are compared (a scope with no account was already resolved to the selected one by <see cref="CloudScopes.Dedupe"/>).
+    /// Whether an unreadable scope is worth a prompt. Round 4 M-A: it is when a recent run of this installation in it could still have a computer running (a row obligation), OR when it is the selected scope and
+    /// the failure is an expired sign-in (actionable at once, and the scope this scan exists to look in for a computer no row records: history cleared, a run older than the lookback). A network or
+    /// permission failure of the selected scope with no row obligation is only logged (an offline exit with nothing recorded is not nagged about).
     /// </summary>
+    private static bool HasObligation(CloudScope scope, Exception error, CloudScope? selected, IReadOnlyList<RunRecord> allRows, string installation, DateTimeOffset now)
+        => RunObligations.Exist(allRows, scope, installation, now) || (IsSelected(scope, selected) && error is AccountAuthException { Code: AuthErrorCodes.SigninExpired });
+
+    /// <summary>Only the project and account are compared (a scope with no account was already resolved to the selected one by <see cref="CloudScopes.Dedupe"/>).</summary>
     private static bool IsSelected(CloudScope scope, CloudScope? selected)
         => selected is not null && string.Equals(scope.ProjectId, selected.ProjectId, StringComparison.Ordinal) && string.Equals(scope.AccountSub, selected.AccountSub, StringComparison.Ordinal);
 

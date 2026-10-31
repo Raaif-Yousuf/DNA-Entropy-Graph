@@ -29,7 +29,8 @@ public static class RunObligations
     }
 
     /// <summary>
-    /// True when any recent run of <paramref name="installation"/> made under account <paramref name="accountSub"/> could still have a computer running. Review M2 (round 3): the account is matched by the SAME rule as
+    /// True when any recent run of <paramref name="installation"/> made under account <paramref name="accountSub"/> could still have a computer running. Round 4 L-1: an outcome that names NO account (null) matches only rows that record no account,
+    /// never every account's rows (the wildcard below is for a ROW with no account, not for a caller with none). Review M2 (round 3): a named account is matched by the SAME rule as
     /// <see cref="Exist"/> and every other scope comparison (<see cref="CloudScopes.Matches"/>): a row with no recorded account acts as the current account, so it belongs to whichever account the caller names
     /// (the pass names the one that was current when it could not act).
     /// </summary>
@@ -43,7 +44,7 @@ public static class RunObligations
             .Where(r => string.Equals(r.Target, "cloud", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(r.InstallationId, installation, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(r.ProjectId)
-                && CloudScopes.Matches(RunScope.Of(r), new CloudScope(r.ProjectId!, accountSub)))
+                && (accountSub is null ? r.AccountSub is null : CloudScopes.Matches(RunScope.Of(r), new CloudScope(r.ProjectId!, accountSub))))
             .Any(r => HasObligation(r, now));
     }
 
@@ -61,15 +62,22 @@ public static class RunObligations
             return false;
         }
 
+        // Round 4 M-B: the app read this run's computer as ended (stopped, deleted or gone) while the account was reachable, so there is nothing left to look after. A confirmation OLDER than the run's finish
+        // belongs to an earlier attempt of the same job (a resume that finished again) and does not count.
+        if (row.VmEndConfirmedAt is { } confirmed && confirmed >= (row.FinishedAt ?? row.CreatedUtc))
+        {
+            return false;
+        }
+
         if (RunErrorCodes.IsVmEndUnconfirmed(row.ErrorCode))
         {
             return true;
         }
 
         // Review M1 (round 3): a keep-alive window holds the computer on purpose, and its expiry does not END anything: the computer keeps running until the reconciler (or the person) stops it,
-        // and a signed-out account can neither. The row records no "confirmed ended" state of its own (the reconciler writes nothing back), so the smallest truthful signal is the one this method
+        // and a signed-out account can neither. Until the reconciler records a confirmed end (VmEndConfirmedAt, round 4 M-B, handled above), the only truthful signal is the one this method
         // is only asked about at its two call sites: the account could NOT be reached just now (a scope the scan could not read, or an account the pass reported as signed out). For such a row the
-        // keep-alive obligation therefore stands from the first minute until the row leaves the lifecycle lookback above, where no sweep looks at it any more. Only worker exit 0 holds the computer
+        // keep-alive obligation therefore stands from the first minute until a confirmed end, or until the row leaves the lifecycle lookback above, where no sweep looks at it any more. Only worker exit 0 holds the computer
         // for a window (Completed or PartiallyCompleted, as the reconciler reads it); every other finished state applied afterKeepAlive at once.
         return row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted
             && RunOptionsJson.TryDeserialize(row.OptionsJson) is { AfterTask: AfterTaskAction.KeepAlive };

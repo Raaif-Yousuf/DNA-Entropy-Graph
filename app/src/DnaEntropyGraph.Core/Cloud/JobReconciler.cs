@@ -449,11 +449,16 @@ public sealed class JobReconciler
                 }
 
                 var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
+
+                // Round 4 M-B: true only while every computer this look found is known to be ended (stopped, deleted or gone) and every look and call that was needed answered. An empty listing is a computer that is gone,
+                // read while the account was reachable.
+                var allEnded = true;
                 foreach (var vm in vms)
                 {
                     var want = WantedByLifecycle(row, vm, options, installation, now);
                     if (want == VmWant.Leave)
                     {
+                        allEnded &= VmFacts.IsStopped(vm);
                         continue;
                     }
 
@@ -474,16 +479,23 @@ public sealed class JobReconciler
                         {
                             // Observable (ids and states only, never a name).
                             _log.Warning("reconciler", row.JobId, (want == VmWant.Delete ? "delete-skipped-" : "stop-skipped-") + skip);
+                            allEnded &= skip == "vm-gone";
                             continue;
                         }
                     }
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
                         Record(outcomes, row.JobId, vm.Name, ex);
+                        allEnded = false;
                         continue;
                     }
 
-                    await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                    allEnded &= await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                }
+
+                if (allEnded)
+                {
+                    await RecordConfirmedEndAsync(row.JobId, now, linked.Token).ConfigureAwait(false);
                 }
             });
             if (driver is not null)
@@ -495,6 +507,29 @@ public sealed class JobReconciler
         {
             RecordUnexpected(outcomes, row.JobId, string.Empty, ex);
             _log.Warning("reconciler", row.JobId, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Round 4 M-B: writes the time the app read this run's computer as ended onto the row (<see cref="RunRecord.VmEndConfirmedAt"/>), so <see cref="RunObligations"/> stops owing the account a look at it. Written from a fresh
+    /// read of the row (a stale copy would overwrite what a runner stored since) and only when the row is still finished and not already confirmed since it finished. A failure to write is logged by class and
+    /// costs nothing but a later retry: the row simply keeps its obligation.
+    /// </summary>
+    private async Task RecordConfirmedEndAsync(string jobId, DateTimeOffset confirmedAt, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var fresh = await _runs.GetAsync(jobId, cancellationToken).ConfigureAwait(false);
+            if (fresh is null || !JobStateMachine.IsTerminal(fresh.Phase) || (fresh.VmEndConfirmedAt is { } already && already >= (fresh.FinishedAt ?? fresh.CreatedUtc)))
+            {
+                return;
+            }
+
+            await _runs.TryUpsertIfPhaseAsync(fresh with { VmEndConfirmedAt = confirmedAt }, fresh.Phase, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _log.Warning("reconciler", jobId, ex.GetType().Name);
         }
     }
 
@@ -649,7 +684,7 @@ public sealed class JobReconciler
         => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
 
     /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
-    private async Task ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task<bool> ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         try
         {
@@ -673,13 +708,15 @@ public sealed class JobReconciler
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
             Record(outcomes, jobId, vm.Name, ex);
-            return;
+            return false;
         }
 
         lock (outcomes)
         {
             outcomes.Add(new LifecycleOutcome(jobId, vm.Name, done));
         }
+
+        return true;
     }
 
     /// <summary>
