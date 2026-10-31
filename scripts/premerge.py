@@ -95,6 +95,7 @@ PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 NOT_A_GATE: dict[str, str] = {
     "scripts/cloud_gpu_test.ps1": "creates billed cloud resources; never a pre-merge step",
     "scripts/gen_third_party_notices.py": "generator; its output is verified by check_third_party_notices.py",
+    "scripts/dotnet_env.py": "a library the generator and premerge import (named in ci-notices.yml paths only); tested by scripts-tests",
     "scripts/compile_sprint_log.py": "folds fragments at merge time; only its --check arm is a gate",
     "scripts/ci_changes_gate.py": (
         "a path-diff gate that needs a pull request base sha and only decides which CI jobs run; "
