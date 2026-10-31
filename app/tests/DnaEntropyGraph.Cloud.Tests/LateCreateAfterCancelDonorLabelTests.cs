@@ -542,12 +542,13 @@ public partial class LateCreateAfterCancelTests
     }
 
     [Fact]
-    public async Task D970r5_a_watch_that_defers_with_the_window_over_and_an_answered_start_claims_no_StartUnanswered_and_writes_no_label()
+    public async Task D970r6_a_watch_that_defers_to_a_second_attempt_that_never_reached_the_VM_restores_the_donor_when_the_window_is_over()
     {
+        // Replaces D970r5_a_watch_that_defers...: Defer only says SOME newer attempt of the job is pending, not that it holds this VM. The instance says who owns it.
         var gcp = new FakeGcp();
         var rig = new Rig(gcp);
         rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
-        var (sent, _, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970o", "job-n970o", claimLabels: false);
+        var (sent, oldVm, donorLabels) = await NoteAReuseSendAsync(gcp, rig, "job-old970o", "job-n970o", claimLabels: true);
         sent.Create = Task.CompletedTask; // answered
         _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970o", CancellationToken.None);
         _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970o", CancellationToken.None); // a newer attempt is pending: the watch defers
@@ -555,8 +556,82 @@ public partial class LateCreateAfterCancelTests
         var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
 
         outcome.State.ShouldBe(LateCreateState.GaveUp);
-        outcome.Restore.ShouldBeNull("only an in-flight start is StartUnanswered; the newer attempt owns the decision for an answered one");
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.Restored);
+        gcp.RestoreAttempts.ShouldBe(1);
+        SameLabels(await LabelsOfAsync(gcp, oldVm), donorLabels, "the VM carried this job's labels and read stopped: the attempt that never claimed it cannot be using it");
+    }
+
+    [Fact]
+    public async Task D970r6_a_watch_that_defers_while_a_second_attempt_recorded_its_own_send_for_the_same_VM_writes_nothing()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var (sent, oldVm, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970r", "job-n970r", claimLabels: true);
+        sent.Create = Task.CompletedTask;
+        rig.Terminator.NoteDonor(TestScopedGateways.Default, "job-n970r", oldVm, ZoneA, new Dictionary<string, string> { ["job-id"] = "job-old970r" });
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-n970r", oldVm)); // the second attempt claimed this same VM
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970r", CancellationToken.None);
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970r", CancellationToken.None);
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
+
+        outcome.State.ShouldBe(LateCreateState.GaveUp);
+        gcp.RestoreAttempts.ShouldBe(0, "the send-match makes this watch stand down");
+        rig.Terminator.DonorCount.ShouldBe(1, "the second attempt's donor is untouched");
+    }
+
+    [Fact]
+    public async Task D970r6_a_watch_that_defers_and_finds_the_VM_not_carrying_this_jobs_labels_logs_NotRestored_DeferredNewerAttempt()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var logged = new List<DonorRestoreOutcome>();
+        rig.Settings.OnDonorRestore = logged.Add;
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var (sent, _, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970s", "job-n970s", claimLabels: false); // the VM still carries the donor's labels
+        sent.Create = Task.CompletedTask;
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970s", CancellationToken.None);
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970s", CancellationToken.None);
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
+
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.NotRestored);
+        outcome.Restore.ErrorClass.ShouldBe("DeferredNewerAttempt");
+        logged.ShouldContain(o => o.LogClass == "NotRestored:DeferredNewerAttempt");
         gcp.RestoreAttempts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task D970r6_a_stale_watch_does_not_consume_or_write_for_a_later_attempts_donor()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var (first, oldVm, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970t", "job-n970t", claimLabels: true); // stopped under job-n970t's labels
+        first.Create = Task.CompletedTask; // answered: the watch would restore at once
+        rig.Terminator.NoteDonor(TestScopedGateways.Default, "job-n970t", oldVm, ZoneA, new Dictionary<string, string> { ["job-id"] = "job-old970t" });
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-n970t", oldVm)); // attempt 2 overwrote donor and send; its start is pending
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([first])).ShouldHaveSingleItem();
+
+        outcome.Restore.ShouldBeNull("another attempt's send owns the key");
+        gcp.RestoreAttempts.ShouldBe(0, "no write while attempt 2's start is pending");
+        rig.Terminator.DonorCount.ShouldBe(1, "attempt 2's donor was not consumed");
+    }
+
+    [Fact]
+    public async Task D970r6_a_reuse_refused_before_anything_was_sent_leaves_no_send_record_behind()
+    {
+        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Stockout);
+        var rig = new Rig(gcp);
+        _ = await SeedStoppedDonorAsync(gcp, rig, "job-old970u");
+        await rig.SeedRowAsync("job-n970u");
+        var spec = Spec("job-n970u");
+
+        _ = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-n970u", spec), spec, new RunProgress(), CancellationToken.None);
+
+        rig.Terminator.ReuseSendCount.ShouldBe(0, "the refused send's record is forgotten with its donor");
+        rig.Terminator.DonorCount.ShouldBe(0);
     }
 
     [Fact]

@@ -286,6 +286,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
+    /// <summary>Tests: how many reuse sends are remembered.</summary>
+    internal int ReuseSendCount => _reuseSends.Count;
+
     /// <summary>Tests: how many donors are remembered.</summary>
     internal int DonorCount => _donors.Count;
 
@@ -332,13 +335,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     public void PruneDonors() => PruneExpiredDonors();
 
     /// <summary>
-    /// Round 4 finding 2, round 5 rule (the owner's DECISION): NEVER write labels while OUR start call is still in flight (its task pending). Once the call has completed on our side (answered, refused,
-    /// Canceled, or a lost answer) and the VM has read STOPPED through <see cref="CloudRunSettings.LateCreateGrace"/>, the restore is allowed (THEORY, unverified, ToTest #970: a server-side start lands
-    /// within the grace). A start still pending at the window end is this outcome, <c>NotRestored:StartUnanswered</c>: the VM stays stopped under this job's labels (the #938 by-name guards are the
-    /// backstop; #1052 tracks restart-safe recovery). The donor is NOT consumed here (a newer attempt may share its key); the watch's end forgets it. Null when no donor was noted for THIS send
+    /// Round 4 finding 2, round 6 rule (the owner's DECISION, stated exactly): NEVER write labels while our start call may still land, i.e. until it has answered, been refused, completed on our side
+    /// (Canceled or a lost answer, then the VM read STOPPED through <see cref="CloudRunSettings.LateCreateGrace"/>), or been seen to land (the VM read RUNNING, which proves the start landed). THEORY
+    /// (unverified, ToTest #970): a server-side start lands within the grace. A start still pending at the window end is this outcome with class <c>StartUnanswered</c>; a deferred watch that
+    /// cannot restore says <c>DeferredNewerAttempt</c>. The VM stays stopped under this job's labels (the #938 by-name guards are the backstop; #1052 tracks restart-safe recovery). The donor is NOT consumed here (a newer attempt may share its key); the watch's end forgets it. Null when no donor was noted for THIS send
     /// (round 5 finding 4: matched by the send, like <see cref="ForgetDonor(SentCreate)"/>). Logs the state and the class only.
     /// </summary>
-    private DonorRestoreOutcome? NoteStartUnanswered(SentCreate sent)
+    private DonorRestoreOutcome? NoteNotRestored(SentCreate sent, string errorClass)
     {
         var key = (sent.JobId, sent.Name, sent.Zone);
         if (!_donors.ContainsKey(key) || !_reuseSends.TryGetValue(key, out var recorded) || !ReferenceEquals(recorded, sent))
@@ -346,7 +349,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             return null;
         }
 
-        var outcome = new DonorRestoreOutcome(sent.JobId, DonorRestoreState.NotRestored, "StartUnanswered");
+        var outcome = new DonorRestoreOutcome(sent.JobId, DonorRestoreState.NotRestored, errorClass);
         try
         {
             settings.OnDonorRestore?.Invoke(outcome);
@@ -893,15 +896,62 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
-    /// <summary>
-    /// Issue #970: a late reuse is judged stopped (seen running and stopped again, started and answered, or past the grace with the VM stopped): the VM goes back under its donor's labels, so the cancelled
-    /// job's label no longer finds it and the donor's keep-alive applies again. What became of the labels rides on the outcome (class only).
-    /// </summary>
+    /// <summary>Round 6 finding 4: our start call may still land: it has not answered, been refused, completed on our side, or been seen to land.</summary>
     private static bool StartInFlight(SentCreate sent)
         => !sent.Answered && !sent.Refused && !sent.Landed && sent.Create is not { IsCompleted: true };
 
+    /// <summary>
+    /// Issue #970: a late reuse is judged stopped (seen running and stopped again, started and answered, or past the grace with the VM stopped): the VM goes back under its donor's labels, so the cancelled
+    /// job's label no longer finds it and the donor's keep-alive applies again. What became of the labels rides on the outcome (class only). Round 6 finding 2: only while the send recorded under the
+    /// donor's key IS this watch's send (a later attempt that noted its own donor and send owns the key; this stale watch stands down and writes nothing).
+    /// </summary>
     private async Task<LateCreateOutcome> ReuseStoppedAsync(SentCreate sent)
-        => new(sent.JobId, LateCreateState.ReuseStopped, Restore: await RestoreDonorLabelsAsync(sent.JobId, sent.Name, sent.Zone).ConfigureAwait(false));
+        => new(sent.JobId, LateCreateState.ReuseStopped, Restore: await RestoreDonorLabelsAsync(sent).ConfigureAwait(false));
+
+    /// <summary>True when the send recorded for this send's (job, VM, zone) is this one (see <see cref="ForgetDonor(SentCreate)"/>).</summary>
+    private bool IsRecordedSend(SentCreate sent)
+        => _reuseSends.TryGetValue((sent.JobId, sent.Name, sent.Zone), out var recorded) && ReferenceEquals(recorded, sent);
+
+    /// <summary>Round 6 finding 2: <see cref="RestoreDonorLabelsAsync(string, string, string)"/> for a watch's own send; null (nothing written, nothing consumed) when another attempt's send owns the key.</summary>
+    internal async Task<DonorRestoreOutcome?> RestoreDonorLabelsAsync(SentCreate sent)
+        => IsRecordedSend(sent) ? await RestoreDonorLabelsAsync(sent.JobId, sent.Name, sent.Zone).ConfigureAwait(false) : null;
+
+    private static bool CarriesJob(VmDescriptor? vm, SentCreate sent)
+        => vm?.Labels is { } labels
+            && labels.TryGetValue("job-id", out var job) && job == sent.JobId
+            && labels.TryGetValue("installation-id", out var installation) && installation == sent.InstallationId;
+
+    /// <summary>
+    /// Round 6 finding 1: the end of a watch that kept deferring to a newer attempt of the job (Defer only says SOME newer attempt is pending, not that it holds this VM). Our start still in flight: no label
+    /// is written (<c>StartUnanswered</c>). Another attempt's send recorded for the same VM: that attempt owns the donor, this watch stands down. Otherwise the INSTANCE says who owns it: a VM that still
+    /// carries THIS job's labels and reads stopped is restored (an attempt that never claimed it cannot be using it); anything else is <c>NotRestored:DeferredNewerAttempt</c>, logged.
+    /// </summary>
+    private async Task<LateCreateOutcome> DeferredReuseGaveUpAsync(SentCreate sent)
+    {
+        if (StartInFlight(sent))
+        {
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "StartUnanswered"));
+        }
+
+        if (!IsRecordedSend(sent))
+        {
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp);
+        }
+
+        VmDescriptor? vm = null;
+        try
+        {
+            vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Scope, sent.Name, sent.Zone, token), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Not looked at: the restore is not attempted below, and the outcome says so.
+        }
+
+        return vm is not null && CarriesJob(vm, sent) && VmFacts.IsStopped(vm)
+            ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent).ConfigureAwait(false))
+            : new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "DeferredNewerAttempt"));
+    }
 
     /// <summary>
     /// Round 4 M3: one round for a REUSE the cancel could not settle. The VM is another run's (reused by relabelling it to this job and starting it): it is never deleted, only STOPPED when it lands running.
@@ -916,9 +966,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             case DeleteDecision.Superseded:
                 return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
             case DeleteDecision.Defer:
-                // Round 5 finding 2: only a start still in flight is StartUnanswered. For an answered, landed, refused or completed one a newer attempt of the job is pending and the instance's job-id cannot say
-                // whose labels those are (both attempts carry the same job id), so the restore is left to that attempt: no label is written and no outcome is claimed.
-                return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: StartInFlight(sent) ? NoteStartUnanswered(sent) : null) : null;
+                // Round 6 finding 1 (replaces round 5 finding 2's handover, which no code performed): see DeferredReuseGaveUpAsync.
+                return windowOver ? await DeferredReuseGaveUpAsync(sent).ConfigureAwait(false) : null;
         }
 
         VmDescriptor? vm;
@@ -935,9 +984,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 : null;
         }
 
-        var mine = vm?.Labels is { } labels
-            && labels.TryGetValue("job-id", out var job) && job == sent.JobId
-            && labels.TryGetValue("installation-id", out var installation) && installation == sent.InstallationId;
+        var mine = CarriesJob(vm, sent);
         if (!mine)
         {
             if (sent.Landed)
@@ -963,8 +1010,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         {
             // Round 6 H1: a stopped donor that carries this job's labels says nothing until the start has been ANSWERED, and a task that ended Canceled (or by a lost answer) answered nothing: the real
             // gateway honours the token, so Compute may still run the start POST that was on the wire. Seen running and stopped by this watch, or a start that answered, there is nothing more to wait for;
-            // otherwise the VM is judged only after the same grace a create gets, counted from the task's end (round 5 rule: a completed call whose VM reads stopped through the grace is restored,
-            // `|| windowOver` included; a call still pending at the window's end is not, see below).
+            // otherwise the VM is judged only after the same grace a create gets, counted from the task's end. Round 6 rule: labels are never written while our start call may still land, so the
+            // `sent.Landed` branch above is allowed even with the Create task pending (a VM this watch SAW running proves the start landed), and a completed call whose VM reads stopped through the
+            // grace is restored, `|| windowOver` included; a call still pending at the window's end, and never seen running, is not (see below).
             if (sent.Landed || sent.Answered)
             {
                 return await ReuseStoppedAsync(sent).ConfigureAwait(false);
@@ -981,9 +1029,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 return null;
             }
 
-            // Round 4 finding 2 (replaces round 3 finding 6), round 5 rule: our start call is still PENDING at the window's end (a hang the CreateTimeout cut off), so it may still land and no label is
-            // written: the VM stays stopped under this job's labels and the outcome says NotRestored (see NoteStartUnanswered). A call that has COMPLETED (the branch above) is restored after the grace.
-            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteStartUnanswered(sent));
+            // Round 4 finding 2 (replaces round 3 finding 6), round 6 rule: our start call is still PENDING at the window's end (a hang the CreateTimeout cut off), so it may still land and no label is
+            // written: the VM stays stopped under this job's labels and the outcome says NotRestored (see NoteNotRestored). A call that has COMPLETED (the branch above) is restored after the grace.
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "StartUnanswered"));
         }
 
         sent.Landed = true; // seen running: the start landed
