@@ -202,7 +202,6 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
             _run = run;
-            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings) ?? string.Empty;
             var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
             if (generation != Volatile.Read(ref _loadGeneration))
             {
@@ -231,6 +230,8 @@ public sealed partial class ResultsViewModel : ObservableObject
                 return;
             }
 
+            // Only with a folder to open: a missing folder already has its notice, and a line over a disabled button would be a dead end.
+            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings) ?? string.Empty;
             Show(folder!, snapshot);
 
             await ShowGeneTablesAsync(folder!, generation);

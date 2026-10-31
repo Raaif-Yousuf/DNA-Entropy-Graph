@@ -333,6 +333,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     {
         var local = TimeZoneInfo.ConvertTime(run.CreatedUtc, _time.LocalTimeZone);
         var (status, statusKey) = Classify(run.Phase);
+        var keptAside = RunsCopy.KeptAsideLine(run, _strings);
         return new RunListItem(
             run,
             string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name,
@@ -354,8 +355,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
-            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings),
-            OpenOutputFolderCommand = RunsCopy.KeptAsideLine(run, _strings) is null ? null : new AsyncRelayCommand(() => OpenOutputFolderAsync(run)),
+            KeptAsideText = keptAside,
+            OpenOutputFolderCommand = keptAside is null ? null : new AsyncRelayCommand(() => OpenOutputFolderAsync(run)),
             CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
             OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
             ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),

@@ -809,10 +809,10 @@
     <value>Open the output folder</value>
   </data>
   <data name="Runs_KeptAside_One" xml:space="preserve">
-    <value>1 file you had changed was kept next to the new result under a new name ("(changed" and the date). Open the output folder to compare them.</value>
+    <value>1 file you had changed was kept next to the new result under a new name that ends with the word changed and the date. Open the output folder to compare them.</value>
   </data>
   <data name="Runs_KeptAside_Many" xml:space="preserve">
-    <value>{0} files you had changed were kept next to the new results under new names ("(changed" and the date). Open the output folder to compare them.</value>
+    <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
   </data>
   <data name="RunsOpenButton.Content" xml:space="preserve">
     <value>Open</value>

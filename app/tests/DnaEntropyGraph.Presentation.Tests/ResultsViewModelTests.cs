@@ -126,6 +126,19 @@ public sealed class ResultsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Issue_929_a_run_whose_folder_is_gone_shows_its_folder_notice_and_no_line_over_a_dead_button()
+    {
+        _strings.GetString(RunsCopy.KeptAsideOne).Returns("one file kept");
+        _rows = [Row("gone", Path.Combine(_base, "no-such-folder")) with { ErrorDetail = KeptAsideDetail.Append(null, 1) }];
+
+        var vm = await Loaded("gone");
+
+        vm.IsNoticeVisible.ShouldBeTrue("the page already says the folder is missing");
+        vm.IsKeptAsideVisible.ShouldBeFalse();
+        vm.OpenFolderCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Issue_929_a_run_with_no_renamed_file_shows_no_line_and_the_line_does_not_outlive_its_run()
     {
         _strings.GetString(RunsCopy.KeptAsideOne).Returns("one file kept");
