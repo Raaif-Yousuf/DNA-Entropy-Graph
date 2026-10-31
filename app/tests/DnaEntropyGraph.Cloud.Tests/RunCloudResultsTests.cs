@@ -209,14 +209,14 @@ public sealed class RunCloudResultsTests : IDisposable
         // Issue #955: cloud rows persist Name as the job id, so the folder came back named by job id, not by the template the user chose.
         PutResult();
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\data\seq.fasta", NameTemplate = "{file}_{model}_{date}" };
-        var started = new DateTimeOffset(2026, 10, 2, 9, 30, 0, TimeSpan.Zero);
+        var started = new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero); // noon UTC: the same local date in every time zone
         var run = Run() with { OutputDir = null, Name = JobId, StartedAt = started, OptionsJson = RunOptionsJson.Serialize(options) };
 
         (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
 
         var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
         var expected = RunOutputFolders.RunFolderName(options, new StagedInput(string.Empty, "seq.fasta"), started.ToLocalTime().DateTime);
-        expected.ShouldStartWith("seq_evo2_7b_");
+        expected.ShouldBe("seq_evo2_7b_2026-10-02");
         Path.GetFileName(made).ShouldBe(expected);
         RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
     }
@@ -247,6 +247,46 @@ public sealed class RunCloudResultsTests : IDisposable
 
         var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
         Path.GetFileName(made).ShouldBe("NC_045512_2_evo2_7b");
+    }
+
+    [Fact]
+    public async Task A_recorded_accession_is_checked_again_and_normalised_before_it_names_the_folder()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "  nc_045512.2 ", AccessionRange = "100-500", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("NC_045512_2_100-500_evo2_7b");
+    }
+
+    [Fact]
+    public async Task A_recorded_accession_that_fails_its_check_falls_back_to_the_job_id()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "..\\evil", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe(JobId);
+    }
+
+    [Fact]
+    public async Task Valid_options_that_name_no_input_fall_back_to_the_rows_name_not_the_template()
+    {
+        // The `input is null` branch: a template with {file} and nothing to fill it with must not name the folder "run" or the model alone.
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = "my named run", OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("my named run");
     }
 
     [Theory]
