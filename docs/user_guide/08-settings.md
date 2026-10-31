@@ -26,6 +26,10 @@ Each run's results are also stored in a storage area in your own Google Cloud pr
 
 Three switches for what the app does when a run finishes: show a message (on), open the folder that holds the results (off) and open the Results page (off, so a finished run never pulls you away from what you are typing). When the app is not the window in front (or is minimized), the message also appears as a Windows notification, for a run that finished and for one that failed; **Open run** on it (or a click on the notification) opens that run's Results page, even if you had closed the app. If you do not see it, check that Windows Focus Assist is not hiding notifications. They are saved at once and apply from the next run that finishes, whichever page you are on. If another copy of the app has the settings file open, the group says so; close the other copies and change the switch again.
 
+## Spending
+
+A monthly warning cap in US dollars and a **Hard stop** tick box, saved at once. The group also shows your estimated spending so far this month. An empty box means no cap; text that is not a number above zero is refused with a message and the cap stays as it was. See [Costs and cleanup](06-costs-and-cleanup.md) for what the warning and the hard stop do.
+
 ## Help
 
 The first time you open the app, a short tour points at New run, Runs, Cloud and Settings, one step at a time. Press **Next** to move on or **Skip tour** to close it; the app remembers you have seen it. **Show the tour again** in this group starts it over, and **Open the user guide** opens this guide in your web browser. The **Help** button at the top right of the window opens the guide page for the screen you are on (for example, Help on the Cloud page opens the costs and cleanup page). After **Reset all settings** the tour shows again at the next start.

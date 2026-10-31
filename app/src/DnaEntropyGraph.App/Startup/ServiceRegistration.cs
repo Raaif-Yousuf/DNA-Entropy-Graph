@@ -193,7 +193,19 @@ public static class ServiceRegistration
         // gets a factory registration rather than the type-to-type shorthand
         // the rest of this method uses.
         services.AddSingleton(_ => new SqliteDatabase(databasePath, portable: root.IsPortable));
-        services.AddSingleton<IRunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper, sp.GetRequiredService<IDiagnosticsLog>()));
+        services.AddSingleton<RunRepository>(sp => new RunRepository(sp.GetRequiredService<SqliteDatabase>(), root.PathMapper, sp.GetRequiredService<IDiagnosticsLog>()));
+        // Issue #109: every writer of a run row (runner, reconciler, cleanup) goes through this decorator, which writes the run's
+        // CostLedger row the first time the row reaches an ended phase. The same SpendLedger is the cap gate the run start and the
+        // New run page ask, so the number that is written is the number that is checked.
+        services.AddSingleton<ICostLedgerRepository>(sp => new CostLedgerRepository(sp.GetRequiredService<SqliteDatabase>()));
+        services.AddSingleton<SpendLedger>(sp => new SpendLedger(
+            sp.GetRequiredService<ICostLedgerRepository>(),
+            sp.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingSource>(),
+            sp.GetRequiredService<ISettingsStore>(),
+            TimeProvider.System,
+            runs: sp.GetRequiredService<RunRepository>()));
+        services.AddSingleton<DnaEntropyGraph.Core.Cost.ISpendCapGate>(sp => sp.GetRequiredService<SpendLedger>());
+        services.AddSingleton<IRunRepository>(sp => new LedgerRecordingRunRepository(sp.GetRequiredService<RunRepository>(), sp.GetRequiredService<SpendLedger>()));
         services.AddSingleton<IProjectRepository>(sp => new ProjectRepository(sp.GetRequiredService<SqliteDatabase>()));
         services.AddSingleton<SettingsStore>(_ => new SettingsStore(settingsPath));
         services.AddSingleton<ISettingsStore>(sp => sp.GetRequiredService<SettingsStore>());
@@ -215,8 +227,8 @@ public static class ServiceRegistration
         // Issue #101: the Runs page's services. Output folders are only ever deleted from under the run's own
         // output folder, and never from the app data folder that holds the input copies (Hard Rule 14).
         services.AddSingleton<TimeProvider>(TimeProvider.System);
-        services.AddSingleton<IRunHistoryRemover>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
-        services.AddSingleton<IRunAnnotations>(sp => (RunRepository)sp.GetRequiredService<IRunRepository>());
+        services.AddSingleton<IRunHistoryRemover>(sp => sp.GetRequiredService<RunRepository>());
+        services.AddSingleton<IRunAnnotations>(sp => sp.GetRequiredService<RunRepository>());
         services.AddSingleton<ILocalRunFiles>(sp => new LocalRunFiles(
             sp.GetRequiredService<IRunInputStore>(),
             () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
@@ -450,6 +462,7 @@ public static class ServiceRegistration
         services.AddTransient<CloudActivityLogSettingsViewModel>();
         services.AddTransient<NotificationsSettingsViewModel>();
         services.AddTransient<AdvancedSettingsViewModel>();
+        services.AddTransient<SpendCapSettingsViewModel>();
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
         services.AddSingleton<RunTargetPickerViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();

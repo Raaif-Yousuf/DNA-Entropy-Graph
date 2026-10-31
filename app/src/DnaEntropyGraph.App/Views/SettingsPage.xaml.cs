@@ -20,6 +20,7 @@ public sealed partial class SettingsPage : Page
 
     public AdvancedSettingsViewModel Advanced { get; }
 
+    public SpendCapSettingsViewModel SpendCap { get; }
     public ThisPcSettingsViewModel ThisPc { get; }
 
     public CloudResultsSettingsViewModel CloudResults { get; }
@@ -47,6 +48,7 @@ public sealed partial class SettingsPage : Page
         Notifications = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<NotificationsSettingsViewModel>();
         FileAssociation = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FileAssociationSettingsViewModel>();
         Advanced = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<AdvancedSettingsViewModel>();
+        SpendCap = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SpendCapSettingsViewModel>();
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
