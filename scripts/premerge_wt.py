@@ -89,15 +89,7 @@ def is_primary_checkout(root: Path) -> bool:
     return (root / ".git").is_dir()
 
 
-def primary_venv(root: Path) -> Path:
-    """`<primary checkout>\\worker\\.venv`, from git's common dir. Raises wt_venv.LinkError when git cannot say."""
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root, capture_output=True, text=True, check=True
-        )
-    except (subprocess.CalledProcessError, OSError) as err:
-        raise wt_venv.LinkError(f"could not ask git for the primary checkout ({err})") from err
-    return Path(out.stdout.strip()).parent / wt_venv.VENV_REL
+primary_venv = wt_venv.primary_venv  # moved to wt_venv so premerge.py shares it (#1001)
 
 
 def _through_link(venv: Path, link: Path, wt: Path) -> bool:

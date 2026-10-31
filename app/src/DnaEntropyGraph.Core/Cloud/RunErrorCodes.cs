@@ -112,6 +112,8 @@ public static class RunErrorCodes
     public const string NetworkCertificate = "network_certificate";
     /// <summary>The run was ended because the user deleted everything this installation made in the project (issue #105): its VM is gone, so the row is Cancelled, never left Running.</summary>
     public const string DeletedByCleanup = "cleanup_deleted";
+    /// <summary>The run was refused before anything was created because the monthly spending cap's hard stop is on and this month's estimated spend has reached it (issue #109).</summary>
+    public const string SpendCap = "spend_cap";
 
     /// <summary>The run was ended because its computer was stopped from the exit window (issue #113) while the run was still live: the row is Cancelled, never left Running.</summary>
     public const string StoppedByCleanup = "cleanup_stopped";
@@ -124,7 +126,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, SpendCap, StoppedByCleanup,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
         ProxyBlocked, NetworkCertificate,
     ];
@@ -276,6 +278,7 @@ public static class RunErrorCodes
         WorkerDefaultAccountMissing => "RunError_worker_default_account_missing",
         WorkerIdentityNotApplied => "RunError_worker_identity_not_applied",
         DeletedByCleanup => "RunError_cleanup_deleted",
+        SpendCap => "RunError_spend_cap",
         StoppedByCleanup => "RunError_cleanup_stopped",
         "billing" => "RunError_billing",
         "api_disabled" => "RunError_api_disabled",

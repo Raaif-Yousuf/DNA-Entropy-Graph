@@ -16,6 +16,13 @@ public sealed class CostLedgerRepository : ICostLedgerRepository
         SELECT last_insert_rowid();
         """;
 
+    // changes() is 0 when the unique index made the insert a no-op; last_insert_rowid() would then be a stale id from another insert.
+    private const string TryInsertSql = """
+        INSERT OR IGNORE INTO CostLedger (RunId, ResourceId, Kind, StartedUtc, EndedUtc, UsdEst)
+        VALUES (@RunId, @ResourceId, @Kind, @StartedUtc, @EndedUtc, @UsdEst);
+        SELECT CASE WHEN changes() > 0 THEN last_insert_rowid() ELSE 0 END;
+        """;
+
     private readonly SqliteDatabase _database;
 
     public CostLedgerRepository(SqliteDatabase database) => _database = database;
@@ -34,6 +41,14 @@ public sealed class CostLedgerRepository : ICostLedgerRepository
         var command = new CommandDefinition(InsertSql, ToRow(entry), cancellationToken: cancellationToken);
         var newId = await connection.ExecuteScalarAsync<long>(command).ConfigureAwait(false);
         return entry with { Id = newId };
+    }
+
+    public async Task<CostLedgerEntry?> TryAppendAsync(CostLedgerEntry entry, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(TryInsertSql, ToRow(entry), cancellationToken: cancellationToken);
+        var newId = await connection.ExecuteScalarAsync<long>(command).ConfigureAwait(false);
+        return newId == 0 ? null : entry with { Id = newId };
     }
 
     private static CostLedgerEntry ToRecord(Row row) => new(
