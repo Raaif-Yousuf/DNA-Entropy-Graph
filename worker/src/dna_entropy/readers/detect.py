@@ -6,6 +6,7 @@ Order of evidence: file extension first, then a content sniff of the first non-b
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .encoding import read_text
@@ -23,7 +24,7 @@ _EMBL_EXT = frozenset({".embl", ".emb"})
 _FASTA_EXT = frozenset({".fa", ".fasta", ".fna", ".ffn"})
 
 
-def detect_kind(path: str | None) -> str:
+def detect_kind(path: str | os.PathLike[str] | None) -> str:
     """Return ``"genbank"``, ``"fasta"``, or ``"paste"`` for ``path`` (None => paste)."""
     if path is None:
         return PASTE

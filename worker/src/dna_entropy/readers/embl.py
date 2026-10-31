@@ -8,6 +8,8 @@ endings are normalised before Biopython sees them, exactly like the GenBank read
 
 from __future__ import annotations
 
+import os
+
 from .encoding import read_text
 from .genbank import GenBankReadError, GenBankRecord, parse_recording_dropped_locations, records_from_parsed
 
@@ -42,7 +44,7 @@ def _refuse_non_ascii_sequence(text: str) -> None:
             in_seq = False
 
 
-def read_embl(path: str) -> tuple[list[GenBankRecord], list[str]]:
+def read_embl(path: str | os.PathLike[str]) -> tuple[list[GenBankRecord], list[str]]:
     """Return ``(records, notices)`` for every record in an EMBL file."""
 
     text = read_text(path).replace("\r\n", "\n").replace("\r", "\n")

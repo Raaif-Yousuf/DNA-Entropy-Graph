@@ -14,6 +14,10 @@ changes for now. Close the other copies, then choose it again.
 
 The files a new run starts with, one list for a GenBank file and one for a FASTA file or a pasted sequence. Tick or untick a file and it is remembered at once; the New run page shows the same ticks, and a choice you make there for a run is remembered here too. At least one file must stay ticked. WIG and the IGV track are alternatives (the worker writes one track format per run), so ticking one unticks the other.
 
+## Save results to
+
+The folder every new run saves its results into (your Downloads folder until you change it). **Change folder** opens a folder chooser and **Use Downloads** goes back to the start. The choice is remembered at once, and the New run page shows and changes the same folder. A whole drive such as D:\ is refused with a message beside the button, and the folder you had stays. If another copy of the app has the settings file open, the group says so; close the other copies and choose again. This choice is not part of Export settings, because a folder only means something on this computer.
+
 ## Files
 
 Where the app keeps its own data: the app data folder, the run folders (each keeps a saved copy of the input file it ran, with how much space those copies and your pasted sequences take) and the log files. **Open folder** shows each in Windows Explorer. Nothing here deletes anything: your results and your input files stay until you remove them yourself. If Windows cannot open a folder, open File Explorer and paste the folder path shown on the page into its address bar.

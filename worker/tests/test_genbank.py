@@ -96,7 +96,7 @@ def test_read_genbank_zero_feature_summary_notice_is_grammatical(tmp_path: Path)
     with open(p, "w", encoding="utf-8", newline="\n") as fh:
         SeqIO.write(rec, fh, "genbank")
 
-    records, notices = read_genbank(str(p))
+    records, notices = read_genbank(p)
     assert records[0].features == []
     assert any("0 gene feature(s)" in n for n in notices)
     assert not any("no gene feature" in n for n in notices)
@@ -116,7 +116,7 @@ def test_read_genbank_wraps_a_missing_origin_block_as_a_clean_error(tmp_path: Pa
         encoding="utf-8",
     )
     with pytest.raises(GenBankReadError):
-        read_genbank(str(p))
+        read_genbank(p)
 
 
 def test_read_genbank_names_a_reason_when_biopython_raises_a_bare_assertion() -> None:
@@ -129,7 +129,7 @@ def test_read_genbank_names_a_reason_when_biopython_raises_a_bare_assertion() ->
     leaving the gap empty."""
     path = MALFORMED_DIR / "genbank_qualifier_missing_slash.gb"
     with pytest.raises(GenBankReadError) as excinfo:
-        read_genbank(str(path))
+        read_genbank(path)
     message = str(excinfo.value)
     assert "Could not parse the GenBank file: . " not in message, (
         f"the reason slot is still empty: {message!r}"
@@ -164,7 +164,7 @@ def test_read_genbank_handles_lone_cr_line_endings(tmp_path: Path) -> None:
     raw = Path(SAMPLE_GB).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r")
     p = tmp_path / "lone_cr.gb"
     p.write_bytes(raw)
-    records, notices = read_genbank(str(p))
+    records, notices = read_genbank(p)
     assert len(records) == 1
     assert len(records[0].seq) == 126
     assert len(records[0].features) == 2
@@ -177,7 +177,7 @@ def test_read_genbank_strips_a_utf8_bom(tmp_path: Path) -> None:
     raw = Path(SAMPLE_GB).read_bytes()
     p = tmp_path / "bom_sample.gb"
     p.write_bytes(b"\xef\xbb\xbf" + raw)
-    records, notices = read_genbank(str(p))
+    records, notices = read_genbank(p)
     assert len(records) == 1
     assert len(records[0].seq) == 126
     assert len(records[0].features) == 2
@@ -581,7 +581,7 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
     cut = tmp_path / "trunc.gb"
     cut.write_text(text[: len(text) - 200], encoding="utf-8", newline="\n")  # chops record 2 mid-ORIGIN
     with pytest.raises(GenBankReadError) as exc:
-        read_genbank(str(cut))
+        read_genbank(cut)
     msg = str(exc.value)
     assert "record 2" in msg, msg
     assert "truncated" in msg  # the action stays: check the file was not truncated
@@ -589,7 +589,7 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
 
 def test_a_malformed_first_record_is_named_record_1() -> None:
     with pytest.raises(GenBankReadError, match="record 1"):
-        read_genbank(str(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb"))
+        read_genbank(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb")
 
 
 # --- issue #536: a truncated file (a LOCUS length, no ORIGIN sequence) is the reader's own error ---
@@ -604,7 +604,7 @@ def test_truncated_after_origin_raises_the_readers_own_error_naming_an_action(tm
     path = tmp_path / "truncated.gb"
     path.write_text(_truncated_after_origin(), encoding="utf-8", newline="\n")
     with pytest.raises(GenBankReadError) as exc:
-        read_genbank(str(path))
+        read_genbank(path)
     assert "Re-export" in str(exc.value)
     assert isinstance(exc.value, ValidationError)  # INPUT_INVALID at the worker boundary
 
@@ -620,7 +620,7 @@ def test_a_truncated_record_among_good_ones_is_skipped_with_a_notice(tmp_path: P
     good = Path(SAMPLE_GB).read_text(encoding="utf-8")
     path = tmp_path / "mixed.gb"
     path.write_text(good + _truncated_after_origin() + "\n//\n", encoding="utf-8", newline="\n")
-    records, notices = read_genbank(str(path))
+    records, notices = read_genbank(path)
     assert len(records) == 1
     assert any("Skipped GenBank record 2" in n and "no nucleotide sequence" in n for n in notices)
 
@@ -633,7 +633,7 @@ def test_every_prefix_of_a_valid_genbank_file_reads_or_raises_the_readers_own_er
     for cut in range(0, len(data) + 1, 3):
         path.write_bytes(data[:cut])
         try:
-            read_genbank(str(path))
+            read_genbank(path)
             outcomes["read"] += 1
         except GenBankReadError:
             outcomes["refused"] += 1
@@ -648,7 +648,7 @@ def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_err
     line shorter than Biopython's qualifier column raised a raw ``IndexError`` out of
     ``Bio.GenBank.Scanner.parse_features``, which the parse try-block did not catch."""
     with pytest.raises(GenBankReadError, match="record 1") as exc:
-        read_genbank(str(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb"))
+        read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
     assert "Check" in str(exc.value)  # names the action
     assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact
 
@@ -688,7 +688,7 @@ def test_a_non_ascii_origin_letter_is_refused_naming_its_code_point_and_position
     path = tmp_path / "non_ascii.gb"
     path.write_text(_gb_with_origin(f"        1 acgtacgt{char}acgtacg"), encoding="utf-8", newline="\n")
     with pytest.raises(GenBankReadError) as exc:
-        read_genbank(str(path))
+        read_genbank(path)
     message = str(exc.value)
     assert f"Invalid character {code_point} at position 9" in message
     assert "record 1" in message
@@ -711,7 +711,7 @@ def test_the_non_ascii_position_counts_bases_across_origin_lines_not_digits_or_s
         newline="\n",
     )
     with pytest.raises(GenBankReadError, match=r"U\+017F at position 25"):
-        read_genbank(str(path))
+        read_genbank(path)
 
 
 def test_the_non_ascii_refusal_names_the_record_and_counts_from_its_own_origin(tmp_path: Path) -> None:
@@ -722,7 +722,7 @@ def test_the_non_ascii_refusal_names_the_record_and_counts_from_its_own_origin(t
     with pytest.raises(
         GenBankReadError, match=r"U\+017F at position 4 .*record 2|record 2.*U\+017F at position 4"
     ):
-        read_genbank(str(path))
+        read_genbank(path)
 
 
 def test_non_ascii_outside_the_origin_block_is_still_read(tmp_path: Path) -> None:
@@ -731,7 +731,7 @@ def test_non_ascii_outside_the_origin_block_is_still_read(tmp_path: Path) -> Non
     )
     path = tmp_path / "qualifier.gb"
     path.write_text(text, encoding="utf-8", newline="\n")
-    records, _ = read_genbank(str(path))
+    records, _ = read_genbank(path)
     assert records[0].seq == "ACGTACGTACGTACGT"
     assert records[0].features[0].gene_id == "g\u00e9ne"
 
@@ -739,5 +739,5 @@ def test_non_ascii_outside_the_origin_block_is_still_read(tmp_path: Path) -> Non
 def test_an_ascii_lowercase_origin_is_still_uppercased(tmp_path: Path) -> None:
     path = tmp_path / "lower.gb"
     path.write_text(_gb_with_origin("        1 acgtacgtrykmacgt"), encoding="utf-8", newline="\n")
-    records, _ = read_genbank(str(path))
+    records, _ = read_genbank(path)
     assert records[0].seq == "ACGTACGTRYKMACGT"
