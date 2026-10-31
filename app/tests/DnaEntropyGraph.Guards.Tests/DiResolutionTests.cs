@@ -433,12 +433,29 @@ public class DiResolutionTests
         var runs = provider.GetRequiredService<DnaEntropyGraph.Core.Abstractions.IRunRepository>();
         await runs.UpsertAsync(new DnaEntropyGraph.Core.Abstractions.RunRecord("job-di", DnaEntropyGraph.Core.JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
 
-        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync("fake-project", "inst-di", CancellationToken.None);
+        await provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.InstallationCleanup>().DeleteAllAsync(new DnaEntropyGraph.Core.Cloud.CloudScope("fake-project"), "inst-di", CancellationToken.None);
 
         var row = (await runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == "job-di");
         row.Phase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Cancelled);
         row.ErrorCode.ShouldBe(DnaEntropyGraph.Core.Cloud.RunErrorCodes.DeletedByCleanup);
     }
+    [Fact]
+    public void The_production_runner_reports_how_a_late_create_ended_to_the_diagnostics_log_by_id_and_state_only()
+    {
+        // Issue #938 round 4 M1: OnLateCreate was set nowhere in the app, so the outcome of the late clean-up (and the ToTest row's "diagnostics log shows Deleted") could never appear.
+        using var provider = BuildRealServiceProvider();
+        var runner = provider.GetRequiredService<DnaEntropyGraph.Core.Cloud.CloudJobRunner>();
+
+        runner.OnLateCreate.ShouldNotBeNull("nothing in the app listened for a late create's outcome");
+        runner.OnLateCreate!(new DnaEntropyGraph.Core.Cloud.LateCreateOutcome("job-late-di", DnaEntropyGraph.Core.Cloud.LateCreateState.DeleteFailed, "permission"));
+
+        var log = Directory.EnumerateFiles(TempAppDataRoot.Value, "app.log", SearchOption.AllDirectories).Select(File.ReadAllText).SingleOrDefault();
+        log.ShouldNotBeNull("the late-create line was not written to app.log");
+        var line = log.Split('\n').Single(l => l.Contains("late-create", StringComparison.Ordinal));
+        line.ShouldContain("job=job-late-di");
+        line.ShouldContain("error=DeleteFailed:permission");
+    }
+
     [Fact]
     public async Task The_production_runner_asks_the_UI_through_the_coordinator_and_a_missing_window_never_ends_a_run()
     {

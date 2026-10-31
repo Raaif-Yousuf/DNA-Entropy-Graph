@@ -116,19 +116,19 @@ public sealed class CloudCallPipeline
     /// <param name="bypassBreaker">True for cleanup that must still reach Google while the breaker is open (cancel, stop, delete, find-by-job): same retries, no breaker.</param>
     /// <param name="singleRequest">True for a call that is exactly one small HTTP request: each attempt is cut after <see cref="CloudRetryOptions.AttemptTimeout"/> and retried. False (the default) for media transfers and for calls that wrap several requests, which have their own deadlines.</param>
     /// <param name="replayable">False when the call consumes something that cannot be replayed (a non-seekable upload stream): it then gets neither retries nor a 401 replay.</param>
-    public async Task<T> ExecuteAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false)
+    public async Task<T> ExecuteAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false, string? accountSub = null)
     {
         try
         {
-            return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
+            return await RunAsync(operation, AsAccount(action, accountSub), cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 401 && replayable)
         {
-            await _refresher.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            await _refresher.RefreshAsync(accountSub ?? CallAccount.Current, cancellationToken).ConfigureAwait(false);
             _observer.OnTokenRefreshed(operation);
             try
             {
-                return await RunAsync(operation, action, cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
+                return await RunAsync(operation, AsAccount(action, accountSub), cancellationToken, replayable, bypassBreaker, singleRequest).ConfigureAwait(false);
             }
             catch (CloudOperationException again) when (again.Error.HttpStatus == 401)
             {
@@ -137,7 +137,7 @@ public sealed class CloudCallPipeline
         }
     }
 
-    public async Task ExecuteAsync(string operation, Func<CancellationToken, Task> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false)
+    public async Task ExecuteAsync(string operation, Func<CancellationToken, Task> action, CancellationToken cancellationToken, bool replayable = true, bool bypassBreaker = false, bool singleRequest = false, string? accountSub = null)
         => await ExecuteAsync<bool>(
             operation,
             async token =>
@@ -148,7 +148,24 @@ public sealed class CloudCallPipeline
             cancellationToken,
             replayable,
             bypassBreaker,
-            singleRequest).ConfigureAwait(false);
+            singleRequest,
+            accountSub).ConfigureAwait(false);
+
+    /// <summary>Issue #830: runs <paramref name="action"/> with <paramref name="accountSub"/> as the account every Google request in it is authorised as (read by the bearer handlers through <see cref="CallAccount"/>); null means the current account.</summary>
+    private static Func<CancellationToken, Task<T>> AsAccount<T>(Func<CancellationToken, Task<T>> action, string? accountSub)
+        => accountSub is null ? action : async token =>
+        {
+            var previous = CallAccount.Current;
+            CallAccount.Current = accountSub;
+            try
+            {
+                return await action(token).ConfigureAwait(false);
+            }
+            finally
+            {
+                CallAccount.Current = previous;
+            }
+        };
 
     private async Task<T> RunAsync<T>(string operation, Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken, bool replayable, bool bypassBreaker, bool singleRequest)
     {

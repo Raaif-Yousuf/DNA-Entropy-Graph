@@ -12,7 +12,7 @@ public sealed record RunImportResult(int Imported, int AlreadyKnown, int Skipped
 /// <summary>Issue #111: finds finished runs in the project's results buckets that this computer's history does not know.</summary>
 public interface IRunImporter
 {
-    Task<RunImportResult> ImportAsync(string projectId, CancellationToken cancellationToken);
+    Task<RunImportResult> ImportAsync(CloudScope scope, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -26,16 +26,17 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
     /// <summary>Issue #111: the most bytes read from a foreign manifest.json or result.json; anything larger is skipped, never stored.</summary>
     public const int MaxObjectBytes = 1024 * 1024;
 
-    public async Task<RunImportResult> ImportAsync(string projectId, CancellationToken cancellationToken)
+    public async Task<RunImportResult> ImportAsync(CloudScope scope, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope.ProjectId);
         var known = (await runs.GetAllAsync(cancellationToken).ConfigureAwait(false)).Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
         var dismissed = dismissals?.Load() ?? new HashSet<string>();
         int imported = 0, alreadyKnown = 0, skipped = 0;
 
-        foreach (var bucket in await storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false))
+        foreach (var bucket in await storage.ListBucketsAsync(scope, cancellationToken).ConfigureAwait(false))
         {
-            foreach (var prefix in await storage.ListChildPrefixesAsync(bucket.Name, ResultsBucket.JobsPrefix, cancellationToken).ConfigureAwait(false))
+            foreach (var prefix in await storage.ListChildPrefixesAsync(scope, bucket.Name, ResultsBucket.JobsPrefix, cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var jobId = prefix[ResultsBucket.JobsPrefix.Length..].TrimEnd('/');
@@ -51,7 +52,7 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
                     continue;
                 }
 
-                var row = await TryBuildRowAsync(projectId, bucket.Name, jobId, cancellationToken).ConfigureAwait(false);
+                var row = await TryBuildRowAsync(scope, bucket.Name, jobId, cancellationToken).ConfigureAwait(false);
                 if (row is null)
                 {
                     skipped++;
@@ -67,11 +68,11 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
         return new RunImportResult(imported, alreadyKnown, skipped);
     }
 
-    private async Task<RunRecord?> TryBuildRowAsync(string projectId, string bucket, string jobId, CancellationToken cancellationToken)
+    private async Task<RunRecord?> TryBuildRowAsync(CloudScope scope, string bucket, string jobId, CancellationToken cancellationToken)
     {
         var prefix = WorkerManifestBuilder.JobPrefix(jobId);
-        var manifestJson = await ReadTextAsync(bucket, prefix + "manifest.json", cancellationToken).ConfigureAwait(false);
-        var resultJson = manifestJson is null ? null : await ReadTextAsync(bucket, prefix + "result.json", cancellationToken).ConfigureAwait(false);
+        var manifestJson = await ReadTextAsync(scope, bucket, prefix + "manifest.json", cancellationToken).ConfigureAwait(false);
+        var resultJson = manifestJson is null ? null : await ReadTextAsync(scope, bucket, prefix + "result.json", cancellationToken).ConfigureAwait(false);
         if (manifestJson is null || resultJson is null)
         {
             // No manifest: not one of our job folders. No result: still running or never finished, nothing to show or download yet.
@@ -106,7 +107,8 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
                 Name: FirstInputName(root) ?? jobId,
                 ErrorCode: phase == JobPhase.Failed ? result.ErrorCode ?? RunErrorCodes.WorkerFailed : null,
                 ManifestJson: manifestJson,
-                ProjectId: projectId,
+                ProjectId: scope.ProjectId,
+                AccountSub: scope.AccountSub,
                 Bucket: bucket,
                 JobPrefix: prefix,
                 AppVersion: Str(createdBy, "appVersion"),
@@ -122,9 +124,9 @@ public sealed class RunImporter(IStorageGateway storage, IRunRepository runs, Im
         }
     }
 
-    private async Task<string?> ReadTextAsync(string bucket, string key, CancellationToken cancellationToken)
+    private async Task<string?> ReadTextAsync(CloudScope scope, string bucket, string key, CancellationToken cancellationToken)
     {
-        await using var stream = await storage.TryDownloadAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+        await using var stream = await storage.TryDownloadAsync(scope, bucket, key, cancellationToken).ConfigureAwait(false);
         if (stream is null)
         {
             return null;

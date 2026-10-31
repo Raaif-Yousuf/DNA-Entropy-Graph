@@ -50,11 +50,11 @@ public sealed class JobObjectDeleterTests
         _gcp.WithPrefixDeleteFailingAfter(2, CloudErrorKind.Permission);
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
         var counts = 0;
-        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
+        storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
             ? _gcp.GetPrefixUsageAsync(Bucket, Prefix, call.Arg<CancellationToken>())
             : Task.FromException<PrefixUsage>(new IOException("read-back failed")));
-        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
-        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => _gcp.DeletePrefixAsync(Bucket, Prefix, call.Arg<CancellationToken>()));
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
+        storage.DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => _gcp.DeletePrefixAsync(Bucket, Prefix, call.Arg<CancellationToken>()));
         return storage;
     }
 
@@ -111,11 +111,11 @@ public sealed class JobObjectDeleterTests
         Seed(JobId, 4);
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
         var counts = 0;
-        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
+        storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(call => ++counts == 1
             ? _gcp.GetPrefixUsageAsync(Bucket, Prefix, call.Arg<CancellationToken>())
             : Task.FromException<PrefixUsage>(new IOException("read-back failed")));
-        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
-        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns<Task<int>>(async _ =>
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>()).Returns(call => _gcp.TryDownloadAsync(Bucket, Prefix + "manifest.json", call.Arg<CancellationToken>()));
+        storage.DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns<Task<int>>(async _ =>
         {
             await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file0.bin", CancellationToken.None);
             await _gcp.DeleteObjectAsync(Bucket, Prefix + "out/file1.bin", CancellationToken.None);
@@ -135,12 +135,12 @@ public sealed class JobObjectDeleterTests
     {
         // The sweep did not fail; only the count after it did. The page must not claim the delete stopped.
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
-        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
+        storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
             Task.FromResult(new PrefixUsage(3, 30)),
             Task.FromException<PrefixUsage>(new IOException("read-back failed")));
-        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
-        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
+        storage.DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
         var runs = new InMemoryRunRepository();
         var results = new RunCloudResults(storage, new JobObjectDeleter(storage, () => Installation), runs, () => Path.GetTempPath(), TimeProvider.System);
 
@@ -166,12 +166,12 @@ public sealed class JobObjectDeleterTests
     {
         // No failure to surface: the delete was accepted, the count after it is unknown, so it is not reported as done.
         var storage = NSubstitute.Substitute.For<IStorageGateway>();
-        storage.GetPrefixUsageAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
+        storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(
             Task.FromResult(new PrefixUsage(3, 30)),
             Task.FromException<PrefixUsage>(new IOException("read-back failed")));
-        storage.TryDownloadAsync(Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "manifest.json", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Installation + "\"}}"))));
-        storage.DeletePrefixAsync(Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
+        storage.DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>()).Returns(Task.FromResult(3));
 
         var ex = await Should.ThrowAsync<PartialCloudDeleteException>(() => new JobObjectDeleter(storage, () => Installation).DeleteJobObjectsAsync(Bucket, Prefix, TestContext.Current.CancellationToken));
 

@@ -35,7 +35,7 @@ public sealed record GoogleCloudGatewaySet(
 /// </summary>
 public static class GoogleCloudGateways
 {
-    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null, Func<string?>? selectedProjectId = null)
+    public static GoogleCloudGatewaySet Create(IGcpAccessTokenSource tokens, CloudCallPipeline pipeline, GoogleCloudOptions? options = null, Func<string?>? budgetProjectId = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -68,7 +68,7 @@ public static class GoogleCloudGateways
             storage,
             // Not wrapped in ResilientComputeGateway: every HTTP request goes through the pipeline itself, so a transient poll error
             // retries that poll and never replays the insert. Production DI must not wrap it either (#609).
-            new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options, selectedProjectId ?? (() => null)),
+            new GoogleComputeGateway(new ComputeService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options),
             // Not wrapped: the account, the role and the two policy edits are creates and read-modify-writes; each HTTP call goes through
             // the pipeline itself, and the policy writes carry the etag they read, so a replay conflicts instead of overwriting.
             workerIdentity,
@@ -80,7 +80,7 @@ public static class GoogleCloudGateways
                 new CloudBillingBudgetService(GoogleRestClient.CreateInitializer(tokens, options)),
                 new CloudResourceManagerService(GoogleRestClient.CreateInitializer(tokens, options)),
                 pipeline,
-                selectedProjectId ?? (() => null)),
+                budgetProjectId ?? (() => null)),
             // Not wrapped: a read-only list whose every page goes through the pipeline (issue #214).
             new GooglePricingCatalogGateway(new CloudbillingService(GoogleRestClient.CreateInitializer(tokens, options)), pipeline, options.TimeProvider));
     }

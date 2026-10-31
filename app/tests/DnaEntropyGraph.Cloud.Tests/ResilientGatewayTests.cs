@@ -22,7 +22,7 @@ public class ResilientGatewayTests
     {
         public int Count { get; private set; }
 
-        public Task RefreshAsync(CancellationToken cancellationToken)
+        public Task RefreshAsync(string? accountSub, CancellationToken cancellationToken)
         {
             Count++;
             return Task.CompletedTask;
@@ -247,7 +247,7 @@ public class ResilientGatewayTests
                 var args = method.GetParameters().Select(ArgumentFor).ToArray();
                 if (method.Name == nameof(IStorageGateway.DeletePrefixAsync))
                 {
-                    args[1] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
+                    args[Array.FindIndex(method.GetParameters(), p => p.Name == "prefix")] = "jobs/x/"; // a delete refuses a prefix that is not a folder path, so the sample must be one
                 }
 
                 var task = (Task)method.Invoke(gateway, args)!;
@@ -340,6 +340,11 @@ public class ResilientGatewayTests
         if (type == typeof(bool))
         {
             return false;
+        }
+
+        if (type == typeof(CloudScope))
+        {
+            return new CloudScope(FakeGcp.AnyProject);
         }
 
         if (type == typeof(Action))

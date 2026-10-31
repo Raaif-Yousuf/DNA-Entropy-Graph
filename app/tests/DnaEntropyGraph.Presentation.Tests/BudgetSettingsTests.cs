@@ -31,6 +31,7 @@ public sealed class BudgetSettingsTests
         _strings.GetString("BudgetThresholdsJoiner").Returns("+");
         _strings.GetString("BudgetThresholdsAnd").Returns("{0}&{1}");
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         _budgets.ConsoleLinkAsync(Project, Arg.Any<CancellationToken>()).Returns("https://console.cloud.google.com/billing/AAA/budgets");
     }
 
@@ -325,6 +326,7 @@ public sealed class BudgetSettingsTests
     {
         var vm = await OpenKnownAsync();
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         var save = 0;
         var remove = 0;
         vm.SaveCommand.CanExecuteChanged += (_, _) => save++;
@@ -340,6 +342,7 @@ public sealed class BudgetSettingsTests
     public async Task With_no_project_chosen_nothing_can_be_saved_and_the_page_says_to_set_one_up()
     {
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         var vm = Open();
 
         await vm.RefreshCommand.ExecuteAsync(null);
@@ -534,6 +537,8 @@ public sealed class BudgetSettingsTests
         vm.AmountText = "99";
 
         _account.SelectedProjectId.Returns("other-lab");
+
+        _account.SelectedScope().Returns(TestScopes.Of("other-lab"));
         await vm.RefreshCommand.ExecuteAsync(null);
 
         vm.AmountText.ShouldBe(20m.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture));
@@ -550,6 +555,8 @@ public sealed class BudgetSettingsTests
         vm.AmountText = "99";
 
         _account.SelectedProjectId.Returns("other-lab");
+
+        _account.SelectedScope().Returns(TestScopes.Of("other-lab"));
         await vm.RefreshCommand.ExecuteAsync(null);
 
         vm.AmountText.ShouldBe("50", "the box goes back to the default instead of carrying the other project's typed amount");
@@ -742,6 +749,8 @@ public sealed class BudgetSettingsTests
         vm.RemoveCommand.CanExecute(null).ShouldBeTrue();
 
         _account.SelectedProjectId.Returns("other-lab");
+
+        _account.SelectedScope().Returns(TestScopes.Of("other-lab"));
 
         vm.SaveCommand.CanExecute(null).ShouldBeFalse("the read was for my-lab, not other-lab");
         vm.RemoveCommand.CanExecute(null).ShouldBeFalse();

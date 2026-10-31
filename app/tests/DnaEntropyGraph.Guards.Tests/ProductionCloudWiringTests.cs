@@ -274,7 +274,7 @@ public class ProductionCloudWiringTests : IDisposable
     {
         var handler = new RecordingHandler();
         var tokens = Substitute.For<IGcpAccessTokenSource>();
-        tokens.GetAccessTokenAsync(Arg.Any<CancellationToken>()).Returns("scripted-token");
+        tokens.GetAccessTokenAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns("scripted-token");
         var account = Substitute.For<IGcpAccount>();
         account.SelectedProjectId.Returns("chosen-project");
         using var provider = Build(services =>
@@ -286,7 +286,7 @@ public class ProductionCloudWiringTests : IDisposable
             services.AddSingleton(account);
         });
 
-        var found = await provider.GetRequiredService<IComputeGateway>().ListAppVmsAsync(CancellationToken.None);
+        var found = await provider.GetRequiredService<IComputeGateway>().ListAppVmsAsync(new CloudScope("chosen-project"), CancellationToken.None);
 
         found.ShouldBeEmpty();
         handler.Requests.ShouldNotBeEmpty("the observable: a request was made at all");

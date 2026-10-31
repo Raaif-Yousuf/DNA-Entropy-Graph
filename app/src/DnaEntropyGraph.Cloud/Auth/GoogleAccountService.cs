@@ -80,6 +80,12 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     /// </summary>
     public string? SelectedProjectId => State.Active is { NeedsSignIn: false } active ? active.ProjectId ?? _options.ProjectIdUntilSelectionExists : null;
 
+    public CloudScope? SelectedScope()
+        => State.Active is { NeedsSignIn: false } active && (active.ProjectId ?? _options.ProjectIdUntilSelectionExists) is { Length: > 0 } project ? new CloudScope(project, active.Sub) : null;
+
+    public ActiveAccountSnapshot? ActiveSnapshot()
+        => State.Active is { } active ? new ActiveAccountSnapshot(active.Sub, active.ProjectId ?? _options.ProjectIdUntilSelectionExists, active.NeedsSignIn) : null;
+
     public AccountInfo? CurrentAccount => State.Active is { } active ? ToInfo(active) : null;
 
     public IReadOnlyList<AccountInfo> Accounts => State.Accounts.Select(ToInfo).ToList();
@@ -379,7 +385,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             // An account the file no longer lists is not put back: it may be one another copy is signing out right now (list entry gone, revoke pending, token file not yet deleted).
             await UpdateAsync(file => file.Accounts.Any(a => a.Sub == active.Sub && !a.NeedsSignIn)
                 ? file with { Accounts = [.. file.Accounts.Select(a => a.Sub == active.Sub ? a with { ProjectId = projectId } : a)] }
-                : throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account is no longer signed in (signed out in another copy of the app, or the list lost it)")).ConfigureAwait(false);
+                : throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the account is no longer signed in (signed out in another copy of the app, or the list lost it)", accountSub: active.Sub)).ConfigureAwait(false);
         }
         catch (TokenStorageException ex)
         {
@@ -422,22 +428,26 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
         RaiseChanged();
     }
 
-    public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) => AccessTokenAsync(forceRefresh: false, cancellationToken);
+    public Task<string> GetAccessTokenAsync(string? accountSub, CancellationToken cancellationToken) => AccessTokenAsync(accountSub, forceRefresh: false, cancellationToken);
+
+    /// <summary>The current account's token (the sign-in path and the calls that are not scoped to a run).</summary>
+    public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) => AccessTokenAsync(null, forceRefresh: false, cancellationToken);
 
     /// <summary>The resilience pipeline calls this once after a 401: the access token Google just refused is replaced even if it looks fresh.</summary>
-    public async Task RefreshAsync(CancellationToken cancellationToken) => _ = await AccessTokenAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+    public async Task RefreshAsync(string? accountSub, CancellationToken cancellationToken) => _ = await AccessTokenAsync(accountSub, forceRefresh: true, cancellationToken).ConfigureAwait(false);
 
-    private async Task<string> AccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
+    private async Task<string> AccessTokenAsync(string? accountSub, bool forceRefresh, CancellationToken cancellationToken)
     {
         var expired = false;
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfAccountsFileLocked();
-            var active = State.Active;
+            var state = State;
+            var active = accountSub is null ? state.Active : state.Accounts.FirstOrDefault(a => a.Sub == accountSub);
             if (active is null || active.NeedsSignIn)
             {
-                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account");
+                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "no signed-in account", accountSub: accountSub);
             }
 
             var token = await _store.GetAsync<TokenResponse>(active.Sub).ConfigureAwait(false);
@@ -445,7 +455,7 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             {
                 await MarkExpiredAsync(active).ConfigureAwait(false);
                 expired = true;
-                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the stored token is missing or unreadable");
+                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "the stored token is missing or unreadable", accountSub: active.Sub);
             }
 
             var client = _options.ClientLoader.Load();
@@ -473,18 +483,18 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
             {
                 await MarkExpiredAsync(active).ConfigureAwait(false);
                 expired = true;
-                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "Google refused the refresh token (invalid_grant)", ex);
+                throw new AccountAuthException(AuthErrorCodes.SigninExpired, "Google refused the refresh token (invalid_grant)", ex, active.Sub);
             }
             catch (TokenResponseException ex)
             {
-                throw new AccountAuthException(AuthErrorCodes.SigninFailed, $"token endpoint answered {ex.Error?.Error}", ex);
+                throw new AccountAuthException(AuthErrorCodes.SigninFailed, $"token endpoint answered {ex.Error?.Error}", ex, active.Sub);
             }
             catch (Exception ex) when (ex is HttpRequestException || IsRefreshManagerGiveUp(ex) || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
                 // A request timeout reaches us as a TaskCanceledException the caller did not ask for, or, after
                 // Google's refresh manager has retried it three times, as an InvalidOperationException
                 // ("could not be refreshed. Errors: timeout, ..."); a refused token is invalid_grant, handled above.
-                throw NetworkFailure("the token endpoint could not be reached", ex);
+                throw NetworkFailure("the token endpoint could not be reached", ex, active.Sub);
             }
         }
         catch (TokenStorageException ex)
@@ -718,13 +728,13 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     }
 
     /// <summary>A failed request to Google: a proxy that refused it or a certificate this PC does not trust (issue #239) is named as such; anything else is the plain network code.</summary>
-    private static AccountAuthException NetworkFailure(string message, Exception ex)
+    private static AccountAuthException NetworkFailure(string message, Exception ex, string? accountSub = null)
         => new(ProxyFailure.Detect(ex) switch
         {
             ProxyFailureKind.ProxyRefused => AuthErrorCodes.SigninProxy,
             ProxyFailureKind.CertificateUntrusted => AuthErrorCodes.SigninCertificate,
             _ => AuthErrorCodes.NetworkUnavailable,
-        }, message, ex);
+        }, message, ex, accountSub);
 
     /// <summary>Only the exception type is kept: its message can carry a path with the user's name in it.</summary>
     private static AccountAuthException StorageFailure(TokenStorageException ex)

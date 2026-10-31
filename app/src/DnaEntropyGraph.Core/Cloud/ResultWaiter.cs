@@ -124,7 +124,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                var vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 Observe(request.JobId, vm);
                 if (vm is { Status: "RUNNING" })
                 {
@@ -349,13 +349,13 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
             try
             {
-                var text = await calls.TryReadTextAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+                var text = await calls.TryReadTextAsync(request.ResolvedScope, bucket, key, cancellationToken).ConfigureAwait(false);
                 if (text is not null)
                 {
                     return text;
                 }
 
-                var vm = await calls.CallAsync(token => compute.GetVmAsync(request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
+                var vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 Observe(request.JobId, vm);
                 lastTransient = null;
                 vmCreatedAt = vm?.RunClockStart ?? vmCreatedAt;
@@ -371,7 +371,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 {
                     // A worker writes result.json BEFORE it stops its own VM, so look once more before
                     // calling a stopped VM lost.
-                    text = await calls.TryReadTextAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+                    text = await calls.TryReadTextAsync(request.ResolvedScope, bucket, key, cancellationToken).ConfigureAwait(false);
                     if (text is not null)
                     {
                         return text;
@@ -383,8 +383,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
 
                 // RUNNING is not working: the VM being up says nothing about the job (CLAUDE.md Critical Pitfalls). The worker's
                 // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
-                var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
-                var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
+                var statusText = await calls.TryReadTextAsync(request.ResolvedScope, bucket, statusKey, cancellationToken).ConfigureAwait(false);
+                var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(request.ResolvedScope, bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart), settings.TimeProvider.GetUtcNow());
                 heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.NewHeartbeatAt, heartbeatMark, cancellationToken).ConfigureAwait(false);
                 if (watch.TakeSlowNotice() is { } slow)
@@ -451,7 +451,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 if (verdict is not null)
                 {
                     // A worker writes result.json BEFORE it stops its heartbeat: one last look before calling it dead.
-                    text = await calls.TryReadTextAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+                    text = await calls.TryReadTextAsync(request.ResolvedScope, bucket, key, cancellationToken).ConfigureAwait(false);
                     if (text is not null)
                     {
                         return text;
@@ -500,7 +500,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public async Task<Exception> VmLostAsync(CloudJobRequest request, string bucket, string zone, string? reason, CancellationToken cancellationToken, VmClockBasis? clock = null)
     {
-        var workerCode = await TryReadWorkerErrorCodeAsync(bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
+        var workerCode = await TryReadWorkerErrorCodeAsync(request.ResolvedScope, bucket, WorkerManifestBuilder.JobPrefix(request.JobId) + "status.json", cancellationToken).ConfigureAwait(false);
         var mapped = RunErrorCodes.ForWorkerStatusCode(workerCode);
 
         // #89: a VM that was seen created, is gone, and whose maxRunDuration has now passed was deleted by Compute Engine at its limit
@@ -522,7 +522,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             {
                 try
                 {
-                    preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.Spec.VmName, zone, incarnation, token), cancellationToken).ConfigureAwait(false);
+                    preempted = await calls.CallAsync(token => compute.WasPreemptedAsync(request.ResolvedScope, request.Spec.VmName, zone, incarnation, token), cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException)
                 {
@@ -555,11 +555,11 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>The <c>error.code</c> in <c>status.json</c>, or null when it is absent, unreadable or the look itself failed (a diagnostic, never worth failing the run over).</summary>
-    private async Task<string?> TryReadWorkerErrorCodeAsync(string bucket, string key, CancellationToken cancellationToken)
+    private async Task<string?> TryReadWorkerErrorCodeAsync(CloudScope scope, string bucket, string key, CancellationToken cancellationToken)
     {
         try
         {
-            var text = await calls.TryReadTextAsync(bucket, key, cancellationToken).ConfigureAwait(false);
+            var text = await calls.TryReadTextAsync(scope, bucket, key, cancellationToken).ConfigureAwait(false);
             return text is null ? null : WorkerResultReader.TryReadStatusErrorCode(text);
         }
         catch (CloudOperationException)

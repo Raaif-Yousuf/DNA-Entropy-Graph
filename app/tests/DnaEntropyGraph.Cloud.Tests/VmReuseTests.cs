@@ -76,8 +76,9 @@ public class VmReuseTests
     }
 
     [Fact]
-    public async Task A_start_that_fails_with_a_stockout_falls_back_to_creating_a_new_VM_and_the_stranded_one_is_deleted()
+    public async Task A_start_that_fails_with_a_stockout_falls_back_to_creating_a_new_VM_and_the_borrowed_one_is_stopped_never_deleted()
     {
+        // Issue #999: the donor is the earlier run's VM (its disk, its outputs). A failed start leaves it STOPPED under its own name; only a VM this run created is ever deleted.
         var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Stockout);
         var repo = new InMemoryRunRepository();
         await SeedIdleVmAsync(gcp, repo, "job-old");
@@ -87,13 +88,15 @@ public class VmReuseTests
         result.FinalPhase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Completed, result.FailureMessage);
         gcp.ReuseAttempts.ShouldBe(1);
         gcp.CreateAttempts.ShouldBe(2, "the seed and the fallback create");
-        var vm = (await VmsAsync(gcp)).ShouldHaveSingleItem();
-        vm.Name.ShouldBe("deg-job-new", "the old VM was claimed for this job and could not start: it must not be left billing beside the new one");
-        vm.Status.ShouldBe("STOPPED");
+        gcp.DeleteAttempts.ShouldBeEmpty("#999: the relabelled donor belongs to the earlier run and is never deleted by this one");
+        var vms = (await VmsAsync(gcp)).ToDictionary(v => v.Name);
+        vms.Keys.ShouldBe(["deg-job-old", "deg-job-new"], ignoreOrder: true);
+        vms["deg-job-old"].Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        vms["deg-job-new"].Status.ShouldBe("STOPPED");
     }
 
     [Fact]
-    public async Task A_start_that_fails_with_billing_off_aborts_the_run_and_ends_the_VM()
+    public async Task A_start_that_fails_with_billing_off_aborts_the_run_and_leaves_the_borrowed_VM_stopped()
     {
         var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Billing);
         var repo = new InMemoryRunRepository();
@@ -104,7 +107,8 @@ public class VmReuseTests
         result.FinalPhase.ShouldBe(DnaEntropyGraph.Core.JobPhase.Failed);
         result.FailureCode.ShouldBe("billing");
         gcp.CreateAttempts.ShouldBe(1, "a project-wide failure must not be answered by creating a VM");
-        (await VmsAsync(gcp)).ShouldBeEmpty();
+        gcp.DeleteAttempts.ShouldBeEmpty("#999: the donor is another run's VM: stopped, never deleted");
+        (await VmsAsync(gcp)).ShouldHaveSingleItem().Status.ShouldBeOneOf("STOPPED", "TERMINATED");
     }
 
     [Fact]
