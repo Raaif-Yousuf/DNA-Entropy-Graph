@@ -164,7 +164,7 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
   old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT` (kept at 1800 s after #959: the parallel run measured 549 s, 3.3x headroom). A timed-out pytest gate is
   `ERROR` (never `PASS`, never `FAIL`) with its own text, `timed out after Ns with N passed and N failed so far (NOT a pass; ...)`,
-  counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. The timeout
+  counted from the `-q` progress characters captured before the kill; when tests had already failed it says so. When a pytest gate's output holds xdist's `node down: Not properly terminated` (Windows, after a pytest-timeout kill), the failure header adds that it is most likely a per-test timeout kill (the `--timeout` limit) and names the test from the `worker 'gwN' crashed while running <test>` line (#1044, `node_down_hint`). The timeout
   kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
   uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
   returned only after the grandchild (a 120 s sleeper in the test) exited.

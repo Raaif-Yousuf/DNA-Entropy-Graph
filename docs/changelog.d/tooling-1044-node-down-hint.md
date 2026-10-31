@@ -1,0 +1,1 @@
+- premerge: a pytest gate whose output holds xdist's "node down: Not properly terminated" now says it is most likely a per-test timeout kill and names the test from the "worker 'gwN' crashed while running" line (#1044).

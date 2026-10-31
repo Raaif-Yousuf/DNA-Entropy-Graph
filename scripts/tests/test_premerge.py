@@ -949,3 +949,56 @@ def test_spawn_in_job_closes_the_pipes_of_a_child_it_kills_on_failure(monkeypatc
     assert proc.stdout is not None and proc.stderr is not None
     assert proc.stdout.closed and proc.stderr.closed
     proc.wait(timeout=10)
+
+
+# --- xdist "node down" hint (#1044) ---------------------------------------------------------------
+
+_NODE_DOWN_OUTPUT = (
+    "....s.....[gw7] node down: Not properly terminated\n"
+    "Fssss\n"
+    "worker 'gw7' crashed while running 'scripts/tests/test_x.py::test_slow_one'\n"
+    "1 failed, 40 passed in 12.3s\n"
+)
+
+
+def test_node_down_hint_names_the_timeout_and_the_test():
+    hint = pm.node_down_hint(_NODE_DOWN_OUTPUT)
+    assert "per-test timeout" in hint
+    assert "--timeout" in hint
+    assert "scripts/tests/test_x.py::test_slow_one" in hint
+
+
+def test_node_down_hint_without_a_crash_line_still_explains():
+    hint = pm.node_down_hint("[gw1] node down: Not properly terminated\n")
+    assert "per-test timeout" in hint
+    assert "crashed while running" not in hint
+
+
+@pytest.mark.parametrize("output", ["", "1 failed, 9 passed in 0.5s", "worker 'gw1' crashed while running 'a::b'"])
+def test_node_down_hint_is_empty_without_the_marker(output):
+    assert pm.node_down_hint(output) == ""
+
+
+def test_classify_pytest_appends_the_hint_to_a_failure():
+    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT)
+    assert status == pm.FAIL
+    assert detail.startswith("1 failed")
+    assert "test_slow_one" in detail
+
+
+def test_classify_pytest_appends_the_hint_to_an_error():
+    status, detail = pm.classify_pytest(1, "..........  [100%]\n[gw2] node down: Not properly terminated\n")
+    assert status == pm.ERROR
+    assert "per-test timeout" in detail
+
+
+def test_classify_pytest_clean_pass_has_no_hint():
+    assert pm.classify_pytest(0, "5 passed in 1s") == (pm.PASS, "")
+
+
+def test_render_summary_shows_the_hint_in_the_failure_header():
+    gate = pm.Gate("scripts-tests", ["x"], Path("."), pytest=True)
+    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT)
+    text, rc = pm.render_summary([pm.Result(gate, status, 1.0, _NODE_DOWN_OUTPUT, detail)])
+    assert rc == 1
+    assert "test_slow_one" in text.splitlines()[1]

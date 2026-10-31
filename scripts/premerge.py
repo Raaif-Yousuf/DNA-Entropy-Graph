@@ -444,7 +444,32 @@ _PYTEST_FAILURE_LINE = re.compile(r"^(FAILED|ERROR) \S", re.MULTILINE)
 _PYTEST_PROGRESS_DONE = re.compile(r"\[100%\]")
 
 
+_NODE_DOWN = "node down: Not properly terminated"
+_WORKER_CRASHED = re.compile(r"worker '(gw\d+)' crashed while running '([^']+)'")
+
+
+def node_down_hint(output: str) -> str:
+    """#1044: xdist on Windows reports a worker killed by pytest-timeout as `node down: Not properly
+    terminated`. Say so, and name the test from the `worker 'gwN' crashed while running <test>` line."""
+    if _NODE_DOWN not in output:
+        return ""
+    hint = f"'{_NODE_DOWN}' is most likely a per-test timeout kill (the --timeout limit)"
+    crashed = _WORKER_CRASHED.search(output)
+    if crashed:
+        hint += f"; {crashed.group(1)} crashed while running {crashed.group(2)}"
+    return hint
+
+
 def classify_pytest(returncode: int, output: str) -> tuple[str, str]:
+    """(status, detail) for a finished pytest process, with the #1044 node-down hint appended."""
+    status, detail = _classify_pytest(returncode, output)
+    hint = node_down_hint(output) if status != PASS else ""
+    if hint:
+        detail = f"{detail}; {hint}" if detail else hint
+    return status, detail
+
+
+def _classify_pytest(returncode: int, output: str) -> tuple[str, str]:
     """(status, detail) for a finished pytest process. The verdict follows the test outcome, so a
     crash after green tests is never reported as a failing test, and never as a pass."""
     counts = _PYTEST_COUNTS.search(output)
@@ -660,6 +685,8 @@ def _timeout_detail(gate: Gate, text: str, captured: Captured) -> str:
         detail = classify_pytest_timeout(gate.timeout, text)
     else:
         detail = f"timed out after {gate.timeout:.0f}s"
+    if gate.pytest and (hint := node_down_hint(text)):
+        detail += f"; {hint}"
     if captured.child_exit is not None:
         detail += f"; child exited {captured.child_exit} but its pipe stayed open"
     if captured.tree_may_survive:
