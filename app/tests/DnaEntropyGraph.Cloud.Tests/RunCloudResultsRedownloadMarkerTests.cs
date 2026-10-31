@@ -138,6 +138,39 @@ public sealed class RunCloudResultsRedownloadMarkerTests : IDisposable
         Directory.Exists(folder).ShouldBeFalse();
     }
     [Fact]
+    public async Task A_row_with_no_recorded_folder_under_a_missing_output_root_makes_nothing_at_all()
+    {
+        Directory.Delete(_root);
+
+        (await Results().RedownloadAsync(Run(null!) with { OutputDir = null }, CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.OutputFolderGone);
+
+        Directory.Exists(_root).ShouldBeFalse("CreateUnique's CreateDirectory(parent) must not bring a vanished drive's folder back");
+    }
+
+    [Fact]
+    public async Task A_row_with_no_recorded_folder_under_an_existing_output_root_still_gets_a_marked_folder()
+    {
+        var run = Run(null!) with { OutputDir = null };
+
+        (await Results().RedownloadAsync(run, CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.Done);
+
+        var saved = (await _runs.GetAsync(JobId, CancellationToken.None))!.OutputDir!;
+        RunFolderMarker.Check(saved, JobId).ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_that_now_holds_another_runs_marker_is_refused_and_nothing_is_written_into_it()
+    {
+        var folder = Path.Combine(_root, "sample");
+        Directory.CreateDirectory(folder);
+        RunFolderMarker.Write(folder, "20261003-someone-else");
+
+        (await Results().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.OtherRunsFolderRefused);
+
+        Directory.GetFileSystemEntries(folder).Select(Path.GetFileName).ShouldBe([RunFolderMarker.FileName], "none of this run's files went into the other run's folder");
+        RunFolderMarker.Check(folder, "20261003-someone-else").ShouldBe(RunFolderMarkerState.Matches);
+    }
+    [Fact]
     public async Task A_dangling_junction_at_the_recorded_path_is_not_recreated_through_the_link()
     {
         // MEASURED 2026-10-31: with the EntryExists check swapped for Path.Exists this still passes, because RunOutputRoot.IsContained already refuses a link at the leaf;

@@ -1204,6 +1204,12 @@
   <data name="Runs_DeleteLocal_Hint_DriveRoot" xml:space="preserve">
     <value>This run was saved straight to a drive, so it cannot be deleted from here. Press the button, then choose Open folder.</value>
   </data>
+  <data name="Runs_Redownload_OtherRun_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_OtherRun_Body" xml:space="preserve">
+    <value>Another run has since used this run's folder, so nothing was written into it. Rename or move that folder in File Explorer, then choose Download again.</value>
+  </data>
   <data name="Runs_Redownload_FolderGone_Title" xml:space="preserve">
     <value>Not downloaded</value>
   </data>
