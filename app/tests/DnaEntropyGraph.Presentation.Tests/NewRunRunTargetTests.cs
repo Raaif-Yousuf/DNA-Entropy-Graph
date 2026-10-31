@@ -51,10 +51,10 @@ public sealed class NewRunRunTargetTests : IDisposable
         public void SetString(string key, string value) => values[key] = value;
     }
 
-    private NewRunViewModel Create(bool withPicker)
+    private NewRunViewModel Create(bool withPicker, ILocalReadinessSource? readiness = null)
     {
         var settings = new Settings(_saved);
-        var picker = withPicker ? new RunTargetPickerViewModel(settings, Substitute.For<ILocalReadinessSource>(), _strings) : null;
+        var picker = withPicker ? new RunTargetPickerViewModel(settings, readiness ?? Substitute.For<ILocalReadinessSource>(), _strings) : null;
         return new NewRunViewModel(
             Substitute.For<IFilePicker>(),
             _jobEngine,
@@ -103,6 +103,39 @@ public sealed class NewRunRunTargetTests : IDisposable
     public async Task A_host_with_no_picker_runs_in_the_cloud()
     {
         (await RunAsync(Create(withPicker: false))).RunTarget.ShouldBe("Cloud");
+    }
+
+    // Issue #735: the Where to run box on New run. Before this, only the Settings page ever looked at this PC, so a New run page opened first
+    // showed This PC as available on a PC that cannot run the model.
+    [Fact]
+    public async Task Opening_New_run_looks_at_this_PC_so_This_PC_is_greyed_out_with_its_reason_where_it_cannot_run()
+    {
+        var readiness = Substitute.For<ILocalReadinessSource>();
+        readiness.CheckAsync(Arg.Any<CancellationToken>())
+            .Returns(new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30), LocalEngineHealth.NotInstalled()));
+        var vm = Create(withPicker: true, readiness);
+        var thisPc = vm.RunTarget!.Options.Single(o => o.Value == "This PC");
+        thisPc.IsAvailable.ShouldBeTrue("nothing has looked at this PC yet");
+
+        vm.ReceiveNavigationParameterCommand.Execute(null);
+        for (var i = 0; i < 200 && thisPc.IsAvailable; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        await readiness.Received().CheckAsync(Arg.Any<CancellationToken>());
+        thisPc.IsAvailable.ShouldBeFalse();
+        vm.RunTarget.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
+    }
+
+    [Fact]
+    public async Task A_page_without_a_picker_opens_without_looking_at_this_PC()
+    {
+        var vm = Create(withPicker: false);
+
+        await vm.ReceiveNavigationParameterCommand.ExecuteAsync(null);
+
+        vm.RunTarget.ShouldBeNull();
     }
 
     private async Task<NewRunViewModel> BlockedByCapAsync(string target)

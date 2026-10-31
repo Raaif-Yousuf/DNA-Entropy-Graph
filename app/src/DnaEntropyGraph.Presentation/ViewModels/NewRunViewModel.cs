@@ -93,6 +93,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
     public RunTargetPickerViewModel? RunTarget { get; }
 
+    /// <summary>Whether the page has a Where to run box to show (issue #735).</summary>
+    public bool HasRunTarget => RunTarget is not null;
+
     /// <summary>The Save to folder (issue #1037), shared with Settings; null in a host that has none, which means the default folder.</summary>
     public OutputFolderViewModel? OutputFolder { get; }
 
@@ -763,6 +766,13 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         _intake?.Attach(this);
         // The page is showing (again): a cap changed in Settings, or spend booked since, must show now (issue #109).
         _ = RefreshEstimateAsync();
+
+        // Issue #735: look at this PC again each time the page shows, so the Where to run box greys out This PC (with its reason) where it cannot run the model.
+        // Never throws; it resumes on this (UI) context because the picker's properties are bound.
+        if (RunTarget is not null)
+        {
+            _ = RunTarget.RefreshAsync();
+        }
 
         // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
         if (parameter is NavigationArrival arrival)
