@@ -55,6 +55,13 @@ def _capture(guard_name: str, hooks_dir: Path, timeout: float = rh.SELF_TEST_BAC
     return buf.getvalue()
 
 
+def _decide(guard_name: str, hooks_dir: Path, timeout: float = rh.SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> rh.Decision:
+    """The structural result (kind + stdout), same default backstop as _capture."""
+    d = rh.run_decision(guard_name, stdin_payload, timeout, hooks_dir=hooks_dir)
+    assert d.rc == 0
+    return d
+
+
 # ---------------------------------------------------------------------------
 # run_hook.py's own self-test, bridged into pytest
 # ---------------------------------------------------------------------------
@@ -99,7 +106,7 @@ def test_guard_crash_denies_with_stderr_in_reason(tmp_path):
     _write_guard(tmp_path, "crashes", "import sys\nsys.stderr.write('boom\\n')\nsys.exit(3)\n")
     out = _capture("crashes", tmp_path)
     assert _is_deny(out), f"captured: {out!r}"
-    assert rh.deny_kind(out) == rh.KIND_CRASHED, f"captured: {out!r}"
+    assert _decide("crashes", tmp_path).kind == rh.KIND_CRASHED
     assert "boom" in out
     assert "3" in out  # the exit code
 
@@ -126,18 +133,20 @@ def test_guard_silent_produces_no_output_and_no_deny(tmp_path):
 
 def test_guard_timeout_denies(tmp_path):
     _write_guard(tmp_path, "hangs", "import time\ntime.sleep(30)\n")
-    out = _capture("hangs", tmp_path, timeout=rh.SELF_TEST_HANG_TIMEOUT_SECONDS)
+    d = _decide("hangs", tmp_path, timeout=rh.SELF_TEST_HANG_TIMEOUT_SECONDS)
     # The timeout deny specifically: a crash deny must not satisfy this test.
-    assert rh.is_timeout_deny(out), f"captured: {out!r}"
-    assert "hangs" in out
+    assert d.kind == rh.KIND_TIMEOUT, f"captured: {d!r}"
+    assert "hangs" in d.stdout
 
 
-def test_is_timeout_deny_distinguishes_timeout_from_crash_and_pass_through(tmp_path):
+def test_each_dispatcher_deny_has_its_own_kind(tmp_path):
     _write_guard(tmp_path, "crashes", "import sys\nsys.exit(3)\n")
-    assert not rh.is_timeout_deny(_capture("crashes", tmp_path))
-    assert not rh.is_timeout_deny(_capture("missing-guard", tmp_path))
-    assert not rh.is_timeout_deny("")
-    assert not rh.is_timeout_deny("not json")
+    _write_guard(tmp_path, "garbage", "import sys\nsys.stdout.write('not json {{{')\n")
+    _write_guard(tmp_path, "silent", "import sys\nsys.exit(0)\n")
+    assert _decide("crashes", tmp_path).kind == rh.KIND_CRASHED
+    assert _decide("missing-guard", tmp_path).kind == rh.KIND_MISSING
+    assert _decide("garbage", tmp_path).kind == rh.KIND_NOT_JSON
+    assert _decide("silent", tmp_path).kind == rh.KIND_PASSTHROUGH
 
 
 def test_a_guard_cannot_pass_for_a_dispatcher_timeout_by_its_prose(tmp_path):
@@ -150,15 +159,25 @@ def test_a_guard_cannot_pass_for_a_dispatcher_timeout_by_its_prose(tmp_path):
         "json.dump({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', "
         "'permissionDecisionReason': 'The mimic guard did not finish within 1s and was killed.'}}, sys.stdout)\n",
     )
-    out = _capture("mimic", tmp_path)
-    assert "did not finish within" in out
-    assert not rh.is_timeout_deny(out), f"captured: {out!r}"
+    d = _decide("mimic", tmp_path)
+    assert "did not finish within" in d.stdout
+    assert d.kind == rh.KIND_PASSTHROUGH, f"captured: {d!r}"
+
+
+def test_production_stdout_has_exactly_the_keys_main_always_emitted(tmp_path):
+    """#1055: the kind is in-process only. Printed deny JSON must stay byte-for-byte
+    the pre-#1055 shape (no extra key), because the hook output schema Claude
+    Code accepts is not verified here."""
+    _write_guard(tmp_path, "hangs", "import time\ntime.sleep(30)\n")
+    out = _capture("hangs", tmp_path, timeout=rh.SELF_TEST_HANG_TIMEOUT_SECONDS)
+    data = json.loads(out)
+    assert set(data) == {"hookSpecificOutput", "systemMessage"}, f"captured: {out!r}"
+    assert set(data["hookSpecificOutput"]) == {"hookEventName", "permissionDecision", "permissionDecisionReason"}
+    assert out == _decide("hangs", tmp_path, timeout=rh.SELF_TEST_HANG_TIMEOUT_SECONDS).stdout
 
 
 def test_deny_helpers_tolerate_valid_json_that_is_not_an_object():
     for out in ("[]", '"x"', "3", "null", '{"hookSpecificOutput": []}', '{"hookSpecificOutput": "x"}'):
-        assert rh.deny_kind(out) is None, out
-        assert rh.is_timeout_deny(out) is False, out
         assert rh._is_deny(out) is False, out  # the dispatcher's own copy
         assert _is_deny(out) is False, out  # this file's copy
 
@@ -191,7 +210,7 @@ def test_guard_nonjson_output_denies(tmp_path):
     out = _capture("garbage", tmp_path)
     # The not-valid-JSON deny specifically: a crash/timeout/missing deny must not pass.
     assert _is_deny(out), f"captured: {out!r}"
-    assert rh.deny_kind(out) == rh.KIND_NOT_JSON, f"captured: {out!r}"
+    assert _decide("garbage", tmp_path).kind == rh.KIND_NOT_JSON
     assert "not valid JSON" in out, f"captured: {out!r}"
 
 
