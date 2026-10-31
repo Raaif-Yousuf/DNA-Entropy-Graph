@@ -272,18 +272,84 @@ public sealed class HistoryViewModelAccountTests
         }
 
         weak.IsAlive.ShouldBeFalse();
-        Should.NotThrow(() => _account.AccountChanged += Raise.Event());
+        _account.DidNotReceive().AccountChanged -= Arg.Any<EventHandler>();
+        _account.AccountChanged += Raise.Event();
+        _account.Received(1).AccountChanged -= Arg.Any<EventHandler>(); // the handler found its page gone and removed itself
     }
     [Fact]
     public async Task The_reload_goes_through_the_dispatcher_when_there_is_one()
     {
         Run("run-a", "sub-a");
+        Run("run-b", "sub-b");
+        var queued = new List<Action>();
         var dispatcher = Substitute.For<IDispatcher>();
+        dispatcher.When(d => d.Enqueue(Arg.Any<Action>())).Do(call => queued.Add(call.Arg<Action>()));
         var vm = Make(dispatcher);
         await vm.RefreshCommand.ExecuteAsync(null);
+        Ids(vm).ShouldBe(["run-a"]);
 
         SwitchTo(B);
+        queued.Count.ShouldBe(1);
+        Ids(vm).ShouldBe(["run-a"]); // nothing reloads until the dispatcher runs the action
 
-        dispatcher.Received(1).Enqueue(Arg.Any<Action>());
+        queued[0]();
+        await vm.AccountRefresh;
+
+        Ids(vm).ShouldBe(["run-b"]);
+    }
+
+    [Fact]
+    public async Task After_Deactivate_an_account_change_loads_nothing()
+    {
+        Run("run-a", "sub-a");
+        var vm = Make();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        _repository.ClearReceivedCalls();
+
+        vm.Deactivate();
+        SwitchTo(B);
+        await vm.AccountRefresh;
+
+        await _repository.DidNotReceive().GetAllAsync(Arg.Any<CancellationToken>());
+        _account.Received(1).AccountChanged -= Arg.Any<EventHandler>();
+    }
+
+    [Fact]
+    public async Task A_failed_Switch_reloads_so_the_Sign_in_again_button_the_toast_names_is_on_screen()
+    {
+        Run("run-b", "sub-b");
+        var vm = Make();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        vm.SwitchAccounts.Count.ShouldBe(1);
+        vm.HasSignInAgain.ShouldBeFalse();
+
+        // B was forgotten after the page loaded; the failed switch raises no AccountChanged.
+        _accounts = [A];
+        _account.SwitchAccountAsync("sub-b", Arg.Any<CancellationToken>()).ThrowsAsync(new AccountAuthException(AuthErrorCodes.AccountNotFound));
+        _toasts.When(t => t.ShowToast(RunsCopy.SwitchFailed.Title, RunsCopy.SwitchFailed.Body, ToastSeverity.Error)).Do(_ => vm.HasSignInAgain.ShouldBeTrue("the button must exist when the toast tells the person to press it"));
+
+        await vm.SwitchAccounts[0].SwitchCommand.ExecuteAsync(null);
+
+        _toasts.Received(1).ShowToast(RunsCopy.SwitchFailed.Title, RunsCopy.SwitchFailed.Body, ToastSeverity.Error);
+        vm.SwitchAccounts.ShouldBeEmpty();
+        vm.HasSignInAgain.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task With_one_owner_signed_in_and_another_signed_out_the_hint_covers_both_buttons()
+    {
+        var c = new AccountInfo("sub-c", "c@lab.org", NeedsSignIn: true);
+        _accounts = [A, B, c];
+        Run("run-a", "sub-a");
+        Run("run-b", "sub-b");
+        Run("run-c", "sub-c");
+        var vm = Make();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.SwitchAccounts.Select(s => s.Label).ShouldBe(["switch b@lab.org"]);
+        vm.HasSignInAgain.ShouldBeTrue();
+        vm.HintText.ShouldContain("hint-switch");
+        vm.HintText.ShouldContain("hint-signin c@lab.org");
     }
 }

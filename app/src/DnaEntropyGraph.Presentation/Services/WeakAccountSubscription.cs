@@ -9,7 +9,8 @@ namespace DnaEntropyGraph.Presentation.Services;
 /// </summary>
 internal static class WeakAccountSubscription
 {
-    public static void Attach<T>(IGcpAccount account, T owner, Action<T> onChanged)
+    /// <summary>Returns the action that ends the subscription now (a page's Detach); the weak handler still covers a page that is dropped without one.</summary>
+    public static Action Attach<T>(IGcpAccount account, T owner, Action<T> onChanged)
         where T : class
     {
         var weak = new WeakReference<T>(owner);
@@ -26,5 +27,6 @@ internal static class WeakAccountSubscription
             }
         };
         account.AccountChanged += handler;
+        return () => account.AccountChanged -= handler;
     }
 }

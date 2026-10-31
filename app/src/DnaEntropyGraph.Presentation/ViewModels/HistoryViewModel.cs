@@ -41,6 +41,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     private int _loadGeneration;
     private readonly IDispatcher? _dispatcher;
     private bool _loaded;
+    private readonly Action _detachAccount;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
@@ -126,14 +127,20 @@ public sealed partial class HistoryViewModel : ObservableObject
         ];
         _selectedStatusFilter = StatusFilters[0];
         _dispatcher = dispatcher;
-        WeakAccountSubscription.Attach(account, this, static vm => vm.OnAccountChanged());
+        _detachAccount = WeakAccountSubscription.Attach(account, this, static vm => vm.OnAccountChanged());
     }
 
     /// <summary>
     /// Issue #100 round 3: the page was left. This ViewModel is transient and the messenger holds it weakly, so without this every instance that has not been collected yet
-    /// would go on reloading the whole table on each run end. The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
+    /// would go on reloading the whole table on each run end (and on each account switch, #112). The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
     /// </summary>
-    public void Deactivate() => _messenger?.UnregisterAll(this);
+    public void Deactivate()
+    {
+        _messenger?.UnregisterAll(this);
+
+        // Issue #112 review: also the account subscription, deterministically; a page not yet collected must not reload on every later switch.
+        _detachAccount();
+    }
 
     [ObservableProperty]
     private bool _isImporting;
@@ -278,10 +285,13 @@ public sealed partial class HistoryViewModel : ObservableObject
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToList();
         HasSignInAgain = signedOut.Count > 0;
-        HintText = signedOut.Count == 0 ? _strings.GetString(RunsCopy.HintSwitch)
+        var signInHint = signedOut.Count == 0 ? string.Empty
             : signedOutEmails.Count > 0
                 ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.HintSignIn), string.Join(_strings.GetString("SignInNeeded_Joiner"), signedOutEmails))
                 : _strings.GetString(RunsCopy.HintSignInUnknown);
+
+        // Both kinds of owner can be hidden at once: the line then leads in to the Switch to buttons AND to Sign in again.
+        HintText = string.Join(" ", new[] { SwitchAccounts.Count > 0 ? _strings.GetString(RunsCopy.HintSwitch) : string.Empty, signInHint }.Where(s => s.Length > 0));
     }
 
     private async Task SwitchToAsync(string sub)
@@ -293,6 +303,8 @@ public sealed partial class HistoryViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // The switch can fail because the account was forgotten after this page loaded, and no AccountChanged is raised then: load again so the buttons the toast names are on screen.
+            await RefreshAsync(CancellationToken.None);
             Toast(RunsCopy.SwitchFailed);
         }
     }
