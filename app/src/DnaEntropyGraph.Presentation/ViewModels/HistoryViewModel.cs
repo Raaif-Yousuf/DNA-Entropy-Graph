@@ -29,6 +29,9 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly ILocalRunFiles _local;
     private readonly IJobEngine _engine;
     private readonly IDialogService _dialogs;
+
+    // Issue #934, #954: the refusals that name an Open folder button. Optional so a host without a window still shows the same text as a toast.
+    private readonly IChoiceDialogService? _choiceDialogs;
     private readonly IToastService _toasts;
     private readonly IStringResourceProvider _strings;
     private readonly IShellLauncher _launcher;
@@ -39,6 +42,9 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly ImportedRunDismissals? _dismissals;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
+    private readonly IDispatcher? _dispatcher;
+    private bool _loaded;
+    private readonly Action _detachAccount;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
@@ -80,8 +86,10 @@ public sealed partial class HistoryViewModel : ObservableObject
         IRunCostSource? costs = null,
         IMessenger? messenger = null,
         IDispatcher? dispatcher = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        IChoiceDialogService? choiceDialogs = null)
     {
+        _choiceDialogs = choiceDialogs;
         _log = log;
         _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
         _costs = costs;
@@ -123,13 +131,21 @@ public sealed partial class HistoryViewModel : ObservableObject
             new(RunStatusFilter.Cancelled, _strings.GetString("Runs_Filter_Cancelled")),
         ];
         _selectedStatusFilter = StatusFilters[0];
+        _dispatcher = dispatcher;
+        _detachAccount = WeakAccountSubscription.Attach(account, this, static vm => vm.OnAccountChanged());
     }
 
     /// <summary>
     /// Issue #100 round 3: the page was left. This ViewModel is transient and the messenger holds it weakly, so without this every instance that has not been collected yet
-    /// would go on reloading the whole table on each run end. The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
+    /// would go on reloading the whole table on each run end (and on each account switch, #112). The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
     /// </summary>
-    public void Deactivate() => _messenger?.UnregisterAll(this);
+    public void Deactivate()
+    {
+        _messenger?.UnregisterAll(this);
+
+        // Issue #112 review: also the account subscription, deterministically; a page not yet collected must not reload on every later switch.
+        _detachAccount();
+    }
 
     [ObservableProperty]
     private bool _isImporting;
@@ -192,6 +208,126 @@ public sealed partial class HistoryViewModel : ObservableObject
         _ => RunsCopy.ImportFailed,
     };
 
+    // ----- Issue #112: only the active account's runs -----
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasHiddenRuns))]
+    private string _hiddenRunsText = string.Empty;
+
+    /// <summary>The one line under the count that names what to do (the Switch to buttons, or Sign in again); empty with nothing hidden.</summary>
+    [ObservableProperty]
+    private string _hintText = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasSignInAgain;
+
+    /// <summary>True when runs of another account exist in the history and are not listed; the page then says so.</summary>
+    public bool HasHiddenRuns => HiddenRunsText.Length > 0;
+
+    /// <summary>One button per other account that owns hidden runs and is still signed in on this PC.</summary>
+    public ObservableCollection<AccountSwitchItem> SwitchAccounts { get; } = [];
+
+    /// <summary>The reload started by the last account change; the list follows a switch by itself, so tests await this.</summary>
+    public Task AccountRefresh { get; private set; } = Task.CompletedTask;
+
+    private void OnAccountChanged()
+    {
+        // A page that was never opened has nothing on screen to correct.
+        if (!_loaded)
+        {
+            return;
+        }
+
+        void Reload() => AccountRefresh = RefreshAsync(CancellationToken.None);
+        if (_dispatcher is null)
+        {
+            Reload();
+        }
+        else
+        {
+            _dispatcher.Enqueue(Reload);
+        }
+    }
+
+    /// <summary>
+    /// DECISION (agent-made, reversible; issue #112): a run is listed under the account that was current when Run was pressed (its <c>AccountSub</c>, kept for the run's whole life).
+    /// A row with no account (a This PC row, which belongs to the computer, or a row older than the column that the one-time backfill has not reached) is listed under every account.
+    /// With nobody signed in at all every row is listed, so an empty page is never mistaken for lost history; this is a view filter, not an access control.
+    /// </summary>
+    private static bool IsListedFor(RunRecord run, string? activeSub) => activeSub is null || run.AccountSub is null || run.AccountSub == activeSub;
+
+    private void ShowHidden(IReadOnlyList<RunRecord> hidden, string? active)
+    {
+        SwitchAccounts.Clear();
+        if (hidden.Count == 0)
+        {
+            HiddenRunsText = string.Empty;
+            HintText = string.Empty;
+            HasSignInAgain = false;
+            return;
+        }
+
+        HiddenRunsText = hidden.Count == 1
+            ? _strings.GetString(RunsCopy.HiddenOne)
+            : string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.HiddenMany), hidden.Count);
+
+        var accounts = _account.Accounts;
+        var owners = hidden.Select(r => r.AccountSub).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        var signedInOwners = accounts.Where(a => a.Sub != active && !a.NeedsSignIn && owners.Contains(a.Sub)).ToList();
+        foreach (var other in signedInOwners)
+        {
+            var sub = other.Sub;
+            SwitchAccounts.Add(new AccountSwitchItem(
+                string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.SwitchLabel), other.Email),
+                new AsyncRelayCommand(() => SwitchToAsync(sub))));
+        }
+
+        // Owners that cannot be switched to: signed out here (their email is known), or forgotten by this PC (it is not).
+        var signedOut = owners.Where(sub => signedInOwners.All(a => a.Sub != sub)).ToList();
+        var signedOutEmails = signedOut
+            .Select(sub => accounts.FirstOrDefault(a => a.Sub == sub)?.Email)
+            .Where(email => !string.IsNullOrEmpty(email))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        HasSignInAgain = signedOut.Count > 0;
+        var signInHint = signedOut.Count == 0 ? string.Empty
+            : signedOutEmails.Count > 0
+                ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.HintSignIn), string.Join(_strings.GetString("SignInNeeded_Joiner"), signedOutEmails))
+                : _strings.GetString(RunsCopy.HintSignInUnknown);
+
+        // Both kinds of owner can be hidden at once: the line then leads in to the Switch to buttons AND to Sign in again.
+        HintText = string.Join(" ", new[] { SwitchAccounts.Count > 0 ? _strings.GetString(RunsCopy.HintSwitch) : string.Empty, signInHint }.Where(s => s.Length > 0));
+    }
+
+    private async Task SwitchToAsync(string sub)
+    {
+        try
+        {
+            // The account service raises AccountChanged, and that reloads this page (OnAccountChanged).
+            await _account.SwitchAccountAsync(sub, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The switch can fail because the account was forgotten after this page loaded, and no AccountChanged is raised then: load again so the buttons the toast names are on screen.
+            await RefreshAsync(CancellationToken.None);
+            Toast(RunsCopy.SwitchFailed);
+        }
+    }
+
+    /// <summary>The button for hidden runs of an account that is signed out here: the same Google sign-in as the shell's bar. The list reloads on the account change the sign-in raises.</summary>
+    [RelayCommand]
+    private async Task SignInAgainAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _account.SignInAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _log?.Warning("runs-sign-in-again", null, ex.GetType().Name);
+            Toast(RunsCopy.SignInFailed);
+        }
+    }
     public IReadOnlyList<RunStatusFilterOption> StatusFilters { get; }
 
     public ObservableCollection<RunDayGroup> Groups { get; } = [];
@@ -205,9 +341,14 @@ public sealed partial class HistoryViewModel : ObservableObject
         // Every load (page open, Refresh, after an action) takes a number; only the newest may write the list, so a slow older
         // load that finishes last cannot put stale rows back.
         var generation = Interlocked.Increment(ref _loadGeneration);
+        _loaded = true;
         try
         {
-            var runs = await _runRepository.GetAllAsync(cancellationToken);
+            // The account is read before the history, so a switch that lands mid-load is followed by its own reload (a newer generation), never mixed in.
+            var activeSub = _account.CurrentAccount?.Sub;
+            var all = await _runRepository.GetAllAsync(cancellationToken);
+            var runs = all.Where(r => IsListedFor(r, activeSub)).ToList();
+            var hidden = all.Where(r => !IsListedFor(r, activeSub)).ToList();
 
             // One disk probe per row: off the UI thread.
             var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
@@ -223,6 +364,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder, booked.TryGetValue(r.Run.JobId, out var usd) ? usd : null))];
+            ShowHidden(hidden, activeSub);
             ApplyFilter();
             SparklineWork = LoadSparklinesAsync(_items, generation, cancellationToken);
         }
@@ -359,7 +501,9 @@ public sealed partial class HistoryViewModel : ObservableObject
             ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),
             Tags = RunTags.Parse(run.TagsJson),
             NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
-            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
+            DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported)
+                : _local.OutputRootIsDriveRoot(run) ? _strings.GetString(RunsCopy.DeleteLocalHintDriveRoot) : null,
+            RedownloadHint = _local.OutputRootIsDriveRoot(run) ? _strings.GetString(RunsCopy.RedownloadHintDriveRoot) : null,
             IsImported = run.IsCloudImport,
             ImportedText = run.IsCloudImport ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.ImportedBadge), ShortInstallation(run.InstallationId)) : null,
             RedownloadLabel = _strings.GetString(run.Phase == JobPhase.Cancelled ? RunsCopy.RedownloadPartialLabel : RunsCopy.RedownloadAgainLabel),
@@ -553,6 +697,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 Toast(RunsCopy.RedownloadChangedKeptAside(result.ChangedKeptAside), result.ChangedKeptAside);
             }
 
+            // Issue #954: a run saved straight to a drive says why, and offers the one action (open the folder), instead of a bare refusal.
+            if (result.Status == CloudResultsStatus.DriveRootRefused)
+            {
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.Redownload(CloudResultsStatus.DriveRootRefused), RunsCopy.RedownloadDriveRootAsToast);
+            }
+
             // A cancelled run's partial outputs are the expected result of its cancel, not a warning that something is missing.
             return run.Phase == JobPhase.Cancelled && result.Status == CloudResultsStatus.Partial ? RunsCopy.RedownloadCancelledPartial : RunsCopy.Redownload(result.Status);
         },
@@ -636,14 +786,49 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return RunsCopy.DeleteLocal(LocalDeleteStatus.Refused);
             }
 
-            var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
-            if (!await _dialogs.ConfirmAsync(_strings.GetString(RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
+            // Issue #934, #954: decided before anything is asked, from the folder's marker. A folder another run owns, and a run saved straight to a drive, are refused with
+            // no question: nothing the user could confirm would make deleting it safe, so the one action is to open the folder and delete it themselves.
+            var plan = await Task.Run(() => _local.PlanDelete(run));
+            if (plan == LocalDeletePlan.OtherRunsFolder)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.OtherRunsFolder);
+            }
+
+            if (plan == LocalDeletePlan.DriveRoot)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.DriveRootRefused);
+            }
+
+            // An unmarked folder that is the user's own (Documents, their profile, ...) is never offered a "Continue".
+            if (plan == LocalDeletePlan.ProtectedFolder)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.ProtectedFolderRefused);
+            }
+
+            // DECISION (agent-made, reversible; issue #934): a folder with no marker (made before markers existed, or the user's own folder named by a damaged row) is asked about
+            // once, with its full path, and deleted only on a yes. This replaces the ordinary question rather than adding to it; Cancel deletes nothing. The alternative was to
+            // refuse every older run for good.
+            var unmarked = plan == LocalDeletePlan.AskFirst;
+            var body = string.Format(CultureInfo.CurrentCulture, _strings.GetString(unmarked ? RunsCopy.DeleteLocalUnmarkedConfirmBody : RunsCopy.DeleteLocalConfirmBody), run.OutputDir);
+            if (!await _dialogs.ConfirmAsync(_strings.GetString(unmarked ? RunsCopy.DeleteLocalUnmarkedConfirmTitle : RunsCopy.DeleteLocalConfirmTitle), body, CancellationToken.None))
             {
                 return null;
             }
 
             // Recursive disk work: off the UI thread.
-            var result = await Task.Run(() => _local.DeleteOutputFolder(run));
+            var result = await Task.Run(() => unmarked ? _local.DeleteUnmarkedOutputFolder(run) : _local.DeleteOutputFolder(run));
+            if (result.Status is LocalDeleteStatus.OtherRunsFolder or LocalDeleteStatus.DriveRootRefused or LocalDeleteStatus.ProtectedFolderRefused)
+            {
+                // The folder changed between the plan and the delete: the service refused, so this is the same refusal the plan would have given.
+                return await RefuseDeleteAsync(run, result.Status);
+            }
+
+            // A link met after some files were already deleted is not "nothing was deleted": say what went and offer the folder.
+            if (result.Status == LocalDeleteStatus.LinkRefused && result.FilesDeleted > 0)
+            {
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocalLinkPartial, RunsCopy.DeleteLocalLinkPartialAsToast);
+            }
+
             if (result.Status != LocalDeleteStatus.Partial)
             {
                 return RunsCopy.DeleteLocal(result.Status);
@@ -654,6 +839,39 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         },
         RunsCopy.DeleteLocal(LocalDeleteStatus.InUse));
+
+    /// <summary>
+    /// A refusal that names one action as a button (Hard Rule 13): the reason and an "Open folder" button that opens the run's folder so the user can deal with it themselves.
+    /// Without a dialog host (or without a recorded folder) it is the same reason as a toast, which names the action in words. Returns the toast to show, or null when the dialog was shown.
+    /// </summary>
+    private Task<RunsMessage?> RefuseDeleteAsync(RunRecord run, LocalDeleteStatus status)
+        => RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(status), RunsCopy.DeleteLocalAsToast(status));
+
+    /// <param name="toastReason">The reason worded for a toast, which has no Open folder button (it names the row's Open button). Shown whenever the dialog is not: no dialog host, or the host could not show it (no window, gate timeout), so the user always sees something.</param>
+    private async Task<RunsMessage?> RefuseWithOpenFolderAsync(RunRecord run, RunsMessage reason, RunsMessage toastReason)
+    {
+        if (_choiceDialogs is null || string.IsNullOrWhiteSpace(run.OutputDir))
+        {
+            return toastReason;
+        }
+
+        var pressed = await _choiceDialogs.ChooseAsync(
+            _strings.GetString(reason.Title),
+            _strings.GetString(reason.Body),
+            [_strings.GetString(RunsCopy.OpenFolderLabel), _strings.GetString(RunsCopy.CloseLabel)],
+            CancellationToken.None);
+        if (pressed is null)
+        {
+            return toastReason;
+        }
+
+        if (pressed == 0 && !_launcher.OpenFolder(run.OutputDir))
+        {
+            return RunsCopy.OpenMissing;
+        }
+
+        return null;
+    }
 
     private Task RemoveAsync(RunRecord run) => ActAsync(
         async () =>

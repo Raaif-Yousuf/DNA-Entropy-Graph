@@ -183,10 +183,137 @@ public sealed class RunCloudResultsTests : IDisposable
         var folder = Path.Combine(_root, "sample");
         var run = Run(folder) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.GetPathRoot(_base) }) };
 
-        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+        // Issue #954: still nothing written, but the History is told it was the drive root, so it can say so and name the action.
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.DriveRootRefused);
 
         Directory.Exists(folder).ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_run_with_no_recorded_folder_gets_a_fresh_one_carrying_the_runs_marker()
+    {
+        // Issue #934: a folder this service creates is the run's own, so it is marked for the delete that will later require it.
+        PutResult();
+        var run = Run() with { OutputDir = null };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
+        File.Exists(Path.Combine(made, "sample.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_templated_run_with_no_recorded_folder_is_redownloaded_into_the_folder_name_the_run_used_and_marked()
+    {
+        // Issue #955: cloud rows persist Name as the job id, so the folder came back named by job id, not by the template the user chose.
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\data\seq.fasta", NameTemplate = "{file}_{model}_{date}" };
+        var started = new DateTimeOffset(2026, 10, 2, 12, 0, 0, TimeSpan.Zero); // noon UTC: the same local date in every time zone
+        var run = Run() with { OutputDir = null, Name = JobId, StartedAt = started, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        var expected = RunOutputFolders.RunFolderName(options, new StagedInput(string.Empty, "seq.fasta"), started.ToLocalTime().DateTime);
+        expected.ShouldBe("seq_evo2_7b_2026-10-02");
+        Path.GetFileName(made).ShouldBe(expected);
+        RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public async Task A_templated_runs_redownload_folder_gets_a_number_when_its_name_is_taken()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", InputPath = @"C:\data\seq.fasta", NameTemplate = "{file}_{model}" };
+        Directory.CreateDirectory(Path.Combine(_root, "seq_evo2_7b"));
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("seq_evo2_7b_2");
+        RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public async Task An_accession_run_is_redownloaded_into_its_templated_name()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "NC_045512.2", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("NC_045512_2_evo2_7b");
+    }
+
+    [Fact]
+    public async Task A_recorded_accession_is_checked_again_and_normalised_before_it_names_the_folder()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "  nc_045512.2 ", AccessionRange = "100-500", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("NC_045512_2_100-500_evo2_7b");
+    }
+
+    [Fact]
+    public async Task A_recorded_accession_that_fails_its_check_falls_back_to_the_job_id()
+    {
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", Accession = "..\\evil", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe(JobId);
+    }
+
+    [Fact]
+    public async Task Valid_options_that_name_no_input_fall_back_to_the_rows_name_not_the_template()
+    {
+        // The `input is null` branch: a template with {file} and nothing to fill it with must not name the folder "run" or the model alone.
+        PutResult();
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "cloud", NameTemplate = "{file}_{model}" };
+        var run = Run() with { OutputDir = null, Name = "my named run", OptionsJson = RunOptionsJson.Serialize(options) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe("my named run");
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("not json")]
+    [InlineData("")]
+    public async Task A_run_whose_options_cannot_name_a_folder_is_redownloaded_into_its_job_id(string optionsJson)
+    {
+        PutResult();
+        var run = Run() with { OutputDir = null, Name = JobId, OptionsJson = optionsJson };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
+
+        var made = (await _runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == JobId).OutputDir!;
+        Path.GetFileName(made).ShouldBe(JobId);
+        RunFolderMarker.Check(made, JobId).ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_outside_the_output_root_is_plain_refused_even_when_the_root_is_a_drive_root_elsewhere()
+    {
+        PutResult();
+        var run = Run(Path.Combine(_base, "Documents", "sample")) with { OptionsJson = RunOptionsJson.Serialize(new RunOptions { ModelId = "m", RunTarget = "cloud", OutputFolder = Path.Combine(_base, "Lab") }) };
+
+        (await Make().RedownloadAsync(run, CancellationToken.None)).ShouldBe(CloudResultsStatus.Refused);
+    }
+
     [Fact]
     public async Task A_recorded_folder_outside_the_output_root_is_refused_before_anything_is_written()
     {

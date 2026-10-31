@@ -89,6 +89,29 @@ public static class RunOutputRoot
     public static bool IsSafelyInside(string path, string root) => !IsDriveRoot(root) && IsStrictlyInside(path, root);
 
     /// <summary>
+    /// True when the run's output folder lies inside an output root that is a drive root (issue #954): the one case where <see cref="IsSafelyInside"/> refuses a folder that is
+    /// otherwise where it should be, so the History can say why. Purely lexical (no disk access) and never throws: a path that cannot be resolved is false.
+    /// </summary>
+    public static bool IsDriveRootOutput(RunRecord run, Func<string> defaultParent)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        if (run.Imported || string.IsNullOrWhiteSpace(run.OutputDir))
+        {
+            return false;
+        }
+
+        try
+        {
+            var root = Resolve(run, defaultParent);
+            return !string.IsNullOrWhiteSpace(root) && IsDriveRoot(root) && IsStrictlyInside(run.OutputDir, root);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// True when <paramref name="jobId"/> is one plain folder name: not empty, not <c>.</c> or <c>..</c>, and with no separator, colon, NUL or
     /// <c>..</c>. <c>Path.Combine(root, "x\..\y")</c> stays inside <c>root</c> but names another job's folder, so containment alone is not enough.
     /// </summary>

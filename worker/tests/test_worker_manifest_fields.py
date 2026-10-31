@@ -185,6 +185,7 @@ def test_bad_gc_window_is_refused(bad) -> None:
 
 def test_preset_maps_to_the_run_config() -> None:
     m = _m(preset={"id": "plasmid-qc", "name": "Plasmid QC"})
+    assert m.preset is not None
     assert (m.preset.id, m.preset.name) == ("plasmid-qc", "Plasmid QC")
     cfg = _cfg(m)
     assert (cfg.preset_id, cfg.preset_name) == ("plasmid-qc", "Plasmid QC")
