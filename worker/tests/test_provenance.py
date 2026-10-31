@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from dna_entropy import __version__
 from dna_entropy.writers.provenance import (
@@ -15,8 +16,8 @@ from dna_entropy.writers.provenance import (
 )
 
 
-def _contig(**overrides):
-    base = dict(
+def _contig(**overrides: Any):
+    base: dict[str, Any] = dict(
         name="locus",
         length=100,
         context_length=50,
@@ -31,8 +32,8 @@ def _contig(**overrides):
     return contig_provenance(**base)
 
 
-def _run(**overrides):
-    base = dict(
+def _run(**overrides: Any):
+    base: dict[str, Any] = dict(
         name="demo",
         predictor_kind="mock",
         model="evo2_7b",

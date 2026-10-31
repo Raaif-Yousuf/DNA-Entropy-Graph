@@ -188,12 +188,22 @@ def test_a_record_with_no_version_line_is_refused_and_not_cached(tmp_path: Path)
 def test_rate_limit_waits_between_requests_without_and_with_a_key(tmp_path: Path) -> None:
     sleeps: list[float] = []
     fake = FakeNcbi()
-    kw = dict(cache_dir=tmp_path / "c", opener=fake, sleep=sleeps.append, clock=lambda: 0.0)
-    entrez.fetch_genbank("NC_000001.1", **kw)
-    entrez.fetch_genbank("NC_000002.1", **kw)  # no time has passed: must wait
+
+    def fetch(accession: str, api_key: str | None = None) -> None:
+        entrez.fetch_genbank(
+            accession,
+            cache_dir=tmp_path / "c",
+            api_key=api_key,
+            opener=fake,
+            sleep=sleeps.append,
+            clock=lambda: 0.0,
+        )
+
+    fetch("NC_000001.1")
+    fetch("NC_000002.1")  # no time has passed: must wait
     assert sleeps and sleeps[-1] == pytest.approx(entrez.MIN_INTERVAL_NO_KEY)
     sleeps.clear()
-    entrez.fetch_genbank("NC_000003.1", api_key="K", **kw)
+    fetch("NC_000003.1", api_key="K")
     assert sleeps and sleeps[-1] == pytest.approx(entrez.MIN_INTERVAL_WITH_KEY)
 
 

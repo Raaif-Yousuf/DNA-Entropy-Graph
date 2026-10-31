@@ -55,9 +55,9 @@ def test_the_reverse_pass_feeds_the_model_the_true_reverse_complement_of_a_kept_
     seen: list[str] = []
 
     class _Recording:
-        def predict(self, window: str) -> np.ndarray:
-            seen.append(window)
-            return MockPredictor(seed=0).predict(window)
+        def predict(self, seq: str) -> np.ndarray:
+            seen.append(seq)
+            return MockPredictor(seed=0).predict(seq)
 
     seq = "ACGT" * 3 + "R" + "ACGT" * 3
     analyze_direction(_Recording(), seq, context_length=8, ceiling=1024, direction=Direction.REVERSE_ONLY)
@@ -502,6 +502,7 @@ def test_seam_position_matches_where_the_combiner_actually_switched(k: int) -> N
         )
         seam = combined.seam
         assert seam == k, (length, k)
+        assert separate.reverse_values is not None and separate.forward_values is not None
         # Before the seam: combined must equal the reverse-only track (reduced tolerance,
         # never exact float equality per Hard Rule/MEASURED note above).
         assert np.allclose(combined.values[:seam], separate.reverse_values[:seam], atol=1e-5), (length, k)
@@ -540,6 +541,7 @@ def test_reverse_only_surprisal_uses_the_reverse_complement_sequence() -> None:
     rc = reverse_complement(seq)
     expected_probs = run_windowed(MockPredictor(seed=5), rc, context_length=4096, ceiling=8192).probs
     expected = compute_surprisal(expected_probs, rc)[::-1]
+    assert result.surprisal_values is not None
     assert np.array_equal(result.surprisal_values, expected)
 
 
@@ -558,6 +560,7 @@ def test_both_combined_surprisal_follows_the_same_seam_as_entropy() -> None:
         MockPredictor(seed=9), seq, context_length=K, ceiling=200, direction=Direction.BOTH_COMBINED
     )
     assert combined.surprisal_values is not None
+    assert rev.surprisal_values is not None and fwd.surprisal_values is not None
     # First K bases: reverse read wins (matches the reverse-only surprisal exactly).
     assert np.array_equal(combined.surprisal_values[:K], rev.surprisal_values[:K])
     # Remaining bases: forward read wins (matches the forward-only surprisal exactly).
@@ -577,6 +580,8 @@ def test_both_averaged_surprisal_takes_mean_where_both_qualify() -> None:
         MockPredictor(seed=4), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_AVERAGED
     )
     mid = slice(K, len(seq) - K)
+    assert fwd.surprisal_values is not None and rev.surprisal_values is not None
+    assert avg.surprisal_values is not None
     expected_mid = (
         fwd.surprisal_values[mid].astype(np.float64) + rev.surprisal_values[mid].astype(np.float64)
     ) / 2.0
@@ -602,6 +607,7 @@ def test_both_separate_still_populates_the_combined_surprisal_values() -> None:
     combined = analyze_direction(
         MockPredictor(seed=7), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED
     )
+    assert combined.surprisal_values is not None
     assert np.array_equal(result.surprisal_values, combined.surprisal_values)
 
 
@@ -641,23 +647,30 @@ class _OOMOnFirstPass:
         }[direction]
         self._fired = direction is None
 
-    def predict(self, window: str) -> np.ndarray:
-        if not self._fired and self._prefix.startswith(window):
+    def predict(self, seq: str) -> np.ndarray:
+        if not self._fired and self._prefix.startswith(seq):
             self._fired = True
             raise PredictorOOMError("simulated OOM")
-        return MockPredictor(seed=0).predict(window)
+        return MockPredictor(seed=0).predict(seq)
 
 
 _SEQ_456 = "ACGTTGCAAGCT" * 20  # 240 nt
 
 
 def _combined_and_separate_456(oom_on: str | None, k: int = 16):
-    kwargs = {"context_length": k, "ceiling": 1024}
     combined = analyze_direction(
-        _OOMOnFirstPass(_SEQ_456, oom_on), _SEQ_456, direction=Direction.BOTH_COMBINED, **kwargs
+        _OOMOnFirstPass(_SEQ_456, oom_on),
+        _SEQ_456,
+        direction=Direction.BOTH_COMBINED,
+        context_length=k,
+        ceiling=1024,
     )
     separate = analyze_direction(
-        _OOMOnFirstPass(_SEQ_456, oom_on), _SEQ_456, direction=Direction.BOTH_SEPARATE, **kwargs
+        _OOMOnFirstPass(_SEQ_456, oom_on),
+        _SEQ_456,
+        direction=Direction.BOTH_SEPARATE,
+        context_length=k,
+        ceiling=1024,
     )
     return combined, separate
 
@@ -668,6 +681,7 @@ def test_seam_after_a_forward_only_halving_is_the_forward_passes_actual_k() -> N
     combined, separate = _combined_and_separate_456("forward")
     assert combined.seam == 8
     assert combined.context_length == 16  # the configured K stays configured (#407)
+    assert separate.reverse_values is not None and separate.forward_values is not None
     assert np.allclose(combined.values[:8], separate.reverse_values[:8], atol=1e-5)
     assert np.allclose(combined.values[8:], separate.forward_values[8:], atol=1e-5)
     assert any("forward pass ran with K=8" in n for n in combined.notices)
@@ -676,6 +690,7 @@ def test_seam_after_a_forward_only_halving_is_the_forward_passes_actual_k() -> N
 def test_seam_after_a_reverse_only_halving_stays_at_the_forward_k() -> None:
     combined, separate = _combined_and_separate_456("reverse")
     assert combined.seam == 16  # forward ran with the configured K
+    assert separate.reverse_values is not None and separate.forward_values is not None
     assert np.allclose(combined.values[:16], separate.reverse_values[:16], atol=1e-5)
     assert np.allclose(combined.values[16:], separate.forward_values[16:], atol=1e-5)
     assert any("reverse pass ran with K=8" in n for n in combined.notices)
@@ -708,8 +723,8 @@ class _UniformFirstRow:
     """Evo-like boundary: no BOS token, so row 0 is uniform (2.0 bits); the other rows are
     the mock's deterministic softmax."""
 
-    def predict(self, window: str) -> np.ndarray:
-        probs = MockPredictor(seed=0).predict(window).copy()
+    def predict(self, seq: str) -> np.ndarray:
+        probs = MockPredictor(seed=0).predict(seq).copy()
         probs[0] = 0.25
         return probs
 
@@ -722,6 +737,7 @@ def test_the_reverse_track_of_a_reverse_palindromic_sequence_mirrors_the_forward
     result = analyze_direction(
         MockPredictor(seed=3), seq, context_length=16, ceiling=1024, direction=Direction.BOTH_SEPARATE
     )
+    assert result.reverse_values is not None and result.forward_values is not None
     assert np.allclose(result.reverse_values, result.forward_values[::-1], atol=1e-6)
 
 
@@ -730,6 +746,7 @@ def test_the_last_base_of_the_reverse_track_is_the_uniform_row() -> None:
     result = analyze_direction(
         _UniformFirstRow(), seq, context_length=16, ceiling=1024, direction=Direction.BOTH_SEPARATE
     )
+    assert result.forward_values is not None and result.reverse_values is not None
     assert result.forward_values[0] == pytest.approx(2.0)
     assert result.reverse_values[-1] == pytest.approx(2.0)  # rc index 0 maps to original L-1
     assert result.reverse_values[0] < 2.0 - 1e-3  # and only that end
@@ -744,6 +761,7 @@ def test_reduced_context_range_is_the_exact_middle_span_neither_direction_reache
         MockPredictor(seed=6), seq, context_length=K, ceiling=8192, direction=Direction.BOTH_COMBINED
     )
     assert result.reduced_context_range == (len(seq) - K, K)
+    assert result.reduced_context_range is not None
     start, end = result.reduced_context_range
     assert end - start == result.reduced_context_count
 
