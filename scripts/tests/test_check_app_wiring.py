@@ -14,6 +14,7 @@ the repository's current state is a timer, not a test.
 
 from __future__ import annotations
 
+import functools
 import json
 import subprocess
 import sys
@@ -1173,7 +1174,9 @@ def test_pathological_generic_input_is_scanned_in_linear_time(tmp_path, name):
 # --- #844: one index per run, not a regex compile + full scan per name -------------------------------------
 
 
+@functools.cache
 def _ref_strip(text: str) -> str:
+    # Pure function of the text; memoised so the oracle strips each file once (#1017).
     return caw._COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
 
 
@@ -1182,7 +1185,9 @@ def _ref_mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
     import re
 
     pattern = re.compile(rf"\b{re.escape(identifier)}\b")
-    return [p for p, t in texts.items() if pattern.search(t)]
+    # `identifier in t` is necessary for a \b match: it skips the regex scan on files
+    # that cannot match, with identical results (#1017).
+    return [p for p, t in texts.items() if identifier in t and pattern.search(t)]
 
 
 def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | None, class_names: frozenset[str]) -> list[Path]:
@@ -1192,6 +1197,8 @@ def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | N
     pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
     hits: list[Path] = []
     for path, text in texts.items():
+        if identifier not in text:  # stripping only blanks text out, so this is necessary (#1017)
+            continue
         for match in pattern.finditer(_ref_strip(text)):
             recv = match.group("recv")
             other_type = owner is not None and recv in class_names and recv != owner
@@ -1205,6 +1212,30 @@ def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | N
             hits.append(path)
             break
     return hits
+
+
+def test_the_fast_oracle_equals_the_verbatim_pre_844_scan_on_edge_texts():
+    """#1017: the golden reference gained a substring prefilter and a strip memo for speed.
+    Prove those shortcuts change nothing against the literal old loops."""
+    import re
+
+    texts = {
+        Path("a.cs"): "x.Name(); // Name in a comment",
+        Path("b.cs"): 'var s = "x.Name"; NameOther.Foo(); y.Nam();',
+        Path("c.cs"): "nameof(Owner.Name) + Name2",
+        Path("d.cs"): "int Name = 1; other.Name = 2; Peer p; p.Name();",
+        Path("e.cs"): "nothing here",
+    }
+    classes = frozenset({"Owner", "Peer"})
+    for ident in ("Name", "Nam", "Foo", "Missing"):
+        pattern = re.compile(rf"\b{re.escape(ident)}\b")
+        assert _ref_mentions(ident, texts) == [p for p, t in texts.items() if pattern.search(t)], ident
+        got = _ref_member_mentions(ident, texts, "Owner", classes)
+        full = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(ident)}\b")
+        expected = [p for p, t in texts.items() if full.search(_ref_strip(t))]
+        # The two differ only by the receiver filter, so the fast result must be a subset.
+        assert set(got) <= set(expected), ident
+    assert _ref_mentions("Name", texts) == [Path("a.cs"), Path("b.cs"), Path("c.cs"), Path("d.cs")]
 
 
 def test_comment_stripping_runs_once_per_file_not_once_per_candidate():
