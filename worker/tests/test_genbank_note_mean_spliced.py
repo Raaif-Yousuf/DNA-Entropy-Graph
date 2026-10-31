@@ -94,12 +94,14 @@ def test_a_track_shorter_than_the_sequence_does_not_raise(tmp_path: Path) -> Non
     spliced = GeneFeature(begin=5, end=60, strand="+", gene_id="sp", segments=((5, 20), (40, 60)))
     text = _write(tmp_path, spliced, short)
     expected = (6 * 1.0 + 10 * 2.0 + 11 * 1.0) / 27  # exon 2 is clipped to 40..50
-    assert float(re.search(r"mean_entropy=([0-9.]+) bits", text).group(1)) == pytest.approx(
-        expected, abs=5e-4
-    )
+    found = re.search(r"mean_entropy=([0-9.]+) bits", text)
+    assert found is not None
+    assert float(found.group(1)) == pytest.approx(expected, abs=5e-4)
 
 
 def test_a_wrapping_gene_on_a_short_track_does_not_raise(tmp_path: Path) -> None:
     wrap = GeneFeature(begin=1, end=L, strand="+", gene_id="w", segments=((1, 10), (120, 126)))
     text = _write(tmp_path, wrap, _values()[:50], circular=True)
-    assert float(re.search(r"mean_entropy=([0-9.]+) bits", text).group(1)) == pytest.approx(1.0, abs=5e-4)
+    found = re.search(r"mean_entropy=([0-9.]+) bits", text)
+    assert found is not None
+    assert float(found.group(1)) == pytest.approx(1.0, abs=5e-4)

@@ -7,6 +7,8 @@ here we pass synthetic tuples to exercise every branch.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from dna_entropy.predictors.base import PredictorError
@@ -257,8 +259,8 @@ def _install_fake_torch_and_evo2(monkeypatch: pytest.MonkeyPatch, capability, gp
     import sys
     import types
 
-    fake_torch = types.ModuleType("torch")
-    fake_torch_cuda = types.ModuleType("torch.cuda")
+    fake_torch: Any = types.ModuleType("torch")
+    fake_torch_cuda: Any = types.ModuleType("torch.cuda")
     fake_torch_cuda.is_available = lambda: capability is not None
     fake_torch_cuda.get_device_capability = lambda: capability
     fake_torch_cuda.device_count = lambda: gpu_count
@@ -266,7 +268,7 @@ def _install_fake_torch_and_evo2(monkeypatch: pytest.MonkeyPatch, capability, gp
     fake_torch.cuda = fake_torch_cuda
     fake_torch.Tensor = object
 
-    fake_evo2 = types.ModuleType("evo2")
+    fake_evo2: Any = types.ModuleType("evo2")
     fake_evo2.Evo2 = _FakeEvo2
 
     monkeypatch.setitem(sys.modules, "torch", fake_torch)

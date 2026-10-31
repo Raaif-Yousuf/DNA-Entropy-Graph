@@ -84,7 +84,9 @@ public sealed partial class PrototypeImportViewModel : ObservableObject
                 }
 
                 // The zone and key alone are not worth a question: there is nothing to add.
-                Status = askEvenIfNothingNew ? _strings.GetString(scan.Runs.Count == 0 ? "PrototypeImportNothingFound" : "PrototypeImportAlreadyDone") : string.Empty;
+                // Issue #915: a run the user removed is not "already in Runs"; that text would be false and would name no way back.
+                var key = scan.Runs.Count == 0 ? "PrototypeImportNothingFound" : _importer.CountRemoved(scan) > 0 ? "PrototypeImportOnlyRemoved" : "PrototypeImportAlreadyDone";
+                Status = askEvenIfNothingNew ? _strings.GetString(key) : string.Empty;
                 return;
             }
 

@@ -142,6 +142,7 @@ def test_end_to_end_denies_then_allows(repo):
     payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr create --title x"}, "cwd": str(repo)}
     code, decision = _run_hook(payload)
     assert code == 0
+    assert decision is not None
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
     stamp.write_stamp(repo, "fast")
     code, decision = _run_hook(payload)
@@ -254,7 +255,9 @@ def test_record_landed_prunes_expired_merges_and_leaves_no_temp_or_lock(repo):
     stamp.record_landed(repo, "1", SHA, now=time.time() - stamp.LANDED_MAX_AGE_SECONDS - 60)
     stamp.record_landed(repo, "2", SHA)
     stamp.record_landed(repo, "3", SHA)
-    data = json.loads(stamp.landed_path(repo).read_text(encoding="utf-8"))
+    landed = stamp.landed_path(repo)
+    assert landed is not None
+    data = json.loads(landed.read_text(encoding="utf-8"))
     assert sorted(data) == ["2", "3"]
     assert sorted(p.name for p in (repo / ".git").glob("landed-prs*") if p.suffix != ".oslock") == ["landed-prs.json"]
 
@@ -267,7 +270,9 @@ def test_concurrent_record_landed_loses_nothing(repo):
         th.start()
     for th in threads:
         th.join()
-    data = json.loads(stamp.landed_path(repo).read_text(encoding="utf-8"))
+    landed = stamp.landed_path(repo)
+    assert landed is not None
+    data = json.loads(landed.read_text(encoding="utf-8"))
     assert sorted(data, key=int) == [str(n) for n in range(1, 13)]
 
 
@@ -279,6 +284,7 @@ def test_powershell_env_bypass_allows_and_is_logged(repo):
 
 def test_deny_message_shows_both_bypass_syntaxes(repo):
     reason = hook.verdict("gh pr create", repo)
+    assert reason is not None
     assert 'DEG_SKIP_PREMERGE="<reason>" gh pr create' in reason
     assert '$env:DEG_SKIP_PREMERGE="<reason>"; gh pr create' in reason
 
