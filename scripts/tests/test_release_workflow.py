@@ -249,7 +249,9 @@ def test_every_checkout_drops_the_token(text):
 
 def test_the_build_job_has_no_write_token_and_the_upload_job_is_separate(text):
     jobs = _jobs(text)
-    app_perm = re.search(r"(?m)^    permissions:\n((?:      .*\n)+)", jobs["app"]).group(1)
+    app_perm_match = re.search(r"(?m)^    permissions:\n((?:      .*\n)+)", jobs["app"])
+    assert app_perm_match is not None
+    app_perm = app_perm_match.group(1)
     assert "contents: read" in app_perm and "contents: write" not in app_perm
     writers = {n for n, j in jobs.items() if "contents: write" in j}
     assert writers == {"upload", "publish"}

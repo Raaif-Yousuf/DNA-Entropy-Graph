@@ -2032,6 +2032,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     public byte[] GetObjectBytes(string bucket, string objectKey)
         => _objects.TryGetValue((bucket, objectKey), out var bytes) ? bytes : throw new KeyNotFoundException($"No such object: {bucket}/{objectKey}");
 
+    private DateTimeOffset? _workerUpdatedAt;
+
+    /// <summary>Pins the <c>updatedAt</c> the simulated worker stamps into every status.json (its own clock), so a test about clock skew does not depend on the machine date. Default: the real clock.</summary>
+    public FakeGcp WithWorkerClock(DateTimeOffset updatedAt)
+    {
+        _workerUpdatedAt = updatedAt;
+        return this;
+    }
+
     /// <summary>Puts an object in the bucket directly, as if another party (the worker, an earlier run) had written it.</summary>
     public void PutObject(string bucket, string objectKey, byte[] content) => _objects[(bucket, objectKey)] = content;
 
@@ -2295,7 +2304,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     // takes the other worker with it.
     private long NextLiveWorkerId() => Interlocked.Increment(ref _liveWorkerIds);
 
-    private static string WorkerStatusJson(string jobId, long seq, string stage = WorkerStages.Running, bool cancelSeen = false, int? windowsDone = null)
+    private string WorkerStatusJson(string jobId, long seq, string stage = WorkerStages.Running, bool cancelSeen = false, int? windowsDone = null)
     {
         var doc = new JsonObject
         {
@@ -2303,7 +2312,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             ["jobId"] = jobId,
             ["stage"] = stage,
             ["heartbeatSeq"] = seq,
-            ["updatedAt"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
+            ["updatedAt"] = (_workerUpdatedAt ?? DateTimeOffset.UtcNow).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
             ["vm"] = new JsonObject { ["gpu"] = "NVIDIA L4" },
             ["worker"] = new JsonObject { ["version"] = "1.0.0", ["image"] = "sha256:fake" },
             ["error"] = null,

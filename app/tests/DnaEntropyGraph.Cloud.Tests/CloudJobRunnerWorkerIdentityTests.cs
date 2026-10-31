@@ -131,6 +131,23 @@ public class CloudJobRunnerWorkerIdentityTests
     }
 
     [Fact]
+    public async Task A_resume_that_adopts_a_VM_books_from_the_VMs_own_start_not_from_the_moment_of_adoption()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var request = TestInputs.Request("job-i6", Spec("job-i6"));
+        await gcp.CreateVmAsync(request.Spec, "us-central1-a", CancellationToken.None);
+        var vm = (await gcp.FindByJobIdAsync("job-i6", CancellationToken.None)).Single();
+        var startedAt = (vm.RunClockStart ?? vm.CreatedAt).ShouldNotBeNull("the fake reports the VM's start");
+        await Task.Delay(40, TestContext.Current.CancellationToken);
+        await repo.UpsertAsync(new RunRecord("job-i6", JobPhase.Provisioning, DateTimeOffset.UtcNow.AddMinutes(-1)), CancellationToken.None);
+
+        await Runner(gcp, gcp, repo).RunAsync(request, CancellationToken.None);
+
+        repo.AllRecordedInOrder.Last(r => r.JobId == "job-i6").VmReadyAt.ShouldBe(startedAt, "a first stamp that failed before the app closed leaves the VM's own start as the only honest figure");
+    }
+
+    [Fact]
     public async Task An_identity_step_longer_than_the_general_call_deadline_but_inside_its_own_budget_still_reaches_the_create()
     {
         // The real gateway is a dozen or more HTTP calls (account, role, two policy edits with retries); the general

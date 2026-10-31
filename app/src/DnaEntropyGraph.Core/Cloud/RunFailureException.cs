@@ -38,6 +38,24 @@ internal sealed class RunProgress
     public long? VmStartMark { get; set; }
 
     /// <summary>
+    /// Issue #109: the start of the span this run's VM billed, the VM's own platform start (see <see cref="VmSpan"/>), set by <see cref="Observe"/> from any observation
+    /// of the VM (a create's answer, a reuse, an adoption, also a create that answered late and was then deleted). The runner copies it to <c>RunRecord.VmReadyAt</c>
+    /// even when provisioning goes on to fail. Null when no VM was observed.
+    /// </summary>
+    public DateTimeOffset? VmCreatedAt { get; set; }
+
+    /// <summary>The end of that span when it is already known: a VM observed stopped, or gone (see <see cref="VmSpan"/>). Null for a VM still running: its billing ends when the run does.</summary>
+    public DateTimeOffset? VmEndedAt { get; set; }
+
+    /// <summary>Records what <paramref name="vm"/> says about its own span, keeping what an earlier observation already set.</summary>
+    public void Observe(VmDescriptor vm)
+    {
+        var (start, end) = VmSpan.Of(vm, null);
+        VmCreatedAt ??= start;
+        VmEndedAt ??= end;
+    }
+
+    /// <summary>
     /// Issue #92 round 3 (F2 iii): true when the VM the run is on was found already there (adopted after the app closed), false when this run created or
     /// started it. Only an adopted flex request may be a queued one the boot wait must not give up on; a request this run created and was granted is not.
     /// </summary>

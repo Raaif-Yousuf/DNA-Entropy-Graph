@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -646,6 +647,125 @@ def test_classify_pytest_reads_xdist_output(rc, output, status):
 def test_a_timed_out_xdist_gate_still_counts_progress():
     out = "......F...  [ 12%]\n..........  [ 24%]\n"
     assert "timed out after 600s with 19 passed and 1 failed" in pm.classify_pytest_timeout(600, out)
+
+
+# ---- #1001: a worktree with no worker/.venv of its own ----------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def fake_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """(primary checkout with a fake shared venv python, a real linked worktree of it with no venv, the fake python)."""
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    _git(primary, "init", "-q")
+    _git(primary, "commit", "-q", "--allow-empty", "-m", "init")
+    rel = Path("Scripts") / "python.exe" if sys.platform == "win32" else Path("bin") / "python"
+    shared = primary / "worker" / ".venv" / rel
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"fake python\n")
+    wt = tmp_path / "wt"
+    _git(primary, "worktree", "add", "-q", str(wt), "-b", "lane")
+    (wt / "worker" / "src").mkdir(parents=True, exist_ok=True)
+    return primary, wt, shared
+
+
+def test_find_venv_python_prefers_the_checkouts_own_venv(fake_worktree):
+    primary, _, shared = fake_worktree
+    assert pm.find_venv_python(primary) == shared
+
+
+def test_find_venv_python_falls_back_to_the_primary_checkouts_venv_from_a_worktree(fake_worktree):
+    _, wt, shared = fake_worktree
+    assert not (wt / "worker" / ".venv").exists()
+    found = pm.find_venv_python(wt)
+    assert found is not None and found.resolve() == shared.resolve()
+
+
+def test_find_venv_python_is_none_when_neither_checkout_has_a_venv(fake_worktree):
+    _, wt, shared = fake_worktree
+    shared.unlink()
+    assert pm.find_venv_python(wt) is None
+
+
+def test_the_fallback_is_announced_and_an_own_venv_or_override_is_not(fake_worktree):
+    primary, wt, _ = fake_worktree
+    note = pm.venv_fallback_note(wt, None)
+    assert note is not None and "primary checkout" in note and "\n" not in note
+    assert pm.venv_fallback_note(primary, None) is None
+    assert pm.venv_fallback_note(wt, "C:/x/python.exe") is None
+
+
+def test_gates_get_this_checkouts_worker_src_first_on_pythonpath(tmp_path):
+    src = str((tmp_path / "worker" / "src").resolve())
+    sep = os.pathsep
+    assert pm.pythonpath_for(tmp_path, {}) == src
+    assert pm.pythonpath_for(tmp_path, {"PYTHONPATH": "A"}) == src + sep + "A"
+    # already there: moved to the front, not duplicated
+    assert pm.pythonpath_for(tmp_path, {"PYTHONPATH": f"A{sep}{src}"}).split(sep) == [src, "A"]
+
+
+def test_main_in_a_worktree_prints_the_fallback_and_runs_the_gates_with_the_worktree_src(fake_worktree, monkeypatch, capsys):
+    _, wt, shared = fake_worktree
+    seen: dict[str, str] = {}
+
+    def fake_run_all(gates, log_dir=None, runner=None, emit=print, env=None):
+        seen["PYTHONPATH"] = (env or {}).get("PYTHONPATH", "")
+        return [], "SUMMARY", 0
+
+    monkeypatch.setattr(pm, "run_all", fake_run_all)
+    monkeypatch.setattr(pm, "_write_stamp", lambda *a, **k: None)
+    monkeypatch.setenv("PYTHONPATH", "KEEP")
+    before = dict(os.environ)
+    (wt / "scripts").mkdir(exist_ok=True)
+    (wt / "scripts" / "check_stub.py").write_text("print('ok')\n", encoding="utf-8", newline="\n")
+    pm.main(["--root", str(wt), "--only", "check_stub"])
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "ERROR" not in captured.err, captured.err
+    assert "primary checkout" in out
+    assert seen["PYTHONPATH"].split(os.pathsep) == [str((wt / "worker" / "src").resolve()), "KEEP"]
+    assert str(shared) in out  # the python it announced is the primary's
+    assert dict(os.environ) == before  # main() builds the gates' env locally; this process is not mutated
+
+
+def test_run_all_hands_the_given_env_to_every_gate_and_leaves_os_environ_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    code = "import os; print(os.environ.get('PYTHONPATH', 'unset'))"
+    gate = pm.Gate("echo-env", [sys.executable, "-c", code], tmp_path)
+    results, _, _ = pm.run_all([gate], env={**os.environ, "PYTHONPATH": "FROM_ENV"}, emit=lambda *_: None)
+    assert "FROM_ENV" in results[0].output
+    assert "PYTHONPATH" not in os.environ
+
+
+def test_git_is_asked_once_per_root_and_with_a_timeout(fake_worktree, monkeypatch):
+    _, wt, _ = fake_worktree
+    calls: list[dict] = []
+    real = subprocess.run
+
+    def spy(argv, *a, **k):
+        if argv[:2] == ["git", "rev-parse"]:
+            calls.append(k)
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    pm._primary_venv_dir.cache_clear()
+    pm.find_venv_python(wt)
+    pm.find_venv_python(wt)
+    pm.venv_fallback_note(wt, None)
+    assert len(calls) == 1
+    assert calls[0].get("timeout")
+
+
+def test_pythonpath_dedupe_ignores_case_and_relative_spelling(tmp_path, monkeypatch):
+    src = (tmp_path / "worker" / "src").resolve()
+    monkeypatch.chdir(tmp_path)
+    spelled = os.path.join("worker", "..", "worker", "src")  # relative, same directory
+    out = pm.pythonpath_for(tmp_path, {"PYTHONPATH": os.pathsep.join([spelled, "A"])})
+    assert out.split(os.pathsep) == [str(src), "A"]
 
 
 # --- #840: a hung test in scripts/tests fails fast with a traceback (pytest-timeout) ------------------------

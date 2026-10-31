@@ -162,6 +162,33 @@ public class CloudJobRunnerResumeAndSettleTests
     }
 
     [Fact]
+    public async Task A_VM_that_was_created_and_then_lost_inside_provisioning_still_has_its_start_recorded_for_the_spend_ledger()
+    {
+        var gcp = new FakeGcp().WithCreateDelay(TimeSpan.FromMilliseconds(150));
+        var repo = new InMemoryRunRepository();
+
+        var result = await WithinAsync(Runner(gcp, repo).RunAsync(TestInputs.Request("job-s3", Spec("job-s3")), CancellationToken.None), "hung");
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        var row = LastRow(repo, "job-s3");
+        row.VmReadyAt.ShouldNotBeNull("the late create landed, billed until it was deleted, and the failed row must say when it started");
+        row.FinishedAt.ShouldNotBeNull();
+        row.VmReadyAt!.Value.ShouldBeLessThanOrEqualTo(row.FinishedAt!.Value);
+    }
+
+    [Fact]
+    public async Task A_run_that_never_got_a_VM_has_no_start_recorded()
+    {
+        var gcp = new FakeGcp().WithZoneStockout(Zone);
+        var repo = new InMemoryRunRepository();
+
+        var result = await WithinAsync(Runner(gcp, repo).RunAsync(TestInputs.Request("job-s4", Spec("job-s4")), CancellationToken.None), "hung");
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        LastRow(repo, "job-s4").VmReadyAt.ShouldBeNull("a stockout creates nothing, so nothing is booked");
+    }
+
+    [Fact]
     public async Task A_cancel_waits_for_an_insert_still_in_flight_and_then_deletes_what_landed()
     {
         var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
@@ -183,6 +210,44 @@ public class CloudJobRunnerResumeAndSettleTests
 
         (await runner.GetPhaseAsync("job-s2", CancellationToken.None)).ShouldBe(JobPhase.Cancelled);
         (await gcp.FindByJobIdAsync("job-s2", CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_cancel_while_the_create_is_in_flight_records_when_the_VM_that_landed_started_so_the_ledger_books_it()
+    {
+        var gcp = new FakeGcp().WithBlockedCreate(ignoreCancellation: true);
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        using var cts = new CancellationTokenSource();
+        var run = runner.RunAsync(TestInputs.Request("job-s5", Spec("job-s5")), cts.Token);
+        await gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => run);
+
+        var cancel = runner.CancelAsync("job-s5", CancellationToken.None);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        gcp.ReleaseCreate();
+        await cancel.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var row = LastRow(repo, "job-s5");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.VmReadyAt.ShouldNotBeNull("the create landed and billed until the cancel deleted it; without a start the ledger books nothing");
+        row.VmReadyAt!.Value.ShouldBeLessThanOrEqualTo(row.FinishedAt!.Value);
+    }
+
+    [Fact]
+    public async Task A_cancel_of_a_run_that_never_created_a_VM_records_no_start()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        await repo.UpsertAsync(new RunRecord("job-s6", JobPhase.Uploading, DateTimeOffset.UtcNow, Target: "cloud"), CancellationToken.None);
+
+        await runner.CancelAsync("job-s6", CancellationToken.None);
+
+        var row = LastRow(repo, "job-s6");
+        row.Phase.ShouldBe(JobPhase.Cancelled);
+        row.VmReadyAt.ShouldBeNull();
     }
 
     // ---- 3: stop is not the end for a VM that never booted (covered in CloudJobRunnerHardeningTests) ----
@@ -345,5 +410,59 @@ public class CloudJobRunnerResumeAndSettleTests
         result.FailureCode.ShouldBe(RunErrorCodes.WorkerFailed);
         LastRow(repo, "job-w").ErrorDetail.ShouldNotBeNull().ToLowerInvariant().ShouldContain("no result files");
         Directory.GetFileSystemEntries(request.OutputFolder).ShouldBeEmpty();
+    }
+
+    // ---- #109 round 3: the span booked is what the VM ran, not how long the app was closed ----
+
+    private static async Task SeedFinishedAndStoppedAsync(FakeGcp gcp, InMemoryRunRepository repo, ManualTimeProvider time, string jobId, TimeSpan ranFor, bool stop = true)
+    {
+        var request = TestInputs.Request(jobId, Spec(jobId));
+        await gcp.CreateVmAsync(request.Spec, Zone, CancellationToken.None);
+        time.Advance(ranFor);
+        if (stop)
+        {
+            await gcp.StopVmAsync($"deg-{jobId}", Zone, CancellationToken.None);
+        }
+
+        var bucket = FakeGcp.BucketName(Project);
+        var track = FakeGcp.TrackBytes("seq");
+        gcp.PutObject(bucket, $"jobs/{jobId}/output/seq/seq.bedgraph", track);
+        gcp.PutObject(bucket, $"jobs/{jobId}/result.json", System.Text.Encoding.UTF8.GetBytes(
+            $$"""{"schema":1,"jobId":"{{jobId}}","status":"done","inputs":[{"id":"in1","status":"done","outputs":["output/seq/seq.bedgraph"],"files":[{"path":"output/seq/seq.bedgraph","sha256":"{{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(track))}}","bytes":{{track.Length}}}],"notices":[],"stats":null,"error":null}],"error":null}"""));
+        await repo.UpsertAsync(new RunRecord(jobId, JobPhase.Running, DateTimeOffset.UtcNow.AddHours(-10)), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_run_resumed_hours_after_its_VM_stopped_itself_books_the_span_the_VM_ran_not_the_time_the_app_was_closed()
+    {
+        var t0 = DateTimeOffset.UtcNow.AddHours(-10);
+        var time = new ManualTimeProvider(t0);
+        var gcp = new FakeGcp(time);
+        var repo = new InMemoryRunRepository();
+        await SeedFinishedAndStoppedAsync(gcp, repo, time, "job-s7", TimeSpan.FromMinutes(20));
+
+        var result = await Runner(gcp, repo).RunAsync(TestInputs.Request("job-s7", Spec("job-s7")), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-s7");
+        row.VmReadyAt.ShouldBe(t0, "the VM's own platform start");
+        (row.FinishedAt!.Value - row.VmReadyAt!.Value).TotalMinutes.ShouldBe(20, 0.01, "the VM stopped at +20 min; resuming 10 h later must not book 10 h");
+    }
+
+    [Fact]
+    public async Task A_resumed_finished_run_whose_VM_is_still_running_ends_now()
+    {
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var time = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        await SeedFinishedAndStoppedAsync(gcp, repo, time, "job-s8", TimeSpan.Zero, stop: false);
+        var request = TestInputs.Request("job-s8", Spec("job-s8"));
+        (await gcp.FindByJobIdAsync("job-s8", CancellationToken.None)).ShouldNotBeEmpty();
+
+        var result = await Runner(gcp, repo).RunAsync(request, CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        var row = LastRow(repo, "job-s8");
+        (DateTimeOffset.UtcNow - row.FinishedAt!.Value).ShouldBeLessThan(TimeSpan.FromMinutes(1), "a running VM bills until the run ends: the end is the finish");
     }
 }
