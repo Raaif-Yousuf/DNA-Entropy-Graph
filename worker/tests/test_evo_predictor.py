@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sys
 import types
+from typing import Any
 
 import numpy as np
 import pytest
@@ -32,7 +33,7 @@ from dna_entropy.predictors.base import NUM_NUCLEOTIDES, check_probability_matri
 
 def _install_fake_torch_and_evo2(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_torch = types.ModuleType("torch")
-    fake_evo2 = types.ModuleType("evo2")
+    fake_evo2: Any = types.ModuleType("evo2")
     fake_evo2.Evo2 = object  # never constructed by these tests
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "evo2", fake_evo2)
