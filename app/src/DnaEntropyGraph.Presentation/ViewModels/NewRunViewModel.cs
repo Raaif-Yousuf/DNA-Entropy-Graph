@@ -1391,7 +1391,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     }
 
     /// <summary>Dollars to the cent, never shown as zero: a run is never free.</summary>
-    private static string Money(double usd) => Math.Max(0.01, Math.Round(usd, 2, MidpointRounding.AwayFromZero)).ToString("0.00", CultureInfo.InvariantCulture);
+    private static string Money(double usd) => RunCostText.Money(usd);
 
     private static int WholeMinutes(double minutes) => Math.Max(1, (int)Math.Round(minutes, MidpointRounding.AwayFromZero));
 

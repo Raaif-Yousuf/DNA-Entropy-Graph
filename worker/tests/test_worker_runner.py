@@ -153,10 +153,11 @@ def test_unsupported_schema_refuses_before_any_status_file_is_written(tmp_path: 
     with pytest.raises(ManifestSchemaError) as exc:
         run_job(store)
     assert "99" in str(exc.value)
-    # Nothing was written — there is no useful heartbeat for a manifest the worker
-    # cannot even read.
+    # No heartbeat: there is nothing useful to tick about a manifest the worker cannot
+    # read. But result.json IS written (issue #1014, replacing the old "nothing written"
+    # assertion, which asserted the very symptom): without it the app cannot name the failure.
     assert not store.exists("status.json")
-    assert not store.exists(RESULT_PATH)
+    assert json.loads(store.read_text(RESULT_PATH))["error"]["code"] == "WORKER_VERSION_MISMATCH"
 
 
 # --- cancellation (docs/job_contract.md §6) --------------------------------------------

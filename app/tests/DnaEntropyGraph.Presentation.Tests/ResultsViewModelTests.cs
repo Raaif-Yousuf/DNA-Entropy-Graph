@@ -21,6 +21,8 @@ public sealed class ResultsViewModelTests : IDisposable
     private readonly INavigator _navigator = Substitute.For<INavigator>();
     private readonly IStringResourceProvider _strings = Substitute.For<IStringResourceProvider>();
     private List<RunRecord> _rows = [];
+    private readonly IRunCostSource _costs = Substitute.For<IRunCostSource>();
+    private Dictionary<string, double> _booked = [];
 
     public ResultsViewModelTests()
     {
@@ -37,6 +39,7 @@ public sealed class ResultsViewModelTests : IDisposable
         _strings.GetString(ResultsCopy.Headline).Returns("mean {0:F3}, lowest {1:F3}, highest {2:F3}, {3:N0} nt in {4}");
         _strings.GetString(ResultsCopy.StatsUnreadable).Returns("unreadable {0}");
         _repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => _rows);
+        _costs.GetBookedAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult<IReadOnlyDictionary<string, double>>(_booked));
         _launcher.OpenFile(Arg.Any<string>()).Returns(true);
         _launcher.ShowInFolder(Arg.Any<string>()).Returns(true);
         _launcher.OpenFolder(Arg.Any<string>()).Returns(true);
@@ -92,13 +95,31 @@ public sealed class ResultsViewModelTests : IDisposable
     private static RunRecord Row(string id, string? outputDir, string? name = null)
         => new(id, JobPhase.Completed, DateTimeOffset.UnixEpoch, Name: name, OutputDir: outputDir);
 
-    private ResultsViewModel Make(IRunOutputReader? reader = null) => new(_repository, reader ?? new RunOutputReader(), _launcher, _navigator, _strings, Substitute.For<IExternalViewerOpener>());
+    private ResultsViewModel Make(IRunOutputReader? reader = null) => new(_repository, reader ?? new RunOutputReader(), _launcher, _navigator, _strings, Substitute.For<IExternalViewerOpener>(), costs: _costs);
 
     private async Task<ResultsViewModel> Loaded(string jobId, IRunOutputReader? reader = null)
     {
         var vm = Make(reader);
         await vm.LoadAsync(jobId, TestContext.Current.CancellationToken);
         return vm;
+    }
+
+    [Fact]
+    public async Task The_header_shows_the_runs_booked_cost_and_a_run_that_booked_nothing_shows_no_cost_line()
+    {
+        _strings.GetString(ResultsCopy.CostEstimate).Returns("est ${0}");
+        var a = MakeRunFolder("costed", SummaryText("costed", "1.1", "1.2"));
+        var b = MakeRunFolder("free", SummaryText("free", "1.1", "1.2"));
+        _rows = [new RunRecord("costed", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: a), new RunRecord("free", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: b)];
+        _booked = new() { ["costed"] = 2.345 };
+
+        var costed = await Loaded("costed");
+        var free = await Loaded("free");
+
+        costed.HasCost.ShouldBeTrue();
+        costed.CostText.ShouldBe("est $2.35");
+        free.HasCost.ShouldBeFalse("no booked figure means no line, never $0.00");
+        free.CostText.ShouldBeEmpty();
     }
 
     [Fact]
