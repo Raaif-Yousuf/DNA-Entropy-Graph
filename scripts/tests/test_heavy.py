@@ -96,9 +96,9 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _kill_pid(pid: int) -> None:
+def _kill_pid(pid: int, tree: bool = False) -> None:
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False)
+        subprocess.run(["taskkill", "/F", *(["/T"] if tree else []), "/PID", str(pid)], capture_output=True, check=False)
     else:
         import signal
 
@@ -611,7 +611,9 @@ def test_tree_cpu_counts_a_grandchild_through_its_child(tmp_path):
         deadline = time.time() + 30
         while not pidfile.exists() and time.time() < deadline:
             time.sleep(0.1)
-        gc_pid = int(pidfile.read_text())
+        while (not pidfile.exists() or not pidfile.read_text().strip()) and time.time() < deadline:
+            time.sleep(0.1)  # the file exists before the child has written the pid into it
+        gc_pid = int(pidfile.read_text().strip())
         time.sleep(2.0)  # let the burner run
         table = heavy._win_process_table() if heavy.IS_WINDOWS else {c: v[0] for c, v in heavy._posix_process_table().items()}
         assert gc_pid in heavy._descendants(child.pid, table)
@@ -620,7 +622,7 @@ def test_tree_cpu_counts_a_grandchild_through_its_child(tmp_path):
         assert gc_cpu is not None and gc_cpu > 0
         assert tree is not None and tree >= gc_cpu
     finally:
-        _kill_pid(child.pid)
+        _kill_pid(child.pid, tree=True)  # /T: the venv launcher's real child is under it
         if gc_pid:
             _kill_pid(gc_pid)
 
@@ -677,7 +679,13 @@ def test_the_waiting_line_goes_to_stderr_not_stdout(tmp_path):
 
     threading.Thread(target=pump_stderr, daemon=True).start()
     try:
-        first = err_q.get(timeout=60)  # the waiting line itself, not a sleep, says it is queued
+        first = None
+        deadline = time.time() + 60
+        while time.time() < deadline:  # the waiting line itself, not a sleep, says it is queued; other stderr lines may precede it
+            line = err_q.get(timeout=max(0.1, deadline - time.time()))
+            if line is None or "heavy: waiting" in line:
+                first = line
+                break
     finally:
         gate.write_text("go", encoding="utf-8", newline="\n")
     assert p2.stdout is not None
@@ -755,7 +763,10 @@ class _FakeProc:
 
 class _FakeJob:
     def __init__(self, result=True, raises=False):
-        self.result, self.raises, self.terminated = result, raises, False
+        self.result, self.raises, self.terminated, self.closed = result, raises, False, False
+
+    def close(self):
+        self.closed = True
 
     def terminate(self):
         self.terminated = True
@@ -792,6 +803,25 @@ def test_kill_child_tree_still_waits_when_kill_tree_raises(monkeypatch):
     assert proc.waited
 
 
+def test_ctrl_c_reaches_kill_tree_when_the_child_was_not_assigned_to_the_job(tmp_path, monkeypatch):
+    """spawn_in_job says assigned=False: the job is EMPTY, and TerminateJobObject on an empty job still returns TRUE.
+    Ctrl-C must not trust that TRUE; it has to fall back to kill_tree."""
+    fake_job, proc, calls = _FakeJob(result=True), _FakeProc(), []
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: fake_job)
+    monkeypatch.setattr(heavy.wt_venv, "spawn_in_job", lambda *_a, **_k: (proc, False))
+    monkeypatch.setattr(heavy.wt_venv, "needs_taskkill_fallback", lambda assigned: True)
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda p: calls.append(p))
+
+    def interrupted(_proc):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(heavy, "_wait_child", interrupted)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    assert rc == 130
+    assert calls == [proc], "an empty job's TRUE from terminate() suppressed the taskkill fallback"
+
+
 def test_the_no_job_note_goes_to_stderr(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(heavy, "kill_children_with_me", lambda: "CreateJobObject error 5")
     rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
@@ -821,6 +851,14 @@ def test_an_oserror_with_an_errno_still_prints_it(tmp_path, monkeypatch, capsys)
     rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", str(tmp_path / "no-such-program-xyz")])
     err = capsys.readouterr().err
     assert rc == 127 and "errno 2" in err
+
+
+def test_kill_children_with_me_names_the_windows_error_number(monkeypatch):
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: None)
+    monkeypatch.setattr(heavy.wt_venv, "last_job_error", lambda: 5)
+    reason = heavy.kill_children_with_me()
+    assert reason is not None and "error 5" in reason and reason.isascii()
 
 
 def test_kill_children_with_me_joins_the_shared_job_helper(monkeypatch):

@@ -192,7 +192,8 @@ def kill_children_with_me() -> str | None:
     try:
         job = wt_venv.create_kill_job()
         if job is None:
-            return "CreateJobObject/SetInformationJobObject failed"
+            code = wt_venv.last_job_error()
+            return f"CreateJobObject/SetInformationJobObject failed, error {code}" if code else "CreateJobObject/SetInformationJobObject failed"
         if not job.assign_self():
             job.close()
             return "AssignProcessToJobObject failed"
@@ -702,6 +703,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
                 flush=True,
             )
+            if child_job is not None:  # an empty job's terminate() returns TRUE and would skip the taskkill fallback
+                child_job.close()
+                child_job = None
         return _wait_child(proc)
     except KeyboardInterrupt:
         if proc is not None:

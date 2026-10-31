@@ -509,7 +509,7 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
     job = _GATE_JOBS.get(proc.pid)
     job_terminated = False
     if job is not None:
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(Exception):  # ctypes.ArgumentError / TypeError too: "never raises"
             job_terminated = job.terminate()
     try:
         if os.name == "nt":

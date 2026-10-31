@@ -225,8 +225,19 @@ def needs_taskkill_fallback(assigned: bool) -> bool:
     return os.name == "nt" and not assigned
 
 
+_LAST_JOB_ERROR: int | None = None
+
+
+def last_job_error() -> int | None:
+    """The Windows error number of the most recent `create_kill_job` failure (None when it succeeded or never ran), for the caller's note."""
+    return _LAST_JOB_ERROR
+
+
 def create_kill_job() -> KillJob | None:
-    """A kill-on-close job object, or None (not Windows, or the API refused: the caller falls back to taskkill /T)."""
+    """A kill-on-close job object, or None (not Windows, or the API refused: the caller falls back to taskkill /T).
+    On a refusal `last_job_error()` holds the Windows error number."""
+    global _LAST_JOB_ERROR
+    _LAST_JOB_ERROR = None
     if os.name != "nt":
         return None
     try:
@@ -274,10 +285,12 @@ def create_kill_job() -> KillJob | None:
         k32.CloseHandle.restype = wintypes.BOOL
         handle = k32.CreateJobObjectW(None, None)
         if not handle:
+            _LAST_JOB_ERROR = ctypes.get_last_error()
             return None
         info = ExtendedLimits()
         info.BasicLimitInformation.LimitFlags = KillJob.KILL_ON_JOB_CLOSE
         if not k32.SetInformationJobObject(handle, KillJob.EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)):
+            _LAST_JOB_ERROR = ctypes.get_last_error()
             k32.CloseHandle(handle)
             return None
         return KillJob(int(handle), k32)
