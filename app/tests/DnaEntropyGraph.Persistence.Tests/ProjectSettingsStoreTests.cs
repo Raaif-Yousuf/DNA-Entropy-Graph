@@ -33,22 +33,42 @@ public class ProjectSettingsStoreTests
     }
 
     [Fact]
-    public async Task Remembering_a_bucket_and_choosing_a_project_at_the_same_time_lose_neither_write()
+    public async Task Remembering_a_bucket_and_choosing_a_project_lose_neither_write_in_either_order()
     {
+        // Both statements are upserts on the SAME Projects row but touch different columns, and each can be the one that creates the row. Order one: bucket first (row
+        // created with no account), then the choice. Order two: the choice first, then the bucket. Neither may blank the other's column.
         using var paths = new TempPaths();
         var (repository, store) = Open(paths);
-        await store.EnsureAsync("project-a", "sub-1", CancellationToken.None);
+
+        await store.RememberBucketAsync("bucket-first", "bucket-1", CancellationToken.None);
+        await store.EnsureAsync("bucket-first", "sub-1", CancellationToken.None);
+        await store.EnsureAsync("choice-first", "sub-1", CancellationToken.None);
+        await store.RememberBucketAsync("choice-first", "bucket-2", CancellationToken.None);
+
+        var rows = (await repository.GetAllAsync(CancellationToken.None)).ToDictionary(r => r.ProjectId);
+        (rows["bucket-first"].Bucket, rows["bucket-first"].AccountSub).ShouldBe(("bucket-1", "sub-1"));
+        (rows["choice-first"].Bucket, rows["choice-first"].AccountSub).ShouldBe(("bucket-2", "sub-1"));
+        (await store.GetKnownAsync("sub-1", CancellationToken.None)).Select(p => p.ProjectId).ShouldBe(["bucket-first", "choice-first"]);
+    }
+
+    [Fact]
+    public async Task Remembering_a_bucket_and_choosing_a_brand_new_project_at_the_same_moment_lose_neither_write()
+    {
+        // The real interleaving: for a project that does not exist yet both writes race to INSERT it, so one must fall into the ON CONFLICT branch.
+        using var paths = new TempPaths();
+        var (repository, store) = Open(paths);
 
         for (var i = 0; i < 20; i++)
         {
             await Task.WhenAll(
-                store.RememberBucketAsync("project-a", "bucket-" + i, CancellationToken.None),
-                store.EnsureAsync("project-a", "sub-1", CancellationToken.None));
+                Task.Run(() => store.RememberBucketAsync("project-" + i, "bucket-" + i, CancellationToken.None), TestContext.Current.CancellationToken),
+                Task.Run(() => store.EnsureAsync("project-" + i, "sub-1", CancellationToken.None), TestContext.Current.CancellationToken));
         }
 
-        var row = (await repository.GetAllAsync(CancellationToken.None)).Single();
-        row.Bucket.ShouldBe("bucket-19");
-        row.AccountSub.ShouldBe("sub-1");
+        var rows = await repository.GetAllAsync(CancellationToken.None);
+        rows.Count.ShouldBe(20);
+        rows.ShouldAllBe(r => r.AccountSub == "sub-1" && r.Bucket == "bucket-" + r.ProjectId.Substring("project-".Length));
+        (await store.GetKnownAsync("sub-1", CancellationToken.None)).Count.ShouldBe(20);
     }
 
     [Fact]

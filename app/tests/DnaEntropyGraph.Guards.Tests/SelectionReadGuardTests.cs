@@ -26,7 +26,7 @@ public class SelectionReadGuardTests
         ["GoogleAccountService.cs"] = ("the real implementation of the selection", 4),
         ["FakeGcp.cs"] = ("the fake's implementation of the selection", 2),
         ["FakeGcp.Scope.cs"] = ("the fake's implementation of the selection", 6),
-        ["WizardViewModel.cs"] = ("the setup wizard chooses the account and project (occurrences: the count is per occurrence since review F7d, so two reads on one line are two)", 9),
+        ["WizardViewModel.cs"] = ("the setup wizard chooses the account and project (occurrences: the count is per occurrence since review F7d, so two reads on one line are two; issue #260 r3: one more CurrentAccount read records the chosen project under the signed-in account)", 10),
         ["SetupStepsViewModel.cs"] = ("the setup steps act on the project being set up", 4),
         ["SetupCheckService.cs"] = ("the setup checks act on the project being set up, as the active account (one ActiveSnapshot read, review F6)", 1),
         ["ShellViewModel.cs"] = ("the status pill names the current account (per occurrence since review F7d)", 2),

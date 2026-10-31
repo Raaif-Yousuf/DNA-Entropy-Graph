@@ -216,6 +216,64 @@ public class ProjectSwitcherTests
         (await Switcher(gcp).ListAsync(CancellationToken.None)).Single(p => p.ProjectId == "from-my-run").Bucket.ShouldBe("bucket-r");
     }
 
+    // ---- r3 review: the project left, and the account that chose ----
+
+    [Fact]
+    public async Task A_project_selected_by_the_wizard_only_is_still_listed_after_switching_away_from_it()
+    {
+        // The wizard calls SelectProjectAsync and records nothing; before the fix the project being LEFT was never written, so it vanished from the list.
+        var gcp = NewGcp("project-a");
+        _store.Rows.ShouldBeEmpty("vacuity: nothing recorded project-a before the switch");
+
+        await Switcher(gcp).SwitchAsync("project-b", CancellationToken.None);
+        var list = await Switcher(gcp).ListAsync(CancellationToken.None);
+
+        list.Select(p => p.ProjectId).ShouldBe(["project-a", "project-b"]);
+        _store.Chosen[FakeGcp.DefaultAccountSub].ShouldContain("project-a", "recorded under the account that left it, not only shown because it was current");
+    }
+
+    [Fact]
+    public async Task Listing_records_the_current_project_for_the_account_so_one_chosen_before_the_table_existed_is_kept()
+    {
+        var gcp = NewGcp("project-a");
+
+        await Switcher(gcp).ListAsync(CancellationToken.None);
+
+        _store.Chosen[FakeGcp.DefaultAccountSub].ShouldBe(["project-a"]);
+    }
+
+    [Fact]
+    public async Task An_account_change_while_the_target_is_checked_selects_nothing_on_the_new_account_and_names_the_problem()
+    {
+        var gcp = NewGcp("project-a").WithAccount("sub-1", "a@example.test", "project-a").WithAccountProject("sub-1", "project-a");
+        var setup = Substitute.For<IProjectSetupGateway>();
+        setup.GetProjectStateAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            await gcp.SwitchAccountAsync("sub-1", CancellationToken.None);
+            return ProjectLifecycleState.Active;
+        });
+
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => Switcher(gcp, setup).SwitchAsync("project-b", CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.AccountChangedDuringSwitch);
+        AuthErrorCodes.ActionResourceKey(failure.Code).ShouldBe("AuthAction_TryAgain");
+        gcp.SelectedProjectId.ShouldBe("project-a", "the account now active keeps ITS project: project-b was checked as the other account");
+        _store.Chosen.ShouldBeEmpty("no AccountProjects row was claimed by either account");
+        _store.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task One_switch_reads_the_account_once_check_remember_and_select_all_use_that_one()
+    {
+        var gcp = NewGcp("project-a");
+
+        await Switcher(gcp).SwitchAsync("project-b", CancellationToken.None);
+
+        gcp.CallsTo("GetProjectState").Select(c => c.AccountSub).ShouldBe([FakeGcp.DefaultAccountSub]);
+        _store.Chosen.Keys.ShouldBe([FakeGcp.DefaultAccountSub]);
+        _store.Chosen[FakeGcp.DefaultAccountSub].OrderBy(x => x).ShouldBe(["project-a", "project-b"]);
+    }
+
     // ---- #830 made every call on a run use the run's own project: a switch is never unsafe for a run, so it is never refused for one ----
 
     [Theory]

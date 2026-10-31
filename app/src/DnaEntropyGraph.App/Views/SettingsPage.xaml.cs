@@ -67,6 +67,9 @@ public sealed partial class SettingsPage : Page
     {
         _ = ThisPc.RefreshCommand.ExecuteAsync(null);
         _ = Budget.RefreshCommand.ExecuteAsync(null);
-        _ = ProjectSwitch.RefreshCommand.ExecuteAsync(null);
+        _ = ProjectSwitch.LoadAsync();
     }
+
+    /// <summary>The project card follows the signed-in account while the page is open; it stops when the page is left (the account service outlives every page).</summary>
+    protected override void OnNavigatedFrom(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e) => ProjectSwitch.Detach();
 }

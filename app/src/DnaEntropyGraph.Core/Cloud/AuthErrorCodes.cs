@@ -64,11 +64,14 @@ public static class AuthErrorCodes
     /// <summary>Google could not open the project the user chose (it is not there, or this account may not use it). Nothing changed. Action: Choose another project (issue #260).</summary>
     public const string ProjectUnreachable = "PROJECT_UNREACHABLE";
 
+    /// <summary>The signed-in account changed (another account became the active one) while a project switch was being checked or saved, so the switch was abandoned and nothing was selected (issue #260). Action: Try again.</summary>
+    public const string AccountChangedDuringSwitch = "ACCOUNT_CHANGED_DURING_SWITCH";
+
     /// <summary>Every code a sign-in can fail under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         SigninExpired, SigninCancelled, SigninTimeout, SigninFailed, NetworkUnavailable,
-        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked, SigninProxy, SigninCertificate, ConsentIncomplete, ProjectUnreachable,
+        OAuthClientMissing, OAuthClientInvalid, AccountNotFound, BrowserUnavailable, LoopbackUnavailable, StorageFailed, ProjectInvalid, ProjectSaveFailed, AccountsFileUnreadable, AccountsFileLocked, SigninProxy, SigninCertificate, ConsentIncomplete, ProjectUnreachable, AccountChangedDuringSwitch,
     ];
 
     /// <summary>The <c>Resources.resw</c> key for a code's message (plain, non-dotted, literal so the orphan-resource scan sees it).</summary>
@@ -93,6 +96,7 @@ public static class AuthErrorCodes
         SigninProxy => "AuthError_SIGNIN_PROXY",
         SigninCertificate => "AuthError_SIGNIN_CERTIFICATE",
         ConsentIncomplete => "AuthError_CONSENT_INCOMPLETE",
+        AccountChangedDuringSwitch => "AuthError_ACCOUNT_CHANGED_DURING_SWITCH",
         _ => "AuthError_SIGNIN_FAILED",
     };
 
@@ -103,7 +107,7 @@ public static class AuthErrorCodes
     public static string? ActionResourceKey(string? code) => code switch
     {
         SigninExpired or SigninCancelled or SigninTimeout or SigninFailed or AccountNotFound or BrowserUnavailable or LoopbackUnavailable or StorageFailed or AccountsFileUnreadable => "AuthAction_SignInAgain",
-        NetworkUnavailable or ProjectSaveFailed or AccountsFileLocked => "AuthAction_TryAgain",
+        NetworkUnavailable or ProjectSaveFailed or AccountsFileLocked or AccountChangedDuringSwitch => "AuthAction_TryAgain",
         ProjectUnreachable => "AuthAction_ChooseAnotherProject",
         ConsentIncomplete => "AuthAction_AllowAccess",
         _ => null,

@@ -10,8 +10,16 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public static class ProjectBucketMemory
 {
-    public static async Task RememberAsync(IRunRepository runs, IProjectSettingsStore store, string jobId, string projectId)
+    public static async Task RememberAsync(IRunRepository runs, IProjectSettingsStore store, string jobId, string? projectId)
     {
+        if (string.IsNullOrWhiteSpace(projectId))
+        {
+            // A row with no project (a damaged or very old row) has nowhere to remember a bucket. The store rejects a blank key with an exception that is not in the list below,
+            // and this runs AFTER a run ended (the engine's finally, the reconciler), where an escaping exception would mask the run's own outcome.
+            System.Diagnostics.Trace.TraceWarning("bucket not remembered: the run row names no project");
+            return;
+        }
+
         try
         {
             var all = await runs.GetAllAsync(CancellationToken.None).ConfigureAwait(false);

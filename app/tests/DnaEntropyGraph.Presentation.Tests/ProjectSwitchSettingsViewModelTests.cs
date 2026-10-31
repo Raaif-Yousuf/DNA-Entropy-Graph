@@ -167,6 +167,71 @@ public class ProjectSwitchSettingsViewModelTests
         vm.Status.ShouldContain("ProjectListFailed");
     }
 
+    // ---- r3 review: a list that follows the account, and a refresh nobody awaits that never fails unobserved ----
+
+    private sealed class InlineDispatcher : IDispatcher
+    {
+        public void Enqueue(Action action) => action();
+    }
+
+    [Fact]
+    public async Task The_list_follows_the_account_while_Settings_is_open_and_stops_after_Detach()
+    {
+        var vm = new ProjectSwitchSettingsViewModel(new ProjectSwitcher(_account, _store, _runs, _setup), _account, _strings, new InlineDispatcher());
+        await vm.LoadAsync();
+        vm.ProjectIds.ShouldBe(["project-a", "project-b"]);
+
+        _account.CurrentAccount.Returns(new AccountInfo("sub-2", "b@example.test"));
+        _account.SelectedProjectId.Returns("project-z");
+        _store.GetKnownAsync("sub-2", Arg.Any<CancellationToken>()).Returns([new ProjectSettings("project-z", Bucket: "bucket-z")]);
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        await WaitUntilAsync(() => vm.CurrentProjectId == "project-z");
+        vm.ProjectIds.ShouldBe(["project-z"]);
+        vm.BucketText.ShouldContain("bucket-z");
+
+        vm.Detach();
+        var calls = _store.ReceivedCalls().Count();
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _store.ReceivedCalls().Count().ShouldBe(calls, "a detached card no longer reacts to the account");
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        condition().ShouldBeTrue("the condition did not become true in 2 seconds");
+    }
+
+    [Fact]
+    public async Task Any_failure_while_listing_is_shown_as_a_message_and_never_faults_the_unawaited_refresh()
+    {
+        _store.GetKnownAsync("sub-1", Arg.Any<CancellationToken>()).Returns(Task.FromException<IReadOnlyList<ProjectSettings>>(new InvalidCastException("surprise")));
+        var vm = NewViewModel();
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+        var observed = vm.LoadAsync();
+        await observed;
+
+        observed.IsFaulted.ShouldBeFalse();
+        vm.Status.ShouldContain("ProjectListFailed");
+    }
+
+    [Fact]
+    public async Task A_cancelled_listing_is_not_an_error_message()
+    {
+        _store.GetKnownAsync("sub-1", Arg.Any<CancellationToken>()).Returns(Task.FromException<IReadOnlyList<ProjectSettings>>(new OperationCanceledException()));
+        var vm = NewViewModel();
+
+        await vm.LoadAsync();
+
+        vm.Status.ShouldBeEmpty();
+    }
+
     // ---- the observable of #260: the Cloud page follows the switch, with no browser ----
 
     [Fact]

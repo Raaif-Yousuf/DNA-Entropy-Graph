@@ -316,6 +316,46 @@ public class JobReconcilerTests
     }
 
     [Fact]
+    public async Task A_run_the_reconciler_fails_without_resuming_it_still_remembers_its_bucket()
+    {
+        // The VM died while the app was closed: no RunAsync happens, the row is failed in place. The bucket it used is still that project's bucket.
+        var env = new Env(new FakeGcp().WithSelectedProject("selected-later"));
+        var store = new MemoryProjectStore();
+        await env.SeedAsync("job-lost", JobPhase.Running, uploaded: true, vm: false);
+
+        var outcome = await OneAsync(env.Reconciler(projectSettings: store), "job-lost");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedVmMissing);
+        store.Rows[Project].Bucket.ShouldBe(FakeGcp.BucketName(Project));
+        store.Rows.ContainsKey("selected-later").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_cancel_the_reconciler_finishes_still_remembers_the_bucket()
+    {
+        var env = new Env();
+        var store = new MemoryProjectStore();
+        await env.SeedAsync("job-cx", JobPhase.Cancelling, vm: true);
+
+        await OneAsync(env.Reconciler(projectSettings: store), "job-cx");
+
+        store.Rows[Project].Bucket.ShouldBe(FakeGcp.BucketName(Project));
+    }
+
+    [Fact]
+    public async Task A_run_row_with_no_project_does_not_escape_the_reconciler_as_an_exception_when_a_store_is_given()
+    {
+        var env = new Env();
+        var store = new MemoryProjectStore();
+        await env.SeedAsync("job-np", JobPhase.Running, vm: true, tweak: row => row with { ProjectId = null });
+
+        var outcome = await OneAsync(env.Reconciler(projectSettings: store), "job-np");
+
+        outcome.Action.ShouldBe(ReattachAction.FailedUnrecoverable);
+        store.Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_resumed_run_whose_account_is_signed_out_reports_the_named_sign_in_outcome_and_touches_nothing()
     {
         var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a").WithSelectedProject("selected-later"));

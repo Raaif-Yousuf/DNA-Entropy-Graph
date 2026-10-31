@@ -46,6 +46,41 @@ public class WizardProjectStepTests
         viewModel.ProjectErrorText.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task A_project_chosen_in_the_wizard_is_recorded_in_the_account_list_and_a_refused_one_is_not()
+    {
+        // Issue #260 review: nothing but the Settings switcher and a run starting recorded a project for the account, so a wizard choice vanished from the list after a switch.
+        var account = NewAccount();
+        account.CurrentAccount.Returns(new AccountInfo("sub-1", "a@example.test"));
+        account.SelectProjectAsync("my-project-1", Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        account.SelectProjectAsync("refused-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(new AccountAuthException(AuthErrorCodes.SigninExpired)));
+        var store = Substitute.For<IProjectSettingsStore>();
+        var viewModel = new WizardViewModel(account, Substitute.For<IDialogService>(), Substitute.For<INavigator>(), Strings(), projectStore: store);
+
+        await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
+        await viewModel.ChooseProjectCommand.ExecuteAsync("refused-1");
+
+        await store.Received(1).EnsureAsync("my-project-1", "sub-1", Arg.Any<CancellationToken>());
+        await store.DidNotReceive().EnsureAsync("refused-1", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_store_that_cannot_be_written_never_turns_a_good_choice_into_an_error()
+    {
+        var account = NewAccount();
+        account.CurrentAccount.Returns(new AccountInfo("sub-1", "a@example.test"));
+        account.SelectProjectAsync("my-project-1", Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        account.SelectedProjectId.Returns("my-project-1");
+        var store = Substitute.For<IProjectSettingsStore>();
+        store.EnsureAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromException(new IOException("disk")));
+        var viewModel = new WizardViewModel(account, Substitute.For<IDialogService>(), Substitute.For<INavigator>(), Strings(), projectStore: store);
+
+        await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
+
+        viewModel.ProjectErrorText.ShouldBeEmpty();
+        viewModel.SelectedProjectId.ShouldBe("my-project-1");
+    }
+
     [Theory]
     [InlineData(AuthErrorCodes.ProjectInvalid, "AuthError_PROJECT_INVALID", "")]
     [InlineData(AuthErrorCodes.SigninExpired, "AuthError_SIGNIN_EXPIRED", "AuthAction_SignInAgain")]

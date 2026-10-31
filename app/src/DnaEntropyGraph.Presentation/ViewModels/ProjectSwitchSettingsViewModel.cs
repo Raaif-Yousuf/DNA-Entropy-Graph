@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Data.Common;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -36,27 +35,82 @@ public sealed partial class ProjectSwitchSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _status = string.Empty;
 
-    public ProjectSwitchSettingsViewModel(ProjectSwitcher switcher, IGcpAccount account, IStringResourceProvider strings)
+    private readonly IDispatcher? _dispatcher;
+    private int _refreshGeneration;
+
+    public ProjectSwitchSettingsViewModel(ProjectSwitcher switcher, IGcpAccount account, IStringResourceProvider strings, IDispatcher? dispatcher = null)
     {
         _switcher = switcher;
         _account = account;
         _strings = strings;
+        _dispatcher = dispatcher;
+        // The list belongs to the signed-in account: another account becoming the active one (switched elsewhere, signed out, signed in) must not leave this one on screen.
+        _account.AccountChanged += OnAccountChanged;
     }
+
+    /// <summary>
+    /// Ends the subscription to <see cref="IGcpAccount.AccountChanged"/>. The account is a singleton and this view model is transient, so without it every visit to Settings
+    /// would leave one more view model reachable and reacting. The page calls it when it is navigated away from.
+    /// </summary>
+    public void Detach() => _account.AccountChanged -= OnAccountChanged;
 
     public ObservableCollection<string> ProjectIds { get; } = [];
 
+    /// <summary>
+    /// The one way to start a refresh nobody awaits (the page opening, the account changing). It observes every failure: cancellation is the end of the work, anything
+    /// else is logged by class and shown as the list-failed message, so no exception is left on a task nobody reads.
+    /// </summary>
+    public async Task LoadAsync()
+    {
+        try
+        {
+            await RefreshCoreAsync(CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // The work was cancelled: not a failure to report.
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"project list refresh failed unexpectedly: {ex.GetType().Name}");
+            Status = _strings.GetString("ProjectListFailed");
+        }
+    }
+
+    private void OnAccountChanged(object? sender, EventArgs e)
+    {
+        if (_dispatcher is null)
+        {
+            _ = LoadAsync();
+            return;
+        }
+
+        _dispatcher.Enqueue(() => _ = LoadAsync());
+    }
+
     [RelayCommand]
-    private async Task RefreshAsync(CancellationToken cancellationToken)
+    private Task RefreshAsync(CancellationToken cancellationToken) => RefreshCoreAsync(cancellationToken);
+
+    private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
         // Called without anyone awaiting it (the page opening): a failure ends up in Status, never as an unobserved exception.
+        var generation = Interlocked.Increment(ref _refreshGeneration);
         IReadOnlyList<ProjectSettings> all;
         try
         {
             all = await _switcher.ListAsync(cancellationToken).ConfigureAwait(true);
         }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or DbException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Whatever the store or the run history threw (a disk, a locked database, anything unforeseen): one message with its action, never an exception on a task nobody reads.
+            System.Diagnostics.Trace.TraceWarning($"project list failed: {ex.GetType().Name}");
             Status = _strings.GetString("ProjectListFailed");
+            return;
+        }
+
+        if (generation != Volatile.Read(ref _refreshGeneration))
+        {
+            // A newer refresh (the account changed while this one was reading) owns the list now; showing this older answer would put the old account's projects back.
             return;
         }
 
@@ -103,7 +157,20 @@ public sealed partial class ProjectSwitchSettingsViewModel : ObservableObject
         }
     }
 
-    private string WithAction(string message, string? actionKey) => actionKey is null ? message : message + " " + _strings.GetString(actionKey);
+    /// <summary>
+    /// The message, then the one action as a plain phrase. Some shared messages already say their action in words ("..., then choose Try again."; the wizard shows the same
+    /// text beside a real button), and the status line would then read it twice, so the phrase is appended only when the message does not already contain it.
+    /// </summary>
+    private string WithAction(string message, string? actionKey)
+    {
+        if (actionKey is null)
+        {
+            return message;
+        }
+
+        var action = _strings.GetString(actionKey);
+        return message.Contains(action, StringComparison.Ordinal) ? message : message + " " + action;
+    }
 
     private string BucketLine(string? projectId)
         => projectId is not null && _known.TryGetValue(projectId, out var settings) && !string.IsNullOrWhiteSpace(settings.Bucket)

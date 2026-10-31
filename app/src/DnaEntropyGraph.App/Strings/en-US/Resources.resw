@@ -3526,7 +3526,10 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>No place for your results (a bucket) yet. The first run in this project creates one.</value>
   </data>
   <data name="AuthError_PROJECT_UNREACHABLE" xml:space="preserve">
-    <value>Google could not open that project. It may not exist, or the signed-in account may not be allowed to use it. Nothing was changed. Choose another project.</value>
+    <value>Google could not open that project. It may not exist, or the signed-in account may not be allowed to use it. Nothing was changed.</value>
+  </data>
+  <data name="AuthError_ACCOUNT_CHANGED_DURING_SWITCH" xml:space="preserve">
+    <value>The signed-in Google account changed while the project was being checked, so the project was not switched.</value>
   </data>
   <data name="AuthAction_ChooseAnotherProject" xml:space="preserve">
     <value>Choose another project</value>

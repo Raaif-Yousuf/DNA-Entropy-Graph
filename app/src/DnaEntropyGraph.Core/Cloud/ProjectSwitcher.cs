@@ -55,9 +55,15 @@ public sealed class ProjectSwitcher
             }
         }
 
-        if (_account.SelectedProjectId is { Length: > 0 } current && !known.ContainsKey(current))
+        if (_account.SelectedProjectId is { Length: > 0 } current)
         {
-            known[current] = await _store.GetAsync(current, cancellationToken).ConfigureAwait(false) ?? new ProjectSettings(current);
+            // A project chosen in the wizard (or before the AccountProjects table existed) was never written for this account. Record it now, so it stays in the list after a
+            // switch away from it. Best effort: the list still shows it as the current project when the store cannot be written.
+            await TryRecordAsync(current, sub, cancellationToken).ConfigureAwait(false);
+            if (!known.ContainsKey(current))
+            {
+                known[current] = await _store.GetAsync(current, cancellationToken).ConfigureAwait(false) ?? new ProjectSettings(current);
+            }
         }
 
         return known.Values.OrderBy(p => p.ProjectId, StringComparer.Ordinal).ToList();
@@ -77,15 +83,26 @@ public sealed class ProjectSwitcher
             throw new AccountAuthException(AuthErrorCodes.ProjectInvalid, "the project id is not a legal Google project id");
         }
 
-        if (!string.Equals(projectId, _account.SelectedProjectId, StringComparison.Ordinal))
+        // The account is read ONCE. The check, the remembering and the selection must all be about the same account: SelectProjectAsync applies to whichever account is
+        // active at that moment, so a change of account in between would otherwise point the NEW account at a project that was checked for the old one.
+        var sub = _account.CurrentAccount?.Sub;
+        var leaving = _account.SelectedProjectId;
+        if (!string.Equals(projectId, leaving, StringComparison.Ordinal))
         {
-            await VerifyAccessAsync(projectId, cancellationToken).ConfigureAwait(false);
+            await VerifyAccessAsync(projectId, sub, cancellationToken).ConfigureAwait(false);
+            EnsureSameAccount(sub);
         }
 
         ProjectSettings settings;
         try
         {
-            await _store.EnsureAsync(projectId, _account.CurrentAccount?.Sub, cancellationToken).ConfigureAwait(false);
+            if (leaving is { Length: > 0 } && !string.Equals(projectId, leaving, StringComparison.Ordinal))
+            {
+                // The project being LEFT is recorded for the account too (the wizard never wrote it), so it is still offered after the switch.
+                await _store.EnsureAsync(leaving, sub, cancellationToken).ConfigureAwait(false);
+            }
+
+            await _store.EnsureAsync(projectId, sub, cancellationToken).ConfigureAwait(false);
             settings = await _store.GetAsync(projectId, cancellationToken).ConfigureAwait(false) ?? new ProjectSettings(projectId);
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or DbException or UnauthorizedAccessException)
@@ -93,17 +110,47 @@ public sealed class ProjectSwitcher
             throw new AccountAuthException(AuthErrorCodes.ProjectSaveFailed, "the project could not be remembered", ex);
         }
 
+        // Last look before the one call that acts on "whoever is active". (A change in the instant between this look and the call cannot be seen from here: closing it
+        // needs the account service to take the expected account, which is its own change.)
+        EnsureSameAccount(sub);
         await _account.SelectProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
         return settings;
     }
 
-    /// <summary>Asks Google, as the current account, whether the TARGET project can be opened. Not the selected one: the selection is exactly what is about to change.</summary>
-    private async Task VerifyAccessAsync(string projectId, CancellationToken cancellationToken)
+    /// <summary>Aborts the switch, selecting nothing, when the active account is no longer the one the switch started with.</summary>
+    private void EnsureSameAccount(string? sub)
+    {
+        if (!string.Equals(_account.CurrentAccount?.Sub, sub, StringComparison.Ordinal))
+        {
+            throw new AccountAuthException(AuthErrorCodes.AccountChangedDuringSwitch, "the active account changed while the project switch was in progress");
+        }
+    }
+
+    /// <summary>Records <paramref name="projectId"/> as one of the account's projects; a store that cannot be written is not a reason to fail the caller.</summary>
+    private async Task TryRecordAsync(string projectId, string? sub, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sub))
+        {
+            return;
+        }
+
+        try
+        {
+            await _store.EnsureAsync(projectId, sub, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or DbException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.TraceWarning($"project not recorded for the account: {ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>Asks Google, as account <paramref name="sub"/>, whether the TARGET project can be opened. Not the selected one: the selection is exactly what is about to change.</summary>
+    private async Task VerifyAccessAsync(string projectId, string? sub, CancellationToken cancellationToken)
     {
         ProjectLifecycleState state;
         try
         {
-            state = await _setup.GetProjectStateAsync(new CloudScope(projectId, _account.CurrentAccount?.Sub), cancellationToken).ConfigureAwait(false);
+            state = await _setup.GetProjectStateAsync(new CloudScope(projectId, sub), cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (IsNoAnswer(ex))
         {

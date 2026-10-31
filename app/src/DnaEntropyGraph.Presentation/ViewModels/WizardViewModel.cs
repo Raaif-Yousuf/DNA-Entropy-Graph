@@ -23,6 +23,7 @@ public sealed partial class WizardViewModel : ObservableObject
     private readonly ISetupCheckService? _setup;
     private readonly ISettingsStore? _settings;
     private readonly IShellLauncher? _shell;
+    private readonly IProjectSettingsStore? _projectStore;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotSignedIn))]
@@ -106,8 +107,9 @@ public sealed partial class WizardViewModel : ObservableObject
     /// <summary>Completes when the project flow started by the last sign-in or choice has ended (it is never fire-and-forget: a failure shows on the project row).</summary>
     public Task WhenIdleAsync() => _flow;
 
-    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null, ISetupCheckService? setup = null, SetupStepsViewModel? setupSteps = null, ISettingsStore? settings = null, IShellLauncher? shell = null)
+    public WizardViewModel(IGcpAccount gcpAccount, IDialogService dialogService, INavigator navigator, IStringResourceProvider strings, IDispatcher? dispatcher = null, ISetupCheckService? setup = null, SetupStepsViewModel? setupSteps = null, ISettingsStore? settings = null, IShellLauncher? shell = null, IProjectSettingsStore? projectStore = null)
     {
+        _projectStore = projectStore;
         _setup = setup;
         _settings = settings;
         _shell = shell;
@@ -183,6 +185,7 @@ public sealed partial class WizardViewModel : ObservableObject
             return;
         }
 
+        await RecordChosenProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
         OnUiThread(() =>
         {
             ProjectErrorText = string.Empty;
@@ -190,6 +193,28 @@ public sealed partial class WizardViewModel : ObservableObject
             SelectedProjectId = _gcpAccount.SelectedProjectId;
             StartProjectFlow();
         });
+    }
+
+    /// <summary>
+    /// Records the chosen project in the signed-in account's own list (issue #260), so the Settings project list still offers it after a switch to another. The choice itself is already
+    /// stored on the account; this is the convenience copy, so a store that cannot be written never turns a good choice into an error.
+    /// </summary>
+    private async Task RecordChosenProjectAsync(string? projectId, CancellationToken cancellationToken)
+    {
+        var sub = _gcpAccount.CurrentAccount?.Sub;
+        if (_projectStore is null || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(sub))
+        {
+            return;
+        }
+
+        try
+        {
+            await _projectStore.EnsureAsync(projectId, sub, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.Data.Common.DbException or UnauthorizedAccessException)
+        {
+            System.Diagnostics.Trace.TraceWarning($"chosen project not recorded for the account: {ex.GetType().Name}");
+        }
     }
 
     [RelayCommand]

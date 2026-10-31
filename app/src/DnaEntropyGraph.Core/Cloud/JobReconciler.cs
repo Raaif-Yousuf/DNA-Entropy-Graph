@@ -989,13 +989,21 @@ public sealed class JobReconciler
         underway.Action = ReattachAction.Resumed;
         underway.Judged();
         var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
-        if (_projectSettings is not null)
-        {
-            // A run the engine started remembers its bucket when it ends (JobEngine); one resumed after a restart never went through there.
-            await ProjectBucketMemory.RememberAsync(_runs, _projectSettings, row.JobId, row.ProjectId).ConfigureAwait(false);
-        }
+        await RememberBucketAsync(row).ConfigureAwait(false);
 
         return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
+    }
+
+    /// <summary>
+    /// A run the engine started remembers its bucket when it ends (JobEngine, in its finally, whatever the end); a run the reconciler ends never went through there, so every
+    /// end the reconciler writes does it: a resumed run that returned, a run it failed in place (VM gone, nothing to resume) and a cancel it finished.
+    /// </summary>
+    private async Task RememberBucketAsync(RunRecord row)
+    {
+        if (_projectSettings is not null)
+        {
+            await ProjectBucketMemory.RememberAsync(_runs, _projectSettings, row.JobId, row.ProjectId).ConfigureAwait(false);
+        }
     }
 
     /// <summary>What the reattach of one run was doing; read when a user cancel stopped it before it could say.</summary>
@@ -1302,6 +1310,7 @@ public sealed class JobReconciler
         }
 
         var after = await _rows.TryLatestRecordAsync(row.JobId).ConfigureAwait(false);
+        await RememberBucketAsync(row).ConfigureAwait(false);
         return new ReattachOutcome(row.JobId, ActionForFinalPhase(ReattachAction.CancelFinished, after?.Phase, after?.ErrorCode), after?.Phase, after?.ErrorCode);
     }
 
@@ -1309,6 +1318,7 @@ public sealed class JobReconciler
     {
         underway.Action = action;
         await _rows.SetPhaseAsync(row.JobId, JobPhase.Failed, cancellationToken, code, detail).ConfigureAwait(false);
+        await RememberBucketAsync(row).ConfigureAwait(false);
         return new ReattachOutcome(row.JobId, action, JobPhase.Failed, code);
     }
 }
