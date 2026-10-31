@@ -85,6 +85,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     [NotifyPropertyChangedFor(nameof(HasEstimateDisk))]
     private string _estimateDiskText = string.Empty;
 
+    /// <summary>
+    /// The line under the estimate (issue #814): where the prices came from and as of when, in plain words, with the one thing to do when today's read of
+    /// Google's price list failed. Empty whenever <see cref="EstimateText"/> is not an estimate, or the page has no pricing status.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPriceSource))]
+    private string _priceSourceText = string.Empty;
+
     /// <summary>A line of help for the user (a path that does not exist, a folder with nothing to run); empty when there is none.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
@@ -120,9 +128,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         RunTargetPickerViewModel? runTarget = null,
         IDispatcher? dispatcher = null,
         TimeProvider? clock = null,
-        OutputFolderViewModel? outputFolder = null)
+        OutputFolderViewModel? outputFolder = null,
+        IPricingStatus? pricing = null)
     {
         _clock = clock ?? TimeProvider.System;
+        _pricing = pricing;
         OutputFolder = outputFolder;
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
@@ -379,6 +389,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     }
 
     public bool HasEstimate => EstimateText.Length > 0;
+
+    public bool HasPriceSource => PriceSourceText.Length > 0;
+
+    private readonly IPricingStatus? _pricing;
 
     public bool HasEstimateDisk => EstimateDiskText.Length > 0;
 
@@ -1254,6 +1268,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = string.Empty;
             EstimateDiskText = string.Empty;
+            PriceSourceText = string.Empty;
             // No file yet: a cap this month's spend has already reached still shows (the estimate of a run that is not chosen is zero).
             SpendCapStatus? noFileCap = null;
             try
@@ -1275,6 +1290,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
         string text;
         string diskText;
+        string priceText;
         SpendCapStatus? cap = null;
         try
         {
@@ -1286,18 +1302,22 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
+            // Read after the estimate: asking for it is what lets the day's catalog read finish (or fail), so this is the answer the numbers came from.
+            priceText = result.Estimate is not null && _pricing is not null ? PriceSourceLine(_pricing.Current) : string.Empty;
             cap = status;
         }
         catch (Exception)
         {
             text = string.Empty;
             diskText = string.Empty;
+            priceText = string.Empty;
         }
 
         if (version == Volatile.Read(ref _estimateVersion))
         {
             EstimateText = text;
             EstimateDiskText = diskText;
+            PriceSourceText = priceText;
             SetSpendCap(cap);
         }
     }
@@ -1359,6 +1379,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private void ClearEstimate()
     {
+        PriceSourceText = string.Empty;
         Interlocked.Increment(ref _estimateVersion);
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
@@ -1404,6 +1425,44 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private static int WholeMinutes(double minutes) => Math.Max(1, (int)Math.Round(minutes, MidpointRounding.AwayFromZero));
 
     private string MinutesPhrase(int minutes) => minutes == 1 ? _strings.GetString("NewRunEstimateMinutesOne") : Format("NewRunEstimateMinutesMany", minutes);
+
+    /// <summary>
+    /// "Prices from Google's price list, as of D", or "... older prices" when that read is not from today (a session that crossed midnight, or yesterday's kept
+    /// copy), or "the list that came with this app" with the reason today's read failed and one action. The date is the list's own, never today's by default.
+    /// </summary>
+    private string PriceSourceLine(PricingSnapshot snapshot)
+    {
+        var reason = ReasonText(snapshot.Reason);
+        var hasDate = snapshot.AsOf != default;
+        var date = hasDate ? snapshot.AsOf.ToString("d MMM yyyy", CultureInfo.InvariantCulture) : string.Empty;
+        var today = DateOnly.FromDateTime(_clock.GetUtcNow().UtcDateTime);
+        string line;
+        if (snapshot.Origin == PricingOrigin.Shipped)
+        {
+            line = hasDate ? Format("PriceSource_Shipped", date) : _strings.GetString("PriceSource_ShippedNoDate");
+        }
+        else if (snapshot.Origin == PricingOrigin.CacheStale || snapshot.AsOf < today)
+        {
+            line = Format("PriceSource_Older", date);
+        }
+        else
+        {
+            line = Format("PriceSource_Catalog", date);
+        }
+
+        return reason.Length == 0 ? line : line + " " + reason;
+    }
+
+    private string ReasonText(PricingFallbackReason reason) => reason switch
+    {
+        PricingFallbackReason.SignedOut => _strings.GetString("PriceSourceReason_SignedOut"),
+        PricingFallbackReason.PermissionDenied => _strings.GetString("PriceSourceReason_PermissionDenied"),
+        PricingFallbackReason.ApiDisabled => _strings.GetString("PriceSourceReason_ApiDisabled"),
+        PricingFallbackReason.Network => _strings.GetString("PriceSourceReason_Network"),
+        PricingFallbackReason.NoMatch => _strings.GetString("PriceSourceReason_NoMatch"),
+        PricingFallbackReason.Other => _strings.GetString("PriceSourceReason_Other"),
+        _ => string.Empty,
+    };
 
     private string Format(string key, params object[] args)
         => string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);

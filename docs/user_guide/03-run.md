@@ -115,7 +115,15 @@ range instead ("about $0.08 to $0.18, about 5 to 12 minutes"), because a compute
 already warm is much quicker than one that has to start from nothing. It is a guess, not
 a bill, and it never shows a number the app does not have: while a file is still being
 checked, or has a problem, there is no estimate line. If the line says the price list
-could not be read, reinstall the app; you can still press Run. See
+could not be read, reinstall the app; you can still press Run. A small line under the
+estimate says where the prices came from and as of when. Usually it reads "Prices from
+Google's price list, as of" a date. If it says "older prices", the app could not get
+today's list and is using one it kept from an earlier day. If it says the prices are from
+the list that came with this app, today's read of Google's list failed, and the line says
+why in plain words and what to do: sign in again from the Cloud page, ask the project owner
+to allow it or to switch on the Cloud Billing API, check your internet connection, or try
+again later. The estimate is still usable in every case; only how fresh the prices are
+changes. See
 [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers actually mean
 and some worked examples.
 
