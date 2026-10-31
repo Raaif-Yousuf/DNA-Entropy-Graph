@@ -51,16 +51,18 @@ FAILS CLOSED (denies) when:
   - the guard subprocess exits 0 but prints something that does not parse
     as JSON (a crash that happened to corrupt only the last write, not the
     exit code, is not distinguishable from a real decision by exit code
-    alone)
+    alone), or that parses as JSON but is not a JSON object (`[]`, `3`,
+    `null`: valid JSON, but no decision)
   - this dispatcher itself raises an exception it did not anticipate above
     (a top-level catch-all; see `main()`)
 
 PASSES THROUGH UNCHANGED when:
   - the guard exits 0 and prints nothing: its own "no opinion" -- silence,
     exit 0, exactly as today
-  - the guard exits 0 and prints valid JSON: its own decision, forwarded
+  - the guard exits 0 and prints a JSON object: its own decision, forwarded
     byte-for-byte, never re-serialised (so this dispatcher can never
-    introduce a formatting difference a guard's own tests did not see)
+    introduce a formatting difference a guard's own tests did not see).
+    Only an object is forwarded; any other output is denied (see above).
 
 WHAT THIS FILE DOES NOT COVER
 ------------------------------
@@ -211,25 +213,37 @@ def run_decision(
     if not out.strip():
         return Decision(0, KIND_PASSTHROUGH, "")  # the guard's own "no opinion" -- stay silent, exactly as today
 
-    # A decision is a JSON OBJECT. Valid JSON of any other shape ([], 3, null)
-    # carries no decision, so forwarding it would silently allow the call.
+    snippet = out.strip()[:200]
     try:
         parsed = json.loads(out)
     except json.JSONDecodeError:
-        parsed = None
-    if not isinstance(parsed, dict):
-        snippet = out.strip()[:200]
         return Decision(
             0,
             KIND_NOT_JSON,
             _deny_json(
                 f"The '{guard_name}' guard exited 0 but printed something that is not valid JSON "
-                f"({snippet!r}) or not a JSON object. A decision that cannot be parsed cannot be trusted, so this tool "
+                f"({snippet!r}). A decision that cannot be parsed cannot be trusted, so this tool "
                 "call is refused rather than silently allowed through an unenforced guard.",
                 f"Blocked: guard '{guard_name}' produced an unreadable decision.",
             ),
         )
 
+    # A decision is a JSON OBJECT. Valid JSON of any other shape ([], 3, null)
+    # carries no decision, so forwarding it would silently allow the call.
+    if not isinstance(parsed, dict):
+        return Decision(
+            0,
+            KIND_NOT_JSON,
+            _deny_json(
+                f"The '{guard_name}' guard exited 0 but printed something that is not a JSON object "
+                f"({snippet!r}). A decision that cannot be read as an object cannot be trusted, so this tool "
+                "call is refused rather than silently allowed through an unenforced guard.",
+                f"Blocked: guard '{guard_name}' produced an unreadable decision.",
+            ),
+        )
+
+    # Deliberate: ANY object is forwarded, even one without hookSpecificOutput.
+    # What an object means is the host's call, not this dispatcher's.
     return Decision(0, KIND_PASSTHROUGH, out)  # the guard's own decision, forwarded byte-for-byte
 
 
@@ -341,7 +355,9 @@ def self_test() -> bool:
 
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
         d = capture("garbage", hooks_dir)
-        check("a guard that exits 0 but prints non-JSON gets the not-valid-JSON deny", d.kind == KIND_NOT_JSON and _is_deny(d.stdout), d)
+        check(
+            "a guard that exits 0 but prints unparseable output gets the not-valid-JSON deny", d.kind == KIND_NOT_JSON and _is_deny(d.stdout), d
+        )
 
     # The print path: run() must write exactly run_decision()'s stdout (a run()
     # that computed the decision and skipped the write would silently allow).

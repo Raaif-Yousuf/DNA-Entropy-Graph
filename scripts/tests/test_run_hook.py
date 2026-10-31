@@ -218,6 +218,8 @@ def test_guard_valid_json_that_is_not_an_object_is_not_a_decision(tmp_path, prin
     d = _decide("nonobj", tmp_path)
     assert d.kind == rh.KIND_NOT_JSON, f"captured: {d!r}"
     assert _is_deny(d.stdout), f"captured: {d!r}"
+    assert "is not a JSON object" in d.stdout, f"captured: {d!r}"
+    assert "not valid JSON" not in d.stdout, f"captured: {d!r}"
 
 
 def test_guard_json_object_is_still_forwarded_byte_for_byte(tmp_path):
