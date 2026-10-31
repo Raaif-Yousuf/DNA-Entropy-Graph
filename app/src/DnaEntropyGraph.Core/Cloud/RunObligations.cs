@@ -62,23 +62,15 @@ public static class RunObligations
             return false;
         }
 
-        // Round 4 M-B, round 5: the reconciler read this run's computer as ended while the account was reachable, so there is nothing left to look after. The writer is the gate: it records a confirmation only from a
-        // POSITIVE observation of the run's own computer (never from an empty label listing, which lags a create), and for a row with an unconfirmed-end code only from a delete or a by-name 404; it clears the
-        // field again whenever a later pass sees the computer running or booting. So a value here is either current or has not been contradicted yet.
-        if (row.VmEndConfirmedAt is not null)
-        {
-            return false;
-        }
-
         if (RunErrorCodes.IsVmEndUnconfirmed(row.ErrorCode))
         {
             return true;
         }
 
         // Review M1 (round 3): a keep-alive window holds the computer on purpose, and its expiry does not END anything: the computer keeps running until the reconciler (or the person) stops it,
-        // and a signed-out account can neither. Until the reconciler records a confirmed end (VmEndConfirmedAt, round 4 M-B, handled above), the only truthful signal is the one this method
+        // and a signed-out account can neither. The row records no "confirmed ended" state of its own (a confirmed-end column was tried in #830 rounds 4 and 5 and dropped: a stale confirmation survives a resume, and a by-name 404 cannot rule out a pending late create), so the smallest truthful signal is the one this method
         // is only asked about at its two call sites: the account could NOT be reached just now (a scope the scan could not read, or an account the pass reported as signed out). For such a row the
-        // keep-alive obligation therefore stands from the first minute until a confirmed end, or until the row leaves the lifecycle lookback above, where no sweep looks at it any more. Only worker exit 0 holds the computer
+        // keep-alive obligation therefore stands from the first minute until the row leaves the lifecycle lookback above, where no sweep looks at it any more. This is a UX nag at worst and never a billing risk. Only worker exit 0 holds the computer
         // for a window (Completed or PartiallyCompleted, as the reconciler reads it); every other finished state applied afterKeepAlive at once.
         return row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted
             && RunOptionsJson.TryDeserialize(row.OptionsJson) is { AfterTask: AfterTaskAction.KeepAlive };

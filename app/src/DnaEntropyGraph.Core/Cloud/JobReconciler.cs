@@ -242,6 +242,9 @@ public sealed class JobReconciler
     /// <summary>Issue #830: the scopes the installation-wide sweeps cover besides those of recent runs (the scope selected now: a VM of this installation with no history row is found there).</summary>
     private readonly Func<IEnumerable<CloudScope>> _additionalSweepScopes;
 
+    /// <summary>Accounts (key: sub, empty for none) whose sign-out was already logged as "no obligation": the line is written when that state CHANGES for an account, not on every pass.</summary>
+    private readonly HashSet<string> _loggedNoObligation = [];
+
     /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
     /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
@@ -412,16 +415,38 @@ public sealed class JobReconciler
         // Review F4: the shell bar is only for an account with something that could still be running (an unfinished run, an unconfirmed end, an unexpired keep-alive); otherwise it is logged only.
         // Round 5 L2: an outcome that names no account (a row with none) acted as the ACTIVE account, so it is resolved to it here (the selection path's scope carries it); only when there is none does it match rows with no account alone.
         var activeSub = extra.FirstOrDefault(s => s.AccountSub is not null)?.AccountSub;
-        foreach (var sub in signedOut.Select(o => o.AccountSub).Distinct())
+        var signedOutSubs = signedOut.Select(o => o.AccountSub).Distinct().ToList();
+        foreach (var sub in signedOutSubs)
         {
+            var key = sub ?? string.Empty;
             if (RunObligations.ExistForAccount(all, sub ?? activeSub, installation, now))
             {
+                lock (_loggedNoObligation)
+                {
+                    _loggedNoObligation.Remove(key);
+                }
+
                 SignInNeeded(sub);
             }
             else
             {
-                _log.Warning("reconciler", null, "account-signed-out-no-obligation");
+                bool changed;
+                lock (_loggedNoObligation)
+                {
+                    changed = _loggedNoObligation.Add(key);
+                }
+
+                if (changed)
+                {
+                    _log.Warning("reconciler", null, "account-signed-out-no-obligation");
+                }
             }
+        }
+
+        // An account that is no longer signed out forgets its state, so a later sign-out is logged again.
+        lock (_loggedNoObligation)
+        {
+            _loggedNoObligation.RemoveWhere(k => !signedOutSubs.Any(s => (s ?? string.Empty) == k));
         }
 
         return outcomes;
@@ -451,23 +476,11 @@ public sealed class JobReconciler
                 }
 
                 var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
-
-                // Round 4 M-B, round 5 H1/M1: what this look learned about the run's computer. allEnded: every computer seen is known ended (stopped or gone) and every look and call that was needed answered.
-                // allGone: every one is deleted or read as 404 (the only evidence that clears a row with an unconfirmed-end code). observed: at least one POSITIVE observation of a computer (an empty label listing is
-                // NOT one: listings lag a create, so the by-name read below decides). sawLive: a computer of the job was seen running or booting.
-                var allEnded = true;
-                var allGone = true;
-                var observed = false;
-                var sawLive = false;
                 foreach (var vm in vms)
                 {
-                    observed = true;
-                    sawLive |= !VmFacts.IsStopped(vm);
                     var want = WantedByLifecycle(row, vm, options, installation, now);
                     if (want == VmWant.Leave)
                     {
-                        allEnded &= VmFacts.IsStopped(vm);
-                        allGone = false;
                         continue;
                     }
 
@@ -488,54 +501,16 @@ public sealed class JobReconciler
                         {
                             // Observable (ids and states only, never a name).
                             _log.Warning("reconciler", row.JobId, (want == VmWant.Delete ? "delete-skipped-" : "stop-skipped-") + skip);
-                            allEnded &= skip == "vm-gone";
-                            allGone &= skip == "vm-gone";
                             continue;
                         }
                     }
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
                         Record(outcomes, row.JobId, vm.Name, ex);
-                        allEnded = false;
-                        allGone = false;
                         continue;
                     }
 
-                    var applied = await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
-                    allEnded &= applied;
-                    allGone &= applied && want == VmWant.Delete;
-                }
-
-                // Round 5 H1: no computer in the listing says nothing (the listing can lag a create): the run's own computer is read BY NAME in the row's scope. 404 is a positive "gone"; STOPPED or TERMINATED is ended
-                // but not proof for a row with an unconfirmed-end code (allGone stays false); running or booting is live.
-                if (vms.Count == 0 && row.VmName is { Length: > 0 } ownName && row.Zone is { Length: > 0 } ownZone)
-                {
-                    try
-                    {
-                        var own = await Lookup(t => _compute.GetVmAsync(scope, ownName, ownZone, t), linked.Token).ConfigureAwait(false);
-                        observed = true;
-                        if (own is not null)
-                        {
-                            sawLive |= !VmFacts.IsStopped(own);
-                            allEnded = VmFacts.IsStopped(own);
-                            allGone = false;
-                        }
-                    }
-                    catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
-                    {
-                        allEnded = false;
-                        allGone = false;
-                    }
-                }
-
-                if (observed && allEnded && (allGone || !RunErrorCodes.IsVmEndUnconfirmed(row.ErrorCode)))
-                {
-                    await WriteConfirmedEndAsync(row, now, linked.Token).ConfigureAwait(false);
-                }
-                else if (sawLive && row.VmEndConfirmedAt is not null)
-                {
-                    // Round 5 M1: the computer is running or booting again (a restart, a late create), so an earlier confirmation is contradicted: the obligation is back.
-                    await WriteConfirmedEndAsync(row, null, linked.Token).ConfigureAwait(false);
+                    await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
                 }
             });
             if (driver is not null)
@@ -546,23 +521,6 @@ public sealed class JobReconciler
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             RecordUnexpected(outcomes, row.JobId, string.Empty, ex);
-            _log.Warning("reconciler", row.JobId, ex.GetType().Name);
-        }
-    }
-
-    /// <summary>
-    /// Round 4 M-B, round 5 M2: records (or, with null, clears) when the app read this run's computer as ended, so <see cref="RunObligations"/> stops (or starts again) owing the account a look at it. One column in one
-    /// statement guarded by the phase the pass read (<see cref="IRunRepository.SetVmEndConfirmedAtAsync"/>): never a copy of the whole row, which could overwrite what a runner stored since. A failure is logged by class and
-    /// costs nothing but a later retry.
-    /// </summary>
-    private async Task WriteConfirmedEndAsync(RunRecord row, DateTimeOffset? confirmedAt, CancellationToken cancellationToken)
-    {
-        try
-        {
-            await _runs.SetVmEndConfirmedAtAsync(row.JobId, row.Phase, confirmedAt, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
             _log.Warning("reconciler", row.JobId, ex.GetType().Name);
         }
     }
@@ -718,7 +676,7 @@ public sealed class JobReconciler
         => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
 
     /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
-    private async Task<bool> ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         try
         {
@@ -742,15 +700,13 @@ public sealed class JobReconciler
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
             Record(outcomes, jobId, vm.Name, ex);
-            return false;
+            return;
         }
 
         lock (outcomes)
         {
             outcomes.Add(new LifecycleOutcome(jobId, vm.Name, done));
         }
-
-        return true;
     }
 
     /// <summary>

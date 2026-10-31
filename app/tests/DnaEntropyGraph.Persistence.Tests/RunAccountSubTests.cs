@@ -37,44 +37,4 @@ public sealed class RunAccountSubTests
         row.Phase.ShouldBe(JobPhase.Completed);
         row.AccountSub.ShouldBe("sub-b");
     }
-
-    [Fact]
-    public async Task Setting_and_clearing_the_confirmed_end_changes_that_one_column_and_never_what_a_runner_stored_since()
-    {
-        // Round 5 M2: a stale copy of the row (read before the runner wrote its VmReadyAt and cost) must not be written back; the targeted write touches one column.
-        using var paths = new TempPaths();
-        IRunRepository repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
-        var ready = new DateTimeOffset(2026, 10, 30, 9, 0, 0, TimeSpan.Zero);
-        var confirmed = ready.AddMinutes(40);
-        await repository.UpsertAsync(new RunRecord("job-m2", JobPhase.Completed, DateTimeOffset.UtcNow), CancellationToken.None);
-        await repository.UpsertAsync(new RunRecord("job-m2", JobPhase.Completed, DateTimeOffset.UtcNow, VmReadyAt: ready, ActualCostUsd: 1.25), CancellationToken.None);
-
-        (await repository.SetVmEndConfirmedAtAsync("job-m2", JobPhase.Completed, confirmed, CancellationToken.None)).ShouldBeTrue();
-        var set = (await repository.GetAsync("job-m2", CancellationToken.None))!;
-        set.VmEndConfirmedAt.ShouldBe(confirmed);
-        set.VmReadyAt.ShouldBe(ready);
-        set.ActualCostUsd.ShouldBe(1.25);
-
-        (await repository.SetVmEndConfirmedAtAsync("job-m2", JobPhase.Completed, null, CancellationToken.None)).ShouldBeTrue();
-        (await repository.GetAsync("job-m2", CancellationToken.None))!.VmEndConfirmedAt.ShouldBeNull("clearing bypasses the upsert's coalesce");
-
-        (await repository.SetVmEndConfirmedAtAsync("job-m2", JobPhase.Running, confirmed, CancellationToken.None)).ShouldBeFalse("the phase moved on: no write");
-        (await repository.SetVmEndConfirmedAtAsync("job-none", JobPhase.Completed, confirmed, CancellationToken.None)).ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task The_time_a_computers_end_was_confirmed_survives_a_relaunch_and_a_stale_writers_record_never_erases_it()
-    {
-        // Round 4 M-B: the reconciler records it; the runner's own copy of the row (written later, knowing nothing of it) must not wipe it.
-        using var paths = new TempPaths();
-        var confirmed = new DateTimeOffset(2026, 10, 30, 9, 30, 0, TimeSpan.Zero);
-        var first = new RunRepository(new SqliteDatabase(paths.DatabasePath));
-        await first.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, VmEndConfirmedAt: confirmed), CancellationToken.None);
-        await first.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, Notes: null), CancellationToken.None);
-
-        var second = new RunRepository(new SqliteDatabase(paths.DatabasePath));
-
-        (await second.GetAsync("job-c", CancellationToken.None))!.VmEndConfirmedAt.ShouldBe(confirmed);
-        (await second.GetAllAsync(CancellationToken.None)).Single().VmEndConfirmedAt.ShouldBe(confirmed);
-    }
 }

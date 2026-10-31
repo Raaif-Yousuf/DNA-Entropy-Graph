@@ -573,42 +573,6 @@ public sealed class LeftRunningScopesTests
 
     // ---- Round 4 M-B and L-1 ----
 
-    private static RunRecord KeepAliveRow(DateTimeOffset? confirmedEnd) => new("job-k", JobPhase.Completed, Start, ProjectId: "project-a", AccountSub: "sub-a", InstallationId: "inst", FinishedAt: Start,
-        OptionsJson: DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = DnaEntropyGraph.Core.AfterTaskAction.KeepAlive, KeepAliveMinutes = 30 }),
-        VmEndConfirmedAt: confirmedEnd);
-
-    [Fact]
-    public void A_keep_alive_row_whose_computer_was_confirmed_ended_has_no_obligation_and_an_unconfirmed_one_does()
-    {
-        RunObligations.HasObligation(KeepAliveRow(null), Start.AddHours(2)).ShouldBeTrue();
-        RunObligations.HasObligation(KeepAliveRow(Start.AddMinutes(31)), Start.AddHours(2)).ShouldBeFalse();
-    }
-
-    [Fact]
-    public void A_confirmed_end_clears_an_earlier_unconfirmed_end_code_and_never_clears_an_unfinished_run()
-    {
-        var unconfirmed = new RunRecord("job-u", JobPhase.Failed, Start, ProjectId: "project-a", AccountSub: "sub-a", FinishedAt: Start, ErrorCode: RunErrorCodes.VmEndUnconfirmed);
-        RunObligations.HasObligation(unconfirmed, Start.AddMinutes(1)).ShouldBeTrue();
-        RunObligations.HasObligation(unconfirmed with { VmEndConfirmedAt = Start.AddMinutes(1) }, Start.AddMinutes(2)).ShouldBeFalse();
-        RunObligations.HasObligation(new RunRecord("job-r", JobPhase.Running, Start, VmEndConfirmedAt: Start.AddMinutes(1)), Start.AddMinutes(2)).ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task A_signed_out_account_whose_keep_alive_computer_the_reconciler_already_confirmed_ended_is_not_prompted_for_but_an_unconfirmed_one_is()
-    {
-        var confirmed = RigWithSignedOutAccountA();
-        await confirmed.Runs.UpsertAsync(KeepAliveRow(Start.AddMinutes(31)) with { InstallationId = confirmed.Installation }, CancellationToken.None);
-        confirmed.Clock.Advance(TimeSpan.FromHours(2));
-        await confirmed.Guard.ConfirmExitAsync(CancellationToken.None);
-        await confirmed.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-
-        var unconfirmed = RigWithSignedOutAccountA();
-        await unconfirmed.Runs.UpsertAsync(KeepAliveRow(null) with { InstallationId = unconfirmed.Installation }, CancellationToken.None);
-        unconfirmed.Clock.Advance(TimeSpan.FromHours(2));
-        await unconfirmed.Guard.ConfirmExitAsync(CancellationToken.None);
-        await unconfirmed.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-    }
-
     [Fact]
     public void An_outcome_with_no_account_matches_only_rows_with_no_recorded_account()
     {

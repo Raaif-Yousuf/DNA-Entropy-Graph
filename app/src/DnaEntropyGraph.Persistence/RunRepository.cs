@@ -19,7 +19,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
                IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
                EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
                AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-               Notes, TagsJson, PreemptionCount, AccountSub, VmEndConfirmedAt
+               Notes, TagsJson, PreemptionCount, AccountSub
         FROM Runs
         """;
 
@@ -45,14 +45,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
             IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
             EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
             AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
-            Notes, TagsJson, PreemptionCount, AccountSub, VmEndConfirmedAt)
+            Notes, TagsJson, PreemptionCount, AccountSub)
         VALUES (
             @Id, @Name, @IsBatch, @Target, @Phase, @ErrorCode, @ErrorDetail, @CreatedAt, @StartedAt, @VmReadyAt, @FinishedAt,
             @OptionsJson, @ManifestJson, @ProjectId, @Bucket, @JobPrefix, @VmName, @Zone, @MachineType, @GpuType,
             @IsSpot, @VmReused, @LastProgressSeq, @LastHeartbeatAt, @StatusGeneration, @OutputDir,
             @EstimatedCostUsd, @ActualCostUsd, @VmSeconds, @CloudResultsExpireAt, @CloudResultsDeleted,
             @AppVersion, @WorkerVersion, @WorkerImageDigest, @ContractVersion, @InstallationId, @Imported,
-            @Notes, @TagsJson, @PreemptionCount, @AccountSub, @VmEndConfirmedAt)
+            @Notes, @TagsJson, @PreemptionCount, @AccountSub)
         ON CONFLICT(Id) DO UPDATE SET
             Name = excluded.Name, IsBatch = excluded.IsBatch, Target = excluded.Target, Phase = excluded.Phase,
             ErrorCode = excluded.ErrorCode, ErrorDetail = excluded.ErrorDetail,
@@ -68,8 +68,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
             AppVersion = excluded.AppVersion, WorkerVersion = excluded.WorkerVersion, WorkerImageDigest = excluded.WorkerImageDigest,
             ContractVersion = excluded.ContractVersion, InstallationId = excluded.InstallationId, Imported = excluded.Imported,
             PreemptionCount = excluded.PreemptionCount,
-            AccountSub = COALESCE(excluded.AccountSub, Runs.AccountSub),
-            VmEndConfirmedAt = COALESCE(excluded.VmEndConfirmedAt, Runs.VmEndConfirmedAt);
+            AccountSub = COALESCE(excluded.AccountSub, Runs.AccountSub);
         """;
 
     private readonly SqliteDatabase _database;
@@ -107,17 +106,6 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(UpsertSql, ToRow(run), cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command).ConfigureAwait(false);
-    }
-
-    /// <summary>Round 5 M2: the one-column write (see <see cref="IRunRepository.SetVmEndConfirmedAtAsync"/>); guarded by the phase in the same statement, so there is no read-then-write gap.</summary>
-    public async Task<bool> SetVmEndConfirmedAtAsync(string jobId, JobPhase expectedPhase, DateTimeOffset? confirmedAt, CancellationToken cancellationToken)
-    {
-        using var connection = _database.OpenConnection();
-        var command = new CommandDefinition(
-            "UPDATE Runs SET VmEndConfirmedAt = @At WHERE Id = @Id AND Phase = @Phase;",
-            new { At = Iso.Format(confirmedAt), Id = jobId, Phase = expectedPhase.ToString() },
-            cancellationToken: cancellationToken);
-        return await connection.ExecuteAsync(command).ConfigureAwait(false) > 0;
     }
 
     /// <summary>Test seam: runs inside <see cref="TryUpsertIfPhaseAsync"/> between its read of the stored phase and its write, so a test can force another writer into that gap. Null in production.</summary>
@@ -249,8 +237,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         Notes: row.Notes,
         TagsJson: row.TagsJson,
         PreemptionCount: (int)row.PreemptionCount,
-        AccountSub: row.AccountSub,
-        VmEndConfirmedAt: Iso.Parse(row.VmEndConfirmedAt));
+        AccountSub: row.AccountSub);
 
     private RunRow ToRow(RunRecord run) => new()
     {
@@ -295,7 +282,6 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         TagsJson = run.TagsJson,
         PreemptionCount = run.PreemptionCount,
         AccountSub = run.AccountSub,
-        VmEndConfirmedAt = Iso.Format(run.VmEndConfirmedAt),
     };
 
     private sealed class RunRow
@@ -339,7 +325,6 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         public long Imported { get; set; }
         public long PreemptionCount { get; set; }
         public string? AccountSub { get; set; }
-        public string? VmEndConfirmedAt { get; set; }
         public string? Notes { get; set; }
         public string? TagsJson { get; set; }
     }

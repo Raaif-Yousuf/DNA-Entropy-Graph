@@ -1,4 +1,2 @@
 -- Issue #830: the Google account (Accounts.Sub) a run was made as. NULL means the current account. No SQL backfill: nothing records which account made an old row (Projects.AccountSub is the project's last chooser, not the run's), so at the first launch after the upgrade with an account signed in, RunAccountBackfill sets every NULL cloud row to that account once.
 ALTER TABLE Runs ADD COLUMN AccountSub TEXT;
--- Issue #830 review round 4 M-B: when the app last CONFIRMED this run's computer ended (stopped, deleted or gone) while its account was reachable (ISO-8601 UTC, NULL = never confirmed). A keep-alive row owes its account a look until then; it is only a confirmation when it is not older than the run's FinishedAt (a resumed run that finished again needs a fresh one).
-ALTER TABLE Runs ADD COLUMN VmEndConfirmedAt TEXT;

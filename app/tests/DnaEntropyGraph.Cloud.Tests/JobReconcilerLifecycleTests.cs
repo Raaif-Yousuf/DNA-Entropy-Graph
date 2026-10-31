@@ -150,50 +150,7 @@ public class JobReconcilerLifecycleTests
         rig.Gcp.CallsTo("FindByJobId").Where(c => c.ProjectId == "project-b").ShouldBeEmpty("project-b was selected, but the run is not in it");
     }
 
-    // ---- Issue #830 review round 4 M-B: the reconciler records that a run's computer was confirmed ended, so a keep-alive row stops obliging the account ----
-
-    private static RunRecord Row(Rig rig, string jobId) => rig.Env.Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
-
-    [Fact]
-    public async Task A_keep_alive_VM_the_reconciler_ends_is_recorded_as_confirmed_ended_and_a_VM_it_leaves_running_is_not()
-    {
-        var rig = new Rig();
-        await rig.SeedFinishedAsync("job-ended", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, afterKeepAlive: AfterKeepAliveAction.Delete);
-        await rig.SeedFinishedAsync("job-held", AfterTaskAction.KeepAlive, keepAliveMinutes: 600, afterKeepAlive: AfterKeepAliveAction.Delete);
-        rig.Clock.Advance(TimeSpan.FromMinutes(21));
-
-        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-
-        Row(rig, "job-ended").VmEndConfirmedAt.ShouldBe(Launch.AddMinutes(21), "the delete was accepted, so the end is confirmed at that time");
-        Row(rig, "job-held").VmEndConfirmedAt.ShouldBeNull("the window has not expired: the computer still runs, nothing is confirmed");
-        (await rig.VmsAsync("job-held")).Single().Status.ShouldBe("RUNNING");
-    }
-
-    [Fact]
-    public async Task A_finished_run_whose_VM_the_reconciler_finds_already_stopped_or_gone_by_name_is_recorded_as_confirmed_ended()
-    {
-        var rig = new Rig();
-        await rig.SeedFinishedAsync("job-stopped", AfterTaskAction.Stop);
-        await rig.StopAsync("job-stopped");
-        await rig.Env.SeedAsync("job-gone", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-gone", Zone = Zone });
-
-        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-
-        Row(rig, "job-stopped").VmEndConfirmedAt.ShouldBe(Launch);
-        Row(rig, "job-gone").VmEndConfirmedAt.ShouldBe(Launch, "the by-name read of the run's own computer answered 404 while the account was reachable");
-    }
-
-    [Fact]
-    public async Task An_empty_label_listing_alone_never_confirms_an_end()
-    {
-        // Round 5 H1: a run that recorded no computer name has nothing to read by name; "the listing shows nothing" lags a create and proves nothing.
-        var rig = new Rig();
-        await rig.Env.SeedAsync("job-noname", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = null });
-
-        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-
-        Row(rig, "job-noname").VmEndConfirmedAt.ShouldBeNull();
-    }
+    // ---- Issue #830 review rounds 4 and 5 ----
 
     /// <summary>The fake behind the compute interface, except that the label listing by job id can be made to show nothing (it lags a create) or to fail as a signed-out account that names no sub.</summary>
     private sealed class ScriptedCompute(FakeGcp inner) : IComputeGateway
@@ -228,52 +185,19 @@ public class JobReconcilerLifecycleTests
         public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
     }
 
-    private static async Task<RunRecord> SeedUnconfirmedLateCreateAsync(Rig rig, string jobId)
-    {
-        await rig.Env.SeedAsync(jobId, JobPhase.Cancelled, vm: true, after: AfterTaskAction.Stop, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ErrorCode = RunErrorCodes.LateCreateUnconfirmed, VmName = VmTerminator.OwnVmName(jobId), Zone = Zone });
-        return Row(rig, jobId);
-    }
-
     [Fact]
-    public async Task A_late_create_unconfirmed_row_whose_VM_the_label_listing_does_not_show_yet_is_not_confirmed_ended_while_the_VM_exists_by_name()
+    public async Task A_signed_out_account_with_no_obligation_is_logged_once_not_on_every_pass()
     {
-        // Round 5 H1: HideListing models the lag of a label listing right after a create. The computer is there by name, so nothing may be confirmed.
-        var rig = new Rig();
-        await SeedUnconfirmedLateCreateAsync(rig, "job-late");
-        var compute = new ScriptedCompute(rig.Gcp) { HideListing = true };
+        // Round 6: the reconciler runs every few minutes; the "no obligation" line is written when that state changes for an account.
+        var rig = new Rig(g => g.WithAccount("sub-x", "x@example.org", "project-x").WithAccountSignedOut("sub-x"));
+        await rig.Env.SeedAsync("job-x", JobPhase.Completed, vm: false, after: AfterTaskAction.Stop, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ProjectId = "project-x", AccountSub = "sub-x" });
+        var reconciler = rig.Reconciler(log: rig.Env.Log);
 
-        await rig.Reconciler(compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
+        await reconciler.EnforceLifecycleAsync(CancellationToken.None);
 
-        Row(rig, "job-late").VmEndConfirmedAt.ShouldBeNull();
-    }
-
-    [Fact]
-    public async Task A_late_create_unconfirmed_row_is_confirmed_ended_by_a_by_name_404_but_not_by_a_stopped_VM()
-    {
-        var gone = new Rig();
-        await gone.Env.SeedAsync("job-404", JobPhase.Cancelled, vm: false, after: AfterTaskAction.Stop, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ErrorCode = RunErrorCodes.LateCreateUnconfirmed, VmName = VmTerminator.OwnVmName("job-404"), Zone = Zone });
-        await gone.Reconciler(compute: new ScriptedCompute(gone.Gcp) { HideListing = true }).EnforceLifecycleAsync(CancellationToken.None);
-        Row(gone, "job-404").VmEndConfirmedAt.ShouldBe(Launch, "a by-name 404 is the positive evidence a row with an unconfirmed-end code needs");
-
-        var stopped = new Rig();
-        await SeedUnconfirmedLateCreateAsync(stopped, "job-stp");
-        await stopped.StopAsync("job-stp");
-        await stopped.Reconciler(compute: new ScriptedCompute(stopped.Gcp) { HideListing = true }).EnforceLifecycleAsync(CancellationToken.None);
-        Row(stopped, "job-stp").VmEndConfirmedAt.ShouldBeNull("a stopped computer can be started again by a late create: weaker than a 404 for such a row");
-    }
-
-    [Fact]
-    public async Task A_confirmed_end_is_cleared_again_when_a_later_pass_sees_the_computer_running()
-    {
-        // Round 5 M1: the computer was restarted under the job label after the confirmation.
-        var rig = new Rig();
-        await rig.SeedFinishedAsync("job-back", AfterTaskAction.KeepAlive, keepAliveMinutes: 600, afterKeepAlive: AfterKeepAliveAction.Delete, tweak: row => row with { VmEndConfirmedAt = Launch.AddMinutes(-5) });
-
-        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-
-        (await rig.VmsAsync("job-back")).Single().Status.ShouldBe("RUNNING");
-        Row(rig, "job-back").VmEndConfirmedAt.ShouldBeNull("a running computer contradicts the earlier confirmation");
-        RunObligations.HasObligation(Row(rig, "job-back"), Launch.AddHours(1)).ShouldBeTrue();
+        rig.Env.Log.Entries.Count(e => e.ErrorClass == "account-signed-out-no-obligation").ShouldBe(1);
     }
 
     [Fact]
@@ -288,18 +212,6 @@ public class JobReconcilerLifecycleTests
         await rig.Reconciler(compute: compute, additionalSweepScopes: () => [new CloudScope("my-project", "sub-a")], onSignInNeeded: sub => signInFor.Add(sub)).EnforceLifecycleAsync(CancellationToken.None);
 
         signInFor.Count.ShouldBe(1, "the named row of the active account matches once the null account is resolved to it");
-    }
-
-    [Fact]
-    public async Task A_run_whose_VM_end_could_not_be_confirmed_is_not_recorded_as_ended()
-    {
-        // The account cannot be used: nothing was read, so nothing may be recorded.
-        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
-        await rig.Env.SeedAsync("job-so", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ProjectId = "project-a", AccountSub = "sub-a" });
-
-        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
-
-        Row(rig, "job-so").VmEndConfirmedAt.ShouldBeNull();
     }
 
     [Theory]
