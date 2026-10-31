@@ -130,3 +130,33 @@ def test_a_ruff_running_the_wrong_version_refuses_via_required_version(tmp_path:
     proc = subprocess.run(["uvx", f"ruff@{V}", "check", "a.py"], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert proc.returncode != 0
     assert "required-version" in (proc.stderr + proc.stdout).lower() or "0.0.1" in (proc.stderr + proc.stdout)
+
+
+@pytest.mark.parametrize("spec", ["latest", "0.17", "0.17.3rc1", "^0.17.3", ">=0.17.3"])
+def test_a_ruff_at_something_other_than_the_exact_pin_is_a_problem(tmp_path: Path, spec: str) -> None:
+    """#1027 review: `ruff@latest` / a partial version matched neither the pinned nor the unpinned pattern."""
+    root = _tree(
+        tmp_path, **{".github__workflows__ci-worker_dot_yml": f"        run: uvx ruff@{spec} check .\n" + f"        run: uvx ruff@{V} x\n" * 2}
+    )
+    problems = crp.check_repo(root)
+    assert any("ci-worker.yml:1" in p and f"ruff@{spec}" in p for p in problems), problems
+
+
+def test_a_quoted_premerge_argv_with_ruff_at_latest_is_a_problem(tmp_path: Path) -> None:
+    root = _tree(tmp_path, scripts__premerge_dot_py='G = ["uvx", "ruff@latest", "check"]\n' + f'H = ["uvx", "ruff@{V}", "x"]\n' * 4)
+    assert any("premerge.py:1" in p and "ruff@latest" in p for p in crp.check_repo(root))
+
+
+def test_an_exact_pin_followed_by_punctuation_is_still_accepted(tmp_path: Path) -> None:
+    root = _tree(tmp_path, docs__dev_commands_dot_md=f"run `uvx ruff@{V}`, then `uvx ruff@{V}.`\n")
+    assert crp.check_repo(root) == []
+
+
+@pytest.mark.parametrize("cmd", ["uv run ruff check .", "uvx --from ruff ruff check .", "python -m ruff check ."])
+def test_other_unversioned_ways_to_run_ruff_are_problems(tmp_path: Path, cmd: str) -> None:
+    root = _tree(tmp_path, docs__dev_commands_dot_md=f"run {cmd}\n")
+    assert any("docs/dev_commands.md:1" in p and "unpinned" in p for p in crp.check_repo(root)), cmd
+
+
+def test_from_ruff_with_an_exact_version_is_accepted(tmp_path: Path) -> None:
+    assert crp.check_repo(_tree(tmp_path, docs__dev_commands_dot_md=f"run uvx --from ruff=={V} ruff check .\n")) == []

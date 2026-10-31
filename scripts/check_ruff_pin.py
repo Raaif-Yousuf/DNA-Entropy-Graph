@@ -36,9 +36,12 @@ SCAN_GLOBS = (".github/workflows/*.yml",)
 MIN_SITES = {"scripts/premerge.py": 4, ".github/workflows/ci-docs.yml": 2, ".github/workflows/ci-worker.yml": 2}
 
 _REQUIRED = re.compile(r'^\s*required-version\s*=\s*["\']==\s*(\d+\.\d+\.\d+)["\']', re.MULTILINE)
-_PINNED = re.compile(r"ruff@(\d+\.\d+\.\d+)")
+# Any `ruff@<token>`: the token must be EXACTLY the pinned X.Y.Z (so `@latest`, `@0.17`, `@^0.17.3` all fail).
+_PINNED = re.compile(r"""ruff@([^\s"'`,)\]]+)""")
+_EXACT = re.compile(r"\d+\.\d+\.\d+")
 # `uvx ruff ...` / `uv tool run ruff` / premerge's argv `"uvx", "ruff"`, with no `@version` on the ruff token.
-_UNPINNED = re.compile(r"""(?:uvx|uv tool run)["',\s]+ruff(?![@\w.-])""")
+# Also `uv run ruff`, `uvx --from ruff` and `python -m ruff` with no pin (`--from ruff==X` counts as pinned).
+_UNPINNED = re.compile(r"""(?:(?:uvx|uv tool run|uv run)["',\s]+|--from[\s=]+|-m\s+)ruff(?![@\w.=-])""")
 
 
 def _read(root: Path, rel: str) -> str | None:
@@ -61,12 +64,20 @@ def _scan_paths(root: Path) -> list[str]:
     return found
 
 
+def _tokens(text: str) -> list[str]:
+    return [t.rstrip(".:;") for t in _PINNED.findall(text)]
+
+
+def _exact_pins(text: str) -> list[str]:
+    return [t for t in _tokens(text) if _EXACT.fullmatch(t)]
+
+
 def count_sites(root: Path) -> int:
     total = 0
     for rel in CONFIGS:
         total += 1 if _REQUIRED.search(_read(root, rel) or "") else 0
     for rel in _scan_paths(root):
-        total += len(_PINNED.findall(_read(root, rel) or ""))
+        total += len(_exact_pins(_read(root, rel) or ""))
     return total
 
 
@@ -84,13 +95,13 @@ def check_repo(root: Path) -> list[str]:
     for rel in _scan_paths(root):
         text = _read(root, rel) or ""
         for lineno, line in enumerate(text.splitlines(), start=1):
-            for found in _PINNED.findall(line):
+            for found in _tokens(line):
                 if found != want:
                     problems.append(f"{rel}:{lineno}: ruff@{found} but {CANONICAL} pins {want}. Make them equal")
             if _UNPINNED.search(line):
                 problems.append(f"{rel}:{lineno}: unpinned ruff run; write ruff@{want}")
     for rel, floor in MIN_SITES.items():
-        seen = len(_PINNED.findall(_read(root, rel) or ""))
+        seen = len(_exact_pins(_read(root, rel) or ""))
         if seen < floor:
             problems.append(f"{rel}: expected at least {floor} `ruff@{want}` pins, found {seen}. Was a ruff gate removed or left unpinned?")
     return problems
