@@ -1,0 +1,1 @@
+- The Save to folder can now be chosen: a Change folder button and a Use Downloads button on New run and in Settings (Save results to) open a real folder chooser, the choice is remembered (setting `output_folder`, not exported) and sent as the run's output folder, and a whole drive is refused beside the button (#1037).
