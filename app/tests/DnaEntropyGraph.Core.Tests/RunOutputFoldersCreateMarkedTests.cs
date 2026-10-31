@@ -28,9 +28,20 @@ public sealed class RunOutputFoldersCreateMarkedTests : IDisposable
     {
         var folder = Path.Combine(_parent, "a", "b");
 
-        RunOutputFolders.CreateMarked(folder, "job-1");
+        RunOutputFolders.CreateMarked(folder, "job-1", _parent);
 
         RunFolderMarker.Check(folder, "job-1").ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public void A_missing_required_root_makes_nothing()
+    {
+        var root = Path.Combine(_parent, "gone");
+        var folder = Path.Combine(root, "a");
+
+        Should.Throw<DirectoryNotFoundException>(() => RunOutputFolders.CreateMarked(folder, "job-1", root));
+
+        Directory.Exists(root).ShouldBeFalse();
     }
 
     [Fact]
@@ -38,7 +49,7 @@ public sealed class RunOutputFoldersCreateMarkedTests : IDisposable
     {
         var folder = Path.Combine(_parent, "a", "b");
 
-        Should.Throw<IOException>(() => RunOutputFolders.CreateMarked(folder, "job-1", (_, _) => throw new IOException("disk full")));
+        Should.Throw<IOException>(() => RunOutputFolders.CreateMarked(folder, "job-1", _parent, (_, _) => throw new IOException("disk full")));
 
         Directory.Exists(Path.Combine(_parent, "a")).ShouldBeFalse();
         Directory.Exists(_parent).ShouldBeTrue("only what this call made is removed");

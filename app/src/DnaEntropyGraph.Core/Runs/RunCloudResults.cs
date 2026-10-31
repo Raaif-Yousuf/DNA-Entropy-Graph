@@ -323,15 +323,36 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         // Issue #1047: Delete files on this PC leaves OutputDir on the row, so a recorded folder that is gone is made again here, with this run's marker, exactly as a folder
-        // made by CreateUnique is. A recorded folder that is still there is never touched: an unmarked one stays unmarked (a pre-marker run keeps its confirmation question).
-        if (!Path.Exists(folder) && !string.IsNullOrWhiteSpace(run.JobId))
+        // made by CreateUnique is. Only the one level CreateUnique ever makes (directly inside the output root); anything deeper is a damaged row and keeps the earlier behaviour.
+        // A recorded folder that is still there is never touched (an unmarked one stays unmarked, so a pre-marker run keeps its confirmation question), and neither is a link,
+        // even a dangling one. The root must already exist (CreateMarked). The check-then-create window is not closed against a junction swapped in between (Hard Rule 14 residual).
+        if (!string.IsNullOrWhiteSpace(run.JobId) && IsDirectChildOf(folder, root) && !EntryExists(folder))
         {
-            RunOutputFolders.CreateMarked(folder, run.JobId);
+            RunOutputFolders.CreateMarked(folder, run.JobId, root);
         }
-
         return folder;
     }
 
+    private static bool IsDirectChildOf(string folder, string root)
+        => string.Equals(Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(folder) ?? string.Empty), Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when anything is at <paramref name="path"/>, a link (even a dangling one) included; only "not found" says false, so an entry that cannot be probed is left alone.</summary>
+    private static bool EntryExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return true;
+        }
+    }
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>
     private sealed class KeptAsideTally
     {

@@ -92,6 +92,57 @@ public sealed class RunCloudResultsRedownloadMarkerTests : IDisposable
         Directory.Exists(Path.GetDirectoryName(outside)).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_missing_output_root_is_not_brought_back_by_a_download_again()
+    {
+        Directory.Delete(_root);
+        var folder = Path.Combine(_root, "sample");
+
+        (await Results().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldNotBe(CloudResultsStatus.Done);
+
+        Directory.Exists(_root).ShouldBeFalse("a re-lettered drive or a root the user removed is not recreated on their behalf");
+    }
+
+    [Fact]
+    public async Task A_recorded_folder_nested_below_the_output_root_is_not_recreated_by_this_path()
+    {
+        // The app only ever makes one level (CreateUnique), so a deeper recorded folder is a damaged row: it gets what it got before #1047, which is no marker made here.
+        var nested = Path.Combine(_root, "a", "b");
+
+        await Results().RedownloadAsync(Run(nested), CancellationToken.None);
+
+        File.Exists(Path.Combine(nested, RunFolderMarker.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_dangling_junction_at_the_recorded_path_is_not_recreated_through_the_link()
+    {
+        // MEASURED 2026-10-31: with the EntryExists check swapped for Path.Exists this still passes, because RunOutputRoot.IsContained already refuses a link at the leaf;
+        // the check in ResolveFolderAsync is a second line, and this test pins the outcome (nothing made through the link), not which line stopped it.
+        var target = Path.Combine(_base, "gone-target");
+        Directory.CreateDirectory(target);
+        var link = Path.Combine(_root, "sample");
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        using (var process = System.Diagnostics.Process.Start(start)!)
+        {
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.SkipUnless(process.ExitCode == 0, "mklink /J is not available here, so a junction cannot be made");
+        }
+
+        Directory.Delete(target);
+
+        try
+        {
+            await Results().RedownloadAsync(Run(link), CancellationToken.None);
+
+            Directory.Exists(target).ShouldBeFalse("nothing was made through the link");
+        }
+        finally
+        {
+            // Remove the junction itself first, so cleanup never has to walk through a dangling link.
+            Directory.Delete(link);
+        }
+    }
     private sealed class FixedTime(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
