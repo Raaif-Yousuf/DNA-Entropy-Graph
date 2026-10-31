@@ -65,6 +65,7 @@ markers = [
 ]
 
 [tool.ruff]
+required-version = "==0.17.3"  # same pin as scripts/ruff.toml (#1027, scripts/check_ruff_pin.py)
 # `ci-worker.yml` turns `ruff check`/`ruff format --check` on the moment this table
 # exists (issue #38) — this is a decision to lint the WHOLE package in one commit, a
 # prototype that had never been linted before. Findings were fixed, not hidden; see the

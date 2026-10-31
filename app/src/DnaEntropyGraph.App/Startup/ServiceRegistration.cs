@@ -265,7 +265,12 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IGeneTableSource, DnaEntropyGraph.Core.Tracks.GeneTableSource>();
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
-        services.AddSingleton(new DnaEntropyGraph.Presentation.Services.ResultsExportRoot(() => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory), appOwned: root.IsPortable));
+        // Issue #1006: follows the saved "Save results to" folder at each save. The other default-parent lambdas (LocalRunFiles, RunCloudResults, LocalJobRunner)
+        // deliberately stay on the default parent: they name the root a run with NO recorded folder was made under, which is a delete and re-download safety root, not a choice.
+        services.AddSingleton(sp => DnaEntropyGraph.Presentation.Services.ResultsExportRoot.FromSettings(
+            sp.GetRequiredService<ISettingsStore>(),
+            () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
+            appOwned: root.IsPortable));
         // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).
         services.AddSingleton<ImportedRunDismissals>(sp => new ImportedRunDismissals(sp.GetRequiredService<ISettingsStore>()));
         services.AddSingleton<IRunImporter>(sp => new RunImporter(sp.GetRequiredService<IStorageGateway>(), sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<ImportedRunDismissals>()));

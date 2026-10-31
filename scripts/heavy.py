@@ -58,6 +58,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 import wt_venv  # noqa: E402  (the one kill-on-close job helper, #958; heavy.py is run by path, so its folder is on sys.path already)
+from dotnet_env import DOTNET_ENV_DEFAULTS, _is_dotnet, dotnet_env  # noqa: E402,F401  (the one definition, shared with premerge.py)
 
 DEFAULT_SLOTS = 2
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -201,29 +202,6 @@ def kill_children_with_me() -> str | None:
         return None
     except Exception as e:  # never let the safety net stop the run
         return f"{type(e).__name__}"
-
-
-DOTNET_ENV_DEFAULTS = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0", "UseSharedCompilation": "false"}
-
-
-def _is_dotnet(argv: list[str]) -> bool:
-    return bool(argv) and Path(argv[0].replace("\\", "/")).name.lower() in ("dotnet", "dotnet.exe")
-
-
-def dotnet_env(argv: list[str], env: dict[str, str]) -> dict[str, str]:
-    """For a dotnet command, return a copy of env with node reuse and shared compilation off.
-
-    Pure. A value the caller already set wins. Non-dotnet commands get env back unchanged.
-    Why: the kill-on-close job ends any MSBuild node or VBCSCompiler server left by this wrapper, and a
-    reusable per-user node could be picked up by another lane's concurrent build and then killed under it.
-    THEORY (unverified): that cross-lane failure was never reproduced; the defaults just make it impossible.
-    """
-    if not _is_dotnet(argv):
-        return env
-    out = dict(env)
-    for key, value in DOTNET_ENV_DEFAULTS.items():
-        out.setdefault(key, value)
-    return out
 
 
 def resolve_executable(command: list[str]) -> list[str]:

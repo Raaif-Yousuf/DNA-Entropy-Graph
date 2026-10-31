@@ -129,6 +129,17 @@ public sealed partial class RunListItem : ObservableObject
 
     public bool HasReason => ReasonText is not null;
 
+    /// <summary>
+    /// Issue #929: "N changed files were kept under new names", for a finished run whose download renamed files aside (Hard Rule 14),
+    /// whatever its primary code is. Null for every other run.
+    /// </summary>
+    public string? KeptAsideText { get; init; }
+
+    public bool HasKeptAside => KeptAsideText is not null;
+
+    /// <summary>Opens the run's output folder (the action <see cref="KeptAsideText"/> names); null exactly when there is no line.</summary>
+    public IAsyncRelayCommand? OpenOutputFolderCommand { get; init; }
+
     /// <summary>"Preset: Plasmid QC" for a run started from an option preset (issue #136); null for a run set by hand.</summary>
     public string? PresetText { get; init; }
 

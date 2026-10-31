@@ -9,6 +9,7 @@ each record's sequence and maps its ``gene`` (or, failing that, ``CDS``) feature
 
 from __future__ import annotations
 
+import os
 import re
 import traceback
 import warnings
@@ -404,7 +405,7 @@ def _features_of(
     return features, notices
 
 
-def read_genbank(path: str) -> tuple[list[GenBankRecord], list[str]]:
+def read_genbank(path: str | os.PathLike[str]) -> tuple[list[GenBankRecord], list[str]]:
     """Return ``(records, notices)`` for **every** record in ``path``.
 
     Features are 1-based inclusive, sequence-relative (matching :class:`GeneFeature`).

@@ -51,16 +51,18 @@ FAILS CLOSED (denies) when:
   - the guard subprocess exits 0 but prints something that does not parse
     as JSON (a crash that happened to corrupt only the last write, not the
     exit code, is not distinguishable from a real decision by exit code
-    alone)
+    alone), or that parses as JSON but is not a JSON object (`[]`, `3`,
+    `null`: valid JSON, but no decision)
   - this dispatcher itself raises an exception it did not anticipate above
     (a top-level catch-all; see `main()`)
 
 PASSES THROUGH UNCHANGED when:
   - the guard exits 0 and prints nothing: its own "no opinion" -- silence,
     exit 0, exactly as today
-  - the guard exits 0 and prints valid JSON: its own decision, forwarded
+  - the guard exits 0 and prints a JSON object: its own decision, forwarded
     byte-for-byte, never re-serialised (so this dispatcher can never
-    introduce a formatting difference a guard's own tests did not see)
+    introduce a formatting difference a guard's own tests did not see).
+    Only an object is forwarded; any other output is denied (see above).
 
 WHAT THIS FILE DOES NOT COVER
 ------------------------------
@@ -84,13 +86,45 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 HOOKS_DIR = Path(__file__).resolve().parent
 DEFAULT_GUARD_TIMEOUT_SECONDS = 8.0
 
+# #1055: checks of forwarding / passthrough / crash / garbage behaviour use fake
+# guards that terminate on their own, so their result must not depend on how
+# fast a cold interpreter starts. MEASURED 2026-10-31: under heavy machine load
+# a 3.0 s deadline made the dispatcher fail closed with its own timeout deny,
+# which the checks misread as a forwarding bug. This backstop exists only so a
+# genuinely broken test cannot hang forever; never use a tight value with it.
+SELF_TEST_BACKSTOP_SECONDS = 120.0
+# Only the "hangs" check uses a short deadline: its expected result (the
+# dispatcher's timeout deny) is the same however slow the machine is. It may
+# even expire before the interpreter has started; that is fine, because the
+# expected result is the timeout deny either way.
+SELF_TEST_HANG_TIMEOUT_SECONDS = 0.5
 
-def _deny(reason: str, system_message: str) -> None:
-    json.dump(
+# What kind of outcome run_decision() produced, so a caller can tell "the
+# dispatcher timed out" from "a guard wrote a deny" structurally, never by
+# matching prose (#1055). The kind lives in-process only (see Decision): the
+# bytes printed to stdout are exactly the pre-#1055 deny JSON, no extra key,
+# because the hook output schema Claude Code accepts is not verified here.
+KIND_PASSTHROUGH = "passthrough"  # the guard's own decision, or its own silence
+KIND_MISSING = "missing"
+KIND_TIMEOUT = "timeout"
+KIND_START_FAILED = "start_failed"
+KIND_CRASHED = "crashed"
+KIND_NOT_JSON = "not_json"
+
+
+class Decision(NamedTuple):
+    rc: int  # always 0, the guard contract
+    kind: str  # one of the KIND_* values
+    stdout: str  # exactly what run() prints
+
+
+def _deny_json(reason: str, system_message: str) -> str:
+    return json.dumps(
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -98,9 +132,12 @@ def _deny(reason: str, system_message: str) -> None:
                 "permissionDecisionReason": reason,
             },
             "systemMessage": system_message,
-        },
-        sys.stdout,
+        }
     )
+
+
+def _deny(reason: str, system_message: str) -> None:
+    sys.stdout.write(_deny_json(reason, system_message))
 
 
 def _guard_path(guard_name: str, hooks_dir: Path) -> Path:
@@ -108,27 +145,28 @@ def _guard_path(guard_name: str, hooks_dir: Path) -> Path:
     return hooks_dir / f"{stem}.py"
 
 
-def run(
+def run_decision(
     guard_name: str,
     stdin_payload: str,
     timeout: float,
     hooks_dir: Path = HOOKS_DIR,
-) -> int:
-    """Run one guard under this dispatcher's own interpreter and print its
-    decision (or this dispatcher's own fail-closed deny) to stdout. Always
-    returns 0 -- the return value exists so a caller (or --self-test) can
-    still tell the difference by reading what was printed, not by exit code,
-    matching the guard contract this dispatcher itself is a layer over."""
+) -> Decision:
+    """Run one guard under this dispatcher's own interpreter and return what to
+    print (the guard's decision, or this dispatcher's own fail-closed deny)
+    together with the kind of outcome. Pure: prints nothing."""
     guard_path = _guard_path(guard_name, hooks_dir)
 
     if not guard_path.is_file():
-        _deny(
-            f"The '{guard_name}' PreToolUse guard is missing: {guard_path} does not exist. "
-            "No guard ran, so this tool call is refused rather than silently allowed through "
-            "an unenforced guard.",
-            f"Blocked: guard '{guard_name}' is missing.",
+        return Decision(
+            0,
+            KIND_MISSING,
+            _deny_json(
+                f"The '{guard_name}' PreToolUse guard is missing: {guard_path} does not exist. "
+                "No guard ran, so this tool call is refused rather than silently allowed through "
+                "an unenforced guard.",
+                f"Blocked: guard '{guard_name}' is missing.",
+            ),
         )
-        return 0
 
     try:
         proc = subprocess.run(
@@ -139,20 +177,26 @@ def run(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        _deny(
-            f"The '{guard_name}' guard did not finish within {timeout:g}s and was killed. "
-            "A hung guard cannot have an opinion, so this tool call is refused rather than "
-            "silently allowed through an unenforced guard.",
-            f"Blocked: guard '{guard_name}' timed out.",
+        return Decision(
+            0,
+            KIND_TIMEOUT,
+            _deny_json(
+                f"The '{guard_name}' guard did not finish within {timeout:g}s and was killed. "
+                "A hung guard cannot have an opinion, so this tool call is refused rather than "
+                "silently allowed through an unenforced guard.",
+                f"Blocked: guard '{guard_name}' timed out.",
+            ),
         )
-        return 0
     except OSError as exc:
-        _deny(
-            f"The '{guard_name}' guard could not be started under {sys.executable}: {exc}. "
-            "Refused rather than silently allowed through an unenforced guard.",
-            f"Blocked: guard '{guard_name}' could not be started.",
+        return Decision(
+            0,
+            KIND_START_FAILED,
+            _deny_json(
+                f"The '{guard_name}' guard could not be started under {sys.executable}: {exc}. "
+                "Refused rather than silently allowed through an unenforced guard.",
+                f"Blocked: guard '{guard_name}' could not be started.",
+            ),
         )
-        return 0
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
@@ -163,27 +207,59 @@ def run(
         reason += (
             ". A crashing guard cannot have an opinion, so this tool call is refused rather than silently allowed through an unenforced guard."
         )
-        _deny(reason, f"Blocked: guard '{guard_name}' crashed.")
-        return 0
+        return Decision(0, KIND_CRASHED, _deny_json(reason, f"Blocked: guard '{guard_name}' crashed."))
 
     out = proc.stdout
     if not out.strip():
-        return 0  # the guard's own "no opinion" -- stay silent, exactly as today
+        return Decision(0, KIND_PASSTHROUGH, "")  # the guard's own "no opinion" -- stay silent, exactly as today
 
+    snippet = out.strip()[:200]
     try:
-        json.loads(out)
+        parsed = json.loads(out)
     except json.JSONDecodeError:
-        snippet = out.strip()[:200]
-        _deny(
-            f"The '{guard_name}' guard exited 0 but printed something that is not valid JSON "
-            f"({snippet!r}). A decision that cannot be parsed cannot be trusted, so this tool "
-            "call is refused rather than silently allowed through an unenforced guard.",
-            f"Blocked: guard '{guard_name}' produced an unreadable decision.",
+        return Decision(
+            0,
+            KIND_NOT_JSON,
+            _deny_json(
+                f"The '{guard_name}' guard exited 0 but printed something that is not valid JSON "
+                f"({snippet!r}). A decision that cannot be parsed cannot be trusted, so this tool "
+                "call is refused rather than silently allowed through an unenforced guard.",
+                f"Blocked: guard '{guard_name}' produced an unreadable decision.",
+            ),
         )
-        return 0
 
-    sys.stdout.write(out)  # the guard's own decision, forwarded byte-for-byte
-    return 0
+    # A decision is a JSON OBJECT. Valid JSON of any other shape ([], 3, null)
+    # carries no decision, so forwarding it would silently allow the call.
+    if not isinstance(parsed, dict):
+        return Decision(
+            0,
+            KIND_NOT_JSON,
+            _deny_json(
+                f"The '{guard_name}' guard exited 0 but printed something that is not a JSON object "
+                f"({snippet!r}). A decision that cannot be read as an object cannot be trusted, so this tool "
+                "call is refused rather than silently allowed through an unenforced guard.",
+                f"Blocked: guard '{guard_name}' produced an unreadable decision.",
+            ),
+        )
+
+    # Deliberate: ANY object is forwarded, even one without hookSpecificOutput.
+    # What an object means is the host's call, not this dispatcher's.
+    return Decision(0, KIND_PASSTHROUGH, out)  # the guard's own decision, forwarded byte-for-byte
+
+
+def run(
+    guard_name: str,
+    stdin_payload: str,
+    timeout: float,
+    hooks_dir: Path = HOOKS_DIR,
+) -> int:
+    """Run one guard (see run_decision) and print the result to stdout. Always
+    returns 0 -- the return value exists so a caller can still tell the
+    difference by reading what was printed, not by exit code, matching the
+    guard contract this dispatcher itself is a layer over."""
+    decision = run_decision(guard_name, stdin_payload, timeout, hooks_dir)
+    sys.stdout.write(decision.stdout)
+    return decision.rc
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +290,10 @@ def _is_deny(out: str) -> bool:
         data = json.loads(out)
     except json.JSONDecodeError:
         return False
-    return data.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    if not isinstance(data, dict):
+        return False
+    hso = data.get("hookSpecificOutput", {})
+    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
 
 
 def self_test() -> bool:
@@ -223,50 +302,81 @@ def self_test() -> bool:
 
     ok = True
 
-    def check(label: str, condition: bool) -> None:
+    def check(label: str, condition: bool, d: Decision, expect_timeout: bool = False) -> None:
         nonlocal ok
         if condition:
             print(f"ok    {label}")
         else:
             print(f"FAIL  {label}")
+            if not expect_timeout and d.kind == KIND_TIMEOUT:
+                print("      cause: the dispatcher's own timeout deny (machine load?), not a behaviour bug")
+            print(f"      captured: kind={d.kind} stdout={d.stdout!r}")
             ok = False
 
-    def capture(guard_name: str, hooks_dir: Path, timeout: float = 3.0, stdin_payload: str = "{}") -> str:
-        buf = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = buf
-        try:
-            rc = run(guard_name, stdin_payload, timeout, hooks_dir=hooks_dir)
-        finally:
-            sys.stdout = old_stdout
-        assert rc == 0, "run() must always return 0, matching the guard contract"
-        return buf.getvalue()
+    def capture(guard_name: str, hooks_dir: Path, timeout: float = SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> Decision:
+        d = run_decision(guard_name, stdin_payload, timeout, hooks_dir=hooks_dir)
+        assert d.rc == 0, "run_decision() must always return rc 0, matching the guard contract"
+        return d
 
     with tempfile.TemporaryDirectory() as tmp:
         hooks_dir = Path(tmp)
 
-        out = capture("does-not-exist", hooks_dir)
-        check("a missing guard file denies", _is_deny(out) and "does-not-exist" in out)
+        d = capture("does-not-exist", hooks_dir)
+        check("a missing guard file denies", d.kind == KIND_MISSING and _is_deny(d.stdout) and "does-not-exist" in d.stdout, d)
 
         _write_guard(hooks_dir, "crashes", _FAKE_GUARD_CRASHES)
-        out = capture("crashes", hooks_dir)
-        check("a guard that exits non-zero denies, with its stderr in the reason", _is_deny(out) and "boom" in out)
+        d = capture("crashes", hooks_dir)
+        check(
+            "a guard that exits non-zero denies, with its stderr in the reason",
+            d.kind == KIND_CRASHED and _is_deny(d.stdout) and "boom" in d.stdout,
+            d,
+        )
 
         _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
-        out = capture("denies", hooks_dir)
-        check("a guard's own deny decision passes through unchanged", _is_deny(out) and "self-test guard says no" in out)
+        d = capture("denies", hooks_dir)
+        check(
+            "a guard's own deny decision passes through unchanged",
+            d.kind == KIND_PASSTHROUGH and _is_deny(d.stdout) and "self-test guard says no" in d.stdout,
+            d,
+        )
 
         _write_guard(hooks_dir, "silent", _FAKE_GUARD_SILENT)
-        out = capture("silent", hooks_dir)
-        check("a guard with no opinion stays silent (no output at all)", out == "")
+        d = capture("silent", hooks_dir)
+        check("a guard with no opinion stays silent (no output at all)", d.kind == KIND_PASSTHROUGH and d.stdout == "", d)
 
         _write_guard(hooks_dir, "hangs", _FAKE_GUARD_HANGS)
-        out = capture("hangs", hooks_dir, timeout=0.5)
-        check("a guard that does not finish in time denies", _is_deny(out) and "hangs" in out)
+        d = capture("hangs", hooks_dir, timeout=SELF_TEST_HANG_TIMEOUT_SECONDS)
+        check(
+            "a guard that does not finish in time gets the dispatcher's timeout deny",
+            d.kind == KIND_TIMEOUT and _is_deny(d.stdout) and "hangs" in d.stdout,
+            d,
+            expect_timeout=True,
+        )
 
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
-        out = capture("garbage", hooks_dir)
-        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)", _is_deny(out))
+        d = capture("garbage", hooks_dir)
+        check(
+            "a guard that exits 0 but prints unparseable output gets the not-valid-JSON deny", d.kind == KIND_NOT_JSON and _is_deny(d.stdout), d
+        )
+
+    # The print path: run() must write exactly run_decision()'s stdout (a run()
+    # that computed the decision and skipped the write would silently allow).
+    with tempfile.TemporaryDirectory() as tmp:
+        hooks_dir = Path(tmp)
+        _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
+        expected = run_decision("denies", "{}", SELF_TEST_BACKSTOP_SECONDS, hooks_dir=hooks_dir)
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            rc = run("denies", "{}", SELF_TEST_BACKSTOP_SECONDS, hooks_dir=hooks_dir)
+        finally:
+            sys.stdout = old_stdout
+        check(
+            "run() prints exactly the decision's stdout (the print path)",
+            rc == 0 and expected.stdout != "" and buf.getvalue() == expected.stdout,
+            Decision(rc, expected.kind, buf.getvalue()),
+        )
 
     # A crashing guard's own stderr is folded into the deny reason, which is
     # also the cheapest way to prove stdin genuinely reaches the guard: make
@@ -279,8 +389,8 @@ def self_test() -> bool:
             "echo_and_fail",
             "import sys\nsys.stderr.write('got:' + sys.stdin.read())\nsys.exit(1)\n",
         )
-        out = capture("echo_and_fail", hooks_dir, stdin_payload='{"marker": "xyz123"}')
-        check("stdin is genuinely forwarded to the guard, not just present", _is_deny(out) and "xyz123" in out)
+        d = capture("echo_and_fail", hooks_dir, stdin_payload='{"marker": "xyz123"}')
+        check("stdin is genuinely forwarded to the guard, not just present", d.kind == KIND_CRASHED and "xyz123" in d.stdout, d)
 
     print(f"\n{'PASS' if ok else 'FAIL'}: run_hook self-test")
     return ok
