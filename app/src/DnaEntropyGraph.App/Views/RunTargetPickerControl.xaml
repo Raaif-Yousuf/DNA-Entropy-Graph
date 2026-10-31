@@ -1,0 +1,22 @@
+<UserControl
+    x:Class="DnaEntropyGraph.App.Views.RunTargetPickerControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:DnaEntropyGraph.Presentation.ViewModels">
+
+    <!-- Where to run (issues #120, #173, #735): ONE control for Settings (the default) and New run, over the one RunTargetPickerViewModel singleton, so the two cannot disagree.
+         A choice that cannot work right now is greyed out and the reason is the line under the box. -->
+    <StackPanel Spacing="4">
+        <ComboBox x:Uid="RunTargetBox" ItemsSource="{x:Bind Picker.Options}" SelectedValuePath="Value" SelectedValue="{x:Bind Picker.SelectedTarget, Mode=TwoWay}">
+            <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:RunTargetOption">
+                    <!-- A choice that cannot work right now reads greyed out; the reason is the line under the box. Picking it is refused by RunTargetPickerViewModel (a {Binding} on the row's IsEnabled is not used: check_app_wiring cannot see the item type). -->
+                    <ContentControl Content="{x:Bind Label}" IsEnabled="{x:Bind IsAvailable, Mode=OneWay}" />
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Text="{x:Bind Picker.ThisPcReason, Mode=OneWay}" TextWrapping="Wrap" />
+        <TextBlock Text="{x:Bind Picker.Note, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+        <TextBlock Text="{x:Bind Picker.SaveStatus, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+    </StackPanel>
+</UserControl>

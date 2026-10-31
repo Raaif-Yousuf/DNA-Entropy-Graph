@@ -253,7 +253,10 @@ left as unnecessary caution.
 
 ## 9. The New run page (issue #63)
 
-`Views/NewRunPage.xaml` binds `NewRunViewModel` only; its code-behind forwards the two drag events to
+`Views/NewRunPage.xaml` binds `NewRunViewModel` only (plus the shared `RunTargetPickerControl`, issue #735: one `UserControl` over the
+`RunTargetPickerViewModel` singleton, used by Settings and New run so the Where to run box cannot differ between them; it is shown when
+`HasRunTarget`). `ReceiveNavigationParameterCommand`, the "page is showing" call, also runs `RunTarget.RefreshAsync()` so This PC is greyed out with its
+reason where it cannot run the model, without Settings having been opened first. Its code-behind forwards the two drag events to
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
