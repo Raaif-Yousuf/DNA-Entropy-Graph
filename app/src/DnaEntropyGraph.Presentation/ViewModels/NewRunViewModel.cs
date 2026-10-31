@@ -93,6 +93,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
     public RunTargetPickerViewModel? RunTarget { get; }
 
+    /// <summary>Whether the page has a Where to run box to show (issue #735).</summary>
+    public bool HasRunTarget => RunTarget is not null;
+
     /// <summary>The Save to folder (issue #1037), shared with Settings; null in a host that has none, which means the default folder.</summary>
     public OutputFolderViewModel? OutputFolder { get; }
 
@@ -752,6 +755,18 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
+    private static async Task LookAtThisPcAsync(RunTargetPickerViewModel picker)
+    {
+        try
+        {
+            await picker.RefreshAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Nothing passes a token here; if one ever does, a cancelled look simply leaves the last answer.
+        }
+    }
+
     /// <summary>
     /// What the page forwards from its navigation parameter (issue #108): files handed over by "Open with" in Explorer arrive as
     /// <see cref="DroppedItems"/> and are added like a drop; any other parameter (none, the usual case) is ignored.
@@ -763,6 +778,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         _intake?.Attach(this);
         // The page is showing (again): a cap changed in Settings, or spend booked since, must show now (issue #109).
         _ = RefreshEstimateAsync();
+
+        // Issue #735: look at this PC again each time the page shows, so the Where to run box greys out This PC (with its reason) where it cannot run the model.
+        // A failed check is shown as a reason, not thrown; only cancellation can surface, and it is ignored here so no faulted task is left unobserved.
+        // It resumes on this (UI) context because the picker's properties are bound.
+        if (RunTarget is not null)
+        {
+            _ = LookAtThisPcAsync(RunTarget);
+        }
 
         // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
         if (parameter is NavigationArrival arrival)
