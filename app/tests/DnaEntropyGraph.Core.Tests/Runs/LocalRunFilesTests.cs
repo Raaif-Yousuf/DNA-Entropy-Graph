@@ -67,9 +67,119 @@ public sealed class LocalRunFilesTests : IDisposable
 
         var result = Make().DeleteOutputFolder(Run(folder, outputFolderOption: driveRoot));
 
-        result.Status.ShouldBe(LocalDeleteStatus.Refused);
+        // Issue #954: refused for its own reason, so the History can say why (a drive root) instead of a bare "refused".
+        result.Status.ShouldBe(LocalDeleteStatus.DriveRootRefused);
         Directory.Exists(folder).ShouldBeTrue();
         File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+        Make().DeleteUnmarkedOutputFolder(Run(folder, outputFolderOption: driveRoot)).Status.ShouldBe(LocalDeleteStatus.DriveRootRefused, "a confirmation never unlocks a drive root");
+        Make().PlanDelete(Run(folder, outputFolderOption: driveRoot)).ShouldBe(LocalDeletePlan.DriveRoot);
+        Make().OutputRootIsDriveRoot(Run(folder, outputFolderOption: driveRoot)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_drive_root_output_folder_is_named_as_the_reason_only_when_the_folder_is_on_that_drive()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "deg-elsewhere-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            var run = Run(outside, outputFolderOption: Path.GetPathRoot(outside));
+
+            Make().DeleteOutputFolder(run).Status.ShouldBe(LocalDeleteStatus.DriveRootRefused);
+            Make().OutputRootIsDriveRoot(run).ShouldBeTrue();
+
+            var elsewhereDrive = Run(Path.Combine(_base, "x"), outputFolderOption: Path.Combine(_base, "Lab"));
+            Make().OutputRootIsDriveRoot(elsewhereDrive).ShouldBeFalse();
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_folder_with_the_runs_own_marker_is_deleted_and_the_marker_goes_with_it_without_being_counted()
+    {
+        var folder = MakeRunFolder();
+        Make().PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.Proceed);
+
+        var result = Make().DeleteOutputFolder(Run(folder));
+
+        result.ShouldBe(new LocalDeleteResult(LocalDeleteStatus.Deleted, FilesDeleted: 1, FilesRemaining: 0));
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_marker_naming_another_job_is_refused_with_nothing_deleted_and_asks_nothing()
+    {
+        var folder = MakeRunFolder(marker: "some-other-job");
+
+        Make().PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.OtherRunsFolder);
+        Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.OtherRunsFolder);
+        Make().DeleteUnmarkedOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.OtherRunsFolder, "a confirmation never unlocks another run's folder");
+
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+        File.Exists(Path.Combine(folder, RunFolderMarker.FileName)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_folder_with_no_marker_is_not_deleted_silently_it_needs_the_users_confirmation()
+    {
+        var folder = MakeRunFolder(marker: null);
+
+        Make().PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.AskFirst);
+        Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.NeedsConfirmation);
+
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void After_the_user_confirms_a_folder_with_no_marker_is_deleted()
+    {
+        var folder = MakeRunFolder(marker: null);
+
+        var result = Make().DeleteUnmarkedOutputFolder(Run(folder));
+
+        result.Status.ShouldBe(LocalDeleteStatus.Deleted);
+        Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_damaged_row_naming_Documents_inside_the_users_profile_never_deletes_documents_without_the_confirmation()
+    {
+        // Issue #934: OutputFolder = the profile, OutputDir = Documents inside it. Containment (taken from the same row) passes; only the marker can tell.
+        var profile = Path.Combine(_base, "bob");
+        var documents = Path.Combine(profile, "Documents");
+        Directory.CreateDirectory(documents);
+        File.WriteAllText(Path.Combine(documents, "thesis.docx"), "keep");
+        var run = Run(documents, outputFolderOption: profile);
+
+        Make().PlanDelete(run).ShouldBe(LocalDeletePlan.AskFirst);
+        Make().DeleteOutputFolder(run).Status.ShouldBe(LocalDeleteStatus.NeedsConfirmation);
+
+        File.ReadAllText(Path.Combine(documents, "thesis.docx")).ShouldBe("keep");
+        Directory.Exists(documents).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_partial_delete_keeps_the_marker_so_the_retry_does_not_ask_again()
+    {
+        var folder = MakeRunFolder();
+        using var held = new FileStream(Path.Combine(folder, "a.bedgraph"), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Make().DeleteOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.InUse);
+
+        File.Exists(Path.Combine(folder, RunFolderMarker.FileName)).ShouldBeTrue();
+        Make().PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.Proceed);
+    }
+
+    [Theory]
+    [InlineData(LocalDeletePlan.Proceed)]
+    public void Planning_a_missing_or_blank_folder_proceeds_so_the_delete_itself_reports_it(LocalDeletePlan expected)
+    {
+        Make().PlanDelete(Run(Path.Combine(_root, "gone"))).ShouldBe(expected);
+        Make().PlanDelete(Run(null)).ShouldBe(expected);
+        Make().PlanDelete(new RunRecord("legacy", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: MakeRunFolder("proto"), Imported: true)).ShouldBe(expected);
     }
 
     [Fact]
@@ -80,11 +190,17 @@ public sealed class LocalRunFilesTests : IDisposable
         Make().DeleteOutputFolder(Run(folder, outputFolderOption: _root)).Status.ShouldNotBe(LocalDeleteStatus.Refused);
         Directory.Exists(folder).ShouldBeFalse();
     }
-    private string MakeRunFolder(string name = "sample")
+    // The run's own folder as the app makes it: the marker names job-1 (the id Run() gives its row) unless a test says otherwise.
+    private string MakeRunFolder(string name = "sample", string? marker = "job-1")
     {
         var folder = Path.Combine(_root, name);
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, "a.bedgraph"), "x");
+        if (marker is not null)
+        {
+            File.WriteAllText(Path.Combine(folder, RunFolderMarker.FileName), marker + "\n");
+        }
+
         return folder;
     }
 
@@ -307,6 +423,7 @@ public sealed class LocalRunFilesTests : IDisposable
         var custom = Path.Combine(_base, "Lab");
         var folder = Path.Combine(custom, "sample");
         Directory.CreateDirectory(folder);
+        RunFolderMarker.Write(folder, "job-1");
 
         Make().DeleteOutputFolder(Run(folder, outputFolderOption: custom)).Status.ShouldBe(LocalDeleteStatus.Deleted);
     }

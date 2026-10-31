@@ -40,6 +40,9 @@ public enum CloudResultsStatus
 
     /// <summary>The results bucket was not found, so nothing was deleted and the run row is unchanged.</summary>
     StorageNotFound,
+
+    /// <summary>The run was saved straight to a drive (<c>D:\</c>), which a re-download through the History row never writes into (issue #954). Nothing was written.</summary>
+    DriveRootRefused,
 }
 
 /// <summary>
@@ -194,7 +197,8 @@ public sealed class RunCloudResults : IRunCloudResults
             var folder = await ResolveFolderAsync(run, cancellationToken).ConfigureAwait(false);
             if (folder is null)
             {
-                return CloudResultsStatus.Refused;
+                // Issue #954: a drive root is the one refusal the user can do something about, so it says so.
+                return RunOutputRoot.IsDriveRootOutput(run, _defaultOutputParent) ? CloudResultsStatus.DriveRootRefused : CloudResultsStatus.Refused;
             }
 
             StalePartSweeper.Sweep(folder, result.Inputs.SelectMany(i => i.Files).Select(f => RunTransfer.ResultSubDirectory(f.Path)));
@@ -306,7 +310,8 @@ public sealed class RunCloudResults : IRunCloudResults
         var root = RunOutputRoot.Resolve(run, _defaultOutputParent);
         if (string.IsNullOrWhiteSpace(run.OutputDir))
         {
-            var created = RunOutputFolders.CreateUnique(root, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name);
+            // Issue #934: a folder made here is the run's own, so it gets the marker a later delete requires.
+            var created = RunOutputFolders.CreateUnique(root, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, jobId: run.JobId);
             await _runs.UpsertAsync(run with { OutputDir = created }, cancellationToken).ConfigureAwait(false);
             return Path.TrimEndingDirectorySeparator(Path.GetFullPath(created));
         }

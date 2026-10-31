@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
@@ -62,7 +63,9 @@ public static class RunOutputFolders
     /// Creates and returns <c>parent\name</c>, or <c>parent\name_2</c>, <c>_3</c> and so on when
     /// that exists. <paramref name="name"/> is made safe as a single folder name first.
     /// </summary>
-    public static string CreateUnique(string parent, string name, Action<string>? removeStaging = null)
+    /// <param name="jobId">The run this folder is for (issue #934): when given, the folder gets its <see cref="RunFolderMarker"/> before it is returned, which a later recursive
+    /// delete requires. A marker that cannot be written fails like any other write into the folder (the empty folder is removed again).</param>
+    public static string CreateUnique(string parent, string name, Action<string>? removeStaging = null, string? jobId = null)
     {
         var safe = Sanitize(name);
         Directory.CreateDirectory(parent);
@@ -71,8 +74,27 @@ public static class RunOutputFolders
             var candidate = Path.Combine(parent, n == 1 ? safe : $"{safe}_{n}");
             if (TryClaim(parent, candidate, removeStaging ?? Directory.Delete))
             {
+                if (!string.IsNullOrWhiteSpace(jobId))
+                {
+                    WriteMarkerOrRemove(candidate, jobId);
+                }
+
                 return candidate;
             }
+        }
+    }
+
+    private static void WriteMarkerOrRemove(string folder, string jobId)
+    {
+        try
+        {
+            RunFolderMarker.Write(folder, jobId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The folder is ours and still empty: leave no trace of a run that could not start (best effort), then fail like any unwritable folder.
+            RunFolderMarker.TryRemoveEmptyFolder(folder);
+            throw;
         }
     }
 

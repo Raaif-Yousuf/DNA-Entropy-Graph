@@ -103,6 +103,9 @@ public sealed partial class RunListItem : ObservableObject
     /// <summary>Why Delete files on this PC is off for an imported run (its tooltip); null when it is not off for that reason.</summary>
     public string? DeleteLocalHint { get; init; }
 
+    /// <summary>Issue #954: why a re-download from History will not write into this run's folder (it was saved straight to a drive), with the one action; null when it is not that.</summary>
+    public string? RedownloadHint { get; init; }
+
     public bool CanRedownload { get; }
 
     public bool CanDeleteCloud { get; }

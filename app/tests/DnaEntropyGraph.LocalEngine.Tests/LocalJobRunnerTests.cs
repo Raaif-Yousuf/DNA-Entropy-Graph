@@ -232,7 +232,18 @@ public sealed class LocalJobRunnerTests : IDisposable
         var result = await Runner(HappyWorker(corruptSha: new string('0', 64))).RunAsync(Request(), CancellationToken.None);
 
         result.ErrorCode.ShouldBe(RunErrorCodes.DownloadCorrupt);
-        Directory.EnumerateFiles(_runs.Latest(JobId).OutputDir!, "*", SearchOption.AllDirectories).ShouldBeEmpty();
+        Directory.EnumerateFiles(_runs.Latest(JobId).OutputDir!, "*", SearchOption.AllDirectories).Select(f => Path.GetFileName(f)).ShouldBe([RunFolderMarker.FileName], "only the app's own marker (issue #934), no result file");
+    }
+
+    [Fact]
+    public async Task The_run_folder_the_app_creates_carries_the_marker_naming_the_job_and_nothing_else_is_added_to_it()
+    {
+        // Issue #934: the one thing a later recursive delete of this folder requires.
+        await Runner(HappyWorker()).RunAsync(Request(), CancellationToken.None);
+
+        var folder = _runs.Latest(JobId).OutputDir!;
+        File.ReadAllText(Path.Combine(folder, RunFolderMarker.FileName)).Trim().ShouldBe(JobId);
+        RunFolderMarker.Check(folder, JobId).ShouldBe(RunFolderMarkerState.Matches);
     }
 
     [Theory]
@@ -612,12 +623,38 @@ public sealed class LocalJobRunnerTests : IDisposable
         WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
         var outputDir = Path.Combine(OutputParent, "locus");
         Directory.CreateDirectory(outputDir);
+        RunFolderMarker.Write(outputDir, "old-2");
         _runs.Seed(new RunRecord("old-2", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(OutputParent)));
 
         await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
 
         _runs.Latest("old-2").Phase.ShouldBe(JobPhase.Completed);
         File.ReadAllText(Path.Combine(outputDir, "locus", "locus.entropy.bedgraph")).ShouldBe("locus 0 12 1.5\n");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("some-other-job")]
+    public async Task On_launch_a_finished_row_whose_folder_has_no_marker_for_this_job_copies_nothing_there_and_is_failed(string? marker)
+    {
+        // Issue #934: the folder is inside the output root (the row says so) but nothing proves the app made it for this run.
+        var jobDir = Path.Combine(RunsDirectory, "old-6");
+        var (rel, sha, bytes) = WriteOutput(jobDir, "output/locus/locus.entropy.bedgraph", "locus 0 12 1.5\n");
+        WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
+        var outputDir = Path.Combine(OutputParent, "Documents");
+        Directory.CreateDirectory(outputDir);
+        if (marker is not null)
+        {
+            RunFolderMarker.Write(outputDir, marker);
+        }
+
+        _runs.Seed(new RunRecord("old-6", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(OutputParent)));
+
+        await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);
+
+        Directory.Exists(Path.Combine(outputDir, "locus")).ShouldBeFalse();
+        _runs.Latest("old-6").Phase.ShouldBe(JobPhase.Failed);
+        _runs.Latest("old-6").ErrorCode.ShouldBe(RunErrorCodes.LocalRunInterrupted);
     }
 
     private static string OptionsFor(string outputFolder)
@@ -632,6 +669,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         WriteResult(jobDir, "done", [new { id = "in1", status = "done", files = new[] { new { path = rel, sha256 = sha, bytes } } }]);
         var outputDir = Path.Combine(OutputParent, "locus");
         Directory.CreateDirectory(outputDir);
+        RunFolderMarker.Write(outputDir, "old-5");
         _runs.Seed(new RunRecord("old-5", JobPhase.Running, DateTimeOffset.UtcNow.AddMinutes(-5), Target: RunTargets.LocalRecord, OutputDir: outputDir, OptionsJson: OptionsFor(Path.GetPathRoot(outputDir)!)));
 
         await Runner(HappyWorker()).ReconcileInterruptedAsync(CancellationToken.None);

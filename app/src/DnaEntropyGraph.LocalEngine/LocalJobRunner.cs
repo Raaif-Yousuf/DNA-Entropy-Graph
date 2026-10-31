@@ -116,7 +116,8 @@ public sealed class LocalJobRunner
         {
             runFolder = RunOutputFolders.CreateUnique(
                 request.OutputFolder,
-                RunOutputFolders.RunFolderName(request.Options, request.Input, Clock.GetLocalNow().DateTime));
+                RunOutputFolders.RunFolderName(request.Options, request.Input, Clock.GetLocalNow().DateTime),
+                jobId: request.JobId); // Issue #934: the marker a later recursive delete requires.
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -251,7 +252,10 @@ public sealed class LocalJobRunner
             && File.Exists(Path.Combine(jobDir, "result.json"))
             && !string.IsNullOrEmpty(row.OutputDir)
             && Directory.Exists(row.OutputDir)
-            && OutputDirIsUnderOutputRoot(row);
+            && OutputDirIsUnderOutputRoot(row)
+            // Issue #934: containment is read from the same row as the folder, so a damaged row can name both. The finish step writes only into a folder
+            // that carries this run's marker (DECISION, agent-made, reversible: a run interrupted before markers existed is failed as interrupted, its files stay in the job folder).
+            && RunFolderMarker.Check(row.OutputDir, row.JobId) == RunFolderMarkerState.Matches;
         if (finished)
         {
             await FinishAsync(row.JobId, jobDir, row.OutputDir!, exitCode: 0).ConfigureAwait(false);
@@ -618,9 +622,9 @@ public sealed class LocalJobRunner
     {
         try
         {
-            if (Directory.Exists(runFolder) && !Directory.EnumerateFileSystemEntries(runFolder).Any())
+            // The app's own marker does not make the folder "not empty" (issue #934); only that marker and the empty folder are removed.
+            if (RunFolderMarker.TryRemoveEmptyFolder(runFolder))
             {
-                Directory.Delete(runFolder, recursive: false);
                 await UpdateRowAsync(jobId, row => row with { OutputDir = null }).ConfigureAwait(false);
             }
         }
