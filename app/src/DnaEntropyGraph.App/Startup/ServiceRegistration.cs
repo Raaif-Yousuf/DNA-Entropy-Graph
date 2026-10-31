@@ -486,6 +486,8 @@ public static class ServiceRegistration
         services.AddTransient<SpendCapSettingsViewModel>();
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
         services.AddSingleton<RunTargetPickerViewModel>();
+        // Issue #1037: one Save to folder for Settings and New run, so the folder picked in either is the one the next run uses.
+        services.AddSingleton<OutputFolderViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();

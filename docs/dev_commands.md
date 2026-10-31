@@ -47,13 +47,13 @@ worker\.venv\Scripts\python.exe -m dna_entropy --help
 runs rather than printing a skip notice. Run via `uvx` (not installed into
 the dev venv itself — nothing in `worker/pyproject.toml`'s own dependency
 groups pulls `ruff` in, on purpose, so the venv stays exactly what the
-package itself needs):
+package itself needs). **One pinned version (#1027):** ruff is `0.17.3` everywhere, named in `scripts/ruff.toml` (`required-version`, which ruff itself enforces) and repeated as `uvx ruff@0.17.3` in `premerge.py`, `ci-docs.yml`, `ci-worker.yml`, `worker/pyproject.toml` and these docs; `python scripts\check_ruff_pin.py` (auto-run by premerge --fast and CI) fails when any site disagrees or runs ruff through `uvx` without a version. **The one command a lane uses is `uvx ruff@0.17.3 ...` as below, never a call with no `@version` (neither `uvx` nor `uv tool run`).** To bump, change every site in one commit:
 
 ```powershell
-uvx ruff check worker
-uvx ruff format --check worker
-uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
-uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
+uvx ruff@0.17.3 check worker
+uvx ruff@0.17.3 format --check worker
+uvx ruff@0.17.3 check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff@0.17.3 format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -185,6 +185,12 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
 - **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
   both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
+- **Dotnet gates run with node reuse off** (#1070). Each gate's child env defaults `MSBUILDDISABLENODEREUSE=1`,
+  `DOTNET_CLI_USE_MSBUILD_SERVER=0` and `UseSharedCompilation=false` (a value you set wins), the same definition
+  `heavy.py` uses (`scripts/dotnet_env.py`); `heavy.py` alone did not cover it because premerge.py is a python command.
+  MEASURED 2026-10-31: with reuse on, `/nodemode:1` workers were still alive in the gate's kill-on-close job after the
+  build exited; with the defaults none were. THEORY (unverified): a gate job closing killed such a node under another
+  premerge's build (MSB4166 x3-4 nodes, twice); not reproduced, the defaults remove the precondition.
 - **Pytest gates get a private `--basetemp`** (a short `%TEMP%\pm-*` dir premerge removes when all gates passed, never under
   `--log-dir`, whose path is only recorded in `<log-dir>basetemp.txt`; #469: a deep basetemp made `git push` fail inside the
   temp bare repos of `test_land_pr`, MEASURED 2026-10-02: reproduced with a plain deep path, "remote unpack failed: unable to create temporary object directory"; `core.longpaths=true` on the bare repo also cures it, but a short basetemp fixes every test at once) and
@@ -422,7 +428,8 @@ python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behavio
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
 python scripts\check_actions_pinned.py       # every workflow `uses:` is a 40-char commit SHA with a `# vX.Y.Z` comment; local and docker:// are exempt (#485). Dependabot's github-actions entry bumps SHA and comment together
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
-python scripts\check_control_bytes.py        # no stray control byte (a mangled backslash escape, e.g. 0x0b) in any tracked or untracked text file; ESC allowed, binary by git's NUL rule or `-text` skipped; untracked files over 2 MB skipped and untracked findings labelled `(untracked file)`; named file:line:column. land_wt.py uses the same scanner, allowlist and `-text` skip (attributes read from the landing commit) at LAND time (#1016). Auto-run by premerge --fast and ci-docs.yml's glob loop
+python scripts\check_ruff_pin.py            # one ruff version everywhere (#1027): scripts/ruff.toml and worker/pyproject.toml `required-version` plus every pinned `uvx` ruff call in premerge.py, the workflows and these docs must agree; a `uvx` ruff call with no version fails; a scanner that finds fewer pins than expected fails. Auto-run by premerge --fast and ci-docs.yml's glob loop
+python scripts\check_control_bytes.py        # no stray control byte (a mangled backslash escape, e.g. 0x0b) in any tracked or untracked text file; ESC allowed, binary by git's NUL rule or `-text` skipped; untracked files over 2 MB skipped and untracked findings labelled `(untracked file)`; named file:line:column. land_wt.py uses the same scanner, allowlist and `-text` skip (attributes read from the landing commit) at LAND time (#1016); the landing-commit attribute read needs git 2.40 or later, and an older git fails land_wt with a `LandError` naming that (exit 1), not "not a git repository" (#1028). Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_doc_headings.py         # every docs/**/*.md: top-level numbered `## N.` headings are strictly ascending with no number reused (fenced code and `###` ignored); a failure names file:line and both headings (#883). Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
@@ -437,11 +444,13 @@ python scripts\<any check_*.py> --self-test   # every one of them supports this
 ```
 
 `check_pyright.py` is the static-type gate for the Python side (pyright, MIT, dev-only: nothing ships it, so no
-THIRD-PARTY-NOTICES change). It is a RATCHET, not a zero gate. Measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode`
-"basic", config in `pyrightconfig.json`): 345 errors in 238 files at the start; `worker/src` was taken to 0 and the rest
-is debt in the test suites and `scripts/tests`, recorded per file in `scripts/pyright_baseline.json`:
+THIRD-PARTY-NOTICES change). History: measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode` "basic", config in
+`pyrightconfig.json`), the first run found 345 errors in 238 files, so the gate was built as a per-file ratchet with the
+debt in the test suites and `scripts/tests` recorded in `scripts/pyright_baseline.json`. That debt is paid (#877):
+`scripts/pyright_baseline.json` now has an empty `files` object, so the gate is zero errors everywhere. The ratchet
+machinery stays, so the baseline file and its semantics are still enforced:
 
-- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0). Fix the error. Never raise the baseline.
+- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0, which today is every file). Fix the error. Never raise the baseline.
 - `STALE`: a file has fewer errors than its baseline, or its entry names a deleted file. Run `--lower` and commit the
   smaller baseline, otherwise the slack lets a new error in unseen (the same self-expiring shape as the unused-fields allowlist).
 - `ZERO`: `worker/src` may not be listed in the baseline at all.
@@ -481,12 +490,12 @@ uv run --with pytest --with pytest-xdist --with pytest-timeout --with pyyaml pyt
 A hung test now fails after 300 s with every thread's traceback (pytest-timeout, #840), instead of stalling the gate until its 1800 s bound.
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
-worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
+worker's family). Run `uvx ruff@0.17.3 check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
 **Parallel (#959):** `scripts/tests` runs under pytest-xdist (MIT, a dev-only `uv run --with`, like pyyaml, so not in `THIRD-PARTY-NOTICES.md`, which lists the `[dev]` extra only). `premerge.py` passes `-n scripts_test_workers()` (half the CPUs, 2 to 8, so 8 on a 16-core box; the log shows `created: N/N workers`), `ci-docs.yml` passes `-n auto`. MEASURED 2026-10-29: serial `1874 passed, 19 skipped in 1600.06s` vs `-n 8` `1879 passed, 19 skipped in 549.17s` under the same agent load. `--basetemp` becomes per-worker (`popen-gwN`). To debug one test, run it serially without `-n`. Running in parallel exposed a landed-PR lock race in the old O_EXCL `premerge_stamp` lock (PermissionError on a delete-pending lock); it is superseded by the OS byte-range lock of `fix/landed-prs-record-race`.
-**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+**Format for `scripts/`:** `uvx ruff@0.17.3 format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
 (`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
-`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
-preview is `uvx ruff format --diff scripts`.
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff@0.17.3 format scripts`; the
+preview is `uvx ruff@0.17.3 format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
@@ -517,6 +526,17 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_agent_dispatch_in_worktree.p
 worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py --self-test
 worker\.venv\Scripts\python.exe scripts\hooks\gcloud_read_only.py --self-test
 ```
+
+The `run_hook.py` self-test gives its fake guards (which end on their own) a 120 s backstop
+instead of a tight deadline, so machine load cannot make a forwarding or passthrough check
+fail; only the "hangs" check uses a short timeout, and it asserts the dispatcher's own
+timeout deny. A failed check prints what it captured and says so when the cause was that
+timeout deny (#1055).
+
+The dispatcher forwards a guard's stdout only when it is a JSON object (or empty, the
+guard's own "no opinion"). Any other output, unparseable text or valid JSON that is not an
+object such as `[]`, `3` or `null`, is denied (#1055); before this, non-object JSON passed
+through as if it were a decision.
 
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
 what I asked for", which is the question you actually have when a command is denied.

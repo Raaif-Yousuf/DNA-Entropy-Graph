@@ -9,6 +9,7 @@ record, like every other input.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from ..redact import describe_len, fingerprint
@@ -37,7 +38,7 @@ class FastaRecordRaw:
     seq: str  # joined sequence lines, raw (not yet uppercased/validated)
 
 
-def read_fasta(path: str) -> tuple[list[FastaRecordRaw], list[str]]:
+def read_fasta(path: str | os.PathLike[str]) -> tuple[list[FastaRecordRaw], list[str]]:
     """Return ``(records, notices)`` for EVERY record in ``path``.
 
     A record whose header line is followed by no sequence lines at all (empty after

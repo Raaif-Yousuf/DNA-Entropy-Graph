@@ -1,5 +1,6 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
@@ -102,6 +103,55 @@ public sealed class ResultsViewModelTests : IDisposable
         var vm = Make(reader);
         await vm.LoadAsync(jobId, TestContext.Current.CancellationToken);
         return vm;
+    }
+
+    [Theory]
+    [InlineData(JobPhase.Completed, RunErrorCodes.ChangedFilesKeptAside)]
+    [InlineData(JobPhase.Completed, RunErrorCodes.LifecycleUnverified)]
+    [InlineData(JobPhase.Failed, RunErrorCodes.WorkerFailed)]
+    [InlineData(JobPhase.Failed, RunErrorCodes.DownloadFailed)]
+    public async Task Issue_929_a_run_that_renamed_files_aside_shows_the_count_and_the_open_folder_button_whatever_its_code(JobPhase phase, string code)
+    {
+        _strings.GetString(RunsCopy.KeptAsideMany).Returns("{0} files kept under new names");
+        var folder = MakeRunFolder("aside", SummaryText("aside", "1.0000", "1.0000"));
+        _rows = [Row("aside", folder) with { Phase = phase, ErrorCode = code, ErrorDetail = KeptAsideDetail.Append("diagnostics", 3) }];
+
+        var vm = await Loaded("aside");
+
+        vm.IsKeptAsideVisible.ShouldBeTrue();
+        vm.KeptAsideText.ShouldBe("3 files kept under new names");
+        vm.OpenFolderCommand.CanExecute(null).ShouldBeTrue();
+        vm.OpenFolderCommand.Execute(null);
+        _launcher.Received(1).OpenFolder(folder);
+    }
+
+    [Fact]
+    public async Task Issue_929_a_run_whose_folder_is_gone_shows_its_folder_notice_and_no_line_over_a_dead_button()
+    {
+        _strings.GetString(RunsCopy.KeptAsideOne).Returns("one file kept");
+        _rows = [Row("gone", Path.Combine(_base, "no-such-folder")) with { ErrorDetail = KeptAsideDetail.Append(null, 1) }];
+
+        var vm = await Loaded("gone");
+
+        vm.IsNoticeVisible.ShouldBeTrue("the page already says the folder is missing");
+        vm.IsKeptAsideVisible.ShouldBeFalse();
+        vm.OpenFolderCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Issue_929_a_run_with_no_renamed_file_shows_no_line_and_the_line_does_not_outlive_its_run()
+    {
+        _strings.GetString(RunsCopy.KeptAsideOne).Returns("one file kept");
+        var folder = MakeRunFolder("plain", SummaryText("plain", "1.0000", "1.0000"));
+        _rows = [Row("plain", folder), Row("aside", folder) with { ErrorDetail = KeptAsideDetail.Append(null, 1) }];
+
+        var vm = Make();
+        await vm.LoadAsync("aside", TestContext.Current.CancellationToken);
+        vm.KeptAsideText.ShouldBe("one file kept");
+        await vm.LoadAsync("plain", TestContext.Current.CancellationToken);
+
+        vm.IsKeptAsideVisible.ShouldBeFalse();
+        vm.KeptAsideText.ShouldBe(string.Empty);
     }
 
     [Fact]

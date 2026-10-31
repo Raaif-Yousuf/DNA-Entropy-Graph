@@ -12,6 +12,8 @@ public sealed partial class SettingsPage : Page
     public RunDefaultsSettingsViewModel RunDefaults { get; }
     public ExternalViewersSettingsViewModel ExternalViewers { get; }
 
+    public OutputFolderViewModel OutputFolder { get; }
+
     public FilesSettingsViewModel Files { get; }
 
     public NotificationsSettingsViewModel Notifications { get; }
@@ -44,6 +46,7 @@ public sealed partial class SettingsPage : Page
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();
         ViewModel = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsViewModel>();
         RunDefaults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<RunDefaultsSettingsViewModel>();
+        OutputFolder = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<OutputFolderViewModel>();
         Files = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FilesSettingsViewModel>();
         Notifications = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<NotificationsSettingsViewModel>();
         FileAssociation = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<FileAssociationSettingsViewModel>();

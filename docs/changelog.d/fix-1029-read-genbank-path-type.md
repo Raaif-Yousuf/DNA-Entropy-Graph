@@ -1,0 +1,1 @@
+- worker readers: `read_genbank`, `read_fasta`, `read_embl`, `read_gff3`, `read_snapgene`, `detect_kind` and `read_text` now declare `str | os.PathLike[str]` instead of `str`, matching what callers pass; the 16 `str(path)` wrappers in `test_genbank.py` are gone (#1029).

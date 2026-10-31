@@ -68,6 +68,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import posixpath
 import subprocess
 import sys
@@ -75,6 +76,8 @@ import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotnet_env import dotnet_env  # the one dotnet env definition (#1070); the script's own folder is on sys.path when run by path
 
 ALLOWED_LICENSES: frozenset[str] = frozenset(
     {
@@ -241,11 +244,13 @@ class NoticesGenerationError(RuntimeError):
 
 def _dotnet_list_packages(csproj: Path) -> list[tuple[str, str]]:
     """Return [(name, resolvedVersion), ...] for one project's direct + transitive packages."""
+    argv = ["dotnet", "list", str(csproj), "package", "--include-transitive", "--format", "json"]
     proc = subprocess.run(
-        ["dotnet", "list", str(csproj), "package", "--include-transitive", "--format", "json"],
+        argv,
         capture_output=True,
         text=True,
         timeout=120,
+        env=dotnet_env(argv, dict(os.environ)),
     )
     if proc.returncode != 0:
         raise NoticesGenerationError(f"'dotnet list package' failed for {csproj}: {proc.stdout}\n{proc.stderr}")
