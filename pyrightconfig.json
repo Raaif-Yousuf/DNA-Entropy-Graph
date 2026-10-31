@@ -2,7 +2,7 @@
   "venvPath": "worker",
   "venv": ".venv",
   "include": ["worker/src", "worker/tests", "scripts"],
-  "extraPaths": ["worker/src", "scripts"],
+  "extraPaths": ["worker/src", "scripts", "scripts/hooks"],
   "exclude": ["**/.venv", "**/node_modules", "app", ".claude/worktrees"],
   "pythonVersion": "3.12",
   "pythonPlatform": "All",

@@ -208,6 +208,7 @@ def test_everything_allowed_in_linked_worktree(repos, command):
 def test_deny_message_names_the_worktree_alternative(repos):
     primary, _ = repos
     reason = hook.verdict("git switch -c x origin/main", _in(primary))
+    assert reason is not None
     assert "git rev-parse --show-toplevel" in reason
     assert "git worktree add" in reason
 
@@ -300,6 +301,7 @@ def test_end_to_end_deny_and_allow_for_both_tools(repos, tool):
     deny = {"tool_name": tool, "tool_input": {"command": "git switch -c x origin/main"}, "cwd": _in(primary)}
     code, out = _run(deny)
     assert code == 0
+    assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     allow = {"tool_name": tool, "tool_input": {"command": "git merge --ff-only origin/main"}, "cwd": _in(primary)}
@@ -372,7 +374,9 @@ def test_missing_sibling_module_fails_open_instead_of_crashing(tmp_path):
 
 def test_deny_message_says_switching_to_main_recovers(repos):
     primary, _ = repos
-    assert "git switch main" in hook.verdict("git switch -c x", _in(primary))
+    reason = hook.verdict("git switch -c x", _in(primary))
+    assert reason is not None
+    assert "git switch main" in reason
 
 
 def test_classify_is_cached_per_directory_and_uses_a_short_timeout(repos, monkeypatch):
@@ -653,10 +657,13 @@ def test_629_run_bounded_returns_on_timeout_and_kills_the_grandchild(tmp_path):
 
 
 def test_629_run_bounded_returns_output_and_code():
-    code, out = agent_hook.run_bounded([sys.executable, "-c", "print('hi')"], timeout=60)
+    ran = agent_hook.run_bounded([sys.executable, "-c", "print('hi')"], timeout=60)
+    assert ran is not None
+    code, out = ran
     assert code == 0 and out.strip() == "hi"
-    code, _ = agent_hook.run_bounded([sys.executable, "-c", "raise SystemExit(3)"], timeout=60)
-    assert code == 3
+    failed = agent_hook.run_bounded([sys.executable, "-c", "raise SystemExit(3)"], timeout=60)
+    assert failed is not None
+    assert failed[0] == 3
     assert agent_hook.run_bounded(["definitely-not-a-real-binary-629"], timeout=5) is None
 
 
@@ -672,6 +679,7 @@ def test_629_stalled_git_classifies_unknown_and_allows(repos, monkeypatch):
 
 
 def _run_hook_budget() -> float:
+    assert agent_hook.__file__ is not None
     sys.path.insert(0, str(Path(agent_hook.__file__).parent))
     import run_hook
 

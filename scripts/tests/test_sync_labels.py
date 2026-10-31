@@ -31,6 +31,7 @@ pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7+) not f
 
 
 def _run(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    assert PWSH is not None  # the module is skipped when pwsh is missing
     return subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT), *args],
         capture_output=True,

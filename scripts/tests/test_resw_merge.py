@@ -31,7 +31,7 @@ def crlf(text: str) -> str:
 
 
 def names(text: str) -> list[str]:
-    return [d.get("name") for d in ET.fromstring(text.encode("utf-8")).findall("data")]
+    return [d.attrib["name"] for d in ET.fromstring(text.encode("utf-8")).findall("data")]
 
 
 BASE = doc(blk("A", "a"), blk("B", "b"))

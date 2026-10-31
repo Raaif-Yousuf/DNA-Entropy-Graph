@@ -22,6 +22,7 @@ pytestmark = pytest.mark.skipif(PWSH is None, reason="pwsh (PowerShell 7+) not f
 
 
 def _run(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    assert PWSH is not None  # the module is skipped when pwsh is missing
     return subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(SCRIPT), *args],
         capture_output=True,
@@ -114,6 +115,7 @@ def test_multiple_done_when_items_each_become_their_own_checklist_line():
     # directly. Exercising the real, documented usage means going through
     # `pwsh -Command`, so PowerShell itself parses the array literal, exactly
     # as it would for an interactive caller or an orchestrator's own .ps1.
+    assert PWSH is not None
     command = f"& '{SCRIPT}' -Title 'scripts: example' -Observable 'y' -DoneWhen 'first thing','second thing'"
     proc = subprocess.run(
         [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
