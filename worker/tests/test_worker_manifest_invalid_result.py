@@ -119,6 +119,22 @@ _ECHO_CASES = [
     (_with("", "outputs", _SECRET), "outputs"),
     (_with("", "preset", [_SECRET]), "preset"),
     (_with("", "inputs", [_SECRET]), "inputs"),
+    (_with("analysis", "stride", 4242), "analysis.stride"),
+    (
+        _with("predictor", "kind", "evo")
+        | {"predictor": {"kind": "evo", "model": "evo2_7b", "precision": _SECRET}},
+        "predictor.precision",
+    ),
+    (_with("inputs", "ambiguityPolicy", _SECRET), "inputs[].ambiguityPolicy"),
+    (_with("inputs", "fastaRecords", _SECRET), "inputs[].fastaRecords"),
+    (_with("analysis", "topology", _SECRET), "analysis.topology"),
+    (_with("analysis", "smoothingWindows", [_SECRET]), "analysis.smoothingWindows"),
+    (_with("analysis", "smoothingWindows", [4242]), "analysis.smoothingWindows"),
+    (_with("analysis", "regionThreshold", [_SECRET]), "analysis.regionThreshold"),
+    (
+        _good_manifest(inputs=[{"id": "in1", "name": "n", "accession": _SECRET}]),
+        "inputs[].accession",
+    ),
 ]
 
 
@@ -130,7 +146,7 @@ def test_the_result_names_the_field_but_never_the_value(tmp_path: Path, manifest
     text = (tmp_path / RESULT_PATH).read_text(encoding="utf-8")
     message = json.loads(text)["error"]["message"]
     assert field in message, message
-    for leaked in (_SECRET, "4242.5"):
+    for leaked in (_SECRET, "4242"):
         assert leaked not in text, message
 
 
@@ -169,33 +185,6 @@ def test_result_file_is_utf8_with_lf_and_round_trips(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "[]",
-        "null",
-        "42",
-        '"x"',
-        '{"schema": 1}',
-        '{"schema": 1, "jobId": "j", "inputs": "nope"}',
-        '{"schema": 1, "jobId": "j", "inputs": [[]]}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": []}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": {"kind": "localdir"}, "analysis": []}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": {"kind": "localdir"}, '
-        '"analysis": {"smoothingWindows": [null]}}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": {"kind": "localdir"}, '
-        '"analysis": {"smoothingWindows": ["x"]}}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": {"kind": "localdir"}, "preset": null}',
-        '{"schema": 1, "jobId": "j", "inputs": [{"id": "a", "path": "p"}], "store": {"kind": "localdir"}, "outputs": [1]}',
-    ],
-)
-def test_odd_shapes_only_ever_raise_manifest_error(tmp_path: Path, text: str) -> None:
-    (tmp_path / MANIFEST_PATH).write_text(text, encoding="utf-8")
-    with pytest.raises(ManifestError):
-        run_job(LocalBlobstore(tmp_path))
-    assert _read_result(tmp_path)["error"]["code"] == "MANIFEST_INVALID"
-
-
 class _ReadOnlyStore:
     """A store whose manifest reads fine but whose writes all fail (the destination is not writable)."""
 
@@ -232,3 +221,109 @@ def test_module_entrypoint_exit_code_stays_two(tmp_path: Path, capsys) -> None:
     assert rc == 2
     assert capsys.readouterr().err.startswith("ERROR: ")
     _assert_manifest_invalid_result(_read_result(tmp_path), message_has="maxRunSeconds")
+
+
+def _shaped(**overrides) -> str:
+    """A manifest whose inputs[] carries every required field (id, path, name), so the case
+    reaches the branch it names instead of failing early on a missing input field."""
+    manifest = _good_manifest(inputs=[{"id": "a", "path": "p", "name": "n"}])
+    manifest.update(overrides)
+    return json.dumps(manifest)
+
+
+@pytest.mark.parametrize(
+    ("text", "field"),
+    [
+        ("[]", "must be a JSON object"),
+        ("null", "must be a JSON object"),
+        ("42", "must be a JSON object"),
+        ('"x"', "must be a JSON object"),
+        ('{"schema": 1}', "'jobId'"),
+        ('{"schema": 1, "jobId": "j", "inputs": "nope"}', "'inputs' must be a non-empty array"),
+        ('{"schema": 1, "jobId": "j", "inputs": [[]]}', "'inputs' entries must be objects"),
+        (_shaped(store=[]), "'store' must be an object"),
+        (_shaped(analysis=[]), "'analysis' must be an object"),
+        (_shaped(analysis={"smoothingWindows": [None]}), "analysis.smoothingWindows"),
+        (_shaped(analysis={"smoothingWindows": ["x"]}), "analysis.smoothingWindows"),
+        (_shaped(preset=None), "manifest.json preset must be an object"),
+        (_shaped(outputs=[1]), "'outputs' must be a list of text names"),
+    ],
+)
+def test_odd_shapes_only_ever_raise_manifest_error(tmp_path: Path, text: str, field: str) -> None:
+    (tmp_path / MANIFEST_PATH).write_text(text, encoding="utf-8")
+    with pytest.raises(ManifestError):
+        run_job(LocalBlobstore(tmp_path))
+    error = _read_result(tmp_path)["error"]
+    assert error["code"] == "MANIFEST_INVALID"
+    assert field in error["message"], error["message"]  # the case reached the branch it names
+
+
+def test_an_integer_too_large_for_python_is_a_manifest_error(tmp_path: Path) -> None:
+    # json.loads raises a plain ValueError (not JSONDecodeError) for a >4300-digit integer.
+    (tmp_path / MANIFEST_PATH).write_text('{"schema": ' + "9" * 5000 + "}", encoding="utf-8")
+    with pytest.raises(ManifestError):
+        run_job(LocalBlobstore(tmp_path))
+    error = _read_result(tmp_path)["error"]
+    assert error["code"] == "MANIFEST_INVALID"
+    assert "99999" not in error["message"]
+    assert "not valid JSON" in error["message"]
+
+
+# --- the guard against the next leak (review round 3) -------------------------------------------
+
+_WORKER_DIR = Path(__file__).parent.parent / "src" / "dna_entropy" / "worker"
+
+# (file, enclosing function) -> why a ManifestError with an interpolated f-string and no public= is safe.
+_UNGUARDED_ALLOWED = {
+    ("manifest.py", "_require"): "interpolates the field NAME it is missing, never a manifest value",
+    ("manifest.py", "parse"): "the JSON decode error text carries a line/column position, never the content",
+    (
+        "runner.py",
+        "_check_store_matches_manifest",
+    ): "never written to result.json (destination disputed, #448)",
+    (
+        "manifest.py",
+        "build_run_config",
+    ): "runs after parse, so never reaches result.json; names an app-chosen input id",
+}
+
+
+def _unguarded_manifest_errors(source: str, filename: str) -> list[str]:
+    """``ManifestError(...)`` calls with a non-constant f-string and no ``public=`` keyword."""
+    import ast
+
+    tree = ast.parse(source)
+    found: list[str] = []
+
+    def visit(node: ast.AST, func: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, ast.FunctionDef) else func
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "ManifestError"
+                and not any(k.arg == "public" for k in child.keywords)
+                and any(isinstance(sub, ast.FormattedValue) for arg in child.args for sub in ast.walk(arg))
+                and (filename, func) not in _UNGUARDED_ALLOWED
+            ):
+                found.append(f"{filename}:{child.lineno} in {func}()")
+            visit(child, name)
+
+    visit(tree, "<module>")
+    return found
+
+
+def test_the_guard_catches_an_unguarded_interpolation() -> None:
+    planted = "def f(raw):\n    raise ManifestError(f" + '"bad {raw!r}"' + ")\n"
+    assert _unguarded_manifest_errors(planted, "x.py") == ["x.py:2 in f()"]
+    guarded = "def f(raw):\n    raise ManifestError(f" + '"bad {raw!r}"' + ', public="bad")\n'
+    assert _unguarded_manifest_errors(guarded, "x.py") == []
+    constant = 'def f():\n    raise ManifestError("bad")\n'
+    assert _unguarded_manifest_errors(constant, "x.py") == []
+
+
+@pytest.mark.parametrize("filename", ["manifest.py", "runner.py"])
+def test_every_value_echoing_manifest_error_has_a_public_message(filename: str) -> None:
+    source = (_WORKER_DIR / filename).read_text(encoding="utf-8")
+    assert "ManifestError(" in source  # vacuity: the scanner sees real raise sites
+    assert _unguarded_manifest_errors(source, filename) == []

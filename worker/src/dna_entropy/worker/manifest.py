@@ -632,6 +632,12 @@ class JobManifest:
             d = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ManifestError(f"manifest.json is not valid JSON: {exc}") from exc
+        except ValueError as exc:
+            # e.g. an integer of more than 4300 digits: a plain ValueError, not a JSONDecodeError.
+            raise ManifestError(
+                f"manifest.json is not valid JSON: {exc}",
+                public="manifest.json is not valid JSON (a number is too large to read)",
+            ) from exc
 
         if not isinstance(d, dict):
             raise ManifestError("manifest.json must be a JSON object")
