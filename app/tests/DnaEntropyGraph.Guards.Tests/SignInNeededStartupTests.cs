@@ -19,8 +19,15 @@ public sealed class SignInNeededStartupTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "deg-signin-needed-" + Guid.NewGuid().ToString("N"));
 
+    private readonly List<ServiceProvider> _providers = [];
+
     public void Dispose()
     {
+        foreach (var provider in _providers)
+        {
+            provider.Dispose();
+        }
+
         try
         {
             if (Directory.Exists(_root))
@@ -37,6 +44,21 @@ public sealed class SignInNeededStartupTests : IDisposable
     [Fact]
     public async Task A_run_whose_account_is_signed_out_opens_the_shells_sign_in_bar_naming_the_account()
     {
+        // Review F4: the bar is for an account with something that could still be running: here a finished run whose computer end was not verified.
+        var bar = await LaunchWithSignedOutAccountAsync(ErrorCode: RunErrorCodes.LifecycleUnverified);
+        bar.IsOpen.ShouldBeTrue("the launch pass could not look at job-a (its account is signed out) and the shell must say so");
+        bar.Title.ShouldContain("a@example.org");
+    }
+
+    [Fact]
+    public async Task A_signed_out_account_with_nothing_that_could_still_be_running_does_not_open_the_bar()
+    {
+        var bar = await LaunchWithSignedOutAccountAsync(ErrorCode: null);
+        bar.IsOpen.ShouldBeFalse("a Completed run whose computer was confirmed ended has nothing to protect");
+    }
+
+    private async Task<SignInNeededViewModel> LaunchWithSignedOutAccountAsync(string? ErrorCode)
+    {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
         services.AddSingleton<FakeGcp>(_ => new FakeGcp()
@@ -44,7 +66,8 @@ public sealed class SignInNeededStartupTests : IDisposable
             .WithAccount("sub-a", "a@example.org", "project-a")
             .WithAccountSignedOut("sub-a"));
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
-        using var provider = services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        _providers.Add(provider);
 
         using (var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection())
         {
@@ -62,14 +85,13 @@ public sealed class SignInNeededStartupTests : IDisposable
                 ProjectId: "project-a",
                 AccountSub: "sub-a",
                 InstallationId: InstallationId.GetOrCreate(provider.GetRequiredService<ISettingsStore>()),
-                FinishedAt: DateTimeOffset.UtcNow.AddMinutes(-10)),
+                FinishedAt: DateTimeOffset.UtcNow.AddMinutes(-10),
+                ErrorCode: ErrorCode),
             CancellationToken.None);
 
         await AppStartup.BeginAsync(provider, CancellationToken.None);
 
-        var bar = provider.GetRequiredService<SignInNeededViewModel>();
-        bar.IsOpen.ShouldBeTrue("the launch pass could not look at job-a (its account is signed out) and the shell must say so");
-        bar.Title.ShouldContain("a@example.org");
+        return provider.GetRequiredService<SignInNeededViewModel>();
     }
 
     [Fact]

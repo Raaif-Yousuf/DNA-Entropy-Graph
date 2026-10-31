@@ -52,7 +52,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         // The ask sits INSIDE the same guard as the delete: whatever it throws (a caller who gave up, an unexpected failure of a look), the VM is still deleted and the row
         // still ends terminal. Nothing in the ask may skip the delete.
         var outcome = GracefulOutcome.NotAsked;
-        string? failure;
+        EndFailure? failure;
         try
         {
             if (existing.Bucket is { Length: > 0 } bucket)
@@ -114,10 +114,13 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     }
 
     /// <summary>What the row records when the cancel itself threw: the error class and the action, never the exception's message (it can carry a path or a name).</summary>
-    private static string UnexpectedFailure(Exception ex)
-        => VmTerminator.ErrorClassOf(ex) == RunErrorCodes.AccountSignedOut
-            ? $"The cancel could not finish ({RunErrorCodes.AccountSignedOut}). Sign in as the Google account this run was made under, then cancel again."
-            : $"The cancel could not finish ({VmTerminator.ErrorClassOf(ex)}). Check the Cloud page and delete or stop any VM left for this run.";
+    private static EndFailure UnexpectedFailure(Exception ex)
+    {
+        var errorClass = VmTerminator.ErrorClassOf(ex);
+        return errorClass == RunErrorCodes.AccountSignedOut
+            ? new EndFailure($"The cancel could not finish ({RunErrorCodes.AccountSignedOut}). Sign in as the Google account this run was made under, then cancel again.", errorClass)
+            : EndFailure.Of("The cancel could not finish", errorClass, "Check the Cloud page and delete or stop any VM left for this run.");
+    }
 
     /// <summary>
     /// A create whose outcome is unknown (still in flight, or ended Canceled or by a network failure: Compute may have accepted it) stays under watch, by name, after the outcome is recorded: ONE loop
@@ -283,7 +286,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         return null;
     }
 
-    private async Task<string?> DeleteAllAsync(CloudScope scope, string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)
+    private async Task<EndFailure?> DeleteAllAsync(CloudScope scope, string jobId, CreateSettleState settled, IReadOnlyList<(string Name, string Zone)> queued, IReadOnlyList<SentCreate> sent, CancellationToken cancellationToken)
     {
         using var hold = terminator.Ledger.HoldDelete(jobId); // round 4 M2: the queued requests' deletes too
         var queuedNote = await terminator.DeleteQueuedRequestsAsync(scope, queued, cancellationToken).ConfigureAwait(false);
@@ -295,7 +298,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     /// Records how a cancel ended: Cancelled when the VMs are confirmed gone, else Failed under <see cref="RunErrorCodes.CancelFailed"/>.
     /// A row that is already terminal (a second cancel that raced the first) is left exactly as it is, and nothing here throws.
     /// </summary>
-    public async Task RecordCancelOutcomeAsync(string jobId, string? failure)
+    internal async Task RecordCancelOutcomeAsync(string jobId, EndFailure? failure)
     {
         try
         {
@@ -312,8 +315,9 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             else
             {
                 // Issue #830 review M6: a sign-in is its own action (the Cloud page lists the SELECTED account, not this run's), so it gets its own code; the reconciler treats both as an unconfirmed cancel.
-                var code = failure.Contains($"({RunErrorCodes.AccountSignedOut})", StringComparison.Ordinal) ? RunErrorCodes.AccountSignedOut : RunErrorCodes.CancelFailed;
-                await rows.SetPhaseAsync(jobId, JobPhase.Failed, CancellationToken.None, code, failure).ConfigureAwait(false);
+                // Review F5: the code comes from the typed class of the failure, never from searching its English sentence.
+                var code = failure.AccountSignedOut ? RunErrorCodes.AccountSignedOut : RunErrorCodes.CancelFailed;
+                await rows.SetPhaseAsync(jobId, JobPhase.Failed, CancellationToken.None, code, failure.Message).ConfigureAwait(false);
             }
         }
         catch (Exception)

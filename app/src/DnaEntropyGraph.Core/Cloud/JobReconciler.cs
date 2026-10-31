@@ -409,9 +409,17 @@ public sealed class JobReconciler
             signedOut = [.. outcomes.Where(o => o.Action == LifecycleAction.NeedsSignIn)];
         }
 
+        // Review F4: the shell bar is only for an account with something that could still be running (an unfinished run, an unconfirmed end, an unexpired keep-alive); otherwise it is logged only.
         foreach (var sub in signedOut.Select(o => o.AccountSub).Distinct())
         {
-            SignInNeeded(sub);
+            if (RunObligations.ExistForAccount(all, sub, installation, now))
+            {
+                SignInNeeded(sub);
+            }
+            else
+            {
+                _log.Warning("reconciler", null, "account-signed-out-no-obligation");
+            }
         }
 
         return outcomes;

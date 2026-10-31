@@ -66,8 +66,8 @@ public sealed class SetupCheckService : ISetupCheckService
         _account = account;
     }
 
-    /// <summary>Issue #830: the wizard acts on the project it is checking as the account of the selection (the selection path). The account comes from ONE <see cref="IGcpAccount.SelectedScope"/> read, never a separate read of the current account; null (no project chosen yet) means the current account at send time.</summary>
-    private CloudScope ScopeFor(string projectId) => new(projectId, _account.SelectedScope()?.AccountSub);
+    /// <summary>Issue #830: the wizard acts on the project it is checking as the account of the selection (the selection path). The account comes from ONE <see cref="IGcpAccount.ActiveSnapshot"/> read (review F6: unlike SelectedScope it is not null while the active account has no project yet), never a separate read of the current account.</summary>
+    private CloudScope ScopeFor(string projectId) => new(projectId, _account.ActiveSnapshot()?.AccountSub);
 
     public async Task<SetupStepResult> ListProjectsAsync(CancellationToken cancellationToken)
     {

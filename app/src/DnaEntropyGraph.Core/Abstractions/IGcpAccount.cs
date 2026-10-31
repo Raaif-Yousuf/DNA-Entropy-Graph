@@ -25,6 +25,12 @@ public interface IGcpAccount
     /// </summary>
     CloudScope? SelectedScope();
 
+    /// <summary>
+    /// Issue #830 review F6: the active account's sub and project from ONE snapshot, also while the account has no project yet or must sign in again (<see cref="SelectedScope"/> is null then).
+    /// For the wizard and setup calls, which act on a project being set up and must keep the account they started under; null only when no account exists at all.
+    /// </summary>
+    ActiveAccountSnapshot? ActiveSnapshot();
+
     /// <summary>The account calls are made as; null when none is signed in.</summary>
     AccountInfo? CurrentAccount { get; }
 

@@ -96,6 +96,19 @@ public sealed class LeftRunningGuard : IDisposable
         catch (TimeoutException)
         {
             ObserveLate(scan, "left-running-scan", null);
+
+            // Review F2: a per-scope failure is no longer a fault of the scan, so an abandoned scan that later finishes with unread scopes is observed here too (classes only).
+            _ = scan.ContinueWith(
+                t =>
+                {
+                    foreach (var unread in t.Result.UnreadList)
+                    {
+                        _log.Warning("left-running-scan", null, unread.ErrorClass ?? nameof(Exception));
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             throw;
         }
     }
@@ -197,19 +210,15 @@ public sealed class LeftRunningGuard : IDisposable
         {
             report = await BoundedScanAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
-        {
-            // Every scope failed and the failure is a signed-out account: there is no report, but the person must still be told (issue #830 review M4).
-            _log.Warning("left-running-exit", null, ex.GetType().Name);
-            report = new LeftRunningReport([], [], 1, [new UnreadScope(new CloudScope("unknown", ex.AccountSub), true)]);
-        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.Warning("left-running-exit", null, ex.GetType().Name);
             return true;
         }
 
-        if (report.UnreadList.Count > 0 && await AskAboutUnreadAsync(report.UnreadList, cancellationToken).ConfigureAwait(false))
+        // Review F4: only a scope with something that could still be running is worth a prompt; the rest was logged by the scan.
+        var worrying = report.UnreadList.Where(u => u.HasObligation).ToList();
+        if (worrying.Count > 0 && await AskAboutUnreadAsync(worrying, cancellationToken).ConfigureAwait(false))
         {
             // Sign-in was chosen: the window stays open so the next close scans again with that account back.
             return false;
@@ -276,9 +285,11 @@ public sealed class LeftRunningGuard : IDisposable
         {
             await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (AccountAuthException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            // Review F7a: a cancelled browser wait or a network error is not an AccountAuthException; none of them may escape the exit. Log the class, say the existing sign-in-failed copy.
             _log.Warning("left-running-exit", null, ex.GetType().Name);
+            _toasts.ShowToast(Text("LeftRunning_UnreadTitle"), Text("AuthError_SIGNIN_FAILED"), ToastSeverity.Error);
         }
 
         return true;

@@ -157,14 +157,37 @@ public sealed class LeftRunningScopesTests
     }
 
     [Fact]
-    public async Task Every_scope_unreadable_throws_so_the_caller_can_degrade()
+    public async Task A_computer_both_accounts_can_see_is_kept_under_the_account_of_the_run_it_belongs_to()
     {
+        // Issue #830 review F7c: job-1's account is listed first, but the computer belongs to job-2, made by sub-b.
+        var rig = new Rig("project-p");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-p").WithAccount("sub-b", "b@example.org", "project-p");
+        await rig.VmAsync("project-p", "sub-b", "job-2");
+        await rig.RowAsync("job-1", JobPhase.Completed, "project-p", "sub-a", Start);
+        await rig.RowAsync("job-2", JobPhase.Running, "project-p", "sub-b");
+
+        var report = await rig.Scanner.ScanAllAsync(rig.Gcp.SelectedScope(), CancellationToken.None);
+
+        report.RunningVms.Single().Scope!.AccountSub.ShouldBe("sub-b");
+    }
+
+    [Fact]
+    public async Task Every_scope_unreadable_returns_a_report_listing_each_instead_of_throwing_the_first_failure()
+    {
+        // Review F2: with every scope failing the first failure used to be thrown, so the exit guard saw a generic error and said nothing.
         var rig = new Rig("project-b");
         rig.Gcp.WithAccount("sub-x", "x@example.org", "project-a").WithAccountSignedOut("sub-x");
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-x", Start);
+        rig.Gcp.WithAccount("sub-y", "y@example.org", "project-c").WithAccountFailure("sub-y", AuthErrorCodes.NetworkUnavailable);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-x");
+        await rig.RowAsync("job-c", JobPhase.Running, "project-c", "sub-y");
         var scanner = new LeftRunningScanner(rig.Gcp, rig.Settings, rig.Runs, null, rig.Clock);
 
-        await Should.ThrowAsync<AccountAuthException>(() => scanner.ScanAllAsync(null, CancellationToken.None));
+        var report = await scanner.ScanAllAsync(null, CancellationToken.None);
+
+        report.RunningVms.ShouldBeEmpty();
+        report.UnreadScopes.ShouldBe(2);
+        report.UnreadList.Select(u => (u.Scope.AccountSub, u.NeedsSignIn, u.HasObligation)).ShouldBe(
+            [("sub-x", true, true), ("sub-y", false, true)], ignoreOrder: true);
     }
 
     [Fact]
@@ -249,7 +272,7 @@ public sealed class LeftRunningScopesTests
     public async Task Exit_with_one_account_signed_out_says_so_and_offers_sign_in_even_when_nothing_else_is_running()
     {
         var rig = RigWithSignedOutAccountA();
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         string? title = null;
         string? body = null;
         IReadOnlyList<string>? buttons = null;
@@ -271,7 +294,7 @@ public sealed class LeftRunningScopesTests
     public async Task Choosing_Sign_in_at_that_prompt_starts_sign_in_and_keeps_the_window_open()
     {
         var rig = RigWithSignedOutAccountA();
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         rig.Choice = 0;
 
         var mayClose = await rig.Guard.ConfirmExitAsync(CancellationToken.None);
@@ -285,7 +308,7 @@ public sealed class LeftRunningScopesTests
     {
         var rig = RigWithSignedOutAccountA();
         await rig.VmAsync("project-b", FakeGcp.DefaultAccountSub, "job-b");
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         var titles = new List<string>();
         rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
@@ -303,7 +326,7 @@ public sealed class LeftRunningScopesTests
     {
         var rig = RigWithSignedOutAccountA();
         rig.Gcp.WithSignedOut();
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         rig.Choice = 1;
 
         await rig.Guard.ConfirmExitAsync(CancellationToken.None);
@@ -316,7 +339,7 @@ public sealed class LeftRunningScopesTests
     {
         var rig = new Rig("project-b");
         rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         IReadOnlyList<string>? buttons = null;
         rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
@@ -334,7 +357,7 @@ public sealed class LeftRunningScopesTests
     {
         var rig = new Rig("project-b");
         rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a");
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
 
         (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
 
@@ -346,7 +369,7 @@ public sealed class LeftRunningScopesTests
     {
         var log = new CountingLog();
         var rig = RigWithSignedOutAccountA(log);
-        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
         rig.Choice = 1;
 
         await rig.Guard.ConfirmExitAsync(CancellationToken.None);
@@ -354,5 +377,116 @@ public sealed class LeftRunningScopesTests
         await rig.Guard.ConfirmExitAsync(CancellationToken.None);
 
         log.Lines.Count(l => l == "left-running-scan/unread-scopes").ShouldBe(1);
+    }
+
+    // ---- Issue #830 review F2 and F4 ----
+
+    [Fact]
+    public async Task One_account_offline_and_another_signed_out_still_prompts_to_sign_in_naming_the_signed_out_one()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a");
+        rig.Gcp.WithAccount("sub-c", "c@example.org", "project-c").WithAccountFailure("sub-c", AuthErrorCodes.NetworkUnavailable);
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
+        await rig.RowAsync("job-c", JobPhase.Running, "project-c", "sub-c");
+        rig.Gcp.WithSignedOut();
+        string? body = null;
+        IReadOnlyList<string>? buttons = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            (body, buttons) = (call.ArgAt<string>(1), call.ArgAt<IReadOnlyList<string>>(2));
+            return Task.FromResult<int?>(1);
+        });
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        body.ShouldBe("UNREAD:a@example.org");
+        buttons.ShouldBe(["LeftRunning_UnreadSignIn", "LeftRunning_UnreadCloseAnyway"]);
+    }
+
+    [Fact]
+    public async Task Two_signed_out_accounts_are_both_named()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a");
+        rig.Gcp.WithAccount("sub-d", "d@example.org", "project-d").WithAccountSignedOut("sub-d");
+        await rig.RowAsync("job-a", JobPhase.Running, "project-a", "sub-a");
+        await rig.RowAsync("job-d", JobPhase.Running, "project-d", "sub-d");
+        rig.Gcp.WithSignedOut();
+        string? body = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            body = call.ArgAt<string>(1);
+            return Task.FromResult<int?>(1);
+        });
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        body.ShouldBe("UNREAD:a@example.org or d@example.org");
+    }
+
+    [Fact]
+    public async Task Every_scope_offline_says_so_with_Close_anyway_only_when_a_run_could_still_be_running()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-c", "c@example.org", "project-c").WithAccountFailure("sub-c", AuthErrorCodes.NetworkUnavailable);
+        await rig.RowAsync("job-c", JobPhase.Running, "project-c", "sub-c");
+        rig.Gcp.WithSignedOut();
+        IReadOnlyList<string>? buttons = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            buttons = call.ArgAt<IReadOnlyList<string>>(2);
+            return Task.FromResult<int?>(0);
+        });
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        buttons.ShouldBe(["LeftRunning_UnreadCloseAnyway"]);
+    }
+
+    [Fact]
+    public async Task A_signed_out_account_whose_only_run_ended_with_its_computer_confirmed_gone_is_not_prompted_for()
+    {
+        var rig = RigWithSignedOutAccountA();
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task A_keep_alive_row_obliges_a_prompt_only_until_it_expires(bool expired, bool expectPrompt)
+    {
+        var rig = RigWithSignedOutAccountA();
+        var options = new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = DnaEntropyGraph.Core.AfterTaskAction.KeepAlive, KeepAliveMinutes = 30 };
+        await rig.Runs.UpsertAsync(new RunRecord("job-k", JobPhase.Completed, Start, ProjectId: "project-a", AccountSub: "sub-a", InstallationId: rig.Installation, FinishedAt: Start,
+            OptionsJson: DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(options)), CancellationToken.None);
+        rig.Clock.Advance(TimeSpan.FromMinutes(expired ? 31 : 10));
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        if (expectPrompt)
+        {
+            await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Fact]
+    public async Task A_finished_run_whose_computer_end_was_not_confirmed_obliges_a_prompt()
+    {
+        var rig = RigWithSignedOutAccountA();
+        await rig.Runs.UpsertAsync(new RunRecord("job-u", JobPhase.Failed, Start, ProjectId: "project-a", AccountSub: "sub-a", InstallationId: rig.Installation, FinishedAt: Start,
+            ErrorCode: RunErrorCodes.VmEndUnconfirmed), CancellationToken.None);
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
     }
 }

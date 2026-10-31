@@ -94,11 +94,11 @@ internal static class TestScopedGateways
 
     internal static Task CancelAsync(this VmCanceller canceller, string jobId, CancellationToken cancellationToken) => canceller.CancelAsync(Default, jobId, cancellationToken);
 
-    internal static Task<string?> DeleteOwnedVmsAndVerifyAsync(this VmTerminator terminator, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null) => terminator.DeleteOwnedVmsAndVerifyAsync(Default, jobId, settle, cancellationToken, sentCreates);
+    internal static async Task<string?> DeleteOwnedVmsAndVerifyAsync(this VmTerminator terminator, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null) => (await terminator.DeleteOwnedVmsAndVerifyAsync(Default, jobId, settle, cancellationToken, sentCreates))?.Message;
 
     internal static Task StopVmsAsync(this VmTerminator terminator, string jobId, CancellationToken cancellationToken) => terminator.StopVmsAsync(Default, jobId, cancellationToken);
 
     internal static Task DeleteVmsAsync(this VmTerminator terminator, string jobId, CancellationToken cancellationToken) => terminator.DeleteVmsAsync(Default, jobId, cancellationToken);
 
-    internal static Task<string?> DeleteQueuedRequestsAsync(this VmTerminator terminator, IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken) => terminator.DeleteQueuedRequestsAsync(Default, requests, cancellationToken);
+    internal static async Task<string?> DeleteQueuedRequestsAsync(this VmTerminator terminator, IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken) => (await terminator.DeleteQueuedRequestsAsync(Default, requests, cancellationToken))?.Message;
 }

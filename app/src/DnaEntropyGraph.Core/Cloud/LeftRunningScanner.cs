@@ -13,8 +13,11 @@ public sealed record LeftRunningVm(string Name, string Zone, string? JobId, Time
 /// <summary>A disk of this installation that no running computer holds: it keeps billing every month until it is deleted.</summary>
 public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth, CloudScope? Scope = null);
 
-/// <summary>A scope the scan could not list. <paramref name="NeedsSignIn"/> is true when its Google account is signed out (the one failure whose action is Sign in); any other failure (offline, a locked accounts file) is false.</summary>
-public sealed record UnreadScope(CloudScope Scope, bool NeedsSignIn);
+/// <summary>
+/// A scope the scan could not list. <paramref name="NeedsSignIn"/> is true when its Google account is signed out (the one failure whose action is Sign in); any other failure (offline, a locked accounts file) is false.
+/// <paramref name="ErrorClass"/> is the failure's exception class (never its message), for the log. <paramref name="HasObligation"/> (review F4) is true when a recent run of this installation in that scope could still have a computer running (<see cref="RunObligations"/>); only then is the person told.
+/// </summary>
+public sealed record UnreadScope(CloudScope Scope, bool NeedsSignIn, bool HasObligation = true, string? ErrorClass = null);
 
 /// <summary>What the scan found. <see cref="IsClean"/> is true when nothing of this installation runs and no disk is being paid for. <paramref name="UnreadScopes"/> counts the scopes (project and account) that could not be listed (signed out, offline) while others were.</summary>
 public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks, int UnreadScopes = 0, IReadOnlyList<UnreadScope>? Unread = null)
@@ -65,13 +68,15 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
 
     /// <summary>
     /// Issue #830: scans every scope a recent run of this installation was made in (<see cref="CloudScopes.ForSweep"/>) plus <paramref name="selected"/>, each once, and merges the reports. One scope
-    /// that cannot be read (its account signed out, a network failure) does not hide the others: it is counted in <see cref="LeftRunningReport.UnreadScopes"/>. When every scope fails the first
-    /// failure is thrown, so the caller degrades exactly as for a single scan. No scope at all is a clean report.
+    /// that cannot be read (its account signed out, a network failure) does not hide the others: it is counted in <see cref="LeftRunningReport.UnreadScopes"/> and listed in
+    /// <see cref="LeftRunningReport.Unread"/>, EVERY failed scope, also when all of them fail (review F2: the report is then empty with every scope unread, so the exit prompt can name each signed-out
+    /// account instead of the first failure being thrown and hiding the rest). Never throws for a per-scope failure. No scope at all is a clean report.
     /// </summary>
     public async Task<LeftRunningReport> ScanAllAsync(CloudScope? selected, CancellationToken cancellationToken)
     {
         var installation = InstallationId.GetOrCreate(settings);
-        var scopes = CloudScopes.ForSweep(await runs.GetAllAsync(cancellationToken).ConfigureAwait(false), installation, clock.GetUtcNow(), selected);
+        var allRows = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var scopes = CloudScopes.ForSweep(allRows, installation, clock.GetUtcNow(), selected);
         var results = await Task.WhenAll(scopes.Select(async scope =>
         {
             try
@@ -86,18 +91,25 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
 
         var ok = results.Where(r => r.Report is not null).Select(r => r.Report!).ToList();
         var failed = results.Where(r => r.Error is not null).ToList();
-        if (ok.Count == 0 && failed.Count > 0)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed[0].Error!).Throw();
-        }
 
         // Issue #830 review (d): a project two accounts can both reach is listed once per account; a computer is one computer, so each is kept once by (project, name, zone). A live run on either listing counts.
         var vms = ok.SelectMany(r => r.RunningVms)
             .GroupBy(v => (Project: v.Scope?.ProjectId, v.Name, v.Zone))
-            .Select(g => g.Count() == 1 ? g.First() : g.First() with { HasLiveRun = g.Any(v => v.HasLiveRun) })
+            .Select(g => g.Count() == 1 ? g.First() : PreferRunsOwnAccount(g.ToList(), allRows) with { HasLiveRun = g.Any(v => v.HasLiveRun) })
             .ToList();
         var disks = ok.SelectMany(r => r.StoppedDisks).GroupBy(d => (Project: d.Scope?.ProjectId, d.Name, d.Zone)).Select(g => g.First()).ToList();
-        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }))]);
+        var now = clock.GetUtcNow();
+        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }, RunObligations.Exist(allRows, f.Scope, installation, now), f.Error!.GetType().Name))]);
+    }
+
+    /// <summary>
+    /// Review F7c: the one listing kept for a computer that two accounts can both see is the one whose account made the run the computer belongs to (the run's row names its account), so a Stop
+    /// or Delete from the exit window acts as that account; when the row names none, or no listing matches it, the first listing is kept.
+    /// </summary>
+    private static LeftRunningVm PreferRunsOwnAccount(IReadOnlyList<LeftRunningVm> same, IReadOnlyList<RunRecord> allRows)
+    {
+        var owner = same[0].JobId is { } job ? RunRowStore.LatestRecord(allRows, job)?.AccountSub : null;
+        return (owner is null ? null : same.FirstOrDefault(v => v.Scope?.AccountSub == owner)) ?? same[0];
     }
 
     private static TimeSpan? RemainingOf(VmDescriptor vm, DateTimeOffset localNow)

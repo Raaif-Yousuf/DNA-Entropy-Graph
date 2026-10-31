@@ -33,7 +33,10 @@ public sealed class RunAccountSignedOutTests
         var row = repo.AllRecordedInOrder.Last(r => r.JobId == "job-so");
         row.Phase.ShouldBe(JobPhase.Failed);
         row.ErrorCode.ShouldBe(RunErrorCodes.AccountSignedOut, row.ErrorDetail);
-        row.ErrorDetail!.ShouldNotContain("(other)");
+        row.ErrorDetail.ShouldNotBeNull();
+        row.ErrorDetail.ShouldNotContain("(other)");
+        row.ErrorDetail.ShouldContain("Sign in");
+        row.ErrorDetail.ShouldNotContain("Cloud page");
     }
 
     [Fact]
@@ -100,5 +103,64 @@ public sealed class RunAccountSignedOutTests
         var outcome = await results.RedownloadAsync(CloudCopyRow(), CancellationToken.None);
 
         outcome.Status.ShouldBe(CloudResultsStatus.Failed);
+    }
+
+    // ---- Issue #830 review F5: a typed outcome picks the code, and a signed-out account's sentence names the sign-in action ----
+
+    private static VmTerminator TerminatorOn(FakeGcp gcp)
+    {
+        var settings = new CloudRunSettings { LifecycleTimeout = TimeSpan.FromMilliseconds(200), LifecyclePollInterval = TimeSpan.FromMilliseconds(10) };
+        return new VmTerminator(gcp, new GatewayCalls(settings, gcp), settings);
+    }
+
+    [Fact]
+    public async Task A_waiting_request_that_cannot_be_deleted_because_the_account_is_signed_out_names_the_sign_in_not_the_Cloud_page()
+    {
+        var failure = await TerminatorOn(GcpWithSignedOutAccountA()).DeleteQueuedRequestsAsync(ScopeA, [("deg-job-q", "us-central1-a")], CancellationToken.None);
+
+        failure.ShouldNotBeNull();
+        failure.AccountSignedOut.ShouldBeTrue();
+        failure.Message.ShouldContain("Sign in");
+        failure.Message.ShouldNotContain("Cloud page");
+    }
+
+    [Fact]
+    public async Task An_owned_VM_that_cannot_be_looked_at_because_the_account_is_signed_out_names_the_sign_in_not_the_Cloud_page()
+    {
+        var sent = new SentCreate(ScopeA, "job-so", "deg-job-so", "us-central1-a", 1, "installation") { Create = Task.CompletedTask };
+
+        var failure = await TerminatorOn(GcpWithSignedOutAccountA()).DeleteOwnedVmsAndVerifyAsync(ScopeA, "job-so", CreateSettleState.Settled, CancellationToken.None, [sent]);
+
+        failure.ShouldNotBeNull();
+        failure.AccountSignedOut.ShouldBeTrue(failure.Message);
+        failure.Message.ShouldContain("Sign in");
+        failure.Message.ShouldNotContain("Cloud page");
+    }
+
+    [Fact]
+    public void Every_sentence_built_for_a_failure_names_the_sign_in_for_a_signed_out_account_and_the_Cloud_page_action_otherwise()
+    {
+        var signedOut = EndFailure.Of("VM 'x' could not be stopped", RunErrorCodes.AccountSignedOut, "Stop it from the Cloud page.");
+        var quota = EndFailure.Of("VM 'x' could not be stopped", "permission", "Stop it from the Cloud page.");
+
+        signedOut.AccountSignedOut.ShouldBeTrue();
+        signedOut.Message.ShouldBe("VM 'x' could not be stopped (account_signed_out). Sign in as the Google account this run was made under, then try again.");
+        quota.AccountSignedOut.ShouldBeFalse();
+        quota.Message.ShouldBe("VM 'x' could not be stopped (permission). Stop it from the Cloud page.");
+    }
+
+    [Fact]
+    public async Task A_cancel_failure_that_only_mentions_the_signed_out_code_in_its_words_is_still_cancel_failed()
+    {
+        // The row's code is chosen from the typed class, not by searching the sentence: this sentence contains the old marker but its class is "other".
+        var repo = new InMemoryRunRepository();
+        await repo.UpsertAsync(new RunRecord("job-w", JobPhase.Cancelling, DateTimeOffset.UtcNow, Target: "cloud", ProjectId: Project), CancellationToken.None);
+        var gcp = new FakeGcp();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        var canceller = runner.CancellerForTests;
+
+        await canceller.RecordCancelOutcomeAsync("job-w", EndFailure.Other("The note says (account_signed_out) but the class is other."));
+
+        repo.AllRecordedInOrder.Last(r => r.JobId == "job-w").ErrorCode.ShouldBe(RunErrorCodes.CancelFailed);
     }
 }

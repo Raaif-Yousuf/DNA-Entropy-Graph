@@ -34,6 +34,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly IRunRepository _runRepository;
     private readonly INavigator _navigator;
     private readonly IGcpAccount? _account;
+    private readonly IDiagnosticsLog _log;
 
     [ObservableProperty]
     private string? _jobId;
@@ -81,9 +82,11 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IRunRepository runRepository,
         INavigator navigator,
         IMessenger messenger,
-        IGcpAccount? account = null)
+        IGcpAccount? account = null,
+        IDiagnosticsLog? log = null)
     {
         _account = account;
+        _log = log ?? NullDiagnosticsLog.Instance;
         _jobEngine = jobEngine;
         _dispatcher = dispatcher;
         _dialogService = dialogService;
@@ -143,6 +146,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
         {
             // The sign-in screen said why (cancelled, timed out); the prompt stays so the person can try again.
         }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Review F7a: a cancelled browser wait or a network error is not an AccountAuthException and must not escape the command. Log the class only; the prompt (with its button) now says the sign-in failed.
+            _log.Warning("run-sign-in", JobId, ex.GetType().Name);
+            SetSignInPrompt(_strings.GetString("AuthError_SIGNIN_FAILED"));
+        }
     }
 
     /// <summary>Runs a stop or delete of this run's computer; a signed-out account becomes the sign-in prompt instead of an unhandled exception.</summary>
@@ -161,12 +170,18 @@ public sealed partial class RunProgressViewModel : ObservableObject
         }
         catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
         {
-            _promptSub = ex.AccountSub;
-            var email = _account?.Accounts.FirstOrDefault(a => a.Sub == ex.AccountSub)?.Email;
-            SetSignInPrompt(email is null
-                ? _strings.GetString("RunSignIn_PromptUnknown")
-                : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("RunSignIn_Prompt"), email));
+            ShowSignInPrompt(ex.AccountSub);
         }
+    }
+
+    /// <summary>The prompt for the run's own account (never the current one): "Sign in as (email)", or the no-email wording when the list no longer knows the account.</summary>
+    private void ShowSignInPrompt(string? accountSub)
+    {
+        _promptSub = accountSub;
+        var email = _account?.Accounts.FirstOrDefault(a => a.Sub == accountSub)?.Email;
+        SetSignInPrompt(email is null
+            ? _strings.GetString("RunSignIn_PromptUnknown")
+            : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("RunSignIn_Prompt"), email));
     }
 
     private void SetSignInPrompt(string text) => _dispatcher.Enqueue(() => SignInPromptText = text);
@@ -293,10 +308,31 @@ public sealed partial class RunProgressViewModel : ObservableObject
         try
         {
             await _jobEngine.CancelRunAsync(JobId, cancellationToken).ConfigureAwait(false);
+            SetActionNotice(string.Empty);
         }
         catch (RunNotFoundException)
         {
             SetActionNotice(_strings.GetString("RunAction_RunNotFound"));
+            return;
+        }
+
+        // Review F1: a cancel whose account is signed out does not throw: the row ends Failed with account_signed_out, whose copy points at a Sign in button. Show it here.
+        await ShowSignInPromptIfCancelEndedSignedOutAsync().ConfigureAwait(false);
+    }
+
+    private async Task ShowSignInPromptIfCancelEndedSignedOutAsync()
+    {
+        try
+        {
+            var rows = await _runRepository.GetAllAsync(CancellationToken.None).ConfigureAwait(false);
+            if (rows.LastOrDefault(r => r.JobId == JobId) is { Phase: JobPhase.Failed, ErrorCode: RunErrorCodes.AccountSignedOut } row)
+            {
+                ShowSignInPrompt(row.AccountSub);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("run-cancel", JobId, ex.GetType().Name);
         }
     }
 

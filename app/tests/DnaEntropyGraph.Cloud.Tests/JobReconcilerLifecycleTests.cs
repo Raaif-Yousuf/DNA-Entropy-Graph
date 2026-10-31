@@ -819,12 +819,26 @@ public class JobReconcilerLifecycleTests
     {
         // Issue #830 review M3.
         var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
-        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a", ErrorCode = RunErrorCodes.LifecycleUnverified });
         var told = new List<string?>();
 
         await rig.Reconciler(onSignInNeeded: told.Add).EnforceLifecycleAsync(CancellationToken.None);
 
         told.Distinct().ShouldBe(["sub-a"]);
+    }
+
+    [Fact]
+    public async Task A_signed_out_account_whose_finished_run_has_nothing_that_could_still_be_running_is_not_nagged_about_in_the_shell()
+    {
+        // Issue #830 review F4: a deliberately signed-out account with only a Completed run whose computer end was confirmed has nothing to protect.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        var outcomes = await rig.Reconciler(onSignInNeeded: told.Add).EnforceLifecycleAsync(CancellationToken.None);
+
+        told.ShouldBeEmpty();
+        outcomes.Single(o => o.JobId == "job-a").Action.ShouldBe(LifecycleAction.NeedsSignIn, "the outcome is still reported; only the shell bar is withheld");
     }
 
     [Fact]

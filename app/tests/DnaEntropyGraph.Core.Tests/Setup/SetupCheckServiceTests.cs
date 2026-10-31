@@ -387,4 +387,49 @@ public class SetupCheckServiceTests
             SetupActions.KindFor(code).ShouldNotBe(SetupActionKind.None, code);
         }
     }
+
+    // ---- Issue #830 review F6: a wizard call keeps the account it started under, also before the account has a project ----
+
+    [Fact]
+    public async Task Storage_setup_for_an_active_account_with_no_project_yet_pins_that_account_on_both_calls_even_if_the_account_is_switched_in_between()
+    {
+        var snapshot = new ActiveAccountSnapshot("sub-a", null, false);
+        _account.ActiveSnapshot().Returns(_ => snapshot);
+        _account.SelectedScope().Returns((CloudScope?)null);
+        CloudScope? bucketScope = null;
+        CloudScope? identityScope = null;
+        _storage.EnsureBucketAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            bucketScope = call.Arg<CloudScope>();
+            snapshot = new ActiveAccountSnapshot("sub-b", null, false); // the person switches account while the bucket is being made
+            return Task.FromResult("bucket");
+        });
+        _identity.EnsureWorkerIdentityAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            identityScope = call.Arg<CloudScope>();
+            return Task.FromResult(new WorkerIdentity("1-compute@developer", null));
+        });
+
+        await NewService().EnsureStorageAsync(Project, TestContext.Current.CancellationToken);
+
+        bucketScope.ShouldBe(new CloudScope(Project, "sub-a"));
+        identityScope.ShouldBe(new CloudScope(Project, "sub-a"));
+    }
+
+    [Fact]
+    public async Task The_quota_check_for_an_account_that_has_no_project_yet_still_carries_that_account()
+    {
+        _account.ActiveSnapshot().Returns(new ActiveAccountSnapshot("sub-a", null, false));
+        _account.SelectedScope().Returns((CloudScope?)null);
+        CloudScope? seen = null;
+        _quota.ReadQuotaAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns<Task<QuotaReadResult>>(call =>
+        {
+            seen = call.Arg<CloudScope>();
+            throw Denied();
+        });
+
+        await NewService().CheckQuotaAsync(Project, TestContext.Current.CancellationToken);
+
+        seen.ShouldBe(new CloudScope(Project, "sub-a"));
+    }
 }

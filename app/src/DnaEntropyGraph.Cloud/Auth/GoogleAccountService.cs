@@ -83,6 +83,9 @@ public sealed class GoogleAccountService : IGcpAccount, IGcpAccessTokenSource, I
     public CloudScope? SelectedScope()
         => State.Active is { NeedsSignIn: false } active && (active.ProjectId ?? _options.ProjectIdUntilSelectionExists) is { Length: > 0 } project ? new CloudScope(project, active.Sub) : null;
 
+    public ActiveAccountSnapshot? ActiveSnapshot()
+        => State.Active is { } active ? new ActiveAccountSnapshot(active.Sub, active.ProjectId ?? _options.ProjectIdUntilSelectionExists, active.NeedsSignIn) : null;
+
     public AccountInfo? CurrentAccount => State.Active is { } active ? ToInfo(active) : null;
 
     public IReadOnlyList<AccountInfo> Accounts => State.Accounts.Select(ToInfo).ToList();

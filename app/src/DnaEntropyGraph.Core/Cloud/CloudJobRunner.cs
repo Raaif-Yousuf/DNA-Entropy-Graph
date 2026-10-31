@@ -258,6 +258,9 @@ public sealed class CloudJobRunner
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Tests: the canceller, to record an outcome of a chosen class (review F5).</summary>
+    internal VmCanceller CancellerForTests => _canceller;
+
     /// <summary>Tests: how many queued flex requests the runner still remembers.</summary>
     internal int PendingQueuedRequestCount => _provisioner.PendingFlexCount;
 
@@ -356,7 +359,7 @@ public sealed class CloudJobRunner
                 // unlooked-at: end it here (best effort, by label, never throws) and record what that found. A repository
                 // that is still failing leaves the row Cancelling, which is not terminal, so the next resume retries.
                 var endNote = await _terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
-                await _canceller.RecordCancelOutcomeAsync(request.JobId, endNote is null ? null : $"{ex.Message}{endNote}").ConfigureAwait(false);
+                await _canceller.RecordCancelOutcomeAsync(request.JobId, endNote is null ? null : EndFailure.Other($"{ex.Message}{endNote}")).ConfigureAwait(false);
             }
 
             var after = await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false);

@@ -804,6 +804,34 @@ public class JobEngineTests
     }
 
     [Fact]
+    public async Task Cancelling_a_run_whose_account_is_signed_out_raises_the_same_sign_in_needed_signal_as_the_reconciler()
+    {
+        // Issue #830 review F1: the cancel does not throw (it records Failed/account_signed_out), so nothing told the shell or the run page to offer Sign in.
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);
+        h.Gcp.WithAccountSignedOut(OtherSub);
+        var told = new ConcurrentQueue<string?>();
+        h.Messenger.Register<Harness, AccountSignInNeededMessage>(h, (_, m) => told.Enqueue(m.AccountSub));
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Last(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.AccountSignedOut);
+        told.ToArray().ShouldBe([OtherSub]);
+    }
+
+    [Fact]
+    public async Task A_cancel_that_ends_cancelled_raises_no_sign_in_signal()
+    {
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);
+        var told = new ConcurrentQueue<string?>();
+        h.Messenger.Register<Harness, AccountSignInNeededMessage>(h, (_, m) => told.Enqueue(m.AccountSub));
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        told.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Cancelling_a_run_in_another_project_acts_in_that_project_as_that_account()
     {
         var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);

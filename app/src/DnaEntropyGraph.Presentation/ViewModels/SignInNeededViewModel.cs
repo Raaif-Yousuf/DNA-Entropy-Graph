@@ -23,16 +23,23 @@ public sealed partial class SignInNeededViewModel : ObservableObject
     private readonly IGcpAccount _account;
     private readonly IStringResourceProvider _strings;
     private readonly IDispatcher _dispatcher;
+    private readonly IDiagnosticsLog _log;
     private readonly HashSet<string> _waiting = new(StringComparer.Ordinal);
 
     [ObservableProperty]
     private bool _isOpen;
 
+    /// <summary>Review F7a: set when the last Sign in press failed for a reason that is not a sign-in answer (the browser wait was cancelled, the network failed); the bar then says the sign-in failed. Cleared by a new account waiting or a sign-in that completes.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Message))]
+    private bool _signInFailed;
+
     [ObservableProperty]
     private string _title = string.Empty;
 
-    public SignInNeededViewModel(IGcpAccount account, IMessenger messenger, IStringResourceProvider strings, IDispatcher dispatcher)
+    public SignInNeededViewModel(IGcpAccount account, IMessenger messenger, IStringResourceProvider strings, IDispatcher dispatcher, IDiagnosticsLog? log = null)
     {
+        _log = log ?? NullDiagnosticsLog.Instance;
         _account = account;
         _strings = strings;
         _dispatcher = dispatcher;
@@ -43,7 +50,7 @@ public sealed partial class SignInNeededViewModel : ObservableObject
     }
 
     /// <summary>What the bar says under its title: one line, the action and why.</summary>
-    public string Message => _strings.GetString("SignInNeeded_Message");
+    public string Message => _strings.GetString(SignInFailed ? "AuthError_SIGNIN_FAILED" : "SignInNeeded_Message");
 
     private void Add(string? sub)
     {
@@ -51,6 +58,7 @@ public sealed partial class SignInNeededViewModel : ObservableObject
         Prune();
         if (grew && _waiting.Count > 0)
         {
+            SignInFailed = false;
             IsOpen = true;
         }
     }
@@ -96,10 +104,18 @@ public sealed partial class SignInNeededViewModel : ObservableObject
         {
             return;
         }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Review F7a: not a sign-in answer (a cancelled browser wait, a network error): it must not escape the command. Log the class only; the bar says the sign-in failed and keeps its button.
+            _log.Warning("sign-in-needed", null, ex.GetType().Name);
+            _dispatcher.Enqueue(() => SignInFailed = true);
+            return;
+        }
 
         // An account whose id was never known cannot be matched to the list, so any completed sign-in answers it.
         _dispatcher.Enqueue(() =>
         {
+            SignInFailed = false;
             _waiting.Remove(UnknownSub);
             Prune();
         });

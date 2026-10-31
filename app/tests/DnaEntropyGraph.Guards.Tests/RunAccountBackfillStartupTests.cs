@@ -33,11 +33,15 @@ public sealed class RunAccountBackfillStartupTests : IDisposable
         }
     }
 
-    private ServiceProvider Build(bool signedIn)
+    private ServiceProvider Build(bool signedIn, bool secondAccount = false)
     {
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
-        services.AddSingleton<FakeGcp>(_ => signedIn ? new FakeGcp().WithSelectedProject("my-project") : new FakeGcp().WithSignedOut());
+        services.AddSingleton<FakeGcp>(_ =>
+        {
+            var fake = signedIn ? new FakeGcp().WithSelectedProject("my-project") : new FakeGcp().WithSignedOut();
+            return secondAccount ? fake.WithAccount("second-sub", "second@example.test", "other-project") : fake;
+        });
         // The Fake backend signs in through the real account service; the scripted account is the FakeGcp one.
         services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
         return services.BuildServiceProvider();
@@ -92,5 +96,18 @@ public sealed class RunAccountBackfillStartupTests : IDisposable
         await AppStartup.BeginAsync(signedIn, CancellationToken.None);
 
         (await RowAsync(signedIn, "old-cloud")).AccountSub.ShouldBe(FakeGcp.DefaultAccountSub);
+    }
+
+    [Fact]
+    public async Task With_two_accounts_on_this_PC_the_rows_stay_null_because_which_one_made_them_is_unknowable_and_it_does_not_try_again()
+    {
+        using var provider = Build(signedIn: true, secondAccount: true);
+        provider.GetRequiredService<IGcpAccount>().Accounts.Count.ShouldBe(2, "the fixture really has two accounts");
+        await SeedAsync(provider, "old-cloud", "cloud");
+
+        await AppStartup.BeginAsync(provider, CancellationToken.None);
+
+        (await RowAsync(provider, "old-cloud")).AccountSub.ShouldBeNull("two accounts: baking either onto the old rows could be wrong for good");
+        provider.GetRequiredService<ISettingsStore>().GetString(DnaEntropyGraph.Core.Cloud.RunAccountBackfill.MarkerKey).ShouldBe("1");
     }
 }

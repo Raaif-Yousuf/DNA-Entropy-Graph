@@ -14,38 +14,37 @@ namespace DnaEntropyGraph.Guards.Tests;
 /// </summary>
 public class SelectionReadGuardTests
 {
-    private static readonly Regex Read = new(@"\bSelectedProjectId\b|\bCurrentAccount\b|\bSelectedScope\(", RegexOptions.Compiled);
+    private static readonly Regex Read = new(@"\bSelectedProjectId\b|\bCurrentAccount\b|\bSelectedScope\(|\bActiveSnapshot\(", RegexOptions.Compiled);
 
     /// <summary>
-    /// File name to (why the selection is read there, how many lines read it). A file is matched by its name, so two files of one name would share an entry (none do). The COUNT makes the entry
+    /// File name to (why the selection is read there, how many times it reads it). A file is matched by its name, so two files of one name would share an entry (none do). The COUNT makes the entry
     /// exact: a second read added to an allowed file (a new one inside <c>JobEngine.CancelRunAsync</c>, say) changes the count and fails, instead of riding on the file's allowance.
     /// </summary>
     private static readonly Dictionary<string, (string Reason, int Reads)> Allowed = new(StringComparer.Ordinal)
     {
-        ["IGcpAccount.cs"] = ("the definition of the selection", 3),
-        ["GoogleAccountService.cs"] = ("the real implementation of the selection", 3),
+        ["IGcpAccount.cs"] = ("the definition of the selection (SelectedProjectId, SelectedScope, ActiveSnapshot, CurrentAccount)", 4),
+        ["GoogleAccountService.cs"] = ("the real implementation of the selection", 4),
         ["FakeGcp.cs"] = ("the fake's implementation of the selection", 2),
-        ["FakeGcp.Scope.cs"] = ("the fake's implementation of the selection", 3),
-        ["WizardViewModel.cs"] = ("the setup wizard chooses the account and project", 6),
+        ["FakeGcp.Scope.cs"] = ("the fake's implementation of the selection", 6),
+        ["WizardViewModel.cs"] = ("the setup wizard chooses the account and project (occurrences: the count is per occurrence since review F7d, so two reads on one line are two)", 9),
         ["SetupStepsViewModel.cs"] = ("the setup steps act on the project being set up", 4),
-        ["SetupCheckService.cs"] = ("the setup checks act on the project being set up, as the account of the selection (one SelectedScope read)", 1),
-        ["ShellViewModel.cs"] = ("the status pill names the current account", 1),
+        ["SetupCheckService.cs"] = ("the setup checks act on the project being set up, as the active account (one ActiveSnapshot read, review F6)", 1),
+        ["ShellViewModel.cs"] = ("the status pill names the current account (per occurrence since review F7d)", 2),
         ["BudgetSettingsViewModel.cs"] = ("budget and billing settings are about the selected project", 1),
-        ["QuotaRequest.cs"] = ("a quota increase is asked for the project being set up, as the account of the selection (one SelectedScope read)", 1),
+        ["QuotaRequest.cs"] = ("a quota increase is asked for the project being set up, as the active account (one ActiveSnapshot read, review F6)", 1),
         ["JobEngine.cs"] = ("the ONE capture of the selected scope when a new run is created; the run keeps it from then on", 1),
         ["CloudResourcesViewModel.cs"] = ("the Cloud page lists the selected project; each row keeps the scope it was listed in", 6),
         ["HistoryViewModel.cs"] = ("importing an existing run adopts the selected project and account", 2),
         ["LeftRunningGuard.cs"] = ("the left-running scan adds the selected scope to the scopes of recent runs", 1),
         ["ServiceRegistration.cs"] = ("hands the selected project to the budget gateway and the selected scope to the reconciler's sweeps", 2),
-        ["RunAccountBackfill.cs"] = ("the one-time backfill gives a run row from before accounts were recorded the account that is current at the first launch after the upgrade", 1),
     };
 
     private static IEnumerable<(string Path, int Count)> Reads(IEnumerable<(string Path, string Text)> files)
         => files
-            .Select(f => (f.Path, Count: f.Text.Split('\n').Count(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal) && Read.IsMatch(line))))
+            .Select(f => (f.Path, Count: f.Text.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)).Sum(line => Read.Matches(line).Count)))
             .Where(f => f.Count > 0);
 
-    /// <summary>A file that reads the selection and is not allowed, or an allowed file whose number of reading lines is not the one its entry states.</summary>
+    /// <summary>A file that reads the selection and is not allowed, or an allowed file whose number of reads is not the one its entry states.</summary>
     private static IEnumerable<string> Violations(IEnumerable<(string Path, string Text)> files, IReadOnlyDictionary<string, (string Reason, int Reads)>? allowed = null)
     {
         allowed ??= Allowed;
@@ -80,6 +79,15 @@ public class SelectionReadGuardTests
 
         Violations([oneRead], allowed).ShouldBeEmpty();
         Violations([twoReads], allowed).ShouldBe(["src/App/JobEngine.cs"]);
+    }
+
+    [Fact]
+    public void Two_reads_on_one_line_count_as_two()
+    {
+        var allowed = new Dictionary<string, (string Reason, int Reads)> { ["JobEngine.cs"] = ("the one capture", 1) };
+        var twoOnOneLine = ("src/App/JobEngine.cs", "var pair = (_account.SelectedScope(), _account.SelectedProjectId);");
+
+        Violations([twoOnOneLine], allowed).ShouldBe(["src/App/JobEngine.cs"]);
     }
 
     [Fact]

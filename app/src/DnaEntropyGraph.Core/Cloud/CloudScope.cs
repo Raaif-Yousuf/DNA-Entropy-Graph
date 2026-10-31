@@ -8,3 +8,9 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// recorded, which is backfilled once (see the <c>Runs.AccountSub</c> migration), never re-resolved per call.
 /// </summary>
 public sealed record CloudScope(string ProjectId, string? AccountSub = null);
+
+/// <summary>
+/// Issue #830 review F6: the active account and its project from ONE read. <paramref name="AccountSub"/> is the active account even while it has no project yet or must sign in again
+/// (<see cref="Abstractions.IGcpAccount.SelectedScope"/> is null then), so a wizard call can still pin the account it started under. <paramref name="ProjectId"/> is null when none is chosen.
+/// </summary>
+public sealed record ActiveAccountSnapshot(string AccountSub, string? ProjectId, bool NeedsSignIn);

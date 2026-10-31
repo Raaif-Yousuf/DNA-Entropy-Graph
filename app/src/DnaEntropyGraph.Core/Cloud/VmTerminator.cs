@@ -6,6 +6,24 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// Hard Rule 11: ends a run's VM (stop or delete), verifies it independently, and finds VMs by job-id label (Hard Rule 9).
 /// Holds no run state: every method is a look at the gateway plus a bounded wait.
 /// </summary>
+/// <summary>
+/// Review F5: why a cancel's delete or read-back could not finish, as the sentence the row keeps AND the error class that decided it. The class is typed, so the row's code
+/// (<see cref="RunErrorCodes.AccountSignedOut"/> or <see cref="RunErrorCodes.CancelFailed"/>) is chosen from it, never by searching the English sentence.
+/// </summary>
+internal sealed record EndFailure(string Message, string ErrorClass)
+{
+    public bool AccountSignedOut => ErrorClass == RunErrorCodes.AccountSignedOut;
+
+    /// <summary>"{stem} ({class}). {action}", except that a signed-out account's sentence names the sign-in action instead of the Cloud page (nothing on the Cloud page can fix it).</summary>
+    public static EndFailure Of(string stem, string errorClass, string cloudAction)
+        => new(errorClass == RunErrorCodes.AccountSignedOut
+            ? $"{stem} ({errorClass}). Sign in as the Google account this run was made under, then try again."
+            : $"{stem} ({errorClass}). {cloudAction}", errorClass);
+
+    /// <summary>A failure with no error class of its own (a timeout, a read that never answered).</summary>
+    public static EndFailure Other(string message) => new(message, RunErrorCodes.Other);
+}
+
 internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _appRequestedEnds = new(StringComparer.Ordinal);
@@ -228,9 +246,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Defence in depth beside the label listing: THEORY (unverified, no live project) a pending request is a listable instance; if it is not, only this finds it.
     /// Null when every one is gone (or none was given), else why not. A request already gone (404) is the state wanted.
     /// </summary>
-    public async Task<string?> DeleteQueuedRequestsAsync(CloudScope scope, IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken)
+    public async Task<EndFailure?> DeleteQueuedRequestsAsync(CloudScope scope, IReadOnlyList<(string Name, string Zone)> requests, CancellationToken cancellationToken)
     {
-        string? error = null;
+        EndFailure? error = null;
         foreach (var (name, zone) in requests)
         {
             try
@@ -256,7 +274,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 {
                     if (settings.ElapsedSince(clockStart) >= settings.LifecycleTimeout)
                     {
-                        error ??= $"The waiting request '{name}' in zone '{zone}' was still there after Delete.";
+                        error ??= EndFailure.Other($"The waiting request '{name}' in zone '{zone}' was still there after Delete.");
                         break;
                     }
 
@@ -265,7 +283,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             }
             catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
-                error ??= $"The waiting request '{name}' in zone '{zone}' could not be deleted ({ErrorClassOf(ex)}). Delete it from the Cloud page.";
+                error ??= EndFailure.Of($"The waiting request '{name}' in zone '{zone}' could not be deleted", ErrorClassOf(ex), "Delete it from the Cloud page.");
             }
         }
 
@@ -734,7 +752,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Only a VM this run CREATED (named <see cref="OwnVmName"/>) is deleted: one the run borrowed by reuse keeps its owner's name, is STOPPED here, and is never counted as left.
     /// Returns null when the VMs are confirmed gone, else why not.
     /// </summary>
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
+    public async Task<EndFailure?> DeleteOwnedVmsAndVerifyAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
     {
         var sent = sentCreates ?? [];
 
@@ -753,13 +771,13 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
-    private async Task<string?> DeleteOwnedCoreAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
+    private async Task<EndFailure?> DeleteOwnedCoreAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
     {
         // Round 4 M3: a REUSE names another run's VM: it is never a delete target nor counted as left (the watch stops it if it lands), so only creates go through the by-name delete and read-back below.
         var sent = allSent.Where(c => !c.IsReuse).ToList();
         var ownName = OwnVmName(jobId);
         IReadOnlyList<VmDescriptor> owned;
-        string? listError = null;
+        EndFailure? listError = null;
         try
         {
             owned = await calls.CallAsync(token => compute.FindByJobIdAsync(scope, jobId, token), cancellationToken).ConfigureAwait(false);
@@ -768,7 +786,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         {
             // The names this job asked for are still deleted; only the label sweep is missing, and the run says so. The class, never the message (it can carry a path).
             owned = [];
-            listError = $"The VMs for this job could not be listed ({ErrorClassOf(ex)}). Check the Cloud page and delete any VM left for this job.";
+            listError = EndFailure.Of("The VMs for this job could not be listed", ErrorClassOf(ex), "Check the Cloud page and delete any VM left for this job.");
         }
 
         var targets = new Dictionary<(string Name, string Zone), VmDescriptor?>();
@@ -782,7 +800,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             targets.TryAdd((create.Name, create.Zone), null);
         }
 
-        string? deleteError = null;
+        EndFailure? deleteError = null;
         foreach (var ((name, zone), listed) in targets)
         {
             // Every VM is attempted even when an earlier delete failed: the first failure is what is reported.
@@ -814,7 +832,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 var (result, error) = await DeleteByNameAsync(scope, name, zone, cancellationToken).ConfigureAwait(false);
                 if (result == DeleteResult.Failed)
                 {
-                    deleteError ??= $"VM '{name}' in zone '{zone}' could not be deleted ({error}). Delete it from the Cloud page.";
+                    deleteError ??= EndFailure.Of($"VM '{name}' in zone '{zone}' could not be deleted", error ?? RunErrorCodes.Other, "Delete it from the Cloud page.");
                 }
 
                 continue;
@@ -825,8 +843,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             if (reap.Step == ReapStep.DeleteFailed)
             {
                 deleteError ??= create0.Landed
-                    ? $"VM '{name}' in zone '{zone}' could not be deleted ({reap.ErrorClass}). Delete it from the Cloud page."
-                    : $"The app could not confirm whether VM '{name}' in zone '{zone}' exists or delete it ({reap.ErrorClass}). Check the Cloud page and delete it if it is there.";
+                    ? EndFailure.Of($"VM '{name}' in zone '{zone}' could not be deleted", reap.ErrorClass ?? RunErrorCodes.Other, "Delete it from the Cloud page.")
+                    : EndFailure.Of($"The app could not confirm whether VM '{name}' in zone '{zone}' exists or delete it", reap.ErrorClass ?? RunErrorCodes.Other, "Check the Cloud page and delete it if it is there.");
             }
         }
 
@@ -888,10 +906,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 if (confirmed.Count == 0)
                 {
                     // Round 7 L1, round 8 L1: nothing READ present on the last look (never seen, or seen once and since read gone or unreadable). Say that, not "still there".
-                    return "The app could not check whether the VMs for this job are gone. Check the Cloud page and delete any VM left for this job.";
+                    return EndFailure.Other("The app could not check whether the VMs for this job are gone. Check the Cloud page and delete any VM left for this job.");
                 }
 
-                return $"{confirmed.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.";
+                return EndFailure.Other($"{confirmed.Count} VM(s) for this job were still there {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete. Delete them from the Cloud page.");
             }
 
             await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
@@ -900,14 +918,14 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         var seconds = settings.CreateSettleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture);
         return listError ?? settle switch
         {
-            CreateSettleState.CreateInFlight => $"A create request was still in flight after {seconds} s, so a VM may still appear. The app deletes it if it does; check the Cloud page to be sure.",
-            CreateSettleState.ReuseInFlight => $"A request to start an earlier VM was still in flight after {seconds} s, so that VM may start. The app stops it again if it does; check the Cloud page to be sure.",
+            CreateSettleState.CreateInFlight => EndFailure.Other($"A create request was still in flight after {seconds} s, so a VM may still appear. The app deletes it if it does; check the Cloud page to be sure."),
+            CreateSettleState.ReuseInFlight => EndFailure.Other($"A request to start an earlier VM was still in flight after {seconds} s, so that VM may start. The app stops it again if it does; check the Cloud page to be sure."),
             _ => null,
         };
     }
 
     /// <summary>Stops a VM this run borrowed (it keeps its owner's name). Null when it is stopped (or stopping, or gone), else why not, with the action.</summary>
-    private async Task<string?> StopBorrowedAsync(CloudScope scope, VmDescriptor vm, CancellationToken cancellationToken)
+    private async Task<EndFailure?> StopBorrowedAsync(CloudScope scope, VmDescriptor vm, CancellationToken cancellationToken)
     {
         if (VmFacts.IsStopped(vm) || vm.Status == "STOPPING")
         {
@@ -935,7 +953,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
-            return $"VM '{vm.Name}' in zone '{vm.Zone}' was started for this run by an earlier job and could not be stopped ({ErrorClassOf(ex)}). Stop it from the Cloud page.";
+            return EndFailure.Of($"VM '{vm.Name}' in zone '{vm.Zone}' was started for this run by an earlier job and could not be stopped", ErrorClassOf(ex), "Stop it from the Cloud page.");
         }
     }
 

@@ -31,10 +31,14 @@ public sealed class SignInNeededViewModelTests
             strings.GetString("SignInNeeded_Title").Returns("Sign in as {0}");
             strings.GetString("SignInNeeded_Joiner").Returns(" or ");
             Account.Accounts.Returns(_ => Accounts);
-            ViewModel = new SignInNeededViewModel(Account, Messenger, strings, new ImmediateDispatcher());
+            ViewModel = new SignInNeededViewModel(Account, Messenger, strings, new ImmediateDispatcher(), Log);
         }
 
         public List<AccountInfo> Accounts { get; }
+
+        public List<string> LogLines { get; } = [];
+
+        private IDiagnosticsLog Log => new Recorder(LogLines);
 
         public IGcpAccount Account { get; } = Substitute.For<IGcpAccount>();
 
@@ -43,6 +47,11 @@ public sealed class SignInNeededViewModelTests
         public SignInNeededViewModel ViewModel { get; }
 
         public void Need(string? sub) => Messenger.Send(new AccountSignInNeededMessage(sub));
+    }
+
+    private sealed class Recorder(List<string> lines) : IDiagnosticsLog
+    {
+        public void Warning(string source, string? jobId, string errorClass) => lines.Add($"{source}/{errorClass}");
     }
 
     private static AccountInfo SignedOut(string sub, string email) => new(sub, email, NeedsSignIn: true);
@@ -139,5 +148,22 @@ public sealed class SignInNeededViewModelTests
 
         rig.Need("sub-b");
         rig.ViewModel.IsOpen.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(OperationCanceledException))]
+    public async Task A_sign_in_that_fails_for_a_reason_that_is_not_a_sign_in_answer_does_not_escape_and_the_bar_says_it_failed(Type failure)
+    {
+        // Issue #830 review F7a.
+        var rig = new Rig(SignedOut("sub-a", "a@example.org"));
+        rig.Need("sub-a");
+        rig.Account.SignInAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException((Exception)Activator.CreateInstance(failure)!));
+
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+
+        rig.ViewModel.IsOpen.ShouldBeTrue("the bar stays so the person can try again");
+        rig.ViewModel.Message.ShouldBe("AuthError_SIGNIN_FAILED");
+        rig.LogLines.ShouldBe([$"sign-in-needed/{failure.Name}"]);
     }
 }

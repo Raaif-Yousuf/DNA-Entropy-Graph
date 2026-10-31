@@ -125,6 +125,9 @@ public static class RunErrorCodes
     /// <summary>A Failed row a cancel left because it could not confirm the computer gone: <see cref="CancelFailed"/>, or <see cref="AccountSignedOut"/> when the run's account was signed out at the time. Both are retried by the reconciler.</summary>
     public static bool IsUnconfirmedCancel(string? code) => code is CancelFailed or AccountSignedOut;
 
+    /// <summary>Issue #830 review F4: a code that records that the run's computer was NOT confirmed ended (so something may still be running and billing).</summary>
+    public static bool IsVmEndUnconfirmed(string? code) => code is CancelFailed or AccountSignedOut or LateCreateUnconfirmed or VmEndUnconfirmed or LifecycleUnverified;
+
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
     [

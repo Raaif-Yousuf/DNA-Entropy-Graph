@@ -257,6 +257,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // Issue #830: the run's own project and account, from its row, never the current selection.
         var scope = await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false);
         await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(scope, jobId, cancellationToken)).ConfigureAwait(false);
+
+        // Review F1: a cancel whose run's account is signed out does not throw: it records Failed/account_signed_out, whose copy points at a Sign in button. Raise the same signal the reconciler does,
+        // so the shell bar offers it too (the run page reads the same row and shows its own prompt).
+        var rows = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        if (rows.LastOrDefault(r => r.JobId == jobId) is { Phase: JobPhase.Failed, ErrorCode: RunErrorCodes.AccountSignedOut } ended)
+        {
+            _messenger.Send(new AccountSignInNeededMessage(ended.AccountSub));
+        }
     }
 
     /// <summary>Issue #830: the scope a run's resources live in, from its row. No row is a <see cref="RunNotFoundException"/> (review M5): the app cannot say where the run's computer is, and returning silently would leave the person thinking it was stopped.</summary>

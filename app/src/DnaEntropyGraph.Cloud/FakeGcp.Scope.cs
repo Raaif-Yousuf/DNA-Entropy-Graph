@@ -93,6 +93,9 @@ public sealed partial class FakeGcp
         return IsSignedIn && project is { Length: > 0 } && account is not null ? new CloudScope(project, account.Sub) : null;
     }
 
+    public ActiveAccountSnapshot? ActiveSnapshot()
+        => CurrentAccount is { } account ? new ActiveAccountSnapshot(account.Sub, SelectedProjectId, account.NeedsSignIn) : null;
+
     /// <summary>The scope the unscoped overloads stand for: the selected project (or "fake-project") as the default account.</summary>
     public CloudScope DefaultScope => new(_selectedProjectId ?? "fake-project", DefaultAccountSub);
 
