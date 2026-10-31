@@ -222,6 +222,8 @@ and `predictor.device` may be `cuda:0`.
 | `store.root` | The local job folder of a `localdir` job | Informational (diagnostics bundle only). Deliberately **not** cross-checked against the store the worker was started with: it is the user's own folder on the same machine and Windows path spellings (case, 8.3 names, junctions) would cause false refusals. |
 | `worker.version` | The app's DECLARED expectation for the worker build (`worker.image` is the pinned digest actually run) | **Fixed 2026-09-19 (issue #344)**: parsed but never compared to anything - only `worker.image` was ever echoed into `status.json`, so an app talking to a genuinely different worker build than it expected had no way to notice. `run_job` now logs a `progress.jsonl` notice when `worker.version` is declared (non-empty) and disagrees with the actually-running build's own version - visibility only, per the issue's own scope; it never refuses or fails the job on a mismatch. |
 
+**Field types (issue #878, 2026-10-30).** Every field is type-checked on the raw JSON: whole numbers must be JSON integers (not `"5"`, `5.5`, `true` or `null`), text fields must be JSON strings, `rna`/`genes` must be booleans, `predictor`/`analysis`/`limits`/`lifecycle`/`worker` must be objects when present, `outputs` a list of strings. A wrong-typed field raises `ManifestError` naming the field (`worker/manifest.py`: `_int_field`, `_str_field`, `_bool_field`, `_object_field`), never a raw `ValueError`/`TypeError` and never a silent `int()`/`str()` coercion. A manifest that fails to parse is reported by the `worker-run` command (`ERROR:` line, exit code 2) before any `status.json` or `result.json` exists. Optional fields stay optional.
+
 ---
 
 ## 4. `status.json` and `progress.jsonl`
