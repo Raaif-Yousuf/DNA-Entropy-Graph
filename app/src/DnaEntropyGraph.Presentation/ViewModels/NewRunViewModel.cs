@@ -755,6 +755,18 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
+    private static async Task LookAtThisPcAsync(RunTargetPickerViewModel picker)
+    {
+        try
+        {
+            await picker.RefreshAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Nothing passes a token here; if one ever does, a cancelled look simply leaves the last answer.
+        }
+    }
+
     /// <summary>
     /// What the page forwards from its navigation parameter (issue #108): files handed over by "Open with" in Explorer arrive as
     /// <see cref="DroppedItems"/> and are added like a drop; any other parameter (none, the usual case) is ignored.
@@ -768,10 +780,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         _ = RefreshEstimateAsync();
 
         // Issue #735: look at this PC again each time the page shows, so the Where to run box greys out This PC (with its reason) where it cannot run the model.
-        // Never throws; it resumes on this (UI) context because the picker's properties are bound.
+        // A failed check is shown as a reason, not thrown; only cancellation can surface, and it is ignored here so no faulted task is left unobserved.
+        // It resumes on this (UI) context because the picker's properties are bound.
         if (RunTarget is not null)
         {
-            _ = RunTarget.RefreshAsync();
+            _ = LookAtThisPcAsync(RunTarget);
         }
 
         // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.

@@ -166,7 +166,7 @@ public sealed partial class RunTargetPickerViewModel : ObservableObject
     private LocalReadiness? _lastReadiness;
     private int _refreshGeneration;
 
-    /// <summary>Looks at this PC again and enables or greys out This PC. Never throws.</summary>
+    /// <summary>Looks at this PC again and enables or greys out This PC. A failed check greys it out with a reason instead of throwing; only cancellation of <paramref name="cancellationToken"/> is rethrown.</summary>
     /// <remarks>Last started wins: New run and Settings share this picker, so two looks can overlap, and a slow older probe finishing last must not overwrite the newer answer.</remarks>
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {

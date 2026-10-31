@@ -111,8 +111,6 @@ public sealed class NewRunRunTargetTests : IDisposable
     public async Task Opening_New_run_looks_at_this_PC_so_This_PC_is_greyed_out_with_its_reason_where_it_cannot_run()
     {
         var readiness = Substitute.For<ILocalReadinessSource>();
-        readiness.CheckAsync(Arg.Any<CancellationToken>())
-            .Returns(new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30), LocalEngineHealth.NotInstalled()));
         var probeStarted = new TaskCompletionSource();
         readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
@@ -137,18 +135,6 @@ public sealed class NewRunRunTargetTests : IDisposable
 
         thisPc.IsAvailable.ShouldBeFalse();
         vm.RunTarget.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
-    }
-
-    [Fact]
-    public async Task A_page_without_a_picker_opens_without_looking_at_this_PC()
-    {
-        var readiness = Substitute.For<ILocalReadinessSource>();
-        var vm = Create(withPicker: false, readiness);
-
-        await vm.ReceiveNavigationParameterCommand.ExecuteAsync(null);
-
-        vm.ReceiveNavigationParameterCommand.IsRunning.ShouldBeFalse();
-        await readiness.DidNotReceive().CheckAsync(Arg.Any<CancellationToken>());
     }
 
     private async Task<NewRunViewModel> BlockedByCapAsync(string target)

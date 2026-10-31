@@ -91,20 +91,29 @@ public sealed class RunTargetPickerTests
     }
 
     [Fact]
-    public async Task When_two_looks_overlap_and_the_older_one_finishes_first_the_newer_answer_still_wins()
+    public async Task When_two_looks_overlap_and_the_older_one_finishes_first_its_answer_is_dropped_and_the_newer_answer_wins()
     {
-        var slowNew = new TaskCompletionSource<LocalReadiness>();
-        _readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(new LocalReadiness(Capable(), Healthy())), slowNew.Task);
+        // Both probes are pending at once, so the calls really overlap; the older (blocked) finishes first, then the newer (available).
+        var older = new TaskCompletionSource<LocalReadiness>();
+        var newer = new TaskCompletionSource<LocalReadiness>();
+        _readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(older.Task, newer.Task);
         var vm = Create();
+        var thisPc = vm.Options.Single(o => o.Value == "This PC");
 
         var first = vm.RefreshAsync(TestContext.Current.CancellationToken);
         var second = vm.RefreshAsync(TestContext.Current.CancellationToken);
-        await first;
-        slowNew.SetResult(new LocalReadiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled()));
-        await second;
+        first.IsCompleted.ShouldBeFalse();
+        second.IsCompleted.ShouldBeFalse();
 
-        vm.Options.Single(o => o.Value == "This PC").IsAvailable.ShouldBeFalse();
-        vm.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
+        older.SetResult(new LocalReadiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled()));
+        await first;
+        thisPc.IsAvailable.ShouldBeTrue("an answer from a look that a newer one replaced is not applied");
+        vm.ThisPcReason.ShouldBeEmpty();
+
+        newer.SetResult(new LocalReadiness(Capable(), Healthy()));
+        await second;
+        thisPc.IsAvailable.ShouldBeTrue();
+        thisPc.Reason.ShouldBeEmpty();
     }
 
     [Fact]
