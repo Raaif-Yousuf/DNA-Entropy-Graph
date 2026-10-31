@@ -221,8 +221,9 @@ def test_dotnet_list_package_runs_with_node_isolation_defaults(monkeypatch, tmp_
         return subprocess.CompletedProcess(argv, 0, stdout='{"projects": []}', stderr="")
 
     monkeypatch.setattr(gtpn.subprocess, "run", fake_run)
-    monkeypatch.delenv("MSBUILDDISABLENODEREUSE", raising=False)
+    for name in ("MSBUILDDISABLENODEREUSE", "UseSharedCompilation", "DOTNET_CLI_USE_MSBUILD_SERVER"):
+        monkeypatch.delenv(name, raising=False)
     gtpn._dotnet_list_packages(tmp_path / "x.csproj")
     env = seen["env"]
     assert isinstance(env, dict)
-    assert env["MSBUILDDISABLENODEREUSE"] == "1" and env["UseSharedCompilation"] == "false"
+    assert env["MSBUILDDISABLENODEREUSE"] == "1" and env["UseSharedCompilation"] == "false" and env["DOTNET_CLI_USE_MSBUILD_SERVER"] == "0"
