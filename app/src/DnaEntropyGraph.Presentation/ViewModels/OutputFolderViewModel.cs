@@ -1,0 +1,110 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Presentation.Messaging;
+using DnaEntropyGraph.Presentation.Services;
+
+namespace DnaEntropyGraph.Presentation.ViewModels;
+
+/// <summary>
+/// The "Save results to" folder (issue #1037). ONE instance (singleton) is shown on Settings (Run defaults) and on New run, so the two can never
+/// disagree. The choice is one settings key, <see cref="SettingKey"/>; blank or missing means the default (Downloads, resolved by the engines through
+/// <c>RunOutputFolders.DefaultParent</c>), so <see cref="FolderPath"/> is null then. A folder goes through <see cref="OutputFolderChoice.Check"/>
+/// before it is saved: a refused folder shows its message beside the control and nothing is written. The user's files are only ever read (Hard Rule 14):
+/// this class stores a path, it creates and deletes nothing.
+/// </summary>
+public sealed partial class OutputFolderViewModel : ObservableObject
+{
+    /// <summary>The settings key. A path on this PC, so it is listed as excluded from Export settings in <c>SettingsCatalog.Excluded</c>.</summary>
+    public const string SettingKey = "output_folder";
+
+    private readonly ISettingsStore _store;
+    private readonly IFilePicker _picker;
+    private readonly IStringResourceProvider _strings;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayText))]
+    private string? _folderPath;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMessage))]
+    private string _message = string.Empty;
+
+    public OutputFolderViewModel(ISettingsStore store, IFilePicker picker, IStringResourceProvider strings, IMessenger? messenger = null)
+    {
+        _store = store;
+        _picker = picker;
+        _strings = strings;
+        _folderPath = Read();
+        messenger?.Register<OutputFolderViewModel, SettingsResetMessage>(this, static (vm, _) => vm.Reload());
+    }
+
+    /// <summary>What the page shows: the chosen folder, or the plain words for the default.</summary>
+    public string DisplayText => FolderPath ?? _strings.GetString("OutputFolder_Default_Text");
+
+    public bool HasMessage => Message.Length > 0;
+
+    [RelayCommand]
+    private async Task ChangeAsync(CancellationToken cancellationToken)
+    {
+        var picked = await _picker.PickOutputFolderAsync(cancellationToken);
+        Message = string.Empty;
+        if (string.IsNullOrWhiteSpace(picked))
+        {
+            // Cancelled, or a folder with no local path: nothing changes.
+            return;
+        }
+
+        var verdict = OutputFolderChoice.Check(picked, _strings);
+        if (!verdict.Accepted)
+        {
+            Message = verdict.Message ?? string.Empty;
+            return;
+        }
+
+        Save(picked);
+    }
+
+    [RelayCommand]
+    private void UseDownloads()
+    {
+        Message = string.Empty;
+        Save(string.Empty);
+    }
+
+    private void Save(string value)
+    {
+        try
+        {
+            _store.SetString(SettingKey, value);
+        }
+        catch (SettingsUnavailableException)
+        {
+            Message = _strings.GetString("OutputFolder_SaveFailed_Message");
+            return;
+        }
+
+        FolderPath = value.Length == 0 ? null : value;
+    }
+
+    private void Reload()
+    {
+        FolderPath = Read();
+        Message = string.Empty;
+    }
+
+    private string? Read()
+    {
+        try
+        {
+            var value = _store.GetString(SettingKey);
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        catch (SettingsUnavailableException ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading the output folder: {ex.GetType().Name}");
+            return null;
+        }
+    }
+}

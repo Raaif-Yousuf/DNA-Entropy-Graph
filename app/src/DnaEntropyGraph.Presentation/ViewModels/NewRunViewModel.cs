@@ -93,6 +93,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
     public RunTargetPickerViewModel? RunTarget { get; }
 
+    /// <summary>The Save to folder (issue #1037), shared with Settings; null in a host that has none, which means the default folder.</summary>
+    public OutputFolderViewModel? OutputFolder { get; }
+
+    public bool HasOutputFolder => OutputFolder is not null;
+
     public NewRunViewModel(
         IFilePicker filePicker,
         IJobEngine jobEngine,
@@ -114,9 +119,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         IAccessionLookup? accessionLookup = null,
         RunTargetPickerViewModel? runTarget = null,
         IDispatcher? dispatcher = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        OutputFolderViewModel? outputFolder = null)
     {
         _clock = clock ?? TimeProvider.System;
+        OutputFolder = outputFolder;
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
         Gpu.Changed += OnGpuPlanChanged;
@@ -1089,6 +1096,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Accession = item.Accession,
         AccessionRange = item.AccessionRange,
         NameTemplate = NameTemplate,
+        OutputFolder = OutputFolder?.FolderPath,
         TreatAsRna = IsTreatingAsRna,
         Direction = Presets?.Direction ?? Direction.BothCombined,
         ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
