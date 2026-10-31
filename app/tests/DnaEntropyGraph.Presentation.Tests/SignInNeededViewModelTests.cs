@@ -166,4 +166,26 @@ public sealed class SignInNeededViewModelTests
         rig.ViewModel.Message.ShouldBe("AuthError_SIGNIN_FAILED");
         rig.LogLines.ShouldBe([$"sign-in-needed/{failure.Name}"]);
     }
+
+    [Fact]
+    public async Task A_failed_sign_in_raises_property_changed_for_the_message_the_bar_binds_and_a_new_account_raises_it_again()
+    {
+        // MainWindow binds Message, so the bar text only updates if the failed flag raises PropertyChanged("Message") both ways.
+        var rig = new Rig(SignedOut("sub-a", "a@example.org"), SignedOut("sub-b", "b@example.org"));
+        rig.Need("sub-a");
+        var raised = new List<string?>();
+        rig.ViewModel.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        rig.Account.SignInAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException(new HttpRequestException()));
+
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+
+        raised.ShouldContain("Message");
+        rig.ViewModel.Message.ShouldBe("AuthError_SIGNIN_FAILED");
+
+        raised.Clear();
+        rig.Need("sub-b");
+
+        raised.ShouldContain("Message");
+        rig.ViewModel.Message.ShouldBe("SignInNeeded_Message");
+    }
 }
