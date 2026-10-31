@@ -354,9 +354,9 @@ class _PlantedPredictor:
     """One-hot (zero entropy) on every A or T, uniform on C/G. A or T, not just A, so the
     reverse-complement pass (where a planted A-run reads as T) agrees with the forward pass."""
 
-    def predict(self, window: str) -> np.ndarray:
-        probs = np.full((len(window), 4), 0.25, dtype=np.float32)
-        for i, base in enumerate(window):
+    def predict(self, seq: str) -> np.ndarray:
+        probs = np.full((len(seq), 4), 0.25, dtype=np.float32)
+        for i, base in enumerate(seq):
             if base in "AT":
                 probs[i] = [1.0, 0.0, 0.0, 0.0] if base == "A" else [0.0, 0.0, 0.0, 1.0]
         return probs

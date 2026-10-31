@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 from collections.abc import Iterator
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,7 @@ def _fetch(tmp_path: Path, fake, accession="NC_045512.2", **kw):
 
 
 def _http_error(code: int, url: str = "https://x/efetch?api_key=SECRETKEY") -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(url, code, "msg", {}, None)  # type: ignore[arg-type]
+    return urllib.error.HTTPError(url, code, "msg", Message(), None)
 
 
 def test_fetch_writes_a_readable_genbank_and_records_accession_and_date(tmp_path: Path) -> None:
