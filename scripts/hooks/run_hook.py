@@ -211,16 +211,20 @@ def run_decision(
     if not out.strip():
         return Decision(0, KIND_PASSTHROUGH, "")  # the guard's own "no opinion" -- stay silent, exactly as today
 
+    # A decision is a JSON OBJECT. Valid JSON of any other shape ([], 3, null)
+    # carries no decision, so forwarding it would silently allow the call.
     try:
-        json.loads(out)
+        parsed = json.loads(out)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
         snippet = out.strip()[:200]
         return Decision(
             0,
             KIND_NOT_JSON,
             _deny_json(
                 f"The '{guard_name}' guard exited 0 but printed something that is not valid JSON "
-                f"({snippet!r}). A decision that cannot be parsed cannot be trusted, so this tool "
+                f"({snippet!r}) or not a JSON object. A decision that cannot be parsed cannot be trusted, so this tool "
                 "call is refused rather than silently allowed through an unenforced guard.",
                 f"Blocked: guard '{guard_name}' produced an unreadable decision.",
             ),
@@ -279,6 +283,7 @@ def _is_deny(out: str) -> bool:
 
 
 def self_test() -> bool:
+    import io
     import tempfile
 
     ok = True
@@ -296,7 +301,7 @@ def self_test() -> bool:
 
     def capture(guard_name: str, hooks_dir: Path, timeout: float = SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> Decision:
         d = run_decision(guard_name, stdin_payload, timeout, hooks_dir=hooks_dir)
-        assert d.rc == 0, "run() must always return 0, matching the guard contract"
+        assert d.rc == 0, "run_decision() must always return rc 0, matching the guard contract"
         return d
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -337,6 +342,25 @@ def self_test() -> bool:
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
         d = capture("garbage", hooks_dir)
         check("a guard that exits 0 but prints non-JSON gets the not-valid-JSON deny", d.kind == KIND_NOT_JSON and _is_deny(d.stdout), d)
+
+    # The print path: run() must write exactly run_decision()'s stdout (a run()
+    # that computed the decision and skipped the write would silently allow).
+    with tempfile.TemporaryDirectory() as tmp:
+        hooks_dir = Path(tmp)
+        _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
+        expected = run_decision("denies", "{}", SELF_TEST_BACKSTOP_SECONDS, hooks_dir=hooks_dir)
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            rc = run("denies", "{}", SELF_TEST_BACKSTOP_SECONDS, hooks_dir=hooks_dir)
+        finally:
+            sys.stdout = old_stdout
+        check(
+            "run() prints exactly the decision's stdout (the print path)",
+            rc == 0 and expected.stdout != "" and buf.getvalue() == expected.stdout,
+            Decision(rc, expected.kind, buf.getvalue()),
+        )
 
     # A crashing guard's own stderr is folded into the deny reason, which is
     # also the cheapest way to prove stdin genuinely reaches the guard: make

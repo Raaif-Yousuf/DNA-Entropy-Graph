@@ -10,10 +10,13 @@ just the importable function.
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOKS_DIR = SCRIPTS_DIR / "hooks"
@@ -28,6 +31,8 @@ def _write_guard(hooks_dir: Path, name: str, source: str) -> Path:
     return p
 
 
+# Deliberately a second copy of run_hook._is_deny: an independent oracle, so a
+# bug in the dispatcher's own helper cannot make these tests agree with it.
 def _is_deny(out: str) -> bool:
     try:
         data = json.loads(out)
@@ -203,6 +208,70 @@ def test_slow_starting_guard_is_not_misread_as_a_timeout(tmp_path):
     )
     out = _capture("slow", tmp_path)
     assert "slow but mine" in out, f"captured: {out!r}"
+
+
+@pytest.mark.parametrize("printed", ["[]", "3", "null", '"allow"', "true", "[{}]"])
+def test_guard_valid_json_that_is_not_an_object_is_not_a_decision(tmp_path, printed):
+    """A guard printing valid JSON that is not an object has no decision; it must
+    fail closed with the not-valid-JSON deny, never be forwarded as a pass."""
+    _write_guard(tmp_path, "nonobj", f"import sys\nsys.stdout.write({printed!r})\nsys.exit(0)\n")
+    d = _decide("nonobj", tmp_path)
+    assert d.kind == rh.KIND_NOT_JSON, f"captured: {d!r}"
+    assert _is_deny(d.stdout), f"captured: {d!r}"
+
+
+def test_guard_json_object_is_still_forwarded_byte_for_byte(tmp_path):
+    _write_guard(tmp_path, "obj", "import sys\nsys.stdout.write('{ \"a\":1 }')\nsys.exit(0)\n")
+    d = _decide("obj", tmp_path)
+    assert d.kind == rh.KIND_PASSTHROUGH
+    assert d.stdout == '{ "a":1 }'
+
+
+def test_guard_that_cannot_be_started_denies_with_its_own_kind(tmp_path, monkeypatch):
+    _write_guard(tmp_path, "silent", "import sys\nsys.exit(0)\n")
+
+    def _oserror(*args, **kwargs):
+        raise OSError("simulated: interpreter vanished")
+
+    monkeypatch.setattr(rh.subprocess, "run", _oserror)
+    d = _decide("silent", tmp_path)
+    assert d.kind == rh.KIND_START_FAILED, f"captured: {d!r}"
+    assert _is_deny(d.stdout), f"captured: {d!r}"
+    assert "could not be started" in d.stdout
+
+
+def test_main_denies_with_exactly_one_json_object_when_subprocess_raises_unexpectedly(monkeypatch, capsys):
+    """The catch-all in main(): a real guard exists, subprocess.run raises
+    something run_decision does not anticipate; stdout is one deny object."""
+
+    def _boom(*args, **kwargs):
+        raise ValueError("not an OSError")
+
+    monkeypatch.setattr(rh.subprocess, "run", _boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    rc = rh.main(["block_git_stash"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    data = json.loads(out)  # exactly one JSON object, nothing before or after
+    assert isinstance(data, dict), f"captured: {out!r}"
+    assert _is_deny(out), f"captured: {out!r}"
+    assert "unexpected" in out.lower(), f"captured: {out!r}"
+
+
+def test_self_test_exercises_the_print_path_of_run(monkeypatch, capsys):
+    """M1: --self-test must catch a run() that computes the decision but skips
+    the write."""
+    real_run = rh.run
+
+    def _silent_run(*args, **kwargs):
+        return rh.run_decision(*args, **kwargs).rc  # decision computed, nothing written
+
+    monkeypatch.setattr(rh, "run", _silent_run)
+    assert rh.self_test() is False
+    out = capsys.readouterr().out
+    assert "FAIL" in out and "print path" in out, out
+    monkeypatch.setattr(rh, "run", real_run)
+    assert rh.self_test() is True
 
 
 def test_guard_nonjson_output_denies(tmp_path):
