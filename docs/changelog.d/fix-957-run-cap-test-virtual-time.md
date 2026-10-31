@@ -1,0 +1,1 @@
+- Fixed #957: the LocalJobRunner run-cap test no longer scales its real-time cost with machine load. The virtual clock now moves in 20 s steps (45 steps to the 15 minute cap instead of 900), the stale and no-heartbeat tests use 10 s steps, and the cap assertion is tightened to the full limit plus margin. The test still fails when the cap is disabled.

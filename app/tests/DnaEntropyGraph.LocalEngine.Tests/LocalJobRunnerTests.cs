@@ -381,11 +381,11 @@ public sealed class LocalJobRunnerTests : IDisposable
         => File.WriteAllText(Path.Combine(root, "status.json"), "{\"stage\":\"running\",\"heartbeatSeq\":" + seq + ",\"updatedAt\":\"2026-10-15T12:00:00Z\",\"worker\":{\"version\":\"0.0.1\"}}");
 
     /// <summary>
-    /// Moves the virtual clock one poll at a time (letting the runner's loop run between steps) until the condition holds.
+    /// Moves the virtual clock one poll (or <c>step</c>, where a test needs many virtual minutes) at a time (letting the runner's loop run between steps) until the condition holds.
     /// Real time here (#841) is only a yield between steps and a 30 s safety net: the outcome follows from how far the virtual clock moved, so a starved
     /// thread makes the loop take more steps and never changes which state the run ends in.
     /// </summary>
-    private static async Task AdvanceUntilAsync(VirtualTimeProvider clock, Func<bool> condition, Action? eachStep = null)
+    private static async Task AdvanceUntilAsync(VirtualTimeProvider clock, Func<bool> condition, Action? eachStep = null, TimeSpan? step = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (!condition())
@@ -396,7 +396,7 @@ public sealed class LocalJobRunnerTests : IDisposable
             }
 
             eachStep?.Invoke();
-            clock.Advance(TimeSpan.FromSeconds(1));
+            clock.Advance(step ?? TimeSpan.FromSeconds(1));
             await Task.Delay(3);
         }
     }
@@ -414,7 +414,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         // Negative evidence, real time (#841): the runner must NOT kill the worker, so a window too short to let it react can only hide a regression, never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
         worker.Killed.ShouldBeFalse("55 s is inside the 60 s first-heartbeat deadline");
-        await AdvanceUntilAsync(clock, () => run.IsCompleted);
+        await AdvanceUntilAsync(clock, () => run.IsCompleted, step: TimeSpan.FromSeconds(10));
 
         var result = await run;
         result.FinalPhase.ShouldBe(JobPhase.Failed);
@@ -440,7 +440,7 @@ public sealed class LocalJobRunnerTests : IDisposable
         }), clock).RunAsync(Request(), CancellationToken.None);
         await AdvanceUntilAsync(clock, () => _runs.Latest(JobId).LastProgressSeq == 1);
 
-        await AdvanceUntilAsync(clock, () => run.IsCompleted);
+        await AdvanceUntilAsync(clock, () => run.IsCompleted, step: TimeSpan.FromSeconds(10));
 
         var result = await run;
         result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerStalled);
@@ -462,11 +462,11 @@ public sealed class LocalJobRunnerTests : IDisposable
         }), clock).RunAsync(Request(), CancellationToken.None);
         await WaitUntilAsync(() => root is not null);
 
-        // 300 virtual seconds: 2.5 stale windows, each poll with a new heartbeat.
-        for (var step = 0; step < 300; step++)
+        // 300 virtual seconds (30 steps of 10 s, #957): 2.5 stale windows, each step with a new heartbeat.
+        for (var step = 0; step < 30; step++)
         {
             WriteHeartbeat(root!, ++seq);
-            clock.Advance(TimeSpan.FromSeconds(1));
+            clock.Advance(TimeSpan.FromSeconds(10));
             // A yield, not a wait for anything (#841): every clock move is preceded by a new heartbeat, so a runner that polls late still sees a changed one.
             await Task.Delay(2, TestContext.Current.CancellationToken);
         }
@@ -492,13 +492,14 @@ public sealed class LocalJobRunnerTests : IDisposable
         }), clock).RunAsync(Request(maxRunMinutes: 10), CancellationToken.None);
         await WaitUntilAsync(() => root is not null);
 
-        await AdvanceUntilAsync(clock, () => run.IsCompleted, () => WriteHeartbeat(root!, ++seq));
+        // 20 s steps (#957): the 15 virtual minutes to the cap cost 45 steps, not 900, so a loaded machine cannot run out the real-time safety net. Each step writes a new heartbeat and stays inside the 120 s stale window.
+        await AdvanceUntilAsync(clock, () => run.IsCompleted, () => WriteHeartbeat(root!, ++seq), TimeSpan.FromSeconds(20));
 
         var result = await run;
         result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerTimedOut);
         worker.KilledTree.ShouldBeTrue();
-        // Ten minutes plus the margin the worker's own cap gets to fire first; never earlier than the limit.
-        clock.GetUtcNow().ShouldBeGreaterThanOrEqualTo(new DateTimeOffset(2026, 10, 2, 8, 10, 0, TimeSpan.Zero));
+        // The limit (10 min) plus the 5 minute margin the worker's own cap gets to fire first; never earlier than that.
+        clock.GetUtcNow().ShouldBeGreaterThanOrEqualTo(new DateTimeOffset(2026, 10, 2, 8, 15, 0, TimeSpan.Zero));
     }
 
     [Fact]
