@@ -96,25 +96,45 @@ DEFAULT_GUARD_TIMEOUT_SECONDS = 8.0
 # genuinely broken test cannot hang forever; never use a tight value with it.
 SELF_TEST_BACKSTOP_SECONDS = 120.0
 # Only the "hangs" check uses a short deadline: its expected result (the
-# dispatcher's timeout deny) is the same however slow the machine is.
+# dispatcher's timeout deny) is the same however slow the machine is. It may
+# even expire before the interpreter has started; that is fine, because the
+# expected result is the timeout deny either way.
 SELF_TEST_HANG_TIMEOUT_SECONDS = 0.5
 
-# The phrase the dispatcher's timeout deny contains (see run()).
-TIMEOUT_DENY_MARKER = "did not finish within"
+# Every deny THIS dispatcher emits carries a machine-readable kind under this key,
+# so a caller can tell "the dispatcher timed out" from "a guard wrote a deny"
+# structurally, never by matching prose (#1055). The key is additive: the
+# user-facing reason and systemMessage text are unchanged.
+DENY_KIND_KEY = "dispatcherDenyKind"
+KIND_MISSING = "missing"
+KIND_TIMEOUT = "timeout"
+KIND_START_FAILED = "start_failed"
+KIND_CRASHED = "crashed"
+KIND_NOT_JSON = "not_json"
+KIND_USAGE = "usage"
+KIND_INTERNAL = "internal"
+
+
+def deny_kind(out: str) -> str | None:
+    """The dispatcher deny kind in `out`, or None when `out` is not valid JSON,
+    not a JSON object, or carries no kind (a guard's own decision)."""
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    kind = data.get(DENY_KIND_KEY)
+    return kind if isinstance(kind, str) else None
 
 
 def is_timeout_deny(out: str) -> bool:
     """True when `out` is this dispatcher's OWN timeout deny, as opposed to a
     guard's decision or any other fail-closed deny."""
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        return False
-    hso = data.get("hookSpecificOutput", {})
-    return hso.get("permissionDecision") == "deny" and TIMEOUT_DENY_MARKER in hso.get("permissionDecisionReason", "")
+    return deny_kind(out) == KIND_TIMEOUT
 
 
-def _deny(reason: str, system_message: str) -> None:
+def _deny(reason: str, system_message: str, kind: str) -> None:
     json.dump(
         {
             "hookSpecificOutput": {
@@ -123,6 +143,7 @@ def _deny(reason: str, system_message: str) -> None:
                 "permissionDecisionReason": reason,
             },
             "systemMessage": system_message,
+            DENY_KIND_KEY: kind,
         },
         sys.stdout,
     )
@@ -152,6 +173,7 @@ def run(
             "No guard ran, so this tool call is refused rather than silently allowed through "
             "an unenforced guard.",
             f"Blocked: guard '{guard_name}' is missing.",
+            KIND_MISSING,
         )
         return 0
 
@@ -165,10 +187,11 @@ def run(
         )
     except subprocess.TimeoutExpired:
         _deny(
-            f"The '{guard_name}' guard {TIMEOUT_DENY_MARKER} {timeout:g}s and was killed. "
+            f"The '{guard_name}' guard did not finish within {timeout:g}s and was killed. "
             "A hung guard cannot have an opinion, so this tool call is refused rather than "
             "silently allowed through an unenforced guard.",
             f"Blocked: guard '{guard_name}' timed out.",
+            KIND_TIMEOUT,
         )
         return 0
     except OSError as exc:
@@ -176,6 +199,7 @@ def run(
             f"The '{guard_name}' guard could not be started under {sys.executable}: {exc}. "
             "Refused rather than silently allowed through an unenforced guard.",
             f"Blocked: guard '{guard_name}' could not be started.",
+            KIND_START_FAILED,
         )
         return 0
 
@@ -188,7 +212,7 @@ def run(
         reason += (
             ". A crashing guard cannot have an opinion, so this tool call is refused rather than silently allowed through an unenforced guard."
         )
-        _deny(reason, f"Blocked: guard '{guard_name}' crashed.")
+        _deny(reason, f"Blocked: guard '{guard_name}' crashed.", KIND_CRASHED)
         return 0
 
     out = proc.stdout
@@ -204,6 +228,7 @@ def run(
             f"({snippet!r}). A decision that cannot be parsed cannot be trusted, so this tool "
             "call is refused rather than silently allowed through an unenforced guard.",
             f"Blocked: guard '{guard_name}' produced an unreadable decision.",
+            KIND_NOT_JSON,
         )
         return 0
 
@@ -239,7 +264,10 @@ def _is_deny(out: str) -> bool:
         data = json.loads(out)
     except json.JSONDecodeError:
         return False
-    return data.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    if not isinstance(data, dict):
+        return False
+    hso = data.get("hookSpecificOutput", {})
+    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
 
 
 def self_test() -> bool:
@@ -248,16 +276,15 @@ def self_test() -> bool:
 
     ok = True
 
-    def check(label: str, condition: bool, captured: str | None = None, expect_timeout: bool = False) -> None:
+    def check(label: str, condition: bool, captured: str, expect_timeout: bool = False) -> None:
         nonlocal ok
         if condition:
             print(f"ok    {label}")
         else:
             print(f"FAIL  {label}")
-            if captured is not None:
-                if not expect_timeout and is_timeout_deny(captured):
-                    print("      cause: the dispatcher's own timeout deny (machine load?), not a behaviour bug")
-                print(f"      captured: {captured!r}")
+            if not expect_timeout and is_timeout_deny(captured):
+                print("      cause: the dispatcher's own timeout deny (machine load?), not a behaviour bug")
+            print(f"      captured: {captured!r}")
             ok = False
 
     def capture(guard_name: str, hooks_dir: Path, timeout: float = SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> str:
@@ -275,15 +302,19 @@ def self_test() -> bool:
         hooks_dir = Path(tmp)
 
         out = capture("does-not-exist", hooks_dir)
-        check("a missing guard file denies", _is_deny(out) and "does-not-exist" in out, out)
+        check("a missing guard file denies", deny_kind(out) == KIND_MISSING and "does-not-exist" in out, out)
 
         _write_guard(hooks_dir, "crashes", _FAKE_GUARD_CRASHES)
         out = capture("crashes", hooks_dir)
-        check("a guard that exits non-zero denies, with its stderr in the reason", _is_deny(out) and "boom" in out, out)
+        check("a guard that exits non-zero denies, with its stderr in the reason", deny_kind(out) == KIND_CRASHED and "boom" in out, out)
 
         _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
         out = capture("denies", hooks_dir)
-        check("a guard's own deny decision passes through unchanged", _is_deny(out) and "self-test guard says no" in out, out)
+        check(
+            "a guard's own deny decision passes through unchanged",
+            _is_deny(out) and deny_kind(out) is None and "self-test guard says no" in out,
+            out,
+        )
 
         _write_guard(hooks_dir, "silent", _FAKE_GUARD_SILENT)
         out = capture("silent", hooks_dir)
@@ -300,7 +331,7 @@ def self_test() -> bool:
 
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
         out = capture("garbage", hooks_dir)
-        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)", _is_deny(out), out)
+        check("a guard that exits 0 but prints non-JSON gets the not-valid-JSON deny", deny_kind(out) == KIND_NOT_JSON, out)
 
     # A crashing guard's own stderr is folded into the deny reason, which is
     # also the cheapest way to prove stdin genuinely reaches the guard: make
@@ -314,7 +345,7 @@ def self_test() -> bool:
             "import sys\nsys.stderr.write('got:' + sys.stdin.read())\nsys.exit(1)\n",
         )
         out = capture("echo_and_fail", hooks_dir, stdin_payload='{"marker": "xyz123"}')
-        check("stdin is genuinely forwarded to the guard, not just present", _is_deny(out) and "xyz123" in out, out)
+        check("stdin is genuinely forwarded to the guard, not just present", deny_kind(out) == KIND_CRASHED and "xyz123" in out, out)
 
     print(f"\n{'PASS' if ok else 'FAIL'}: run_hook self-test")
     return ok
@@ -345,6 +376,7 @@ def _main(argv: list[str] | None = None) -> int:
             "scripts/hooks/run_hook.py was invoked with no guard name. Nothing ran, so this "
             "tool call is refused rather than silently allowed through an unenforced guard.",
             "Blocked: the guard dispatcher was invoked incorrectly (no guard name given).",
+            KIND_USAGE,
         )
         return 0
 
@@ -373,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"scripts/hooks/run_hook.py itself raised an unexpected exception: {exc!r}. "
                 "Refused rather than silently allowed through an unenforced guard.",
                 "Blocked: the guard dispatcher crashed unexpectedly.",
+                KIND_INTERNAL,
             )
         return 0
 

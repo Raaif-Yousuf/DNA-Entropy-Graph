@@ -33,7 +33,10 @@ def _is_deny(out: str) -> bool:
         data = json.loads(out)
     except json.JSONDecodeError:
         return False
-    return data.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    if not isinstance(data, dict):
+        return False
+    hso = data.get("hookSpecificOutput", {})
+    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
 
 
 def _capture(guard_name: str, hooks_dir: Path, timeout: float = rh.SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> str:
@@ -87,7 +90,7 @@ def test_help_exits_zero():
 
 def test_missing_guard_file_denies(tmp_path):
     out = _capture("does-not-exist-at-all", tmp_path)
-    assert _is_deny(out)
+    assert _is_deny(out), f"captured: {out!r}"
     assert "does-not-exist-at-all" in out
     assert "missing" in out.lower()
 
@@ -95,7 +98,8 @@ def test_missing_guard_file_denies(tmp_path):
 def test_guard_crash_denies_with_stderr_in_reason(tmp_path):
     _write_guard(tmp_path, "crashes", "import sys\nsys.stderr.write('boom\\n')\nsys.exit(3)\n")
     out = _capture("crashes", tmp_path)
-    assert _is_deny(out)
+    assert _is_deny(out), f"captured: {out!r}"
+    assert rh.deny_kind(out) == rh.KIND_CRASHED, f"captured: {out!r}"
     assert "boom" in out
     assert "3" in out  # the exit code
 
@@ -136,6 +140,35 @@ def test_is_timeout_deny_distinguishes_timeout_from_crash_and_pass_through(tmp_p
     assert not rh.is_timeout_deny("not json")
 
 
+def test_a_guard_cannot_pass_for_a_dispatcher_timeout_by_its_prose(tmp_path):
+    """The timeout is detected by the dispatcher's structural kind, not by a
+    phrase in the reason: a real guard writing that phrase is still its own."""
+    _write_guard(
+        tmp_path,
+        "mimic",
+        "import json, sys\n"
+        "json.dump({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', "
+        "'permissionDecisionReason': 'The mimic guard did not finish within 1s and was killed.'}}, sys.stdout)\n",
+    )
+    out = _capture("mimic", tmp_path)
+    assert "did not finish within" in out
+    assert not rh.is_timeout_deny(out), f"captured: {out!r}"
+
+
+def test_deny_helpers_tolerate_valid_json_that_is_not_an_object():
+    for out in ("[]", '"x"', "3", "null", '{"hookSpecificOutput": []}', '{"hookSpecificOutput": "x"}'):
+        assert rh.deny_kind(out) is None, out
+        assert rh.is_timeout_deny(out) is False, out
+        assert rh._is_deny(out) is False, out  # the dispatcher's own copy
+        assert _is_deny(out) is False, out  # this file's copy
+
+
+def test_backstop_is_a_backstop_not_a_tight_deadline():
+    # The slow-start test only proves > 4 s; pin the intent: a cold interpreter
+    # under heavy load must never hit it.
+    assert rh.SELF_TEST_BACKSTOP_SECONDS >= 60
+
+
 def test_slow_starting_guard_is_not_misread_as_a_timeout(tmp_path):
     """#1055: a guard that terminates on its own must never fail a check by being
     slow to start (a cold interpreter under machine load). This guard takes ~4 s,
@@ -156,7 +189,10 @@ def test_slow_starting_guard_is_not_misread_as_a_timeout(tmp_path):
 def test_guard_nonjson_output_denies(tmp_path):
     _write_guard(tmp_path, "garbage", "import sys\nsys.stdout.write('not json {{{')\nsys.exit(0)\n")
     out = _capture("garbage", tmp_path)
-    assert _is_deny(out)
+    # The not-valid-JSON deny specifically: a crash/timeout/missing deny must not pass.
+    assert _is_deny(out), f"captured: {out!r}"
+    assert rh.deny_kind(out) == rh.KIND_NOT_JSON, f"captured: {out!r}"
+    assert "not valid JSON" in out, f"captured: {out!r}"
 
 
 def test_stdin_payload_genuinely_reaches_the_guard(tmp_path):
@@ -206,7 +242,7 @@ def test_main_catches_an_unexpected_exception_and_still_denies(monkeypatch, caps
     rc = rh.main([])
     assert rc == 0
     out = capsys.readouterr().out
-    assert _is_deny(out)
+    assert _is_deny(out), f"captured: {out!r}"
     assert "unexpected" in out.lower()
 
 
@@ -228,7 +264,7 @@ def _run_cli(args: list[str], stdin_payload: str = "{}", timeout: int = 15) -> s
 def test_cli_no_guard_name_denies():
     proc = _run_cli([])
     assert proc.returncode == 0
-    assert _is_deny(proc.stdout)
+    assert _is_deny(proc.stdout), f"captured: {proc.stdout!r}"
     assert "no guard name" in proc.stdout.lower()
 
 
@@ -238,7 +274,7 @@ def test_cli_unknown_guard_denies_not_silently_allows():
     never silently ignored."""
     proc = _run_cli(["this-guard-does-not-exist"])
     assert proc.returncode == 0
-    assert _is_deny(proc.stdout)
+    assert _is_deny(proc.stdout), f"captured: {proc.stdout!r}"
 
 
 def test_cli_real_silent_guard_produces_no_stdout_and_exits_zero():
@@ -254,7 +290,7 @@ def test_cli_real_guard_deny_passes_through():
     command it is known to deny."""
     proc = _run_cli(["block_git_stash"], stdin_payload=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git stash pop"}}))
     assert proc.returncode == 0
-    assert _is_deny(proc.stdout)
+    assert _is_deny(proc.stdout), f"captured: {proc.stdout!r}"
 
 
 def test_cli_bad_timeout_value_is_a_usage_error_not_a_silent_allow():
