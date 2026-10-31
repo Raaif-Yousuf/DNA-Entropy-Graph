@@ -36,6 +36,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IGcpAccount? _account;
     private readonly IDiagnosticsLog _log;
+    private readonly RunProgressStore? _progressStore;
 
     [ObservableProperty]
     private string? _jobId;
@@ -84,8 +85,10 @@ public sealed partial class RunProgressViewModel : ObservableObject
         INavigator navigator,
         IMessenger messenger,
         IGcpAccount? account = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        RunProgressStore? progressStore = null)
     {
+        _progressStore = progressStore;
         _account = account;
         _log = log ?? NullDiagnosticsLog.Instance;
         _jobEngine = jobEngine;
@@ -211,6 +214,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
         RefreshLogTail();
         _outputFolder = null;
         UpdateCanOpenViewer();
+
+        // A page created or shown again mid-run missed the events published before it existed: start from the last one for this run.
+        if (value is not null && _progressStore?.Latest(value) is { } latest)
+        {
+            ApplyProgress(latest);
+        }
     }
 
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)
@@ -230,16 +239,18 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        _dispatcher.Enqueue(() =>
-        {
-            if (IsTerminal(CurrentPhase))
-            {
-                return; // a late event after the run ended must not rewrite the finished page
-            }
+        _dispatcher.Enqueue(() => ApplyProgress(message.Progress));
+    }
 
-            FractionComplete = message.Progress.FractionComplete;
-            StatusDetailText = ProgressText(message.Progress);
-        });
+    private void ApplyProgress(ProgressEvent progress)
+    {
+        if (IsTerminal(CurrentPhase))
+        {
+            return; // a late event after the run ended must not rewrite the finished page
+        }
+
+        FractionComplete = progress.FractionComplete;
+        StatusDetailText = ProgressText(progress);
     }
 
     private void ApplyPhase(JobPhase phase)
@@ -408,12 +419,11 @@ public sealed partial class RunProgressViewModel : ObservableObject
     // Hard Rule 13: the page text for a worker stage comes from Resources.resw; an unknown stage gets the neutral line, never the raw id, and never an input or file name.
     private string ProgressText(ProgressEvent progress) => progress.Stage switch
     {
-        "model-loading" => _strings.GetString("ProgressModelLoading"),
-        "booting" => _strings.GetString("ProgressBooting"),
-        "uploading" => _strings.GetString("ProgressSaving"),
-        "running" when progress.Window is { } window && progress.Windows is { } windows
+        WorkerStages.ModelLoading => _strings.GetString("ProgressModelLoading"),
+        WorkerStages.Booting => _strings.GetString("ProgressBooting"),
+        WorkerStages.Running when progress.Window is { } window && progress.Windows is { } windows
             => string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("ProgressAnalysingWindowCount"), window, windows),
-        "running" => _strings.GetString("ProgressAnalysing"),
+        WorkerStages.Running => _strings.GetString("ProgressAnalysing"),
         _ => _strings.GetString("ProgressGeneric"),
     };
 

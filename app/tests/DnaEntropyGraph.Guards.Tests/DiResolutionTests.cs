@@ -90,6 +90,21 @@ public class DiResolutionTests
         }
     }
 
+    [Theory]
+    [InlineData(typeof(DnaEntropyGraph.Core.Cloud.CloudJobRunner))]
+    [InlineData(typeof(DnaEntropyGraph.LocalEngine.LocalJobRunner))]
+    public void A_run_page_made_after_a_runner_published_progress_sees_it_because_the_runner_start_creates_the_store(Type runnerType)
+    {
+        // Issue #1086 review, wired-to-nothing: the store listens from construction. If nothing builds it before the first progress event, a page opened mid-run is blank.
+        // Observable: resolve ONLY the runner (as the app does at launch), publish through the real messenger, and only then ask for the store.
+        using var provider = BuildRealServiceProvider();
+        provider.GetRequiredService(runnerType).ShouldNotBeNull();
+
+        provider.GetRequiredService<IMessenger>().Send(new DnaEntropyGraph.Presentation.Messaging.RunProgressChangedMessage("job-1", new DnaEntropyGraph.Core.Contract.ProgressEvent("running", 0.5, 5, 10)));
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.RunProgressStore>().Latest("job-1")!.FractionComplete.ShouldBe(0.5);
+    }
+
     [Fact]
     public void New_run_resolves_with_its_option_preset_picker_not_without_one()
     {

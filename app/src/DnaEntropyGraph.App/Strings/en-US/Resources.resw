@@ -304,9 +304,6 @@
   <data name="ProgressBooting" xml:space="preserve">
     <value>The rented computer is starting up...</value>
   </data>
-  <data name="ProgressSaving" xml:space="preserve">
-    <value>Saving your results to your cloud storage...</value>
-  </data>
   <data name="ProgressAnalysing" xml:space="preserve">
     <value>Analysing your sequence...</value>
   </data>

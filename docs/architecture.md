@@ -108,8 +108,13 @@ poll. The event is data (stage id, fraction, window and windows); `RunProgressVi
 `Resources.resw` line, with a neutral line for an unknown stage, and ignores an event that arrives after
 the run's terminal phase. The input and contig name are never carried. A run
 reattached after a restart goes through the same `CloudJobRunner`, so it publishes too.
-`Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>`
-receiver and no `Send(new ...)` sender anywhere in `app/src`.
+Progress is published on change only and the run page is a transient ViewModel, so a page created or shown
+again mid-run would miss every earlier event. `RunProgressStore` (Presentation/Services, a singleton that
+the two runner factories build before the first event) keeps the last progress per run, drops it at the
+run's terminal phase, and `RunProgressViewModel` seeds itself from it when its `JobId` is set.
+`Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>` call or
+an `IRecipient<...>` implementation (comments are stripped first, so a commented-out call does not count)
+and no `Send(new ...)` sender anywhere in `app/src`.
 
 **Implemented (issue #428)**: `JobEngine` delegates a cloud run to `CloudJobRunner`, which
 `ServiceRegistration` registers as a singleton whose phase callback sends

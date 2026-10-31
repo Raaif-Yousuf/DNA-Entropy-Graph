@@ -332,6 +332,7 @@ public static class ServiceRegistration
         services.AddSingleton<LocalJobRunner>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
+            _ = sp.GetRequiredService<RunProgressStore>(); // listening before the first progress event, so a page opened mid-run is not blank
             return new LocalJobRunner(
                 sp.GetRequiredService<IProcessLauncher>(),
                 sp.GetRequiredService<IRunRepository>(),
@@ -358,6 +359,7 @@ public static class ServiceRegistration
         {
             var messenger = sp.GetRequiredService<IMessenger>();
             var diagnostics = sp.GetRequiredService<IDiagnosticsLog>();
+            _ = sp.GetRequiredService<RunProgressStore>(); // listening before the first progress event, so a page opened mid-run is not blank
             return new CloudJobRunner(
                 sp.GetRequiredService<IComputeGateway>(),
                 sp.GetRequiredService<IStorageGateway>(),
@@ -468,6 +470,8 @@ public static class ServiceRegistration
         services.AddTransient<GpuPlanViewModel>();
         // Issue #527: one instance for the app, so the files on the New run page survive a trip to another page and back; it empties itself when a run starts.
         services.AddSingleton<NewRunViewModel>();
+        // Issue #1086: the run page is transient, so the last progress per run lives here; the runner factories above build it before the first progress event.
+        services.AddSingleton<RunProgressStore>(sp => new RunProgressStore(sp.GetRequiredService<IMessenger>()));
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
         // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.

@@ -331,16 +331,32 @@ public sealed class LocalJobRunnerTests : IDisposable
             File.WriteAllText(Path.Combine(RootOf(spec), "status.json"), "{\"stage\":\"running\",\"percent\":25,\"detail\":{\"window\":2,\"windows\":8},\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}");
             return worker;
         });
+        // Virtual time (no real delay): a Tick moves the clock one poll and returns only after the runner has handled that poll and armed the next one, so "five unchanged polls" really happened.
+        var clock = new VirtualTimeProvider();
         var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), onProgress: (jobId, ev) => { lock (published) { published.Add((jobId, ev)); } })
         {
-            PollInterval = TimeSpan.FromMilliseconds(20),
+            Clock = clock,
+            PollInterval = TimeSpan.FromSeconds(1),
         };
+        async Task TickAsync()
+        {
+            var created = clock.TimersCreated;
+            clock.Advance(TimeSpan.FromSeconds(1));
+            await clock.WhenTimerCreatedAsync(created).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
 
         var run = runner.RunAsync(Request(), CancellationToken.None);
-        await WaitUntilAsync(() => { lock (published) { return published.Count == 1; } });
-        await Task.Delay(200, TestContext.Current.CancellationToken); // many more polls of the same file
+        await clock.WhenTimerCreatedAsync(0).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await TickAsync();
+        lock (published) { published.Count.ShouldBe(1); }
+        for (var i = 0; i < 5; i++)
+        {
+            await TickAsync(); // the same file, read again: not republished
+        }
+
+        lock (published) { published.Count.ShouldBe(1); }
         File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":50,\"detail\":{\"window\":4,\"windows\":8},\"heartbeatSeq\":2,\"worker\":{\"version\":\"0.0.1\"}}");
-        await WaitUntilAsync(() => { lock (published) { return published.Count == 2; } });
+        await TickAsync();
         worker.End(1);
         await run;
 

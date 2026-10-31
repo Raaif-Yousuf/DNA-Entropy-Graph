@@ -216,6 +216,82 @@ public class RunProgressViewModelTests
         viewModel.StatusDetailText.ShouldBe("Loading the analysis model onto the computer...");
     }
 
+    [Fact]
+    public void A_page_created_after_the_progress_was_published_shows_it_at_once_from_the_store()
+    {
+        // Issue #1086 review: the page is a transient ViewModel; an event published before it existed must not leave it blank until the worker changes again.
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, 4, 11)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0.42);
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 4 of 11");
+    }
+
+    [Fact]
+    public void A_page_for_a_run_with_no_stored_progress_stays_empty()
+    {
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunProgressChangedMessage("other", new ProgressEvent("running", 0.9, 9, 10)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0);
+        viewModel.StatusDetailText.ShouldBeNull();
+    }
+
+    // Every stage-to-line row (Hard Rule 13: the keys live in Resources.resw; an unmapped stage gets the neutral line, never the raw id).
+    // "uploading" is NOT mapped: no worker code writes it (MEASURED 2026-10-31: grep of worker/src and worker/vm), so it is neutral like any other.
+    [Theory]
+    [InlineData(WorkerStages.Booting, null, null, "ProgressBooting")]
+    [InlineData(WorkerStages.ModelLoading, null, null, "ProgressModelLoading")]
+    [InlineData(WorkerStages.Running, null, null, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, 3, null, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, null, 9, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, 3, 9, "ProgressAnalysingWindowCount|3|9")]
+    [InlineData(WorkerStages.Uploading, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Queued, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Provisioning, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Finalizing, null, null, "ProgressGeneric")]
+    [InlineData("some-future-stage", null, null, "ProgressGeneric")]
+    public void Every_stage_maps_to_its_own_resw_line(string stage, int? window, int? windows, string expected)
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => "KEY:" + call.Arg<string>());
+        strings.GetString("ProgressAnalysingWindowCount").Returns("ProgressAnalysingWindowCount|{0}|{1}");
+        var messenger = new WeakReferenceMessenger();
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger)
+        {
+            JobId = "job-1",
+        };
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.1, window, windows)));
+
+        viewModel.StatusDetailText.ShouldBe(expected.Contains('|') ? expected : "KEY:" + expected);
+    }
+
     [Theory]
     [InlineData("some-future-stage")]
     [InlineData("queued")]

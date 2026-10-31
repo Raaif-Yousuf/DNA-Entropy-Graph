@@ -120,10 +120,11 @@ Shipped in `Resources.resw` for the run page's detail line (issue #1086; `RunPro
 | Key | Text | Stage |
 |---|---|---|
 | `ProgressBooting` | The rented computer is starting up... | `booting` |
-| `ProgressSaving` | Saving your results to your cloud storage... | `uploading` |
 | `ProgressAnalysing` | Analysing your sequence... | `running`, before the first part finishes |
 | `ProgressAnalysingWindowCount` | Analysing your sequence: part {0} of {1} | `running`, with `detail.window` / `detail.windows` (a "window" is a part of the sequence; the plain word is used on screen) |
 | `ProgressGeneric` | Working on your run... | any other stage (the neutral line) |
+
+Stages with live text on the run page today: `booting`, `model-loading` and `running` (with and without the part counts). Every other stage, including `uploading`, shows the neutral `ProgressGeneric` line. MEASURED 2026-10-31: no worker code writes the stage `uploading` (grep of `worker/src` and `worker/vm`), so a "saving your results" line would never have shown; the `ProgressSaving` resw key was removed and the section 2 line `ProgressSaving` above is a design intent with no stage behind it.
 
 `ProgressAnalysingWindow` above (with `{inputName}`) is NOT used by the page: a line that names the input would put the user's file name on screen and in logs.
 
