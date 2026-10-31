@@ -8,6 +8,7 @@ using Xunit;
 namespace DnaEntropyGraph.Persistence.Tests;
 
 /// <summary>Issue #109: the ledger writer, the month-to-date sum and the cap check.</summary>
+[Collection(TraceCollection.Name)]
 public class SpendLedgerTests
 {
     // g2-standard-8 on demand 1.00/h, spot 0.40/h; disk 0.073 USD per GB-month so 150 GB is exactly 0.015/h (730 h month).

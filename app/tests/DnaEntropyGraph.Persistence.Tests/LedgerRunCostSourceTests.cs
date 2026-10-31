@@ -10,6 +10,7 @@ namespace DnaEntropyGraph.Persistence.Tests;
 /// Issues #100 and #557: the figure a run shows is the ledger entry for it and nothing else. Every case drives the real <see cref="SpendLedger"/>, the real
 /// <see cref="LedgerRecordingRunRepository"/> and the real SQLite ledger, then reads what the pages read (<see cref="IRunCostSource"/>) and compares it with the entry.
 /// </summary>
+[Collection(TraceCollection.Name)]
 public class LedgerRunCostSourceTests
 {
     private const string PricingJson = """
