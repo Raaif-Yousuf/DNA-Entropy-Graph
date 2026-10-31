@@ -98,14 +98,14 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     }
 
     public async Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        {
+    {
         using var _account = CallAccount.Use(scope);
         return await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false)
             ?? throw new CloudOperationException(new CloudError("NOT_FOUND", 404, $"No such object: {bucket}/{objectKey}"), CloudErrorKind.Other);
     }
 
     public async Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        {
+    {
         using var _account = CallAccount.Use(scope);
         return await DownloadCoreAsync(bucket, objectKey, cancellationToken).ConfigureAwait(false);
     }
@@ -146,7 +146,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
 
     /// <summary>Issue #91: deletes exactly one object by its exact name; one already gone (404) counts as deleted. One HTTP request through the pipeline.</summary>
     public Task DeleteObjectAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken)
-        {
+    {
         using var _account = CallAccount.Use(scope);
         return _pipeline.ExecuteAsync(
             "Storage.DeleteObject",
@@ -671,7 +671,7 @@ internal sealed class GoogleStorageGateway : IStorageGateway
     /// file again from byte zero. Integrity is the caller's: it verifies the file's size and SHA-256 against <c>result.json</c>.
     /// </summary>
     public Task<bool> TryDownloadToFileAsync(CloudScope scope, string bucket, string objectKey, string destinationPath, CancellationToken cancellationToken)
-        {
+    {
         using var _account = CallAccount.Use(scope);
         return _pipeline.ExecuteAsync(
             "Storage.Download",

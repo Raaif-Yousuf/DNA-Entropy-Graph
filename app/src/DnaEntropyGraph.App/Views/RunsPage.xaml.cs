@@ -20,4 +20,7 @@ public sealed partial class RunsPage : Page
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e) => _ = ViewModel.RefreshCommand.ExecuteAsync(null);
+
+    /// <summary>Issue #100 round 3: leaving the page ends the ViewModel's listening for run ends (it is transient, and a new visit makes a new one).</summary>
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => ViewModel.Deactivate();
 }

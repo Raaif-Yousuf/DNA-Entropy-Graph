@@ -121,6 +121,7 @@ KNOWN_DYNAMIC: dict[str, int] = {
     # TraceListener.TraceEvent applies the caller's own format and args: dynamic by definition, no resw key.
     "app/src/DnaEntropyGraph.Core/Diagnostics/DiagnosticsTraceListener.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/LeftRunningGuard.cs": 1,
+    "app/src/DnaEntropyGraph.Presentation/Services/RunCostText.cs": 1,
     "app/src/DnaEntropyGraph.Presentation/Services/RunStallCoordinator.cs": 1,
     # _requestKey picks one of three request texts; each takes {0} (and some {1}).
     "app/src/DnaEntropyGraph.Presentation/ViewModels/BudgetSettingsViewModel.cs": 1,

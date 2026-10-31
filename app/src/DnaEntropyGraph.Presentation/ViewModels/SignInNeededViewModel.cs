@@ -30,8 +30,6 @@ public sealed partial class SignInNeededViewModel : ObservableObject
     private bool _isOpen;
 
     /// <summary>Review F7a: set when the last Sign in press failed for a reason that is not a sign-in answer (the browser wait was cancelled, the network failed); the bar then says the sign-in failed. Cleared by a new account waiting or a sign-in that completes.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(Message))]
     private bool _signInFailed;
 
     [ObservableProperty]
@@ -50,7 +48,19 @@ public sealed partial class SignInNeededViewModel : ObservableObject
     }
 
     /// <summary>What the bar says under its title: one line, the action and why.</summary>
-    public string Message => _strings.GetString(SignInFailed ? "AuthError_SIGNIN_FAILED" : "SignInNeeded_Message");
+    public string Message => _strings.GetString(_signInFailed ? "AuthError_SIGNIN_FAILED" : "SignInNeeded_Message");
+
+    /// <summary>Not an [ObservableProperty]: nothing binds the flag itself, the bar binds <see cref="Message"/>, so a change raises PropertyChanged for Message only.</summary>
+    private void SetSignInFailed(bool value)
+    {
+        if (_signInFailed == value)
+        {
+            return;
+        }
+
+        _signInFailed = value;
+        OnPropertyChanged(nameof(Message));
+    }
 
     private void Add(string? sub)
     {
@@ -58,7 +68,7 @@ public sealed partial class SignInNeededViewModel : ObservableObject
         Prune();
         if (grew && _waiting.Count > 0)
         {
-            SignInFailed = false;
+            SetSignInFailed(false);
             IsOpen = true;
         }
     }
@@ -108,14 +118,14 @@ public sealed partial class SignInNeededViewModel : ObservableObject
         {
             // Review F7a: not a sign-in answer (a cancelled browser wait, a network error): it must not escape the command. Log the class only; the bar says the sign-in failed and keeps its button.
             _log.Warning("sign-in-needed", null, ex.GetType().Name);
-            _dispatcher.Enqueue(() => SignInFailed = true);
+            _dispatcher.Enqueue(() => SetSignInFailed(true));
             return;
         }
 
         // An account whose id was never known cannot be matched to the list, so any completed sign-in answers it.
         _dispatcher.Enqueue(() =>
         {
-            SignInFailed = false;
+            SetSignInFailed(false);
             _waiting.Remove(UnknownSub);
             Prune();
         });
