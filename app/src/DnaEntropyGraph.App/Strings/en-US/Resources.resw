@@ -2856,6 +2856,39 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_Import_Failed_SignIn" xml:space="preserve">
     <value>Your Google sign-in has expired. Sign in again on the Cloud page, then choose Find runs from other computers.</value>
   </data>
+  <data name="Runs_OtherAccount_Hidden_One" xml:space="preserve">
+    <value>1 run started under another Google account is hidden here.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hidden_Many" xml:space="preserve">
+    <value>{0} runs started under other Google accounts are hidden here.</value>
+  </data>
+  <data name="Runs_OtherAccount_Switch" xml:space="preserve">
+    <value>Switch to {0}</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_Switch" xml:space="preserve">
+    <value>Choose Switch to, below, to use the account that started them and see them.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_SignIn" xml:space="preserve">
+    <value>Some were started as {0}, which is signed out on this computer. Choose Sign in again and sign in as that account to see them.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_SignInUnknown" xml:space="preserve">
+    <value>Some were started under a Google account that is not signed in on this computer. Choose Sign in again and sign in as that account to see them.</value>
+  </data>
+  <data name="RunsSignInAgainButton.Content" xml:space="preserve">
+    <value>Sign in again</value>
+  </data>
+  <data name="Runs_OtherAccount_SwitchFailed_Title" xml:space="preserve">
+    <value>Could not switch accounts</value>
+  </data>
+  <data name="Runs_OtherAccount_SwitchFailed_Body" xml:space="preserve">
+    <value>That account is no longer signed in on this computer. Choose Sign in again on this page, then sign in as that account.</value>
+  </data>
+  <data name="Runs_OtherAccount_SignInFailed_Title" xml:space="preserve">
+    <value>Could not sign in</value>
+  </data>
+  <data name="Runs_OtherAccount_SignInFailed_Body" xml:space="preserve">
+    <value>The Google sign-in did not finish. Choose Sign in again on this page and finish it in the browser window.</value>
+  </data>
   <data name="Runs_Imported_Badge" xml:space="preserve">
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
@@ -3467,5 +3500,77 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
+  </data>
+  <data name="Runs_DeleteLocal_Unmarked_Confirm_Title" xml:space="preserve">
+    <value>Delete this folder?</value>
+  </data>
+  <data name="Runs_DeleteLocal_Unmarked_Confirm_Body" xml:space="preserve">
+    <value>This folder does not carry the mark the app puts on its own run folders. It may come from an older version of the app, so the app cannot be sure it holds only this run's results. The folder is {0}. Check that this is the folder you mean. Choose Continue to delete the folder and everything in it, or Cancel to keep it. Your original input file is not touched.</value>
+  </data>
+  <data name="Runs_DeleteLocal_NeedsConfirmation_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_NeedsConfirmation_Body" xml:space="preserve">
+    <value>This folder changed while the app was checking it, so nothing was deleted. Choose Delete files on this PC again to review it.</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Body" xml:space="preserve">
+    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open folder to see it in File Explorer, and delete it yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Toast_Body" xml:space="preserve">
+    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open on this run, then Open folder on the page that appears, and delete the folder yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Body" xml:space="preserve">
+    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open folder to see it in File Explorer, and delete only what you want gone yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Toast_Body" xml:space="preserve">
+    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete only what you want gone yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Toast_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete the run's files yourself.</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Toast_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open on this run, then Open folder on the page that appears, to see the files already saved there.</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open folder to see it in File Explorer, and delete the run's files yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_DriveRoot" xml:space="preserve">
+    <value>This run was saved straight to a drive, so it cannot be deleted from here. Press the button, then choose Open folder.</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open folder to see the files already saved there.</value>
+  </data>
+  <data name="Runs_Redownload_Hint_DriveRoot" xml:space="preserve">
+    <value>This run was saved straight to a drive, so it cannot be downloaded again from here. Press the button, then choose Open folder.</value>
+  </data>
+  <data name="Runs_OpenFolder_Label" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="Runs_Close_Label" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="OutputFolder_DriveRoot_Message" xml:space="preserve">
+    <value>A whole drive cannot be the output folder, because results saved straight to a drive cannot be deleted or downloaded again from the Runs page. Choose a folder inside the drive instead.</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Title" xml:space="preserve">
+    <value>Some files were deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open folder to see what is left in File Explorer, and delete it yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Toast_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open on this run, then Open folder on the page that appears, to see what is left, and delete it yourself if you want it gone.</value>
   </data>
 </root>

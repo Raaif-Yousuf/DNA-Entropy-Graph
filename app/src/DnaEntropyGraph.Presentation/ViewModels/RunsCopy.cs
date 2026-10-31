@@ -26,6 +26,17 @@ public static class RunsCopy
     public const string DeleteCloudConfirmBody = "Runs_DeleteCloud_Confirm_Body";
     public const string DeleteLocalConfirmTitle = "Runs_DeleteLocal_Confirm_Title";
     public const string DeleteLocalConfirmBody = "Runs_DeleteLocal_Confirm_Body";
+    /// <summary>Issue #934: the one question for a folder with no marker (made before markers existed, or the user's own); <c>{0}</c> in the body is the folder's full path.</summary>
+    public const string DeleteLocalUnmarkedConfirmTitle = "Runs_DeleteLocal_Unmarked_Confirm_Title";
+    public const string DeleteLocalUnmarkedConfirmBody = "Runs_DeleteLocal_Unmarked_Confirm_Body";
+
+    /// <summary>Issue #934, #954: the button that opens the run's folder in File Explorer from a refusal, and the button that just closes it.</summary>
+    public const string OpenFolderLabel = "Runs_OpenFolder_Label";
+    public const string CloseLabel = "Runs_Close_Label";
+
+    /// <summary>Issue #954: the tooltips on Delete files on this PC and Run again's re-download for a run saved straight to a drive (<c>D:\</c>): why, and the one action.</summary>
+    public const string DeleteLocalHintDriveRoot = "Runs_DeleteLocal_Hint_DriveRoot";
+    public const string RedownloadHintDriveRoot = "Runs_Redownload_Hint_DriveRoot";
     public const string DeleteCloudHintRunning = "Runs_DeleteCloud_Hint_Running";
     public const string DeleteCloudHintNoCopy = "Runs_DeleteCloud_Hint_NoCopy";
     public const string DeleteCloudHintNotConnected = "Runs_DeleteCloud_Hint_NotConnected";
@@ -68,6 +79,22 @@ public static class RunsCopy
     public static readonly RunsMessage RemoveFailed = Pair("Runs_Remove_Failed_Title", "Runs_Remove_Failed_Body", ToastSeverity.Error);
     public static readonly RunsMessage RefreshFailed = Pair("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body", ToastSeverity.Error);
 
+    // Issue #112: runs of another Google account are not listed; each line below names an action that exists (a button, or the sign-in button).
+    public const string HiddenOne = "Runs_OtherAccount_Hidden_One";
+
+    public const string HiddenMany = "Runs_OtherAccount_Hidden_Many";
+
+    public const string SwitchLabel = "Runs_OtherAccount_Switch";
+
+    public const string HintSwitch = "Runs_OtherAccount_Hint_Switch";
+
+    public const string HintSignIn = "Runs_OtherAccount_Hint_SignIn";
+
+    public const string HintSignInUnknown = "Runs_OtherAccount_Hint_SignInUnknown";
+
+    public static readonly RunsMessage SwitchFailed = Pair("Runs_OtherAccount_SwitchFailed_Title", "Runs_OtherAccount_SwitchFailed_Body", ToastSeverity.Error);
+
+    public static readonly RunsMessage SignInFailed = Pair("Runs_OtherAccount_SignInFailed_Title", "Runs_OtherAccount_SignInFailed_Body", ToastSeverity.Error);
     private static readonly string[] FilterKeys = ["Runs_Filter_All", "Runs_Filter_Active", "Runs_Filter_Completed", "Runs_Filter_Failed", "Runs_Filter_Cancelled"];
 
     /// <summary>The "changed files kept" copy for <paramref name="count"/> files: singular for exactly one (the <c>_One</c> key), else plural.</summary>
@@ -87,6 +114,7 @@ public static class RunsCopy
         CloudResultsStatus.NoCloudCopy => Pair("Runs_Redownload_NoCloudCopy_Title", "Runs_Redownload_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.ResultNotFound => Pair("Runs_Redownload_ResultNotFound_Title", "Runs_Redownload_ResultNotFound_Body", ToastSeverity.Error),
         CloudResultsStatus.Refused => Pair("Runs_Redownload_Refused_Title", "Runs_Redownload_Refused_Body", ToastSeverity.Error),
+        CloudResultsStatus.DriveRootRefused => Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Body", ToastSeverity.Error),
         CloudResultsStatus.SignInNeeded => Pair("Runs_Redownload_SignIn_Title", "Runs_Redownload_SignIn_Body", ToastSeverity.Warning),
         _ => Pair("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error),
     };
@@ -170,8 +198,33 @@ public static class RunsCopy
         LocalDeleteStatus.AccessDenied => Pair("Runs_DeleteLocal_AccessDenied_Title", "Runs_DeleteLocal_AccessDenied_Body", ToastSeverity.Error),
         LocalDeleteStatus.Partial => Pair("Runs_DeleteLocal_Partial_Title", "Runs_DeleteLocal_Partial_Body", ToastSeverity.Warning),
         LocalDeleteStatus.LinkRefused => Pair("Runs_DeleteLocal_Link_Title", "Runs_DeleteLocal_Link_Body", ToastSeverity.Error),
+        LocalDeleteStatus.NeedsConfirmation => Pair("Runs_DeleteLocal_NeedsConfirmation_Title", "Runs_DeleteLocal_NeedsConfirmation_Body", ToastSeverity.Warning),
+        LocalDeleteStatus.OtherRunsFolder => Pair("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Body", ToastSeverity.Error),
+        LocalDeleteStatus.DriveRootRefused => Pair("Runs_DeleteLocal_DriveRoot_Title", "Runs_DeleteLocal_DriveRoot_Body", ToastSeverity.Error),
+        LocalDeleteStatus.ProtectedFolderRefused => Pair("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", ToastSeverity.Error),
         _ => Pair("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body", ToastSeverity.Error),
     };
+
+    /// <summary>
+    /// The same refusals as <see cref="DeleteLocal"/> for a host with no dialog window: a toast has no Open folder button, so these name the row's own Open button instead.
+    /// A status with no such variant answers the ordinary copy.
+    /// </summary>
+    public static RunsMessage DeleteLocalAsToast(LocalDeleteStatus status) => status switch
+    {
+        LocalDeleteStatus.OtherRunsFolder => Pair("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Toast_Body", ToastSeverity.Error),
+        LocalDeleteStatus.DriveRootRefused => Pair("Runs_DeleteLocal_DriveRoot_Title", "Runs_DeleteLocal_DriveRoot_Toast_Body", ToastSeverity.Error),
+        LocalDeleteStatus.ProtectedFolderRefused => Pair("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Toast_Body", ToastSeverity.Error),
+        _ => DeleteLocal(status),
+    };
+
+    /// <summary>A delete that stopped on a link after it had already deleted some files (issue #934): says some files are gone and the rest were left, never "nothing was deleted". One action: Open folder.</summary>
+    public static readonly RunsMessage DeleteLocalLinkPartial = Pair("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Body", ToastSeverity.Error);
+
+    /// <summary>The toast form of <see cref="DeleteLocalLinkPartial"/>: a toast has no Open folder button, so it names the row's Open button instead.</summary>
+    public static readonly RunsMessage DeleteLocalLinkPartialAsToast = Pair("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Toast_Body", ToastSeverity.Error);
+
+    /// <summary>The toast form of <see cref="Redownload"/> for a run saved straight to a drive (see <see cref="DeleteLocalAsToast"/>).</summary>
+    public static readonly RunsMessage RedownloadDriveRootAsToast = Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Toast_Body", ToastSeverity.Error);
 
     /// <summary>Every key above, for the guard that proves each one exists in the .resw.</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
@@ -179,9 +232,10 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
-        DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
+        DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn, HiddenOne, HiddenMany, SwitchLabel, HintSwitch, HintSignIn, HintSignInUnknown, .. Flatten(SwitchFailed), .. Flatten(SignInFailed),
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
+        DeleteLocalUnmarkedConfirmTitle, DeleteLocalUnmarkedConfirmBody, OpenFolderLabel, CloseLabel, DeleteLocalHintDriveRoot, RedownloadHintDriveRoot,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(DeleteCloud(s))).Distinct(),
@@ -190,6 +244,8 @@ public static class RunsCopy
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
+        .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocalAsToast(s))).Distinct(),
+        .. Flatten(RedownloadDriveRootAsToast), .. Flatten(DeleteLocalLinkPartial), .. Flatten(DeleteLocalLinkPartialAsToast),
     ];
 
     // Whole literal keys on purpose: scripts/check_app_wiring.py finds a resource's reader by its literal text.
