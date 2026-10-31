@@ -157,7 +157,7 @@ def test_unsupported_schema_refuses_before_any_status_file_is_written(tmp_path: 
     # read. But result.json IS written (issue #1014, replacing the old "nothing written"
     # assertion, which asserted the very symptom): without it the app cannot name the failure.
     assert not store.exists("status.json")
-    assert json.loads(store.read_text(RESULT_PATH))["error"]["code"] == "MANIFEST_INVALID"
+    assert json.loads(store.read_text(RESULT_PATH))["error"]["code"] == "WORKER_VERSION_MISMATCH"
 
 
 # --- cancellation (docs/job_contract.md §6) --------------------------------------------

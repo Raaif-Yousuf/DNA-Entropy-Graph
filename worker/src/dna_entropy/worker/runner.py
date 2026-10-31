@@ -493,6 +493,20 @@ _PLAIN_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _UNREADABLE_MESSAGE_MAX = 500
 
 
+def _ascii_capped(text: str, limit: int) -> str:
+    """ASCII-escape ``text`` one character at a time and stop before an escape would pass
+    ``limit``, so the cap never cuts an escape sequence in half."""
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        piece = ch.encode("ascii", "backslashreplace").decode("ascii")
+        if used + len(piece) > limit:
+            break
+        out.append(piece)
+        used += len(piece)
+    return "".join(out)
+
+
 def _record_unreadable_manifest(store: Blobstore, manifest_text: str, exc: ManifestError) -> None:
     """Best-effort terminal ``result.json`` for a manifest the worker cannot parse (issue #1014).
 
@@ -500,7 +514,9 @@ def _record_unreadable_manifest(store: Blobstore, manifest_text: str, exc: Manif
     ``DEG_JOB_URI``), which does not depend on the manifest, so it is known even when the
     manifest is not. ``jobId`` is a raw read of the manifest when that is a plain name, else
     ``"unknown"`` (never invented; the app keys on the file's location, not this field).
-    The message is the parser's own field-naming text, ASCII-escaped and capped. A write that
+    The code is the exception's own (a schema mismatch is WORKER_VERSION_MISMATCH). The message
+    is the exception's ``public_message``: the field path and what was expected, never the
+    offending value (it may be a file name), ASCII-escaped and capped. A write that
     fails is swallowed: the caller re-raises the ManifestError, which stays the exit-2 story.
     Not used for the store-mismatch refusal (#448): there the destination itself is disputed.
     """
@@ -512,7 +528,7 @@ def _record_unreadable_manifest(store: Blobstore, manifest_text: str, exc: Manif
             job_id = candidate
     except ValueError:
         pass
-    message = str(exc).encode("ascii", "backslashreplace").decode("ascii")[:_UNREADABLE_MESSAGE_MAX]
+    message = _ascii_capped(getattr(exc, "public_message", None) or str(exc), _UNREADABLE_MESSAGE_MAX)
     now = _utc_now_iso()
     result = JobResult(
         schema=1,
@@ -520,7 +536,11 @@ def _record_unreadable_manifest(store: Blobstore, manifest_text: str, exc: Manif
         status="failed",
         inputs=[],
         timing=ResultTiming(startedAt=now, finishedAt=now),
-        error={"code": ManifestError.code, "message": message, "retriable": False},
+        error={
+            "code": exc.code,
+            "message": message,
+            "retriable": False,
+        },  # the instance's code: a schema error keeps its own
     )
     # best effort by design; the manifest error is what the caller reports
     with contextlib.suppress(Exception):
