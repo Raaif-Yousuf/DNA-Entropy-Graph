@@ -88,9 +88,17 @@ company policy blocked it. Allow DNA Entropy Graph in your security program, the
 separately on this computer, so you can switch between them without signing in again.
 Signing out removes the sign-in from this computer and also tells Google to cancel it.
 
-### "Sign in as ... to stop this run's computer"
+### "Sign in as ... to stop or delete this run's computer"
 
-You can be signed in to more than one Google account. A run always uses the account it was started under, even after you switch to another one. If that account has been signed out since, the run page cannot stop or delete the run's rented computer, and says "Sign in as (the account) to stop this run's computer" with a **Sign in** button. Press it and sign in with that same Google account, then press **Stop** or **Delete** again. Until you do, the computer still ends by itself at its time limit, and you are not charged for longer than that.
+You can be signed in to more than one Google account. A run always uses the account it was started under, even after you switch to another one. If that account has been signed out since, the app cannot look at the run's rented computer, and says so in three places, each with a **Sign in** button:
+
+- A bar at the bottom of the window when the app starts: "Sign in as (the account)". It names every account that needs it and goes away once that account is signed in again. Signing in as a different account leaves the bar, because the account it names is still signed out. If you close the bar it stays closed until another account needs it.
+- The run page, when you press **Stop** or **Delete**: "Sign in as (the account) to stop or delete this run's computer". Press the button, sign in with that same Google account, then press **Stop** or **Delete** again. Cancel, Download again and Delete cloud copy say the same thing in their own words.
+- The window asking what to do with computers still running when you close the app. If it could not check some account, it first says so and offers **Sign in** or **Close anyway**. Choosing **Sign in** keeps the window open, so closing it again checks once more.
+
+Until you sign in, a computer still ends by itself at its time limit, and you are not charged for longer than that. When the app cannot reach Google at all (no internet), it does not ask you to sign in: it tries again when the connection returns, and the closing window tells you to open the Cloud page to see what is running.
+
+If a run is no longer in your history, the app cannot tell which account and project its computer is in, and says so on the run page: open the **Cloud page** and stop or delete any computer left running there.
 
 ## The app can't finish setting up your project
 

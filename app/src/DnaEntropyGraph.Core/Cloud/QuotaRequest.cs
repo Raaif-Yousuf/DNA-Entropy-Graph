@@ -1,5 +1,5 @@
-using DnaEntropyGraph.Core.Abstractions;
 using System.Text.RegularExpressions;
+using DnaEntropyGraph.Core.Abstractions;
 
 namespace DnaEntropyGraph.Core.Cloud;
 
