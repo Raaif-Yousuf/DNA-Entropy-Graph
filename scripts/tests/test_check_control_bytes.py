@@ -203,3 +203,33 @@ def test_main_exit_codes_and_ascii_output(tmp_path: Path, capsys: pytest.Capture
 
 def test_self_test_passes() -> None:
     assert ccb.main(["--self-test"]) == 0
+
+
+class _FakeProc:
+    def __init__(self, returncode: int, stderr: bytes) -> None:
+        self.returncode, self.stderr, self.stdout = returncode, stderr, b""
+
+
+def test_git_failure_is_distinct_from_not_a_git_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """#1028: an old git rejecting `check-attr --source` must not be reported as 'not a git repository'."""
+    monkeypatch.setattr(ccb.subprocess, "run", lambda *a, **k: _FakeProc(129, b"error: unknown option `source'"))
+    with pytest.raises(ccb.GitCommandFailed) as err:
+        ccb._git(tmp_path, "check-attr", "--source", "abc")
+    assert not isinstance(err.value, ccb.NotAGitRepo)
+    assert err.value.returncode == 129
+    assert "check-attr" in str(err.value) and "129" in str(err.value) and "unknown option" in str(err.value)
+    monkeypatch.setattr(
+        ccb.subprocess, "run", lambda *a, **k: _FakeProc(128, b"fatal: not a git repository (or any of the parent directories): .git")
+    )
+    with pytest.raises(ccb.NotAGitRepo):
+        ccb._git(tmp_path, "ls-files")
+
+
+def test_main_reports_a_failed_git_command_not_a_missing_repo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ccb.subprocess, "run", lambda *a, **k: _FakeProc(129, b"error: unknown option `source'"))
+    assert ccb.main(["--root", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "not a git repository" not in err
+    assert "ls-files" in err and "129" in err

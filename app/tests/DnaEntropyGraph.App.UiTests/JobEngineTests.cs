@@ -172,7 +172,7 @@ public class JobEngineTests
 
     private sealed class Harness
     {
-        public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null, LocalReadiness? readiness = null, IProcessLauncher? launcher = null)
+        public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null, LocalReadiness? readiness = null, IProcessLauncher? launcher = null, TimeProvider? clock = null)
         {
             ImageProvider = new StaticImageProvider(image ?? new WorkerImageResolution(WorkerImageStatus.Available, Pinned));
             AppData = Path.Combine(TempRoot, "appdata-" + Guid.NewGuid().ToString("N"));
@@ -208,9 +208,9 @@ public class JobEngineTests
                 CancelGrace = TimeSpan.FromMilliseconds(100),
             };
             Ready = ready;
-            var local = new LocalRunDriver(Messenger, localRunner, ready, Settings, Runs, inputs, activeRuns, downloads);
+            var local = new LocalRunDriver(Messenger, localRunner, ready, Settings, Runs, inputs, activeRuns, downloads, clock: clock);
             Local = local;
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, Projects, inputs, ImageProvider, Lookup, activeRuns, new RunTargetResolver(ready), local, downloads);
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, Projects, inputs, ImageProvider, Lookup, activeRuns, new RunTargetResolver(ready), local, downloads, clock: clock);
         }
 
         public ScriptedAccessionLookup Lookup { get; } = new();
@@ -329,6 +329,61 @@ public class JobEngineTests
         row.OptionsJson.ShouldContain("evo2_7b");
         row.Target.ShouldBe("cloud");
         row.VmName.ShouldBe((await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None)).Single().Name, "the row names the VM the run used (issue #679)");
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
+    }
+
+    [Fact]
+    public async Task A_cloud_run_row_is_named_by_the_run_name_template_not_by_its_job_id_and_is_stamped_by_the_injected_clock()
+    {
+        // Issue #1046: History shows Name, falling back to the job id; the row used to carry no name so ToRow stored the job id.
+        var at = new DateTimeOffset(2031, 4, 5, 6, 7, 0, TimeSpan.Zero);
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), clock: new FixedClock(at));
+        var options = Options() with { NameTemplate = "{file}_{model}_{date}_{time}" };
+
+        var jobId = await h.Engine.StartRunAsync(options, CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.Name.ShouldBe("SetTnpB_evo2_7b_2031-04-05_0607");
+        row.Name.ShouldNotBe(jobId);
+        row.CreatedUtc.ShouldBe(at);
+        row.StartedAt.ShouldBe(at);
+        jobId.ShouldContain("20310405", Case.Insensitive, "the job id is stamped by the same clock");
+    }
+
+    [Fact]
+    public async Task A_this_PC_run_row_is_named_by_the_run_name_template_and_stamped_by_the_injected_clock()
+    {
+        var at = new DateTimeOffset(2031, 4, 5, 6, 7, 0, TimeSpan.Zero);
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project), readiness: HealthyPc(gpu: false), launcher: new FinishingWorkerLauncher(), clock: new FixedClock(at));
+        var options = Options("This PC") with { Predictor = PredictorSelection.MockTestPredictor, NameTemplate = "{file}_{date}" };
+
+        var jobId = await h.Engine.StartRunAsync(options, CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.Name.ShouldBe("SetTnpB_2031-04-05");
+        row.CreatedUtc.ShouldBe(at);
+    }
+
+    [Fact]
+    public async Task A_run_that_fails_before_it_starts_is_stamped_by_the_injected_clock()
+    {
+        var at = new DateTimeOffset(2031, 4, 5, 6, 7, 0, TimeSpan.Zero);
+        var h = new Harness(new FakeGcp().WithSignedOut(), clock: new FixedClock(at));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.CreatedUtc.ShouldBe(at);
+        row.FinishedAt.ShouldBe(at);
     }
 
     [Fact]

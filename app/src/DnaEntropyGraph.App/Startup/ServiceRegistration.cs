@@ -364,6 +364,8 @@ public static class ServiceRegistration
                 // Issue #938: how the clean-up of a create that landed after a cancel ended goes to the diagnostics log (the run id, the state and an error class, never a name, a file or an email);
                 // what the user must act on is also on the Cancelled row as an error code (VmCanceller.CodeFor). The reap window keeps its default (15 minutes).
                 OnLateCreate = outcome => diagnostics.Warning("late-create", outcome.JobId, outcome.LogClass),
+                // Issue #970: what became of the labels of a VM a failed or cancelled run had borrowed by reuse (the run id, the state and an error class only).
+                OnDonorRestore = outcome => diagnostics.Warning("donor-restore", outcome.JobId, outcome.LogClass),
                 // Issue #675: the stall question is a Stop / Delete / Keep waiting dialog and the slow-run notice is a line on the run page (RunStallCoordinator; the notice is also
                 // logged by id and kind, never a sequence, a file name or an email). A dialog that cannot be shown answers Keep waiting; StallDecisions.EndAsRunChose stays the
                 // default for a runner built without a UI (tests, the reconciler's own runner).
@@ -479,6 +481,8 @@ public static class ServiceRegistration
         services.AddTransient<SpendCapSettingsViewModel>();
         // One picker for the whole app (Settings and New run), so a change made in Settings is what the next run uses without reopening any page.
         services.AddSingleton<RunTargetPickerViewModel>();
+        // Issue #1037: one Save to folder for Settings and New run, so the folder picked in either is the one the next run uses.
+        services.AddSingleton<OutputFolderViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
         // Issue #260: the project switcher card. The switcher holds no state of its own; the store reads the Projects and AccountProjects tables.

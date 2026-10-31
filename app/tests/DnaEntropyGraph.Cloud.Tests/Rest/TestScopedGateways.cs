@@ -11,6 +11,8 @@ internal static class TestScopedGateways
 
     internal static Task<VmDescriptor> ReuseVmAsync(this IComputeGateway gateway, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => gateway.ReuseVmAsync(Default, spec, existingVmName, zone, cancellationToken);
 
+    internal static Task<LabelRestoreState> RestoreVmLabelsAsync(this IComputeGateway gateway, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken) => gateway.RestoreVmLabelsAsync(Default, vmName, zone, fromJobId, donorLabels, cancellationToken);
+
     internal static Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(this IComputeGateway gateway, string acceleratorType, CancellationToken cancellationToken) => gateway.ListAcceleratorZonesAsync(Default, acceleratorType, cancellationToken);
 
     internal static Task StartVmAsync(this IComputeGateway gateway, string vmName, string zone, CancellationToken cancellationToken) => gateway.StartVmAsync(Default, vmName, zone, cancellationToken);

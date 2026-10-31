@@ -42,6 +42,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly ICostEstimateService? _estimates;
     private readonly IRunTargetResolver _targets;
     private readonly LocalRunDriver _local;
+    private readonly TimeProvider _clock;
 
     public JobEngine(
         IMessenger messenger,
@@ -58,8 +59,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         LocalRunDriver local,
         Func<string?>? downloadsFolder = null,
         AppDataRoot? dataRoot = null,
-        ICostEstimateService? estimates = null)
+        ICostEstimateService? estimates = null,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _estimates = estimates;
         _targets = targets;
         _local = local;
@@ -80,7 +83,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
     public async Task<string> StartRunAsync(RunOptions options, CancellationToken cancellationToken)
     {
-        var jobId = JobId.NewId(DateTimeOffset.UtcNow, Random.Shared);
+        var jobId = JobId.NewId(_clock.GetUtcNow(), Random.Shared);
 
         var decision = await _targets.ResolveAsync(options, cancellationToken).ConfigureAwait(false);
         if (RunTargets.IsThisPc(decision.Target))
@@ -236,13 +239,16 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // and every path that starts a run comes through here, so the project row is ensured here
         // (idempotent, never overwrites a richer row) rather than at each place a project is selected.
         await _projects.EnsureAsync(projectId, scope.AccountSub, cancellationToken).ConfigureAwait(false);
+        var now = _clock.GetUtcNow();
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,
                 JobPhase.Draft,
-                DateTimeOffset.UtcNow,
+                now,
+                // Issue #1046: the name History shows is the run-name template's result, the same function that names the output folder; left null it would be stored as the job id.
+                Name: RunOutputFolders.RunFolderName(options, staged, _clock.GetLocalNow().DateTime),
                 Target: RunTargets.CloudRecord,
-                StartedAt: DateTimeOffset.UtcNow,
+                StartedAt: now,
                 OptionsJson: RunOptionsJson.Serialize(options),
                 ProjectId: projectId,
                 // The planned name: it keeps the diagnostics redaction key for a run that fails before any VM exists. The runner overwrites it with the VM the run actually uses (a reused VM keeps its old name, issue #679).
@@ -382,7 +388,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
     private async Task FailBeforeStartAsync(string jobId, RunOptions options, string errorCode, CancellationToken cancellationToken, string? errorDetail = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,
