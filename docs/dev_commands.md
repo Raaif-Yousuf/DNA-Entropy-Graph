@@ -185,6 +185,12 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
 - **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
   both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
+- **Dotnet gates run with node reuse off** (#1070). Each gate's child env defaults `MSBUILDDISABLENODEREUSE=1`,
+  `DOTNET_CLI_USE_MSBUILD_SERVER=0` and `UseSharedCompilation=false` (a value you set wins), the same definition
+  `heavy.py` uses (`scripts/dotnet_env.py`); `heavy.py` alone did not cover it because premerge.py is a python command.
+  MEASURED 2026-10-31: with reuse on, `/nodemode:1` workers were still alive in the gate's kill-on-close job after the
+  build exited; with the defaults none were. THEORY (unverified): a gate job closing killed such a node under another
+  premerge's build (MSB4166 x3-4 nodes, twice); not reproduced, the defaults remove the precondition.
 - **Pytest gates get a private `--basetemp`** (a short `%TEMP%\pm-*` dir premerge removes when all gates passed, never under
   `--log-dir`, whose path is only recorded in `<log-dir>basetemp.txt`; #469: a deep basetemp made `git push` fail inside the
   temp bare repos of `test_land_pr`, MEASURED 2026-10-02: reproduced with a plain deep path, "remote unpack failed: unable to create temporary object directory"; `core.longpaths=true` on the bare repo also cures it, but a short basetemp fixes every test at once) and

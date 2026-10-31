@@ -87,6 +87,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import wt_venv  # noqa: E402
+from dotnet_env import dotnet_env  # noqa: E402
 
 PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 
@@ -682,6 +683,7 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
     child_env.setdefault("PYTHONUNBUFFERED", "1")  # partial pytest progress must survive a kill
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     argv = [resolved, *gate.argv[1:]]
+    child_env = dotnet_env(argv, child_env)  # node reuse and compiler servers off for dotnet gates (#1070)
     if gate.pytest and basetemp_root is not None:
         argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:

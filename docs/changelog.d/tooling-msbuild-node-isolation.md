@@ -1,0 +1,1 @@
+- tooling: premerge.py's dotnet gates now run with node reuse, the MSBuild server and shared compilation off (the same defaults heavy.py uses, one definition in scripts/dotnet_env.py), so no MSBuild node outlives a gate for a concurrent premerge to adopt and lose (MSB4166, #1070). Also: dev_commands.md describes check_pyright.py as it is now (baseline empty, #877).
