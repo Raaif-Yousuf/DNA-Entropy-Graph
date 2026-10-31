@@ -323,7 +323,8 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         {
             folder = RunOutputFolders.CreateUnique(
                 request.OutputFolder,
-                RunOutputFolders.RunFolderName(request.Options, request.Inputs[0], settings.TimeProvider.GetLocalNow().DateTime));
+                RunOutputFolders.RunFolderName(request.Options, request.Inputs[0], settings.TimeProvider.GetLocalNow().DateTime),
+                jobId: request.JobId);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -384,9 +385,9 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         try
         {
             var folder = (await rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false))?.OutputDir;
-            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder) && !Directory.EnumerateFileSystemEntries(folder).Any())
+            // The folder may hold the app's own marker (issue #934); TryRemoveEmptyFolder removes that and the empty folder, nothing else (Hard Rule 14).
+            if (!string.IsNullOrWhiteSpace(folder) && RunFolderMarker.TryRemoveEmptyFolder(folder, jobId))
             {
-                Directory.Delete(folder, recursive: false);
                 await rows.UpdateRowAsync(jobId, row => row with { OutputDir = null }, CancellationToken.None).ConfigureAwait(false);
             }
         }
