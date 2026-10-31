@@ -148,8 +148,10 @@ def test_a_missing_baseline_file_is_an_error(tmp_path: Path) -> None:
 
 def test_the_committed_baseline_loads_and_keeps_worker_src_at_zero() -> None:
     baseline = cp.load_baseline(cp.BASELINE_PATH)
-    # The rule, not the state: the baseline may be empty once the debt is paid. That is not a gap, because check_pyright holds every file it does not
-    # list to zero errors (test_a_file_not_in_the_baseline_is_held_to_zero) and worker/src may never be listed (test_worker_src_may_not_be_in_the_baseline_at_all).
+    # The rule, not the state: the baseline may be empty once the debt is paid.
+    # An empty one is no gap: check_pyright holds every file it does not list to zero errors
+    # (test_a_file_not_in_the_baseline_is_held_to_zero), and worker/src may never be listed
+    # (test_worker_src_may_not_be_in_the_baseline_at_all).
     assert isinstance(baseline, dict)
     assert not [f for f in baseline if f.startswith(cp.ZERO_PREFIXES)]
     # every entry is a real file (the stale-entry arm would also say so, but not before a run)
