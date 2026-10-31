@@ -1379,8 +1379,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     private void ClearEstimate()
     {
-        PriceSourceText = string.Empty;
         Interlocked.Increment(ref _estimateVersion);
+        PriceSourceText = string.Empty;
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
         // The cap card is about the month, not the file: re-ask it with no file chosen.
@@ -1427,23 +1427,27 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private string MinutesPhrase(int minutes) => minutes == 1 ? _strings.GetString("NewRunEstimateMinutesOne") : Format("NewRunEstimateMinutesMany", minutes);
 
     /// <summary>
-    /// "Prices from Google's price list, as of D", or "... older prices" when that read is not from today (a session that crossed midnight, or yesterday's kept
-    /// copy), or "the list that came with this app" with the reason today's read failed and one action. The date is the list's own, never today's by default.
+    /// "Prices from Google's price list, as of D", or "... older prices" when the source says its read is not from today (<see cref="PricingOrigin.CacheStale"/>;
+    /// the real source ages a catalog read at midnight itself, so this does not date-check again), or "the list that came with this app" with the reason
+    /// today's read failed and one action. With no reason it can also mean the read has not finished yet or was not tried: the line then corrects itself
+    /// when the service reports the read's outcome. The date is the list's own, never today's by default.
     /// </summary>
     private string PriceSourceLine(PricingSnapshot snapshot)
     {
         var reason = ReasonText(snapshot.Reason);
         var hasDate = snapshot.AsOf != default;
-        var date = hasDate ? snapshot.AsOf.ToString("d MMM yyyy", CultureInfo.InvariantCulture) : string.Empty;
         var today = DateOnly.FromDateTime(_clock.GetUtcNow().UtcDateTime);
+        // A catalog date a day ahead of this clock is accepted by the source (a time zone, a fast clock); it must never read as a date in the future.
+        var shown = snapshot.Origin != PricingOrigin.Shipped && snapshot.AsOf > today ? today : snapshot.AsOf;
+        var date = hasDate ? shown.ToString("d MMM yyyy", CultureInfo.InvariantCulture) : string.Empty;
         string line;
         if (snapshot.Origin == PricingOrigin.Shipped)
         {
             line = hasDate ? Format("PriceSource_Shipped", date) : _strings.GetString("PriceSource_ShippedNoDate");
         }
-        else if (snapshot.Origin == PricingOrigin.CacheStale || snapshot.AsOf < today)
+        else if (snapshot.Origin == PricingOrigin.CacheStale)
         {
-            line = Format("PriceSource_Older", date);
+            line = hasDate ? Format("PriceSource_Older", date) : _strings.GetString("PriceSource_OlderNoDate");
         }
         else
         {

@@ -117,13 +117,16 @@ a bill, and it never shows a number the app does not have: while a file is still
 checked, or has a problem, there is no estimate line. If the line says the price list
 could not be read, reinstall the app; you can still press Run. A small line under the
 estimate says where the prices came from and as of when. Usually it reads "Prices from
-Google's price list, as of" a date. If it says "older prices", the app could not get
-today's list and is using one it kept from an earlier day. If it says the prices are from
-the list that came with this app, today's read of Google's list failed, and the line says
-why in plain words and what to do: sign in again from the Cloud page, ask the project owner
-to allow it or to switch on the Cloud Billing API, check your internet connection, or try
-again later. The estimate is still usable in every case; only how fresh the prices are
-changes. See
+Google's price list, as of" a date. If it says "older prices", the app is using a list it
+kept from an earlier day; when it also says why (for example that your connection failed),
+today's read of Google's list did not work. If it says the prices are from the list that
+came with this app and gives no reason, the app has not got today's list yet (this is
+normal on the first run after you install the app, and while the read is still going); the
+line changes by itself when the read finishes or fails. If it does give a reason, today's
+read failed, and the line says why in plain words and one thing to do: sign in again from
+the Cloud page, ask the project owner to allow it or to switch on the price list service,
+check your internet connection, or try again later. The estimate is still usable in every
+case; only how fresh the prices are changes. See
 [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers actually mean
 and some worked examples.
 

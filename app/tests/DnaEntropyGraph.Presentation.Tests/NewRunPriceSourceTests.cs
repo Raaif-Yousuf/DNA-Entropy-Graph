@@ -26,6 +26,7 @@ public sealed class NewRunPriceSourceTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "deg-pricesrc-" + Guid.NewGuid().ToString("N"));
     private readonly ICostEstimateService _estimates = Substitute.For<ICostEstimateService>();
     private readonly ResourceStrings _strings = new();
+    private readonly FakeTime _time = new();
     private readonly FakePricing _pricing = new(new PricingSnapshot(PricingOrigin.Shipped, Shipped, PricingFallbackReason.None));
 
     public NewRunPriceSourceTests()
@@ -48,7 +49,11 @@ public sealed class NewRunPriceSourceTests : IDisposable
 
     private sealed class FakeTime : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => Now;
+        private DateTimeOffset _now = Now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
     }
 
     private sealed class FakePricing(PricingSnapshot snapshot) : IPricingStatus
@@ -67,7 +72,7 @@ public sealed class NewRunPriceSourceTests : IDisposable
     private void EstimateReturns(CostEstimateResult result)
         => _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(result));
 
-    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true)
+    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true, IPricingStatus? pricing = null, ICostEstimateService? estimates = null)
     {
         var vm = new NewRunViewModel(
             Substitute.For<IFilePicker>(),
@@ -75,12 +80,12 @@ public sealed class NewRunPriceSourceTests : IDisposable
             Substitute.For<INavigator>(),
             _strings,
             new LocalPastedInputStore(Path.Combine(_dir, "appdata")),
-            _estimates,
+            estimates ?? _estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             NullDiagnosticsLog.Instance,
             TestGpu.Plan(),
-            clock: new FakeTime(),
-            pricing: withPricing ? _pricing : null);
+            clock: _time,
+            pricing: withPricing ? pricing ?? _pricing : null);
         var path = Path.Combine(_dir, "a.fasta");
         await File.WriteAllTextAsync(path, ">a\n" + string.Concat(Enumerable.Repeat("ACGT", 40)) + "\n", new UTF8Encoding(false), TestContext.Current.CancellationToken);
         await vm.AddDroppedCommand.ExecuteAsync(new DroppedItems([path], 0, false));
@@ -126,13 +131,45 @@ public sealed class NewRunPriceSourceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_catalog_read_that_is_a_day_old_reads_as_older_prices_even_though_its_origin_is_catalog()
+    public async Task A_session_that_crosses_midnight_reads_as_older_prices_through_the_real_catalog_source_mapping()
     {
-        // A session that crosses midnight: the origin stays Catalog while the date goes stale.
-        var line = await LineForAsync(PricingOrigin.Catalog, Yesterday);
+        // The real CatalogPricingSource (not a fake status) maps a day-old Catalog read to CacheStale in Current; the line must follow that.
+        var shipped = Substitute.For<IPricingSource>();
+        shipped.Load().Returns(PricingTable.Parse(ShippedJson));
+        var gateway = Substitute.For<DnaEntropyGraph.Core.Cloud.IPricingCatalogGateway>();
+        gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DnaEntropyGraph.Core.Cloud.CatalogSku>>(G2Skus()));
+        var source = new CatalogPricingSource(shipped, gateway, new MemoryCache(), _time);
+        await source.RefreshIfStaleAsync(TestContext.Current.CancellationToken);
+        source.Current.Origin.ShouldBe(PricingOrigin.Catalog, "the read worked today");
+        _time.Advance(TimeSpan.FromDays(1));
+        source.Current.Origin.ShouldBe(PricingOrigin.CacheStale, "the real source ages it at midnight");
+
+        var vm = await OpenWithAFileAsync(pricing: source);
+        var line = await LineAsync(vm);
 
         line.ShouldContain("older prices");
-        line.ShouldContain("30 Oct 2026");
+        line.ShouldContain("31 Oct 2026");
+        line.ShouldNotContain("1 Nov 2026");
+    }
+
+    [Fact]
+    public async Task A_catalog_date_one_day_ahead_of_this_clock_never_reads_as_a_date_in_the_future()
+    {
+        // CatalogPricingSource accepts a cache dated up to a day ahead (a time zone or a clock a little fast); the line says today instead.
+        var line = await LineForAsync(PricingOrigin.Cache, Today.AddDays(1));
+
+        line.ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
+    }
+
+    [Fact]
+    public async Task Older_prices_with_no_date_do_not_read_as_of_nothing()
+    {
+        var line = await LineForAsync(PricingOrigin.CacheStale, default);
+
+        line.ShouldContain("older prices");
+        line.ShouldNotContain("as of .");
+        line.ShouldNotContain("as of  ");
+        line.ShouldNotContain("PriceSource_", Case.Sensitive);
     }
 
     [Fact]
@@ -146,7 +183,7 @@ public sealed class NewRunPriceSourceTests : IDisposable
     [Theory]
     [InlineData(PricingFallbackReason.SignedOut, "signed out", "Sign in again")]
     [InlineData(PricingFallbackReason.PermissionDenied, "not allowed", "Ask the project owner")]
-    [InlineData(PricingFallbackReason.ApiDisabled, "Cloud Billing API", "switch on the Cloud Billing API")]
+    [InlineData(PricingFallbackReason.ApiDisabled, "price list service", "Ask the project owner to switch it on")]
     [InlineData(PricingFallbackReason.Network, "connection", "Check your internet connection")]
     [InlineData(PricingFallbackReason.Other, "could not be read this time", "Try again later")]
     [InlineData(PricingFallbackReason.NoMatch, "did not cover", "Try again later")]
@@ -173,6 +210,18 @@ public sealed class NewRunPriceSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task The_switched_off_service_reason_leads_with_the_plain_phrase_and_gives_exactly_one_action()
+    {
+        var line = await LineForAsync(PricingOrigin.Shipped, Shipped, PricingFallbackReason.ApiDisabled);
+
+        line.IndexOf("price list service", StringComparison.Ordinal).ShouldBeGreaterThan(-1);
+        line.IndexOf("price list service", StringComparison.Ordinal).ShouldBeLessThan(line.IndexOf("Cloud Billing API", StringComparison.Ordinal), "the plain phrase comes before the product name");
+        line.ShouldNotContain("yourself");
+        line.ShouldNotContain("console");
+        System.Text.RegularExpressions.Regex.Matches(line, "Ask |Sign in|Check |Try ").Count.ShouldBe(1, "one action only");
+    }
+
+    [Fact]
     public async Task Stale_catalog_prices_after_a_failed_read_give_the_older_prices_line_and_the_reason()
     {
         var line = await LineForAsync(PricingOrigin.CacheStale, Yesterday, PricingFallbackReason.Network);
@@ -186,13 +235,121 @@ public sealed class NewRunPriceSourceTests : IDisposable
     public async Task With_no_estimate_there_is_no_price_line()
     {
         EstimateReturns(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
+        // The cap card is written in the same step as the estimate and price lines, last: once it shows, the step has run (no fixed wait).
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0)));
         var vm = await OpenWithAFileAsync();
-        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await WaitForAsync(vm, nameof(NewRunViewModel.SpendCapText), () => vm.SpendCapText.Length > 0);
 
         vm.EstimateText.ShouldBeEmpty();
         vm.PriceSourceText.ShouldBeEmpty();
         vm.HasPriceSource.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_read_that_finishes_after_the_estimate_stopped_waiting_and_fails_adds_the_reason_without_another_estimate()
+    {
+        // Issue #814 review round 2 (M1): the real estimate service, a source whose read outlives the estimate's wait and then fails. The page
+        // must be told by the service, not by the user asking again.
+        var source = new LateFailingSource();
+        var service = new CostEstimateService(source, Substitute.For<IRunRepository>(), TimeSpan.FromMilliseconds(20));
+        var vm = await OpenWithAFileAsync(estimates: service, pricing: source);
+        await WaitForAsync(vm, nameof(NewRunViewModel.PriceSourceText), () => vm.PriceSourceText.Length > 0);
+        vm.PriceSourceText.ShouldBe("Prices from the list that came with this app, as of 1 Sep 2026.", "the read had not finished when the estimate answered");
+        source.Refreshes.ShouldBe(1);
+
+        source.FinishWithNetworkFailure();
+        await WaitForAsync(vm, nameof(NewRunViewModel.PriceSourceText), () => vm.PriceSourceText.Contains("connection", StringComparison.Ordinal));
+
+        vm.PriceSourceText.ShouldContain("Check your internet connection");
+    }
+
+    private static async Task WaitForAsync(NewRunViewModel vm, string property, Func<bool> done)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == property && done())
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        vm.PropertyChanged += Handler;
+        try
+        {
+            if (!done())
+            {
+                await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            }
+        }
+        finally
+        {
+            vm.PropertyChanged -= Handler;
+        }
+    }
+
+    /// <summary>Serves the shipped list; its read waits to be released and then fails with a network problem, leaving the prices as they were.</summary>
+    private sealed class LateFailingSource : IPricingSource, IPricingRefresh, IPricingStatus
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private PricingSnapshot _current = new(PricingOrigin.Shipped, Shipped, PricingFallbackReason.None);
+        private int _refreshes;
+
+        public int Refreshes => Volatile.Read(ref _refreshes);
+
+        public PricingSnapshot Current => Volatile.Read(ref _current);
+
+        public void FinishWithNetworkFailure() => _release.TrySetResult();
+
+        public PricingLoadResult Load() => PricingTable.Parse(ShippedJson);
+
+        public async Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _refreshes) > 1)
+            {
+                return;
+            }
+
+            await _release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _current, _current with { Reason = PricingFallbackReason.Network });
+        }
+    }
+
+    private sealed class MemoryCache : IPricingCacheStore
+    {
+        private string? _json;
+
+        public string? Read() => _json;
+
+        public void Write(string json) => _json = json;
+    }
+
+    private const string ShippedJson = """
+        {
+          "schema": 1,
+          "asOf": "2026-09-01",
+          "currency": "USD",
+          "region": "us-central1",
+          "source": "test",
+          "disk": { "type": "pd-balanced", "usdPerGbMonth": 0.10 },
+          "machines": {
+            "g2-standard-8": { "accelerator": "1x NVIDIA L4", "onDemandUsdPerHour": 0.85, "spotUsdPerHour": 0.18 },
+            "a2-highgpu-1g": { "accelerator": "1x NVIDIA A100 40GB", "onDemandUsdPerHour": 3.67, "spotUsdPerHour": null }
+          }
+        }
+        """;
+
+    private static DnaEntropyGraph.Core.Cloud.CatalogSku Sku(string description, string family, string usage, double price, string unit = "h")
+        => new("sku-" + description, description, family, "x", usage, ["us-central1"], price, unit);
+
+    private static DnaEntropyGraph.Core.Cloud.CatalogSku[] G2Skus() =>
+    [
+        Sku("G2 Instance Core running in Americas", "Compute", "OnDemand", 0.1),
+        Sku("G2 Instance Ram running in Americas", "Compute", "OnDemand", 0.01, "GBy.h"),
+        Sku("Nvidia L4 GPU running in Americas", "Compute", "OnDemand", 1.0),
+        Sku("Balanced PD Capacity", "Storage", "OnDemand", 0.2, "GBy.mo"),
+    ];
 
     [Fact]
     public async Task A_page_with_no_pricing_status_shows_no_price_line()
