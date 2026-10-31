@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Runs;
 
@@ -57,6 +58,36 @@ public static class RunOutputFolders
         // A blank template is the default, not "run": a user who clears the box gets the file's name, as before the box existed.
         var template = string.IsNullOrWhiteSpace(options.NameTemplate) ? DefaultTemplate : options.NameTemplate;
         return RunNamer.Resolve(template, file, options.ModelId, now, 1, []);
+    }
+
+    /// <summary>
+    /// The folder name a finished run's results get when the app has to make the folder again (issue #955: a re-download after the folder was removed):
+    /// the same <see cref="RunFolderName"/> the run used, read back from the row's recorded options and stamped with the run's own start time (not now).
+    /// The job id when the options do not say what the input was (an unreadable or empty record).
+    /// </summary>
+    public static string RedownloadFolderName(RunRecord run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var fallback = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
+        var options = RunOptionsJson.TryDeserialize(run.OptionsJson);
+        StagedInput? input = null;
+        if (!string.IsNullOrWhiteSpace(options?.Accession))
+        {
+            input = StagedInput.ForAccession(options.Accession, options.AccessionRange);
+        }
+        else if (!string.IsNullOrWhiteSpace(options?.InputPath) && !string.IsNullOrWhiteSpace(Path.GetFileName(options.InputPath)))
+        {
+            input = new StagedInput(string.Empty, Path.GetFileName(options.InputPath));
+        }
+
+        if (options is null || input is null)
+        {
+            return fallback;
+        }
+
+        var when = (run.StartedAt ?? run.CreatedUtc).ToLocalTime().DateTime;
+        return RunFolderName(options, input, when);
     }
 
     /// <summary>

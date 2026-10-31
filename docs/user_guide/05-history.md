@@ -24,6 +24,9 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
   copies are kept for a while after a run finishes (90 days by default, adjustable in
   Settings) and then automatically deleted; once that happens, Download again is no longer
   possible (the button is greyed out) and only Run again will get you a fresh result.
+  When the app has to make the folder again, it names it the way the run did (from the
+  run name pattern you chose, using the run's own start time, with a number added if that
+  name is taken). If it cannot tell what the input was, it uses the run's id instead.
 - **Delete files on this PC** / **Delete cloud copy**: free up space on your computer or in
   your cloud storage. Each asks you to confirm first. These are separate actions; deleting
   one does not delete the other. Deleting files on this PC removes only that run's own
