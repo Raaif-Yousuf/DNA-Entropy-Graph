@@ -34,6 +34,11 @@
                             <RadioButton x:Uid="ThemeDarkRadio" />
                             <RadioButton x:Uid="ThemeSystemRadio" />
                         </RadioButtons>
+                        <!-- Issue #195: track colours. Nothing is pushed: the chart, Runs lines, PNG and viewer read the saved choice when they draw. -->
+                        <RadioButtons x:Uid="PaletteChoices" MaxColumns="2" SelectedIndex="{x:Bind Palette.PaletteIndex, Mode=TwoWay}">
+                            <RadioButton x:Uid="PaletteDefaultRadio" />
+                            <RadioButton x:Uid="PaletteHighContrastRadio" />
+                        </RadioButtons>
                     </StackPanel>
                 </Border>
             </StackPanel>

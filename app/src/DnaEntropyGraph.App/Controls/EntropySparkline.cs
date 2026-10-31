@@ -1,3 +1,5 @@
+using DnaEntropyGraph.App.Services;
+using DnaEntropyGraph.Core.Palettes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -23,11 +25,17 @@ public sealed class EntropySparkline : Grid
         StrokeLineJoin = PenLineJoin.Round,
     };
 
-    /// <summary>The line's colour; set from XAML with a ThemeResource so it follows light, dark and high contrast.</summary>
+    private bool _strokeSet;
+
+    /// <summary>An explicit colour. Left unset, the line takes the chosen palette's entropy colour (issue #195), read each time it is drawn.</summary>
     public Brush? Stroke
     {
         get => _line.Stroke;
-        set => _line.Stroke = value;
+        set
+        {
+            _strokeSet = value is not null;
+            _line.Stroke = value;
+        }
     }
 
     public EntropySparkline()
@@ -35,6 +43,20 @@ public sealed class EntropySparkline : Grid
         Width = 120;
         Height = 28;
         Children.Add(_line);
+        Loaded += (_, _) => Redraw();
+        ActualThemeChanged += (_, _) => Redraw();
+    }
+
+    private void PaintFromPalette()
+    {
+        if (_strokeSet)
+        {
+            return;
+        }
+
+        var hex = AppPalette.Current.Hex(TrackRole.Entropy, ActualTheme == ElementTheme.Dark);
+        var (r, g, b) = PaletteValidator.ParseHex(hex);
+        _line.Stroke = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, (byte)r, (byte)g, (byte)b));
     }
 
     public float[]? Values
@@ -45,6 +67,7 @@ public sealed class EntropySparkline : Grid
 
     private void Redraw()
     {
+        PaintFromPalette();
         var points = new PointCollection();
         if (Values is { Length: > 1 } values)
         {

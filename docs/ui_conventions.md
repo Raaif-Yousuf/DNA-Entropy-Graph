@@ -390,6 +390,31 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).
 
+### Track colours: one palette, one definition (issue #195)
+
+- The only place a track colour is spelled is `Core/Palettes/TrackPalette.cs` (`TrackPalettes`). Roles: Entropy, Forward, Reverse,
+  Smoothed, Marker (seam lines and the drag selection: neutral black or white, so they differ from every track by lightness).
+  Palettes: **Default** is Okabe and Ito (2008) (light: blue 0072B2, vermillion D55E00, bluish green 009E73, reddish purple CC79A7;
+  dark swaps in sky blue 56B4E9 and orange E69F00); **High contrast** keeps each colour at 7:1 or more against its background.
+- Consumers: `EntropyPlotBuilder` (overview chart and PNG; `OverviewPngExporter` gets `ITrackPaletteProvider` through DI),
+  `EntropySparkline` and the chart span (through `AppPalette.Current`), and the viewer (`ViewerViewModel` hands colours to
+  `IgvLoadPlanner`, to the added smoothed track and to the `seams` bridge command; `bridge.js` spells no colour).
+  `Guards.Tests/TrackPaletteSingleSourceGuardTests` fails on a hex colour, `rgb()` or named colour in any consumer.
+- The choice (Settings > Appearance, `PaletteSettingsViewModel`, key `TrackPalette`) is read through
+  `SettingsTrackPaletteProvider` every time something draws; nothing caches it and nothing is pushed. The Results page and the Runs
+  list pick it up the next time they are shown; the viewer picks it up when a run is opened.
+- Validation (`Core.Tests/Palettes/PaletteValidatorTests`, `PaletteValidator`): each colour against the light background
+  (#FFFFFF) and the dark one (#1F1F1F) for WCAG contrast (3:1 default, 7:1 high contrast), and every pair of roles under normal
+  vision, deuteranopia, protanopia and tritanopia (Machado, Oliveira and Fernandes 2009, severity 1.0, linear sRGB), by CIEDE2000
+  (Sharma, Wu and Dalal 2005) with a minimum of 10 (default) or 8 (high contrast). The backgrounds are pinned to `viewer.css` and `dark.css`.
+- **The viewer's dark mode inverts track colours.** `dark.css` darkens the page with `filter: invert(0.9) hue-rotate(180deg)` over
+  all of `#igv`, which keeps hue and flips lightness, and it applies to colours set on a track too. So the viewer is always given
+  `TrackPalette.ForViewer()` (the light colours), and the validator checks them twice: as given on white, and through
+  `ViewerDarkFilter` (the same filter, simulated) on the dark page, at a minimum of 8. A colour that has to be bright and saturated in
+  the dark theme (the dark default's orange) cannot be reached through this filter (MEASURED 2026-10-31: pre-image search, out of
+  gamut), which is why the viewer does not use the dark variants. THEORY (unverified): igv.js applies `color` to a wig track as written;
+  it needs a look in a real build (a ToTest row is added when #195 closes).
+
 ## 14. The Cloud page (issue #105)
 
 `CloudPage` (route `Cloud`) over `CloudResourcesViewModel`. Refresh lists through `InstallationCleanup.InventoryAsync` (this installation's computers and disks by label, job folders by manifest `createdBy.installationId`) and `IComputeGateway.ListAppVmsAsync` for the rest. A computer another installation labelled for this app is a read-only row tagged "Another computer" with no commands (Hard Rule 9; DECISION, reversible). Cost comes from `IPricingSource` (machine price while running, attached disks per day while stopped; empty when the price list cannot be read). Row commands live on `CloudVmRow`. Delete (one) and Delete everything go through `IDialogService.ConfirmAsync`; Delete everything names the counts and shows `CleanupReport` item by item, with the soft delete retention of job folders. Not built: typed confirmation, deleting the service account and role, a banner for a running computer with no run on this PC (the banner shows any running computer).

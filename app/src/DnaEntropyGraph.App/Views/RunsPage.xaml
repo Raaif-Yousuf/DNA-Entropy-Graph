@@ -107,7 +107,6 @@
                                                 <controls:EntropySparkline
                                                     x:Uid="RunsSparkline"
                                                     HorizontalAlignment="Left"
-                                                    Stroke="{ThemeResource AccentFillColorDefaultBrush}"
                                                     Values="{x:Bind Sparkline, Mode=OneWay}"
                                                     Visibility="{x:Bind HasSparkline, Mode=OneWay}" />
                                                 <TextBlock Text="{x:Bind ReasonText}" Visibility="{x:Bind HasReason}" TextWrapping="Wrap" />
