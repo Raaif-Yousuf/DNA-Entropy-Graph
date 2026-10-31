@@ -519,6 +519,31 @@ public class NothingLeftRunningTests
     }
 
     [Fact]
+    public async Task An_abandoned_scan_that_later_finishes_with_an_unread_scope_logs_that_scopes_error_class_once()
+    {
+        // Review L6 (round 3): a per-scope failure is no longer a fault of the scan, so the continuation after the timeout is the only place a late unread scope is observed.
+        var rig = new Rig();
+        var log = Substitute.For<IDiagnosticsLog>();
+        var late = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
+        var hung = Substitute.For<IComputeGateway>();
+        hung.ListByInstallationAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(late.Task);
+        var guard = new LeftRunningGuard(new LeftRunningScanner(hung, rig.Settings, rig.Runs, null, rig.Clock), new InstallationCleanup(hung, rig.Gcp, rig.Runs, clock: rig.Clock), rig.Settings, rig.Dialog, rig.Toasts, new EchoStrings(), log, rig.Clock, rig.Gcp);
+
+        var closing = guard.ConfirmExitAsync(CancellationToken.None);
+        await rig.Clock.FireNextTimeoutAsync(LeftRunningGuard.ScanTimeout);
+        (await closing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+        log.ClearReceivedCalls();
+        late.SetException(new AccountAuthException(AuthErrorCodes.SigninExpired, "later", accountSub: FakeGcp.DefaultAccountSub));
+
+        for (var i = 0; i < 200 && !log.ReceivedCalls().Any(); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        log.Received(1).Warning("left-running-scan", null, nameof(AccountAuthException));
+    }
+
+    [Fact]
     public async Task A_dialog_gate_that_never_frees_gives_no_answer_within_the_bound_the_guard_asks_for()
     {
         var rig = new Rig();

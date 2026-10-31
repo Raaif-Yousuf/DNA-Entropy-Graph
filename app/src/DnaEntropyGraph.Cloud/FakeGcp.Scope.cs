@@ -107,7 +107,9 @@ public sealed partial class FakeGcp
             _calls.Add(new FakeCall(method, scope.ProjectId, scope.AccountSub));
         }
 
-        if (scope.AccountSub is { } sub && sub != DefaultAccountSub)
+        // Review M2: a scope with no account (a legacy row) acts as the CURRENT account, as the real gateways resolve it, so a modeled current account that is signed out fails such a call too.
+        var effectiveSub = scope.AccountSub ?? (ActiveIsDefault ? null : _activeSub);
+        if (effectiveSub is { } sub && sub != DefaultAccountSub)
         {
             if (!_modeled.TryGetValue(sub, out var account) || !account.SignedIn)
             {

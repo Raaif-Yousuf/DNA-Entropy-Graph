@@ -842,6 +842,36 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
+    public async Task An_expired_keep_alive_row_of_a_signed_out_account_still_tells_the_shell_because_nothing_could_stop_the_computer()
+    {
+        // Review M1 (round 3): the window ended 50 minutes ago, the account is signed out, so the reconciler wrote nothing and the computer is still running.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.SeedFinishedAsync("job-k", AfterTaskAction.KeepAlive, keepAliveMinutes: 30, afterKeepAlive: AfterKeepAliveAction.Stop, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        rig.Clock.Advance(TimeSpan.FromMinutes(60));
+        var told = new List<string?>();
+
+        await rig.Reconciler(onSignInNeeded: told.Add).EnforceLifecycleAsync(CancellationToken.None);
+
+        told.Distinct().ShouldBe(["sub-a"]);
+        (await rig.VmsAsync("job-k")).Single().Status.ShouldBe("RUNNING", "nothing could reach it");
+    }
+
+    [Fact]
+    public async Task A_row_with_no_account_tells_the_shell_to_sign_in_the_account_that_was_current_when_the_pass_could_not_act()
+    {
+        // Review M2 (round 3): two accounts, so no backfill ever gives the legacy row an account; its NeedsSignIn names the CURRENT one (sub-a).
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.SeedFinishedAsync("job-legacy", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = null, ErrorCode = RunErrorCodes.LifecycleUnverified });
+        await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+        var told = new List<string?>();
+
+        var outcomes = await rig.Reconciler(onSignInNeeded: told.Add).EnforceLifecycleAsync(CancellationToken.None);
+
+        outcomes.Single(o => o.JobId == "job-legacy").AccountSub.ShouldBe("sub-a");
+        told.Distinct().ShouldBe(["sub-a"], "the row has no account of its own but acts as the current one");
+    }
+
+    [Fact]
     public async Task A_finished_run_whose_account_cannot_be_reached_is_deferred_not_told_to_sign_in_and_the_pass_goes_on()
     {
         // Issue #830 review M2: a lost connection is not an expired sign-in; the probe retries it.

@@ -487,12 +487,12 @@ public class CloudJobRunnerGuaranteesTests
         (await gcp.FindByJobIdAsync("job-r5a", CancellationToken.None)).ShouldBeEmpty("a booting VM was left billing");
     }
 
-    private sealed class ThrowingOnGetAllRepository(InMemoryRunRepository inner, int throwOnCall) : IRunRepository
+    private sealed class ThrowingOnGetAllRepository(InMemoryRunRepository inner, int throwOnCall, string message = "database is busy", Exception? failure = null) : IRunRepository
     {
         private int _calls;
 
         public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
-            => Interlocked.Increment(ref _calls) == throwOnCall ? throw new InvalidOperationException("database is busy") : inner.GetAllAsync(cancellationToken);
+            => Interlocked.Increment(ref _calls) == throwOnCall ? throw (failure ?? new InvalidOperationException(message)) : inner.GetAllAsync(cancellationToken);
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => inner.UpsertAsync(run, cancellationToken);
     }
@@ -511,6 +511,62 @@ public class CloudJobRunnerGuaranteesTests
         (await gcp.FindByJobIdAsync("job-r5b", CancellationToken.None)).ShouldBeEmpty("the cancel never looked at the VM");
         LastRow(inner, "job-r5b").Phase.ShouldBe(JobPhase.Cancelled, LastRow(inner, "job-r5b").ErrorDetail);
         result.FinalPhase.ShouldBe(JobPhase.Cancelled);
+    }
+
+    [Fact]
+    public async Task A_resumed_cancel_whose_clean_up_finds_the_account_signed_out_is_recorded_as_account_signed_out_not_cancel_failed()
+    {
+        // Review L4 (round 3): the repository read inside CancelAsync fails, then the by-label clean up cannot reach Google because the run's account is signed out.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never).WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a");
+        var inner = new InMemoryRunRepository();
+        var request = (await SeedAsync(gcp, inner, "job-l4a", JobPhase.Cancelling)) with { Scope = new CloudScope(Project, "sub-a") };
+        var repo = new ThrowingOnGetAllRepository(inner, throwOnCall: 2, "database is busy: C:\\Users\\someone\\secret-file.gb");
+
+        await Runner(gcp, gcp, repo).RunAsync(request, CancellationToken.None);
+
+        var row = LastRow(inner, "job-l4a");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe(RunErrorCodes.AccountSignedOut, row.ErrorDetail);
+        row.ErrorDetail.ShouldNotBeNull();
+        row.ErrorDetail.ShouldContain("Sign in");
+        row.ErrorDetail.ShouldNotContain("Cloud page");
+        row.ErrorDetail.ShouldNotContain("secret-file", Case.Insensitive, "the exception's message can carry a path; the row keeps the error class only");
+    }
+
+    [Fact]
+    public async Task A_resumed_cancel_whose_own_failure_is_a_sign_out_is_recorded_as_account_signed_out()
+    {
+        // The exception CancelAsync threw is itself the sign-out (it read Google before its own logic ran); the class decides, not the clean up.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never).WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a");
+        var inner = new InMemoryRunRepository();
+        var request = (await SeedAsync(gcp, inner, "job-l4b", JobPhase.Cancelling)) with { Scope = new CloudScope(Project, "sub-a") };
+        var repo = new ThrowingOnGetAllRepository(inner, throwOnCall: 2, "x", new AccountAuthException(AuthErrorCodes.SigninExpired, "secret-file.gb", accountSub: "sub-a"));
+
+        await Runner(gcp, gcp, repo).RunAsync(request, CancellationToken.None);
+
+        var row = LastRow(inner, "job-l4b");
+        row.ErrorCode.ShouldBe(RunErrorCodes.AccountSignedOut, row.ErrorDetail);
+        row.ErrorDetail.ShouldNotBeNull();
+        row.ErrorDetail.ShouldNotContain("secret-file", Case.Insensitive);
+    }
+
+    [Fact]
+    public async Task A_resumed_cancel_whose_clean_up_fails_for_another_reason_is_cancel_failed_and_its_row_holds_no_exception_message()
+    {
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var inner = new InMemoryRunRepository();
+        var request = await SeedAsync(gcp, inner, "job-l4c", JobPhase.Cancelling);
+        var compute = new ScriptedCompute(gcp) { OnFind = (_, _) => throw new CloudOperationException(new CloudError(null, null, "connection reset"), CloudErrorKind.Network) };
+        var repo = new ThrowingOnGetAllRepository(inner, throwOnCall: 2, "database is busy: C:\\Users\\someone\\secret-file.gb");
+
+        await Runner(compute, gcp, repo).RunAsync(request, CancellationToken.None);
+
+        var row = LastRow(inner, "job-l4c");
+        row.Phase.ShouldBe(JobPhase.Failed);
+        row.ErrorCode.ShouldBe(RunErrorCodes.CancelFailed, row.ErrorDetail);
+        row.ErrorDetail.ShouldNotBeNull();
+        row.ErrorDetail.ShouldContain("Cloud page");
+        row.ErrorDetail.ShouldNotContain("secret-file", Case.Insensitive);
     }
 
     [Fact]

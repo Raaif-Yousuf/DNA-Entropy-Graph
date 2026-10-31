@@ -358,8 +358,14 @@ public sealed class CloudJobRunner
                 // CancelAsync failed before its own delete logic (a busy repository read). Never Failed/other with the VM
                 // unlooked-at: end it here (best effort, by label, never throws) and record what that found. A repository
                 // that is still failing leaves the row Cancelling, which is not terminal, so the next resume retries.
-                var endNote = await _terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
-                await _canceller.RecordCancelOutcomeAsync(request.JobId, endNote is null ? null : EndFailure.Other($"{ex.Message}{endNote}")).ConfigureAwait(false);
+                var endFailure = await _terminator.EndVmAfterFailureClassifiedAsync(request, null, forceDelete: true).ConfigureAwait(false);
+
+                // Review L4 (round 3): the row's code comes from the error CLASS (the failure that stopped the cancel, or the one the clean up hit), never from a message: a sign-out is
+                // account_signed_out with the sign-in action, and an exception's message (it can carry a path or a name) is never persisted.
+                var errorClass = endFailure is { AccountSignedOut: true } || VmTerminator.ErrorClassOf(ex) == RunErrorCodes.AccountSignedOut
+                    ? RunErrorCodes.AccountSignedOut
+                    : VmTerminator.ErrorClassOf(ex);
+                await _canceller.RecordCancelOutcomeAsync(request.JobId, endFailure is null ? null : VmCanceller.CancelFailureOf(errorClass)).ConfigureAwait(false);
             }
 
             var after = await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false);

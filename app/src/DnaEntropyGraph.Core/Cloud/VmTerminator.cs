@@ -3,10 +3,6 @@ using System.Globalization;
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
-/// Hard Rule 11: ends a run's VM (stop or delete), verifies it independently, and finds VMs by job-id label (Hard Rule 9).
-/// Holds no run state: every method is a look at the gateway plus a bounded wait.
-/// </summary>
-/// <summary>
 /// Review F5: why a cancel's delete or read-back could not finish, as the sentence the row keeps AND the error class that decided it. The class is typed, so the row's code
 /// (<see cref="RunErrorCodes.AccountSignedOut"/> or <see cref="RunErrorCodes.CancelFailed"/>) is chosen from it, never by searching the English sentence.
 /// </summary>
@@ -24,6 +20,10 @@ internal sealed record EndFailure(string Message, string ErrorClass)
     public static EndFailure Other(string message) => new(message, RunErrorCodes.Other);
 }
 
+/// <summary>
+/// Hard Rule 11: ends a run's VM (stop or delete), verifies it independently, and finds VMs by job-id label (Hard Rule 9).
+/// Holds no run state: every method is a look at the gateway plus a bounded wait.
+/// </summary>
 internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _appRequestedEnds = new(StringComparer.Ordinal);
@@ -53,14 +53,20 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public async Task<string?> EndVmAfterFailureAsync(CloudJobRequest request, string? zone, bool forceDelete = false, bool forceStop = false)
     {
+        var error = await EndVmAfterFailureClassifiedAsync(request, zone, forceDelete, forceStop).ConfigureAwait(false);
+        return error is null ? null : " (VM end not confirmed: " + error.Message + ")";
+    }
+
+    /// <summary><see cref="EndVmAfterFailureAsync"/> returning the typed failure (null when the VM was confirmed ended): the class, not the sentence, picks a row's code (review L4 round 3).</summary>
+    internal async Task<EndFailure?> EndVmAfterFailureClassifiedAsync(CloudJobRequest request, string? zone, bool forceDelete = false, bool forceStop = false)
+    {
         // forceDelete wins; forceStop (the user chose Stop at a stall, #675) overrides the run's own end choice.
         var action = forceDelete ? AfterTaskAction.Delete : forceStop ? AfterTaskAction.Stop : FailureEndAction(request);
 
         // Issue #999: a failed run deletes only a VM it CREATED (OwnVmName). One it borrowed by reuse keeps its owner's name and is stopped instead, whichever way the delete was asked for.
-        var error = zone is not null
-            ? await EnsureVmEndedAsync(request, zone, action, CancellationToken.None, ownOnly: true).ConfigureAwait(false)
+        return zone is not null
+            ? await EnsureVmEndedClassifiedAsync(request, zone, action, CancellationToken.None, ownOnly: true).ConfigureAwait(false)
             : await EnsureVmsEndedByLabelAsync(request, action).ConfigureAwait(false);
-        return error is null ? null : " (VM end not confirmed: " + error + ")";
     }
 
     /// <summary>
@@ -75,7 +81,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     };
 
     /// <summary>Ends whatever VMs carry this job's label (Hard Rule 9), for a run that does not know the zone: a resume, or an insert that may have landed anywhere.</summary>
-    private async Task<string?> EnsureVmsEndedByLabelAsync(CloudJobRequest request, AfterTaskAction action)
+    private async Task<EndFailure?> EnsureVmsEndedByLabelAsync(CloudJobRequest request, AfterTaskAction action)
     {
         IReadOnlyList<VmDescriptor> owned;
         try
@@ -86,14 +92,14 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         {
             // Never throws (the callers are already handling a failure): anything that is not the caller cancelling is
             // "could not look", and the run says the VM end is unconfirmed.
-            return $"the VMs for this job could not be looked up: {ex.Message}";
+            return new EndFailure($"the VMs for this job could not be looked up: {ex.Message}", ErrorClassOf(ex));
         }
 
-        string? error = null;
+        EndFailure? error = null;
         foreach (var vm in owned)
         {
             // Every VM is ended even when an earlier one could not be: the first failure is what is reported.
-            var thisError = await EnsureVmEndedAsync(request, vm.Zone, action, CancellationToken.None, vm.Name, ownOnly: true).ConfigureAwait(false);
+            var thisError = await EnsureVmEndedClassifiedAsync(request, vm.Zone, action, CancellationToken.None, vm.Name, ownOnly: true).ConfigureAwait(false);
             error ??= thisError;
         }
 
@@ -109,6 +115,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// failure: the caller decides what an unconfirmed VM means for the run.
     /// </summary>
     public async Task<string?> EnsureVmEndedAsync(CloudJobRequest request, string? zone, AfterTaskAction action, CancellationToken cancellationToken, string? vmName = null, bool ownOnly = false)
+        => (await EnsureVmEndedClassifiedAsync(request, zone, action, cancellationToken, vmName, ownOnly).ConfigureAwait(false))?.Message;
+
+    /// <summary><see cref="EnsureVmEndedAsync"/> with the failure's typed error class (review L4 round 3), so a caller picks the row's code from the class and never by reading the sentence.</summary>
+    internal async Task<EndFailure?> EnsureVmEndedClassifiedAsync(CloudJobRequest request, string? zone, AfterTaskAction action, CancellationToken cancellationToken, string? vmName = null, bool ownOnly = false)
     {
         if (zone is null)
         {
@@ -197,12 +207,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                     if (!stopSent)
                     {
                         // Round 8 L2: no stop was ever sent (a borrowed VM that never left booting), so never say "after Stop".
-                        return $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after the app started waiting, so the stop could not be sent while it was starting. Stop it from the Cloud page.";
+                        return EndFailure.Other($"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after the app started waiting, so the stop could not be sent while it was starting. Stop it from the Cloud page.");
                     }
 
-                    return action == AfterTaskAction.Delete
+                    return EndFailure.Other(action == AfterTaskAction.Delete
                         ? $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Delete."
-                        : $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Stop (Hard Rule 11).";
+                        : $"VM '{name}' in zone '{zone}' was still '{vm.Status}' {settings.LifecycleTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s after Stop (Hard Rule 11).");
                 }
 
                 await settings.DelayAsync(settings.LifecyclePollInterval, cancellationToken).ConfigureAwait(false);
@@ -210,7 +220,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
-            return $"VM '{name}' in zone '{zone}' could not be confirmed {(action == AfterTaskAction.Delete ? "deleted" : "stopped")}: {ex.Message}";
+            return new EndFailure($"VM '{name}' in zone '{zone}' could not be confirmed {(action == AfterTaskAction.Delete ? "deleted" : "stopped")}: {ex.Message}", ErrorClassOf(ex));
         }
         finally
         {

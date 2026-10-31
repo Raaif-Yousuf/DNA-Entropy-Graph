@@ -114,9 +114,11 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     }
 
     /// <summary>What the row records when the cancel itself threw: the error class and the action, never the exception's message (it can carry a path or a name).</summary>
-    private static EndFailure UnexpectedFailure(Exception ex)
+    private static EndFailure UnexpectedFailure(Exception ex) => CancelFailureOf(VmTerminator.ErrorClassOf(ex));
+
+    /// <summary>The one sentence a cancel that could not finish records for <paramref name="errorClass"/>: names Sign in for a signed-out account and the Cloud page otherwise. Class only, never an exception's message.</summary>
+    internal static EndFailure CancelFailureOf(string errorClass)
     {
-        var errorClass = VmTerminator.ErrorClassOf(ex);
         return errorClass == RunErrorCodes.AccountSignedOut
             ? new EndFailure($"The cancel could not finish ({RunErrorCodes.AccountSignedOut}). Sign in as the Google account this run was made under, then cancel again.", errorClass)
             : EndFailure.Of("The cancel could not finish", errorClass, "Check the Cloud page and delete or stop any VM left for this run.");

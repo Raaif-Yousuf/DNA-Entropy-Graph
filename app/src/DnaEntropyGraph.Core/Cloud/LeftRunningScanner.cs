@@ -99,8 +99,15 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             .ToList();
         var disks = ok.SelectMany(r => r.StoppedDisks).GroupBy(d => (Project: d.Scope?.ProjectId, d.Name, d.Zone)).Select(g => g.First()).ToList();
         var now = clock.GetUtcNow();
-        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }, RunObligations.Exist(allRows, f.Scope, installation, now), f.Error!.GetType().Name))]);
+        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }, IsSelected(f.Scope, selected) || RunObligations.Exist(allRows, f.Scope, installation, now), f.Error!.GetType().Name))]);
     }
+
+    /// <summary>
+    /// Review L3 (round 3): the selected scope is always worth a prompt when it cannot be read, whatever the rows say (history cleared, a run older than the lookback): it is the scope this scan
+    /// exists to look in for a computer no row records. Only its project and account are compared (a scope with no account was already resolved to the selected one by <see cref="CloudScopes.Dedupe"/>).
+    /// </summary>
+    private static bool IsSelected(CloudScope scope, CloudScope? selected)
+        => selected is not null && string.Equals(scope.ProjectId, selected.ProjectId, StringComparison.Ordinal) && string.Equals(scope.AccountSub, selected.AccountSub, StringComparison.Ordinal);
 
     /// <summary>
     /// Review F7c: the one listing kept for a computer that two accounts can both see is the one whose account made the run the computer belongs to (the run's row names its account), so a Stop

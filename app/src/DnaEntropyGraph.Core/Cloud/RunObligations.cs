@@ -6,8 +6,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// <summary>
 /// Issue #830 review F4: whether a scope (project and Google account) still has something that could be running, so a deliberately signed-out account is
 /// not nagged about at every exit for two weeks. A scope has an OBLIGATION when one of this installation's recent cloud runs in it is not finished, or
-/// finished with a computer whose end was not confirmed (<see cref="RunErrorCodes.IsVmEndUnconfirmed"/>), or finished with a keep-alive window that has not
-/// expired yet (the computer is held on purpose until then). Anything else (a Completed run whose computer was stopped or deleted and verified) leaves nothing
+/// finished with a computer whose end was not confirmed (<see cref="RunErrorCodes.IsVmEndUnconfirmed"/>), or finished with a keep-alive window (the computer is held on purpose,
+/// and stays up after the window until something stops it: review M1 round 3). Anything else (a Completed run whose computer was stopped or deleted and verified) leaves nothing
 /// to look after, so a sign-in prompt for that account has nothing to protect and is only logged.
 /// </summary>
 public static class RunObligations
@@ -28,7 +28,11 @@ public static class RunObligations
             .Any(r => HasObligation(r, now));
     }
 
-    /// <summary>True when any recent run of <paramref name="installation"/> made under account <paramref name="accountSub"/> (null: a row with no recorded account) could still have a computer running.</summary>
+    /// <summary>
+    /// True when any recent run of <paramref name="installation"/> made under account <paramref name="accountSub"/> could still have a computer running. Review M2 (round 3): the account is matched by the SAME rule as
+    /// <see cref="Exist"/> and every other scope comparison (<see cref="CloudScopes.Matches"/>): a row with no recorded account acts as the current account, so it belongs to whichever account the caller names
+    /// (the pass names the one that was current when it could not act).
+    /// </summary>
     public static bool ExistForAccount(IReadOnlyList<RunRecord> allRows, string? accountSub, string installation, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(allRows);
@@ -39,7 +43,7 @@ public static class RunObligations
             .Where(r => string.Equals(r.Target, "cloud", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(r.InstallationId, installation, StringComparison.Ordinal)
                 && !string.IsNullOrWhiteSpace(r.ProjectId)
-                && r.AccountSub == accountSub)
+                && CloudScopes.Matches(RunScope.Of(r), new CloudScope(r.ProjectId!, accountSub)))
             .Any(r => HasObligation(r, now));
     }
 
@@ -62,12 +66,12 @@ public static class RunObligations
             return true;
         }
 
-        // A keep-alive window holds the computer on purpose until it expires, and only after a worker exit 0 (Completed or PartiallyCompleted), as the reconciler reads it.
-        if (row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted && RunOptionsJson.TryDeserialize(row.OptionsJson) is { AfterTask: AfterTaskAction.KeepAlive } options)
-        {
-            return now < (row.FinishedAt ?? row.CreatedUtc).AddMinutes(options.KeepAliveMinutes);
-        }
-
-        return false;
+        // Review M1 (round 3): a keep-alive window holds the computer on purpose, and its expiry does not END anything: the computer keeps running until the reconciler (or the person) stops it,
+        // and a signed-out account can neither. The row records no "confirmed ended" state of its own (the reconciler writes nothing back), so the smallest truthful signal is the one this method
+        // is only asked about at its two call sites: the account could NOT be reached just now (a scope the scan could not read, or an account the pass reported as signed out). For such a row the
+        // keep-alive obligation therefore stands from the first minute until the row leaves the lifecycle lookback above, where no sweep looks at it any more. Only worker exit 0 holds the computer
+        // for a window (Completed or PartiallyCompleted, as the reconciler reads it); every other finished state applied afterKeepAlive at once.
+        return row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted
+            && RunOptionsJson.TryDeserialize(row.OptionsJson) is { AfterTask: AfterTaskAction.KeepAlive };
     }
 }

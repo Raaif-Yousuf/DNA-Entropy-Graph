@@ -456,26 +456,102 @@ public sealed class LeftRunningScopesTests
     }
 
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task A_keep_alive_row_obliges_a_prompt_only_until_it_expires(bool expired, bool expectPrompt)
+    [InlineData(10)]
+    [InlineData(31)]
+    [InlineData(60 * 24)]
+    public async Task A_keep_alive_row_obliges_a_prompt_before_AND_after_its_window_expires_because_a_signed_out_account_cannot_end_the_computer(int minutesLater)
     {
+        // Review M1 (round 3): the computer is held until something stops it; with the account signed out nothing can, so the expiry is no end.
         var rig = RigWithSignedOutAccountA();
         var options = new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = DnaEntropyGraph.Core.AfterTaskAction.KeepAlive, KeepAliveMinutes = 30 };
         await rig.Runs.UpsertAsync(new RunRecord("job-k", JobPhase.Completed, Start, ProjectId: "project-a", AccountSub: "sub-a", InstallationId: rig.Installation, FinishedAt: Start,
             OptionsJson: DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(options)), CancellationToken.None);
-        rig.Clock.Advance(TimeSpan.FromMinutes(expired ? 31 : 10));
+        rig.Clock.Advance(TimeSpan.FromMinutes(minutesLater));
 
         await rig.Guard.ConfirmExitAsync(CancellationToken.None);
 
-        if (expectPrompt)
+        await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void An_expired_keep_alive_row_keeps_its_obligation_until_it_leaves_the_lifecycle_lookback_and_then_drops_it()
+    {
+        var options = new DnaEntropyGraph.Core.RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = DnaEntropyGraph.Core.AfterTaskAction.KeepAlive, KeepAliveMinutes = 30 };
+        var row = new RunRecord("job-k", JobPhase.Completed, Start, ProjectId: "project-a", AccountSub: "sub-a", FinishedAt: Start, OptionsJson: DnaEntropyGraph.Core.Runs.RunOptionsJson.Serialize(options));
+
+        RunObligations.HasObligation(row, Start.AddMinutes(31)).ShouldBeTrue();
+        RunObligations.HasObligation(row, Start.AddDays(13)).ShouldBeTrue();
+        RunObligations.HasObligation(row, Start.AddDays(15)).ShouldBeFalse("past the lookback no sweep looks at the row any more");
+    }
+
+    // ---- Review M2 (round 3): one matching rule for a row with no account, on both the exit-guard path and the reconciler path ----
+
+    [Fact]
+    public void A_row_with_no_account_obliges_the_account_that_was_current_on_both_matching_paths()
+    {
+        var row = new RunRecord("job-n", JobPhase.Running, Start, ProjectId: "project-a", AccountSub: null, InstallationId: "inst");
+        IReadOnlyList<RunRecord> rows = [row];
+
+        RunObligations.Exist(rows, new CloudScope("project-a", "sub-a"), "inst", Start).ShouldBeTrue("exit-guard path");
+        RunObligations.ExistForAccount(rows, "sub-a", "inst", Start).ShouldBeTrue("reconciler path");
+        RunObligations.ExistForAccount(rows, "sub-b", "inst", Start).ShouldBeTrue("with no recorded account the row acts as whichever account is current, so any named account may owe it");
+    }
+
+    [Fact]
+    public void A_row_that_names_another_account_does_not_oblige_this_one_on_either_path()
+    {
+        var row = new RunRecord("job-n", JobPhase.Running, Start, ProjectId: "project-a", AccountSub: "sub-b", InstallationId: "inst");
+        IReadOnlyList<RunRecord> rows = [row];
+
+        RunObligations.Exist(rows, new CloudScope("project-a", "sub-a"), "inst", Start).ShouldBeFalse();
+        RunObligations.ExistForAccount(rows, "sub-a", "inst", Start).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_exit_guard_prompts_for_a_signed_out_account_whose_only_unfinished_run_row_has_no_account()
+    {
+        // Two accounts are modelled, so no backfill ever gives the legacy row an account; the current one (sub-a) is the selected scope and cannot be read.
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+        await rig.RowAsync("job-legacy", JobPhase.Running, "project-a", null);
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    // ---- Review L3 (round 3): the selected scope is always worth a prompt when it cannot be read ----
+
+    [Fact]
+    public async Task An_unreadable_SELECTED_scope_is_prompted_for_even_with_no_run_rows_at_all()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountProject("sub-a", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        await rig.Gcp.SwitchAccountAsync("sub-a", CancellationToken.None);
+        IReadOnlyList<string>? buttons = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
-            await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-        }
-        else
-        {
-            await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
-        }
+            buttons = call.ArgAt<IReadOnlyList<string>>(2);
+            return Task.FromResult<int?>(0);
+        });
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        buttons.ShouldBe(["LeftRunning_UnreadCloseAnyway"]);
+    }
+
+    [Fact]
+    public async Task An_unreadable_scope_that_is_not_selected_and_whose_only_row_holds_nothing_that_could_run_is_still_only_logged()
+    {
+        // The selected scope is readable (project-b); the unreadable one has only a Completed row with its computer confirmed gone: nothing to protect.
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-x", "x@example.org", "project-a").WithAccountFailure("sub-x", AuthErrorCodes.NetworkUnavailable);
+        await rig.RowAsync("job-old", JobPhase.Completed, "project-a", "sub-x", Start);
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
