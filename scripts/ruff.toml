@@ -4,6 +4,8 @@
 # Scope is LINT ONLY for now. `ruff format --check scripts` would rewrite most of the
 # existing files (see docs/dev_commands.md for the measured size), and a mass reformat
 # must land as its own mechanical commit, so no format gate is wired yet.
+# The ruff every lane, premerge and CI runs (#1027); scripts/check_ruff_pin.py keeps the other sites equal.
+required-version = "==0.17.3"
 line-length = 145
 target-version = "py312"
 
