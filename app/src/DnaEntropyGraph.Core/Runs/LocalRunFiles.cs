@@ -34,6 +34,12 @@ public enum LocalDeleteStatus
 
     /// <summary>The run was saved straight to a drive (<c>D:\</c>), so a delete through the History row is never offered (issue #954). Nothing was deleted.</summary>
     DriveRootRefused,
+
+    /// <summary>
+    /// The folder has no marker and is one of the user's own shell folders (their profile, Documents, Desktop, Downloads itself, Pictures, Music, Videos) or sits directly inside one (issue #934).
+    /// Nothing was deleted and no confirmation unlocks it: a damaged row naming such a folder must never reach a recursive delete.
+    /// </summary>
+    ProtectedFolderRefused,
 }
 
 /// <summary>What the History must do before it deletes a run's folder (issue #934), decided without deleting anything. The default (0) is "go ahead": the delete itself still checks everything.</summary>
@@ -50,6 +56,54 @@ public enum LocalDeletePlan
 
     /// <summary>The run was saved straight to a drive: refuse, and offer to open the folder.</summary>
     DriveRoot,
+
+    /// <summary>No marker, and the folder is the user's own shell folder or directly inside one: refuse, and offer to open the folder.</summary>
+    ProtectedFolder,
+}
+
+/// <summary>The user's own folders an unmarked run folder may not be, or sit directly inside (issue #934). Paths are compared without case and without a trailing separator.</summary>
+/// <param name="SelfAndChildren">The folder itself and anything directly inside it is protected (the profile, Documents, Desktop, Pictures, Music, Videos).</param>
+/// <param name="SelfOnly">Only the folder itself is protected: Downloads holds ordinary run folders directly inside it.</param>
+public sealed record ShellFolderSet(IReadOnlyList<string> SelfAndChildren, IReadOnlyList<string> SelfOnly)
+{
+    /// <summary>The current user's folders as Windows reports them.</summary>
+    public static ShellFolderSet FromEnvironment()
+    {
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] both =
+        [
+            profile,
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+        ];
+        return new(
+            both.Where(p => !string.IsNullOrWhiteSpace(p)).ToList(),
+            string.IsNullOrWhiteSpace(profile) ? [] : [Path.Combine(profile, "Downloads")]);
+    }
+
+    /// <summary>True when <paramref name="folder"/> is one of these folders, or (for <see cref="SelfAndChildren"/>) directly inside one. Lexical; a path that cannot be read counts as protected.</summary>
+    public bool Protects(string folder)
+    {
+        try
+        {
+            var full = Norm(folder);
+            var parent = Path.GetDirectoryName(full);
+            return SelfOnly.Any(p => Same(full, p))
+                   || SelfAndChildren.Any(p => Same(full, p) || (parent is not null && Same(parent, p)));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return true;
+        }
+    }
+
+    private static string Norm(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    private static bool Same(string normalized, string other)
+        => string.Equals(normalized, Norm(other), StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>What a local delete did. The counts are files, not folders, and are set for <see cref="LocalDeleteStatus.Deleted"/> and <see cref="LocalDeleteStatus.Partial"/>.</summary>
@@ -91,13 +145,24 @@ public sealed class LocalRunFiles : ILocalRunFiles
     private readonly IRunInputStore _inputs;
     private readonly Func<string> _defaultOutputParent;
     private readonly IReadOnlyList<string> _protectedPaths;
+    private readonly Func<ShellFolderSet> _shellFolders;
+    private readonly Action<string>? _beforeFirstDelete;
 
     /// <param name="protectedPaths">Folders that must never be deleted from or through (the app data folder holding the input copies).</param>
-    public LocalRunFiles(IRunInputStore inputs, Func<string> defaultOutputParent, IReadOnlyList<string> protectedPaths)
+    /// <param name="shellFolders">The user's own folders an unmarked folder may not be or sit directly inside; null reads them from Windows. A test seam.</param>
+    /// <param name="beforeFirstDelete">Called with the folder after it was listed and before the first file is deleted, so a test can change the disk in the gap the re-check closes. A test seam.</param>
+    public LocalRunFiles(
+        IRunInputStore inputs,
+        Func<string> defaultOutputParent,
+        IReadOnlyList<string> protectedPaths,
+        Func<ShellFolderSet>? shellFolders = null,
+        Action<string>? beforeFirstDelete = null)
     {
         _inputs = inputs;
         _defaultOutputParent = defaultOutputParent;
         _protectedPaths = protectedPaths;
+        _shellFolders = shellFolders ?? ShellFolderSet.FromEnvironment;
+        _beforeFirstDelete = beforeFirstDelete;
     }
 
     public bool OutputFolderExists(RunRecord run)
@@ -128,12 +193,12 @@ public sealed class LocalRunFiles : ILocalRunFiles
         return RunFolderMarker.Check(inspection.Folder!, run.JobId) switch
         {
             RunFolderMarkerState.Matches => LocalDeletePlan.Proceed,
-            RunFolderMarkerState.Absent => LocalDeletePlan.AskFirst,
+            RunFolderMarkerState.Absent => _shellFolders().Protects(inspection.Folder!) ? LocalDeletePlan.ProtectedFolder : LocalDeletePlan.AskFirst,
             _ => LocalDeletePlan.OtherRunsFolder,
         };
     }
 
-    private readonly record struct Inspection(LocalDeleteStatus? Stop, string? Folder);
+    private readonly record struct Inspection(LocalDeleteStatus? Stop, string? Folder, string? Root = null);
 
     /// <summary>Every check that does not need the marker, in the order a delete makes them. <see cref="Inspection.Stop"/> is the answer when one stops the delete.</summary>
     private Inspection Inspect(RunRecord run)
@@ -179,7 +244,7 @@ public sealed class LocalRunFiles : ILocalRunFiles
 
         // Hard Rule 14: IsStrictlyInside is lexical, so a junction or symlink at the folder or above it (below the output folder)
         // would still carry the delete into its target. Refuse rather than remove the link: the user did not ask to unlink anything.
-        return HasLinkBetween(folder, root) ? new(LocalDeleteStatus.LinkRefused, null) : new(null, folder);
+        return HasLinkBetween(folder, root) ? new(LocalDeleteStatus.LinkRefused, null) : new(null, folder, root);
     }
 
     private LocalDeleteResult DeleteCore(RunRecord run, bool allowUnmarked)
@@ -193,15 +258,36 @@ public sealed class LocalRunFiles : ILocalRunFiles
         var folder = inspection.Folder!;
 
         // Issue #934: containment above is read from the same history row as the folder, so a damaged row can name both. The marker is the proof the app made this folder for this run.
-        switch (RunFolderMarker.Check(folder, run.JobId))
+        var planned = RunFolderMarker.Check(folder, run.JobId);
+        switch (planned)
         {
             case RunFolderMarkerState.OtherRun:
                 return new(LocalDeleteStatus.OtherRunsFolder);
             case RunFolderMarkerState.Absent when !allowUnmarked:
                 return new(LocalDeleteStatus.NeedsConfirmation);
+            case RunFolderMarkerState.Absent when _shellFolders().Protects(folder):
+                // A confirmation unlocks a missing marker, never the user's own folders.
+                return new(LocalDeleteStatus.ProtectedFolderRefused);
         }
 
-        return DeleteFilesThenFolders(folder);
+        return DeleteFilesThenFolders(folder, inspection.Root!, run.JobId, planned);
+    }
+
+    /// <summary>The disk now, against what the delete was planned on: a link swapped in, or a marker added, removed or replaced since the checks above. Null when nothing changed.</summary>
+    private static LocalDeleteResult? ChangedSincePlanned(string folder, string root, string jobId, RunFolderMarkerState planned)
+    {
+        if (HasLinkBetween(folder, root))
+        {
+            return new(LocalDeleteStatus.LinkRefused);
+        }
+
+        var now = RunFolderMarker.Check(folder, jobId);
+        if (now == planned)
+        {
+            return null;
+        }
+
+        return new(now == RunFolderMarkerState.OtherRun ? LocalDeleteStatus.OtherRunsFolder : LocalDeleteStatus.NeedsConfirmation);
     }
 
     /// <summary>True when <paramref name="folder"/>, or any folder above it up to (not including) <paramref name="root"/>, is a reparse point.</summary>
@@ -233,7 +319,7 @@ public sealed class LocalRunFiles : ILocalRunFiles
     /// Deletes file by file so a file that cannot go (open elsewhere, read-only) does not hide how much did:
     /// the caller reports the counts. Folders are removed deepest first, only once empty.
     /// </summary>
-    private static LocalDeleteResult DeleteFilesThenFolders(string folder)
+    private LocalDeleteResult DeleteFilesThenFolders(string folder, string root, string jobId, RunFolderMarkerState planned)
     {
         var files = new List<string>();
         var links = new List<(string Path, bool IsDirectory)>();
@@ -256,6 +342,13 @@ public sealed class LocalRunFiles : ILocalRunFiles
         if (marker is not null)
         {
             files.Remove(marker);
+        }
+
+        // Issue #934: the checks above ran before the walk; re-run the two that decide whether this is ours, immediately before the first delete.
+        _beforeFirstDelete?.Invoke(folder);
+        if (ChangedSincePlanned(folder, root, jobId, planned) is { } changed)
+        {
+            return changed;
         }
 
         int deleted = 0, inUse = 0, denied = 0;

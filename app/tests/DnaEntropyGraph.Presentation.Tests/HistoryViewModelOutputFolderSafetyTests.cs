@@ -146,7 +146,73 @@ public sealed class HistoryViewModelOutputFolderSafetyTests
 
         await Press(item.DeleteLocalCommand);
 
-        _toasts.Received(1).ShowToast("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Body", ToastSeverity.Error);
+        // A toast has no Open folder button, so the toast variant names the row's own Open button instead.
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Toast_Body", ToastSeverity.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_choice_dialog_a_drive_root_delete_and_redownload_toast_the_variant_that_names_the_Open_button()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.DriveRoot);
+        _cloud.RedownloadAsync(Arg.Any<RunRecord>(), Arg.Any<CancellationToken>()).Returns(CloudResultsStatus.DriveRootRefused);
+        var item = await Loaded(Row("a", @"D:\sample"), withChoice: false);
+
+        await Press(item.DeleteLocalCommand);
+        await Press(item.RedownloadCommand);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_DriveRoot_Title", "Runs_DeleteLocal_DriveRoot_Toast_Body", ToastSeverity.Error);
+        _toasts.Received(1).ShowToast("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Toast_Body", ToastSeverity.Error);
+    }
+
+    [Fact]
+    public async Task A_refusal_dialog_that_could_not_be_shown_falls_back_to_the_toast_so_the_user_always_sees_the_reason()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.OtherRunsFolder);
+        _choice.ChooseAsync(default!, default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs((int?)null);
+        var item = await Loaded(Row());
+
+        await Press(item.DeleteLocalCommand);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Toast_Body", ToastSeverity.Error);
+        _launcher.DidNotReceiveWithAnyArgs().OpenFolder(default!);
+    }
+
+    [Fact]
+    public async Task An_unmarked_folder_that_is_the_users_own_shell_folder_is_refused_without_a_question_and_offers_to_open_it()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.ProtectedFolder);
+        var item = await Loaded(Row());
+
+        await Press(item.DeleteLocalCommand);
+
+        await _dialogs.DidNotReceiveWithAnyArgs().ConfirmAsync(default!, default!, TestContext.Current.CancellationToken);
+        _local.DidNotReceiveWithAnyArgs().DeleteOutputFolder(default!);
+        _local.DidNotReceiveWithAnyArgs().DeleteUnmarkedOutputFolder(default!);
+        await _choice.Received(1).ChooseAsync("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", Arg.Is<IReadOnlyList<string>>(l => l[0] == RunsCopy.OpenFolderLabel), Arg.Any<CancellationToken>());
+        _launcher.Received(1).OpenFolder(Folder);
+    }
+
+    [Fact]
+    public async Task A_protected_folder_refusal_without_a_dialog_toasts_the_variant_that_names_the_Open_button()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.ProtectedFolder);
+        var item = await Loaded(Row(), withChoice: false);
+
+        await Press(item.DeleteLocalCommand);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Toast_Body", ToastSeverity.Error);
+    }
+
+    [Fact]
+    public async Task A_confirmed_delete_the_service_refuses_as_a_protected_folder_offers_to_open_it()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.AskFirst);
+        _local.DeleteUnmarkedOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.ProtectedFolderRefused));
+        var item = await Loaded(Row());
+
+        await Press(item.DeleteLocalCommand);
+
+        await _choice.Received(1).ChooseAsync("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -187,18 +253,17 @@ public sealed class HistoryViewModelOutputFolderSafetyTests
         _launcher.Received(1).OpenFolder(@"D:\sample");
     }
 
-    [Theory]
-    [InlineData(LocalDeleteStatus.NeedsConfirmation, "Runs_DeleteLocal_NeedsConfirmation")]
-    public async Task A_delete_that_still_finds_no_marker_after_the_plan_said_go_ahead_toasts_instead_of_deleting(LocalDeleteStatus status, string keyPrefix)
+    [Fact]
+    public async Task A_delete_that_still_finds_no_marker_after_the_plan_said_go_ahead_toasts_instead_of_deleting()
     {
         // The folder changed between the plan and the delete: the service refuses, and the page says to press the button again, never a silent delete.
         _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.Proceed);
-        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(status));
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.NeedsConfirmation));
         var item = await Loaded(Row());
 
         await Press(item.DeleteLocalCommand);
 
-        _toasts.Received(1).ShowToast(keyPrefix + "_Title", keyPrefix + "_Body", ToastSeverity.Warning);
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_NeedsConfirmation_Title", "Runs_DeleteLocal_NeedsConfirmation_Body", ToastSeverity.Warning);
         _local.DidNotReceiveWithAnyArgs().DeleteUnmarkedOutputFolder(default!);
     }
 
@@ -234,5 +299,11 @@ public sealed class HistoryViewModelOutputFolderSafetyTests
         RunsCopy.AllKeys.ShouldContain(RunsCopy.RedownloadHintDriveRoot);
         RunsCopy.AllKeys.ShouldContain("Runs_DeleteLocal_OtherRun_Body");
         RunsCopy.AllKeys.ShouldContain("Runs_Redownload_DriveRoot_Title");
+        foreach (var key in new[] { "Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", "Runs_DeleteLocal_Protected_Toast_Body", "Runs_DeleteLocal_OtherRun_Toast_Body", "Runs_DeleteLocal_DriveRoot_Toast_Body", "Runs_Redownload_DriveRoot_Toast_Body" })
+        {
+            RunsCopy.AllKeys.ShouldContain(key);
+        }
+
+        RunsCopy.DeleteLocal(LocalDeleteStatus.ProtectedFolderRefused).Body.ShouldBe("Runs_DeleteLocal_Protected_Body");
     }
 }

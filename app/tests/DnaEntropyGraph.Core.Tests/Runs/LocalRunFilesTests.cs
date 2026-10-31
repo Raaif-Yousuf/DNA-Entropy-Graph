@@ -159,6 +159,11 @@ public sealed class LocalRunFilesTests : IDisposable
 
         File.ReadAllText(Path.Combine(documents, "thesis.docx")).ShouldBe("keep");
         Directory.Exists(documents).ShouldBeTrue();
+
+        // And once the user's shell folders are known, not even Continue deletes it.
+        MakeWithShell().PlanDelete(run).ShouldBe(LocalDeletePlan.ProtectedFolder);
+        MakeWithShell().DeleteUnmarkedOutputFolder(run).Status.ShouldBe(LocalDeleteStatus.ProtectedFolderRefused);
+        File.ReadAllText(Path.Combine(documents, "thesis.docx")).ShouldBe("keep");
     }
 
     [Fact]
@@ -173,14 +178,152 @@ public sealed class LocalRunFilesTests : IDisposable
         Make().PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.Proceed);
     }
 
-    [Theory]
-    [InlineData(LocalDeletePlan.Proceed)]
-    public void Planning_a_missing_or_blank_folder_proceeds_so_the_delete_itself_reports_it(LocalDeletePlan expected)
+    [Fact]
+    public void Planning_a_missing_or_blank_folder_proceeds_so_the_delete_itself_reports_it()
     {
-        Make().PlanDelete(Run(Path.Combine(_root, "gone"))).ShouldBe(expected);
-        Make().PlanDelete(Run(null)).ShouldBe(expected);
-        Make().PlanDelete(new RunRecord("legacy", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: MakeRunFolder("proto"), Imported: true)).ShouldBe(expected);
+        Make().PlanDelete(Run(Path.Combine(_root, "gone"))).ShouldBe(LocalDeletePlan.Proceed);
+        Make().PlanDelete(Run(null)).ShouldBe(LocalDeletePlan.Proceed);
+        Make().PlanDelete(new RunRecord("legacy", JobPhase.Completed, DateTimeOffset.UtcNow, OutputDir: MakeRunFolder("proto"), Imported: true)).ShouldBe(LocalDeletePlan.Proceed);
     }
+
+    // ---- issue #934 cold review: the user's own folders are never deletable without a marker, whatever the user confirms ----
+
+    private LocalRunFiles MakeWithShell(Action<string>? beforeFirstDelete = null)
+    {
+        // A pretend profile under the test folder: user-home paths are built at runtime, never written out.
+        var profile = Path.Combine(_base, "bob");
+        return new LocalRunFiles(
+            _inputs,
+            () => _root,
+            [_appData],
+            () => new ShellFolderSet(
+                [profile, Path.Combine(profile, "Desktop"), Path.Combine(profile, "Documents"), Path.Combine(profile, "Pictures"), Path.Combine(profile, "Music"), Path.Combine(profile, "Videos")],
+                [Path.Combine(profile, "Downloads")]),
+            beforeFirstDelete);
+    }
+
+    public static TheoryData<string[], bool> ShellCases() => new()
+    {
+        { ["Documents"], true },
+        { ["Desktop"], true },
+        { ["Pictures"], true },
+        { ["Music"], true },
+        { ["Videos"], true },
+        { ["Downloads"], true },
+        { ["Documents", "thesis"], true },
+        { ["Desktop", "lab"], true },
+        { ["Downloads", "run-1"], false },
+        { ["Documents", "lab", "run-1"], false },
+        { ["Misc"], true },
+    };
+
+    [Theory]
+    [MemberData(nameof(ShellCases))]
+    public void An_unmarked_folder_that_is_a_shell_folder_or_directly_inside_one_is_refused_and_no_confirmation_unlocks_it(string[] relative, bool protectedFolder)
+    {
+        var profile = Path.Combine(_base, "bob");
+        var folder = Path.Combine([profile, .. relative]);
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "thesis.docx"), "keep");
+        var run = Run(folder, outputFolderOption: profile);
+        var shell = MakeWithShell();
+
+        shell.PlanDelete(run).ShouldBe(protectedFolder ? LocalDeletePlan.ProtectedFolder : LocalDeletePlan.AskFirst);
+        var result = shell.DeleteUnmarkedOutputFolder(run);
+
+        if (protectedFolder)
+        {
+            result.Status.ShouldBe(LocalDeleteStatus.ProtectedFolderRefused);
+            File.ReadAllText(Path.Combine(folder, "thesis.docx")).ShouldBe("keep");
+        }
+        else
+        {
+            result.Status.ShouldBe(LocalDeleteStatus.Deleted);
+        }
+    }
+
+    [Fact]
+    public void A_marked_folder_inside_Documents_still_proceeds_and_an_unmarked_child_of_the_profile_is_protected()
+    {
+        var profile = Path.Combine(_base, "bob");
+        var documents = Path.Combine(profile, "Documents");
+        var marked = Path.Combine(documents, "run-1");
+        Directory.CreateDirectory(marked);
+        RunFolderMarker.Write(marked, "job-1");
+        File.WriteAllText(Path.Combine(marked, "a.bedgraph"), "x");
+
+        // Even though it sits in Documents, this run's own marker proves the app made it.
+        MakeWithShell().PlanDelete(Run(marked, outputFolderOption: documents)).ShouldBe(LocalDeletePlan.Proceed);
+        MakeWithShell().DeleteOutputFolder(Run(marked, outputFolderOption: documents)).Status.ShouldBe(LocalDeleteStatus.Deleted);
+
+        // A folder directly inside the profile, with no marker, is protected (output folder = the test base, so containment passes).
+        Directory.CreateDirectory(Path.Combine(profile, "Misc"));
+        MakeWithShell().PlanDelete(Run(Path.Combine(profile, "Misc"), outputFolderOption: _base)).ShouldBe(LocalDeletePlan.ProtectedFolder);
+    }
+
+    // ---- issue #934 cold review: the disk can change between the plan and the first delete ----
+
+    [Fact]
+    public void A_marker_swapped_for_another_runs_between_the_plan_and_the_delete_stops_the_delete()
+    {
+        var folder = MakeRunFolder();
+        var files = MakeWithShellAndHook(f => File.WriteAllText(Path.Combine(f, RunFolderMarker.FileName), "some-other-job\n"));
+
+        files.PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.Proceed);
+        var result = files.DeleteOutputFolder(Run(folder));
+
+        result.Status.ShouldBe(LocalDeleteStatus.OtherRunsFolder);
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue("nothing was deleted");
+    }
+
+    [Fact]
+    public void A_marker_removed_between_the_plan_and_the_delete_stops_the_delete_and_asks_again()
+    {
+        var folder = MakeRunFolder();
+        var files = MakeWithShellAndHook(f => File.Delete(Path.Combine(f, RunFolderMarker.FileName)));
+
+        var result = files.DeleteOutputFolder(Run(folder));
+
+        result.Status.ShouldBe(LocalDeleteStatus.NeedsConfirmation);
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue("nothing was deleted");
+    }
+
+    [Fact]
+    public void A_marker_planted_between_the_plan_and_the_confirmed_delete_stops_the_delete()
+    {
+        var folder = MakeRunFolder(marker: null);
+        var files = MakeWithShellAndHook(f => File.WriteAllText(Path.Combine(f, RunFolderMarker.FileName), "some-other-job\n"));
+
+        files.DeleteUnmarkedOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.OtherRunsFolder);
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_junction_swapped_in_between_the_plan_and_the_delete_stops_the_delete()
+    {
+        var folder = MakeRunFolder();
+        var target = MakePreciousFolder();
+        var sub = Path.Combine(folder, "keep-sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "k.txt"), "k");
+        var swapped = false;
+        var files = MakeWithShellAndHook(f =>
+        {
+            // The whole run folder becomes a link to somewhere else after it was listed.
+            Directory.Move(f, f + "-moved");
+            MakeJunction(f, target);
+            swapped = true;
+        });
+
+        var result = files.DeleteOutputFolder(Run(folder));
+
+        swapped.ShouldBeTrue();
+        result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
+        File.Exists(Path.Combine(target, "precious.txt")).ShouldBeTrue();
+        File.Exists(Path.Combine(folder + "-moved", "a.bedgraph")).ShouldBeTrue();
+    }
+
+    private LocalRunFiles MakeWithShellAndHook(Action<string> hook) => MakeWithShell(hook);
 
     [Fact]
     public void An_ordinary_subfolder_output_root_still_deletes_its_run_folder()

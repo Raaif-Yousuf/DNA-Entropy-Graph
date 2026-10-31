@@ -3,6 +3,7 @@ using DnaEntropyGraph.Cloud;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Runs;
 using Shouldly;
 using Xunit;
 
@@ -170,7 +171,8 @@ public class CloudJobRunnerTransferTests
         var dir = LastRow(repo, "job-sum").OutputDir;
         if (dir is not null && Directory.Exists(dir))
         {
-            Directory.GetFiles(dir, "*", SearchOption.AllDirectories).ShouldBeEmpty("a corrupt download must not be left looking like a result");
+            // The run folder's own marker (issue #934) is the app's file, not a result.
+            Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Where(f => !RunFolderMarker.IsMarkerOf(dir, f)).ShouldBeEmpty("a corrupt download must not be left looking like a result");
         }
     }
 

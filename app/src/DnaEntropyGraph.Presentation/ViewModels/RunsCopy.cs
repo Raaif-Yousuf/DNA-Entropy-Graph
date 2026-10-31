@@ -183,8 +183,24 @@ public static class RunsCopy
         LocalDeleteStatus.NeedsConfirmation => Pair("Runs_DeleteLocal_NeedsConfirmation_Title", "Runs_DeleteLocal_NeedsConfirmation_Body", ToastSeverity.Warning),
         LocalDeleteStatus.OtherRunsFolder => Pair("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Body", ToastSeverity.Error),
         LocalDeleteStatus.DriveRootRefused => Pair("Runs_DeleteLocal_DriveRoot_Title", "Runs_DeleteLocal_DriveRoot_Body", ToastSeverity.Error),
+        LocalDeleteStatus.ProtectedFolderRefused => Pair("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", ToastSeverity.Error),
         _ => Pair("Runs_DeleteLocal_Refused_Title", "Runs_DeleteLocal_Refused_Body", ToastSeverity.Error),
     };
+
+    /// <summary>
+    /// The same refusals as <see cref="DeleteLocal"/> for a host with no dialog window: a toast has no Open folder button, so these name the row's own Open button instead.
+    /// A status with no such variant answers the ordinary copy.
+    /// </summary>
+    public static RunsMessage DeleteLocalAsToast(LocalDeleteStatus status) => status switch
+    {
+        LocalDeleteStatus.OtherRunsFolder => Pair("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Toast_Body", ToastSeverity.Error),
+        LocalDeleteStatus.DriveRootRefused => Pair("Runs_DeleteLocal_DriveRoot_Title", "Runs_DeleteLocal_DriveRoot_Toast_Body", ToastSeverity.Error),
+        LocalDeleteStatus.ProtectedFolderRefused => Pair("Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Toast_Body", ToastSeverity.Error),
+        _ => DeleteLocal(status),
+    };
+
+    /// <summary>The toast form of <see cref="Redownload"/> for a run saved straight to a drive (see <see cref="DeleteLocalAsToast"/>).</summary>
+    public static readonly RunsMessage RedownloadDriveRootAsToast = Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Toast_Body", ToastSeverity.Error);
 
     /// <summary>Every key above, for the guard that proves each one exists in the .resw.</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
@@ -204,6 +220,8 @@ public static class RunsCopy
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudFailed(k))).Distinct(),
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
+        .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocalAsToast(s))).Distinct(),
+        .. Flatten(RedownloadDriveRootAsToast),
     ];
 
     // Whole literal keys on purpose: scripts/check_app_wiring.py finds a resource's reader by its literal text.

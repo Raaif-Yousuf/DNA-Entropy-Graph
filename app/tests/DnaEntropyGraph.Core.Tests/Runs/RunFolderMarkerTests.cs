@@ -75,6 +75,47 @@ public sealed class RunFolderMarkerTests : IDisposable
     }
 
     [Fact]
+    public void A_marker_that_is_a_symbolic_link_is_never_trusted_even_when_its_target_names_the_job()
+    {
+        var folder = Path.Combine(_parent, "f");
+        Directory.CreateDirectory(folder);
+        var target = Path.Combine(_parent, "elsewhere.txt");
+        File.WriteAllText(target, "job-a\n");
+        try
+        {
+            File.CreateSymbolicLink(Path.Combine(folder, RunFolderMarker.FileName), target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip("A symbolic link could not be created here (needs Developer Mode or administrator rights).");
+        }
+
+        RunFolderMarker.Check(folder, "job-a").ShouldBe(RunFolderMarkerState.OtherRun);
+    }
+
+    [Fact]
+    public void A_marker_larger_than_512_bytes_is_never_trusted_even_when_it_starts_with_the_job_id()
+    {
+        var folder = Path.Combine(_parent, "f");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, RunFolderMarker.FileName), "job-a\n" + new string('x', 600));
+
+        RunFolderMarker.Check(folder, "job-a").ShouldBe(RunFolderMarkerState.OtherRun);
+    }
+
+    [Fact]
+    public void A_marker_that_cannot_be_read_because_it_is_locked_is_other_run_not_absent()
+    {
+        var folder = Path.Combine(_parent, "f");
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, RunFolderMarker.FileName);
+        File.WriteAllText(path, "job-a\n");
+        using var held = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        RunFolderMarker.Check(folder, "job-a").ShouldBe(RunFolderMarkerState.OtherRun, "only a missing file may be confirmed by the user");
+    }
+
+    [Fact]
     public void A_folder_holding_only_the_marker_counts_as_empty_and_is_removed_without_recursion()
     {
         var folder = RunOutputFolders.CreateUnique(_parent, "sample", jobId: "job-a");

@@ -518,7 +518,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             // Issue #954: a run saved straight to a drive says why, and offers the one action (open the folder), instead of a bare refusal.
             if (result.Status == CloudResultsStatus.DriveRootRefused)
             {
-                return await RefuseWithOpenFolderAsync(run, RunsCopy.Redownload(CloudResultsStatus.DriveRootRefused));
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.Redownload(CloudResultsStatus.DriveRootRefused), RunsCopy.RedownloadDriveRootAsToast);
             }
 
             // A cancelled run's partial outputs are the expected result of its cancel, not a warning that something is missing.
@@ -609,12 +609,18 @@ public sealed partial class HistoryViewModel : ObservableObject
             var plan = await Task.Run(() => _local.PlanDelete(run));
             if (plan == LocalDeletePlan.OtherRunsFolder)
             {
-                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(LocalDeleteStatus.OtherRunsFolder));
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.OtherRunsFolder);
             }
 
             if (plan == LocalDeletePlan.DriveRoot)
             {
-                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(LocalDeleteStatus.DriveRootRefused));
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.DriveRootRefused);
+            }
+
+            // An unmarked folder that is the user's own (Documents, their profile, ...) is never offered a "Continue".
+            if (plan == LocalDeletePlan.ProtectedFolder)
+            {
+                return await RefuseDeleteAsync(run, LocalDeleteStatus.ProtectedFolderRefused);
             }
 
             // DECISION (agent-made, reversible; issue #934): a folder with no marker (made before markers existed, or the user's own folder named by a damaged row) is asked about
@@ -629,10 +635,10 @@ public sealed partial class HistoryViewModel : ObservableObject
 
             // Recursive disk work: off the UI thread.
             var result = await Task.Run(() => unmarked ? _local.DeleteUnmarkedOutputFolder(run) : _local.DeleteOutputFolder(run));
-            if (result.Status is LocalDeleteStatus.OtherRunsFolder or LocalDeleteStatus.DriveRootRefused)
+            if (result.Status is LocalDeleteStatus.OtherRunsFolder or LocalDeleteStatus.DriveRootRefused or LocalDeleteStatus.ProtectedFolderRefused)
             {
                 // The folder changed between the plan and the delete: the service refused, so this is the same refusal the plan would have given.
-                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(result.Status));
+                return await RefuseDeleteAsync(run, result.Status);
             }
 
             if (result.Status != LocalDeleteStatus.Partial)
@@ -650,11 +656,15 @@ public sealed partial class HistoryViewModel : ObservableObject
     /// A refusal that names one action as a button (Hard Rule 13): the reason and an "Open folder" button that opens the run's folder so the user can deal with it themselves.
     /// Without a dialog host (or without a recorded folder) it is the same reason as a toast, which names the action in words. Returns the toast to show, or null when the dialog was shown.
     /// </summary>
-    private async Task<RunsMessage?> RefuseWithOpenFolderAsync(RunRecord run, RunsMessage reason)
+    private Task<RunsMessage?> RefuseDeleteAsync(RunRecord run, LocalDeleteStatus status)
+        => RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocal(status), RunsCopy.DeleteLocalAsToast(status));
+
+    /// <param name="toastReason">The reason worded for a toast, which has no Open folder button (it names the row's Open button). Shown whenever the dialog is not: no dialog host, or the host could not show it (no window, gate timeout), so the user always sees something.</param>
+    private async Task<RunsMessage?> RefuseWithOpenFolderAsync(RunRecord run, RunsMessage reason, RunsMessage toastReason)
     {
         if (_choiceDialogs is null || string.IsNullOrWhiteSpace(run.OutputDir))
         {
-            return reason;
+            return toastReason;
         }
 
         var pressed = await _choiceDialogs.ChooseAsync(
@@ -662,6 +672,11 @@ public sealed partial class HistoryViewModel : ObservableObject
             _strings.GetString(reason.Body),
             [_strings.GetString(RunsCopy.OpenFolderLabel), _strings.GetString(RunsCopy.CloseLabel)],
             CancellationToken.None);
+        if (pressed is null)
+        {
+            return toastReason;
+        }
+
         if (pressed == 0 && !_launcher.OpenFolder(run.OutputDir))
         {
             return RunsCopy.OpenMissing;
