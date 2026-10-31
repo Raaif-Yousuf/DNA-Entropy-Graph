@@ -2,6 +2,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cost;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
 
 namespace DnaEntropyGraph.Persistence;
@@ -17,15 +18,12 @@ namespace DnaEntropyGraph.Persistence;
 /// midnight on the 1st counts toward the new month. MonthlySpend is not a stored table: the sum is read from the append-only ledger, so
 /// there is no second number to drift. Issue #557 will replace the estimate with the instance-timestamp figure.
 /// </summary>
-public sealed class SpendLedger : ISpendCapGate
+public sealed class SpendLedger : ISpendCapGate, IRunCostRepair
 {
     public const string VmRuntimeKind = "vm_runtime";
 
     /// <summary>The boot disk <c>RunOptions.BootDiskGb</c> defaults to, used when a row's options cannot be read.</summary>
     private const int DefaultBootDiskGb = 150;
-
-    /// <summary>The run limit <c>RunOptions.MaxRunDurationMinutes</c> defaults to, used when a row's options cannot be read.</summary>
-    private const int DefaultMaxRunMinutes = 240;
 
     private readonly ICostLedgerRepository _ledger;
     private readonly IPricingSource _pricing;
@@ -57,7 +55,7 @@ public sealed class SpendLedger : ISpendCapGate
         ArgumentNullException.ThrowIfNull(run);
         // A local-engine run (Target "local") rents no VM and books nothing. There is deliberately no fallback to StartedAt for a row with no
         // VmReadyAt: the engine writes the planned VM name up front, so a name is no proof a VM ever existed.
-        if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal)
+        if (!string.Equals(run.Target, RunTargets.CloudRecord, StringComparison.OrdinalIgnoreCase)
             || !JobStateMachine.IsTerminal(run.Phase)
             || run.VmReadyAt is not { } vmStart
             || run.FinishedAt is not { } finished
@@ -67,7 +65,7 @@ public sealed class SpendLedger : ISpendCapGate
         }
 
         // A span is never negative: a row whose end is before its start (a clock step, a bad stamp) books a zero span with its $0, so every reader of the entry agrees.
-        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : finished, UsdEst: usd);
+        return new CostLedgerEntry(VmRuntimeKind, vmStart, run.JobId, EndedUtc: finished < vmStart ? vmStart : BookedVmSpan.ClampEnd(run, vmStart, finished), UsdEst: usd);
     }
 
     /// <summary>Appends the run's row once. Returns it, or null when nothing was written (books nothing, or it was already booked, also by a concurrent writer).</summary>
@@ -113,9 +111,16 @@ public sealed class SpendLedger : ISpendCapGate
     }
 
     /// <summary>
-    /// Books every ended run that has a VM and no ledger row yet (a ledger append that failed after its run row was stored is otherwise
-    /// never re-driven). Idempotent through the unique index. Every read of the month, so every cap check, runs it. Returns the rows
-    /// including what it added.
+    /// Issues #100 and #557: books every ended run that has a VM and no ledger row yet, and nothing else. A ledger append that failed after its run row was stored is
+    /// otherwise never re-driven. The app calls this once at startup (AppStartup, in the background); a page or export that reads a run's cost never does (a read never
+    /// writes). Idempotent (the unique index), and a no-op with no run history.
+    /// </summary>
+    public async Task BookUnbookedRunsAsync(CancellationToken cancellationToken)
+        => await ReconcileAsync(await _ledger.GetByKindAsync(VmRuntimeKind, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Books every ended run that has a VM and no ledger row yet (the repair above and every read of the month, so every cap check, run it). Idempotent through the unique
+    /// index. Returns the rows including what it added.
     /// </summary>
     private async Task<IReadOnlyList<CostLedgerEntry>> ReconcileAsync(IReadOnlyList<CostLedgerEntry> rows, CancellationToken cancellationToken)
     {
@@ -158,7 +163,7 @@ public sealed class SpendLedger : ISpendCapGate
         var total = 0.0;
         foreach (var run in latest)
         {
-            if (!string.Equals(run.Target, "cloud", StringComparison.Ordinal) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
+            if (!string.Equals(run.Target, RunTargets.CloudRecord, StringComparison.OrdinalIgnoreCase) || JobStateMachine.IsTerminal(run.Phase) || booked.Contains(run.JobId) || run.VmReadyAt is not { } vmStart)
             {
                 continue;
             }
@@ -195,15 +200,10 @@ public sealed class SpendLedger : ISpendCapGate
         var diskGb = options?.BootDiskGb ?? DefaultBootDiskGb;
 
         // The VM cannot outlive its maxRunDuration (the run limit plus the grace it is created with, Hard Rule 10), so a row stuck
-        // in progress (an orphan) stops accruing there instead of growing forever and blocking every run.
+        // in progress (an orphan) stops accruing there instead of growing forever and blocking every run. BookedVmSpan is the one clamp: the support zip reports the same span.
         if (run.VmReadyAt is { } start)
         {
-            var limit = TimeSpan.FromMinutes(options?.MaxRunDurationMinutes ?? DefaultMaxRunMinutes) + CloudJobRequestFactory.VmGrace;
-            var latestEnd = start + limit;
-            if (to > latestEnd)
-            {
-                to = latestEnd;
-            }
+            to = BookedVmSpan.ClampEnd(run, start, to);
         }
 
         return (rate + table.DiskUsdPerHour(diskGb)) * Math.Max(0, (to - from).TotalHours);
@@ -219,9 +219,10 @@ public sealed class SpendLedger : ISpendCapGate
 
 /// <summary>
 /// Wraps the run repository so every writer of a run row (the runner, the reconciler, the cleanup) feeds the ledger when a row first
-/// reaches an ended phase, without any of them knowing. The row is stored FIRST (carrying the cost and VM seconds, which are deterministic
-/// from the row), then the ledger row is appended: a store that throws leaves no ledger row, so the retry books it once, and a ledger
-/// append is idempotent (unique index), so a retry after a failed append books it too. A ledger failure never fails the run row.
+/// reaches an ended phase, without any of them knowing. The row is stored FIRST, then the ledger row is appended: a store that throws
+/// leaves no ledger row, so the retry books it once, and a ledger append is idempotent (unique index, first write wins), so a retry after
+/// a failed append books it too. A ledger failure never fails the run row. The ledger entry is the only record of what a run cost: nothing
+/// is written onto the run row (issues #100 and #557 read the figure from the ledger).
 /// </summary>
 public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedger ledger) : IRunRepository
 {
@@ -231,9 +232,8 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
-        var (stamped, quote) = Quote(run);
-        await inner.UpsertAsync(stamped, cancellationToken).ConfigureAwait(false);
-        await BookAsync(stamped, quote).ConfigureAwait(false);
+        await inner.UpsertAsync(run, cancellationToken).ConfigureAwait(false);
+        await BookAsync(run).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -243,31 +243,17 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
     /// </summary>
     public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
     {
-        var (stamped, quote) = Quote(run);
-        if (!await inner.TryUpsertIfPhaseAsync(stamped, expectedPhase, cancellationToken).ConfigureAwait(false))
+        if (!await inner.TryUpsertIfPhaseAsync(run, expectedPhase, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
 
-        await BookAsync(stamped, quote).ConfigureAwait(false);
+        await BookAsync(run).ConfigureAwait(false);
         return true;
     }
 
-    private (RunRecord Run, CostLedgerEntry? Quote) Quote(RunRecord run)
+    private async Task BookAsync(RunRecord stored)
     {
-        var quote = ledger.Quote(run);
-        return quote is null
-            ? (run, null)
-            : (run with { EstimatedCostUsd = quote.UsdEst, VmSeconds = (long)Math.Round(((quote.EndedUtc ?? quote.StartedUtc) - quote.StartedUtc).TotalSeconds) }, quote);
-    }
-
-    private async Task BookAsync(RunRecord stored, CostLedgerEntry? quote)
-    {
-        if (quote is null)
-        {
-            return;
-        }
-
         try
         {
             await ledger.RecordRunAsync(stored, CancellationToken.None).ConfigureAwait(false);
