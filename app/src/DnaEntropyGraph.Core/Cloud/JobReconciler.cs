@@ -217,7 +217,7 @@ public sealed class JobReconciler
     /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
     /// so costs one call however long the history is; this keeps a launch from making one lookup per run row ever recorded.
     /// </summary>
-    private static readonly TimeSpan LifecycleLookback = TimeSpan.FromDays(14);
+    private static readonly TimeSpan LifecycleLookback = CloudScopes.LifecycleLookback;
 
     /// <summary>Issue #830: the scopes the installation-wide sweeps cover besides those of recent runs (the scope selected now: a VM of this installation with no history row is found there).</summary>
     private readonly Func<IEnumerable<CloudScope>> _additionalSweepScopes;
@@ -365,7 +365,8 @@ public sealed class JobReconciler
         }
 
         // Issue #830: the idle sweep lists in every scope a recent finished run of this installation was made in, never in whatever is selected now.
-        var sweepScopes = finished.Select(ScopeOf).Concat(_additionalSweepScopes()).Distinct().ToList();
+        var extra = _additionalSweepScopes().ToList();
+        var sweepScopes = CloudScopes.Dedupe(finished.Select(ScopeOf).Concat(extra), extra.FirstOrDefault(s => s.AccountSub is not null));
         foreach (var scope in sweepScopes)
         {
             await SweepIdleAsync(scope, installation, now, outcomes, cancellationToken).ConfigureAwait(false);

@@ -13,8 +13,8 @@ public sealed record LeftRunningVm(string Name, string Zone, string? JobId, Time
 /// <summary>A disk of this installation that no running computer holds: it keeps billing every month until it is deleted.</summary>
 public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth, CloudScope? Scope = null);
 
-/// <summary>What the scan found. <see cref="IsClean"/> is true when nothing of this installation runs and no disk is being paid for.</summary>
-public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks)
+/// <summary>What the scan found. <see cref="IsClean"/> is true when nothing of this installation runs and no disk is being paid for. <paramref name="UnreadScopes"/> counts the scopes (project and account) that could not be listed (signed out, offline) while others were.</summary>
+public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks, int UnreadScopes = 0)
 {
     public bool IsClean => RunningVms.Count == 0 && StoppedDisks.Count == 0;
 }
@@ -37,7 +37,8 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             return new LeftRunningReport([], []);
         }
 
-        var live = (await runs.GetAllAsync(cancellationToken).ConfigureAwait(false)).Where(r => !JobStateMachine.IsTerminal(r.Phase)).Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
+        // Issue #830: a run is live for a computer only in the scope it runs in: the live set is keyed by (scope, job id), so a same-named job of another project or account never vouches for this one.
+        var live = (await runs.GetAllAsync(cancellationToken).ConfigureAwait(false)).Where(r => !JobStateMachine.IsTerminal(r.Phase)).Select(r => (Scope: RunScope.Of(r), r.JobId)).ToList();
         var table = LoadPricing();
         var now = clock.GetUtcNow();
 
@@ -45,7 +46,7 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
         {
             var jobId = vm.Labels is not null && vm.Labels.TryGetValue("job-id", out var job) ? job : null;
             var machine = vm.MachineType is { Length: > 0 } type ? table?.Find(type[(type.LastIndexOf('/') + 1)..]) : null;
-            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Contains(jobId), vm, scope);
+            return new LeftRunningVm(vm.Name, vm.Zone, jobId, RemainingOf(vm, now), machine?.OnDemandUsdPerHour, jobId is not null && live.Any(l => l.JobId == jobId && CloudScopes.Matches(l.Scope, scope)), vm, scope);
         }).ToList();
 
         var runningNames = running.Select(v => v.Name).ToHashSet(StringComparer.Ordinal);
@@ -54,6 +55,37 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             .Select(d => new LeftStoppedDisk(d.Name, d.Zone, d.SizeGb, table is null ? null : d.SizeGb * table.DiskUsdPerGbMonth, scope))
             .ToList();
         return new LeftRunningReport(runningReport, stopped);
+    }
+
+    /// <summary>
+    /// Issue #830: scans every scope a recent run of this installation was made in (<see cref="CloudScopes.ForSweep"/>) plus <paramref name="selected"/>, each once, and merges the reports. One scope
+    /// that cannot be read (its account signed out, a network failure) does not hide the others: it is counted in <see cref="LeftRunningReport.UnreadScopes"/>. When every scope fails the first
+    /// failure is thrown, so the caller degrades exactly as for a single scan. No scope at all is a clean report.
+    /// </summary>
+    public async Task<LeftRunningReport> ScanAllAsync(CloudScope? selected, CancellationToken cancellationToken)
+    {
+        var installation = InstallationId.GetOrCreate(settings);
+        var scopes = CloudScopes.ForSweep(await runs.GetAllAsync(cancellationToken).ConfigureAwait(false), installation, clock.GetUtcNow(), selected);
+        var results = await Task.WhenAll(scopes.Select(async scope =>
+        {
+            try
+            {
+                return (Report: await ScanAsync(scope, cancellationToken).ConfigureAwait(false), Error: (Exception?)null);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                return (Report: (LeftRunningReport?)null, Error: ex);
+            }
+        })).ConfigureAwait(false);
+
+        var ok = results.Where(r => r.Report is not null).Select(r => r.Report!).ToList();
+        var failed = results.Where(r => r.Error is not null).ToList();
+        if (ok.Count == 0 && failed.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed[0].Error!).Throw();
+        }
+
+        return new LeftRunningReport([.. ok.SelectMany(r => r.RunningVms)], [.. ok.SelectMany(r => r.StoppedDisks)], failed.Count);
     }
 
     private static TimeSpan? RemainingOf(VmDescriptor vm, DateTimeOffset localNow)

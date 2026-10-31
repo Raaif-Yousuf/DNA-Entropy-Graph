@@ -141,8 +141,27 @@ public class CloudResourcesViewModelTests
         await running.StopCommand.ExecuteAsync(null);
         await stopped.StartCommand.ExecuteAsync(null);
 
-        await _compute.Received(1).StopVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).StartVmAsync(Arg.Any<CloudScope>(), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).StopVmAsync(new CloudScope(Project), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).StartVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_row_acts_in_the_scope_it_was_listed_in_whatever_is_selected_when_it_is_clicked()
+    {
+        var listedIn = new CloudScope(Project, "sub-listed");
+        _account.SelectedScope().Returns(listedIn);
+        var viewModel = await LoadedAsync();
+        _account.SelectedScope().Returns(new CloudScope(Project, "sub-other")); // the account moved on (the project check cannot see it) without the page being told
+
+        var stopRow = viewModel.Vms[0]; // both rows are taken before acting: an action refreshes the page, and the refresh lists in the scope selected then
+        var deleteRow = viewModel.Vms[1];
+
+        await stopRow.StopCommand!.ExecuteAsync(null);
+        await deleteRow.DeleteCommand!.ExecuteAsync(null);
+
+        await _compute.Received(1).StopVmAsync(listedIn, "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(listedIn, "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().StopVmAsync(Arg.Is<CloudScope>(s => s.AccountSub == "sub-other"), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -156,7 +175,7 @@ public class CloudResourcesViewModelTests
 
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
         await viewModel.Vms[1].DeleteCommand!.ExecuteAsync(null);
-        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -199,7 +218,7 @@ public class CloudResourcesViewModelTests
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
         await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
         await _compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), "deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _storage.Received(1).DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, "jobs/job-1/", Arg.Any<CancellationToken>());
         viewModel.HasReport.ShouldBeTrue();
@@ -240,7 +259,7 @@ public class CloudResourcesViewModelTests
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
         await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
         await _compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), "deg-late", Arg.Any<string>(), Arg.Any<CancellationToken>());
         viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Skipped") && l.Contains("deg-late"));
         viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");

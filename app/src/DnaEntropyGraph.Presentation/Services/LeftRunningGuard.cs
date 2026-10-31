@@ -83,16 +83,18 @@ public sealed class LeftRunningGuard : IDisposable
 
     private async Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
     {
-        // Issue #830: the scan lists in the project and account selected NOW (the selection path); what it finds carries that scope, and every stop or delete below uses it.
-        if (_account.SelectedScope() is not { } scope)
-        {
-            return new LeftRunningReport([], []);
-        }
-
-        var scan = _scanner.ScanAsync(scope, cancellationToken);
+        // Issue #830: the scan lists in every scope a recent run of this installation was made in plus the selection (the selection path); what it finds carries the scope it was found in,
+        // and every stop or delete below uses that one. A signed-out selection still scans the scopes of recent runs.
+        var scan = _scanner.ScanAllAsync(_account.SelectedScope(), cancellationToken);
         try
         {
-            return await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
+            var report = await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
+            if (report.UnreadScopes > 0)
+            {
+                _log.Warning("left-running-scan", null, "unread-scopes");
+            }
+
+            return report;
         }
         catch (TimeoutException)
         {

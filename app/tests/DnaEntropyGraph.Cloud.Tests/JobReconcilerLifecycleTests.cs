@@ -53,7 +53,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null, DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog? log = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, log: log, compute: compute);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null, DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog? log = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, log: log, compute: compute, additionalSweepScopes: additionalSweepScopes);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -754,6 +754,28 @@ public class JobReconcilerLifecycleTests
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
 
         (await rig.VmsAsync("job-y")).Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_idle_sweep_lists_a_project_once_when_a_row_with_no_account_and_the_selected_scope_name_the_same_project_and_account()
+    {
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-legacy", AfterTaskAction.Stop); // the row names no account: it acts as the current one
+
+        await rig.Reconciler(additionalSweepScopes: () => [new CloudScope("my-project", FakeGcp.DefaultAccountSub)]).EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.CallsTo("ListByInstallation").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_idle_sweep_lists_the_same_project_once_per_distinct_account()
+    {
+        var rig = new Rig(g => g.WithAccount("sub-x", "x@example.org", "my-project"));
+        await rig.SeedFinishedAsync("job-x", AfterTaskAction.Stop, tweak: row => row with { AccountSub = "sub-x" });
+
+        await rig.Reconciler(additionalSweepScopes: () => [new CloudScope("my-project", FakeGcp.DefaultAccountSub)]).EnforceLifecycleAsync(CancellationToken.None);
+
+        rig.Gcp.CallsTo("ListByInstallation").Select(c => c.AccountSub).Order().ToList().ShouldBe([FakeGcp.DefaultAccountSub, "sub-x"]);
     }
 
     [Fact]
