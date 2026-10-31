@@ -718,6 +718,32 @@ def test_a_file_name_with_space_quote_and_tab_is_read_exactly_and_scanned(world)
     assert world.remote_branches() == ["main"]
 
 
+def test_land_wt_uses_the_one_shared_control_byte_scanner():
+    import check_control_bytes as ccb
+
+    assert lw.CONTROL_BYTES is ccb.CONTROL_BYTES
+    # the allowlisted vendored file is skipped in the LAND check too (one implementation, one allowlist)
+    assert ccb.ALLOWLIST, "vacuity: the allowlist must hold at least the vendored igv.min.js"
+    allowed = sorted(ccb.ALLOWLIST)[0]
+    assert lw.find_control_bytes({allowed: b"a\x01b", "z.txt": b"\x08"}) == ["z.txt"]
+
+
+def test_changed_text_files_skips_a_minus_text_file_like_premerge_does(world):
+    """A `-text` fixture with a control byte and no NUL is skipped at LAND exactly as in check_control_bytes (#1016)."""
+    _git(world.clone, "switch", "-q", "-c", "feat/attr", "origin/main")
+    (world.clone / ".gitattributes").write_bytes(b"raw/** -text\n")
+    (world.clone / "raw").mkdir()
+    (world.clone / "raw" / "fixture.txt").write_bytes(b"a\x0bb")
+    (world.clone / "plain.txt").write_bytes(b"a\x0bb")
+    _git(world.clone, "add", "--", ".gitattributes", "raw/fixture.txt", "plain.txt")
+    _git(world.clone, "commit", "-q", "-m", "attr")
+    sha = _git(world.clone, "rev-parse", "HEAD")
+    _git(world.clone, "switch", "-q", "--detach", "origin/main")
+    got = lw._changed_text_files(world.ctx(), sha)
+    assert "raw/fixture.txt" not in got
+    assert got["plain.txt"] == b"a\x0bb"
+
+
 def test_esc_is_allowed_because_logs_carry_colour_but_vt_and_ff_are_not():
     assert lw.find_control_bytes({"log.txt": b"\x1b[31mred\x1b[0m\n"}) == []
     assert lw.find_control_bytes({"a": b"\x0b", "b": b"\x0c"}) == ["a", "b"]

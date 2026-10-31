@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core.Cloud;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -153,5 +154,84 @@ public class BillingSetupTests
         outcome.Kind.ShouldBe(BillingOutcomeKind.ChooseAccount);
         outcome.Accounts.Select(a => a.AccountId).ShouldBe(["billingAccounts/OPEN"]);
         gcp.BillingLinkCalls.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_linked_but_off_project_with_other_accounts_carries_the_BILLING_STILL_OFF_code_but_a_fresh_choice_carries_none()
+    {
+        var linkedOff = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingAccount("billingAccounts/BBB", "Department").WithBillingLinkThatDoesNotEnable();
+        var setup = new BillingSetup(linkedOff);
+        await setup.LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
+        var again = await setup.EnsureAsync(Project, CancellationToken.None);
+
+        again.Kind.ShouldBe(BillingOutcomeKind.ChooseAccount);
+        again.Code.ShouldBe(SetupErrorCodes.BillingStillOff);
+
+        var fresh = new FakeGcp().WithBillingOff(Project).WithBillingAccount("billingAccounts/AAA", "Lab card").WithBillingAccount("billingAccounts/BBB", "Department");
+        var choose = await new BillingSetup(fresh).EnsureAsync(Project, CancellationToken.None);
+
+        choose.Kind.ShouldBe(BillingOutcomeKind.ChooseAccount);
+        choose.Code.ShouldBeNull("nothing is wrong when the user simply has several accounts to pick from");
+    }
+
+    [Fact]
+    public async Task A_failure_listing_accounts_after_a_link_that_worked_returns_FixLinkedAccount_instead_of_throwing()
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError("NETWORK", 0, "offline"), CloudErrorKind.Network)));
+
+        var outcome = await new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
+        await gateway.Received(1).LinkProjectAsync(Project, "billingAccounts/AAA", Arg.Any<CancellationToken>());
+        outcome.Kind.ShouldBe(BillingOutcomeKind.FixLinkedAccount);
+        outcome.Code.ShouldBe(SetupErrorCodes.BillingAccountOff);
+        outcome.Accounts.ShouldBeEmpty();
+        outcome.DeepLink.ShouldBe(BillingLinks.ForProject(Project));
+    }
+
+    [Fact]
+    public async Task Cancelling_during_the_after_link_listing_still_cancels()
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new OperationCanceledException()));
+
+        await Should.ThrowAsync<OperationCanceledException>(() => new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Permission, SetupErrorCodes.BillingNoPermission)]
+    [InlineData(CloudErrorKind.Billing, "BILLING")]
+    [InlineData(CloudErrorKind.ApiDisabled, "API_DISABLED")]
+    [InlineData(CloudErrorKind.OrgPolicy, "ORG_POLICY_BLOCK")]
+    public async Task An_abort_class_failure_listing_accounts_after_a_link_that_worked_propagates_and_is_not_read_as_a_suspended_account(CloudErrorKind kind, string code)
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError(code, 403, "denied"), kind)));
+
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None));
+
+        ex.Kind.ShouldBe(kind);
+        ex.Error.Code.ShouldBe(code);
+    }
+
+    [Theory]
+    [InlineData(CloudErrorKind.Network)]
+    [InlineData(CloudErrorKind.Other)]
+    public async Task A_transient_or_unknown_failure_listing_accounts_after_a_link_that_worked_still_returns_FixLinkedAccount(CloudErrorKind kind)
+    {
+        var gateway = Substitute.For<IBillingGateway>();
+        gateway.GetBillingStatusAsync(Project, Arg.Any<CancellationToken>()).Returns(new BillingStatus(false, "billingAccounts/AAA"));
+        gateway.ListOpenBillingAccountsAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<BillingAccountSummary>>(new CloudOperationException(new CloudError("X", 0, "x"), kind)));
+
+        var outcome = await new BillingSetup(gateway).LinkAsync(Project, "billingAccounts/AAA", CancellationToken.None);
+
+        outcome.Kind.ShouldBe(BillingOutcomeKind.FixLinkedAccount);
     }
 }

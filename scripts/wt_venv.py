@@ -29,6 +29,22 @@ def venv_python(venv: Path) -> Path | None:
     return None
 
 
+def primary_venv(root: Path) -> Path:
+    """`<primary checkout>\\worker\\.venv`, from git's common dir. Raises LinkError when git cannot say."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
+        raise LinkError(f"could not ask git for the primary checkout ({err})") from err
+    return Path(out.stdout.strip()).parent / VENV_REL
+
+
 def make_dir_link(link: Path, target: Path) -> None:
     try:
         link.parent.mkdir(parents=True, exist_ok=True)

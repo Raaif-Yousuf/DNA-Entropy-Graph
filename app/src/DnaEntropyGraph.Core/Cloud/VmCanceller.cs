@@ -47,6 +47,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         // The ask sits INSIDE the same guard as the delete: whatever it throws (a caller who gave up, an unexpected failure of a look), the VM is still deleted and the row
         // still ends terminal. Nothing in the ask may skip the delete.
         var outcome = GracefulOutcome.NotAsked;
+        var found = new List<VmDescriptor>();
         string? failure;
         try
         {
@@ -76,7 +77,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 }
             }
 
-            failure = await DeleteAllAsync(jobId, settled, queued, cancellationToken).ConfigureAwait(false);
+            failure = await DeleteAllAsync(jobId, settled, queued, found.Add, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -88,7 +89,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             // last attempt that the caller's token cannot cut, then the terminal state is recorded from what it finds.
             try
             {
-                failure = await DeleteAllAsync(jobId, settled, queued, CancellationToken.None).ConfigureAwait(false);
+                failure = await DeleteAllAsync(jobId, settled, queued, found.Add, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -96,14 +97,19 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             }
         }
 
+        // Issue #109: the span of the VMs the delete found (VmSpan.Across: the earliest start, the latest end, still open when any was running).
+        // A cancel that found no VM books nothing, and a create that lands after this look is surfaced by the label-based left-running scan, not booked here.
+        var (vmStart, vmEnd) = VmSpan.Across(found);
+        await rows.StampVmSpanAsync(jobId, vmStart, vmEnd).ConfigureAwait(false);
+
         // Hard Rule 11: a cancel ends in exactly one recorded terminal state. Failed names the VM to delete by hand.
         await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
     }
 
-    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, CancellationToken cancellationToken)
+    private async Task<string?> DeleteAllAsync(string jobId, bool settled, IReadOnlyList<(string Name, string Zone)> queued, Action<VmDescriptor> found, CancellationToken cancellationToken)
     {
         var queuedNote = await terminator.DeleteQueuedRequestsAsync(queued, cancellationToken).ConfigureAwait(false);
-        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken).ConfigureAwait(false);
+        var ownedNote = await terminator.DeleteOwnedVmsAndVerifyAsync(jobId, settled, cancellationToken, found).ConfigureAwait(false);
         return ownedNote ?? queuedNote;
     }
 

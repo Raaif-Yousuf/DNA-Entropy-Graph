@@ -226,9 +226,15 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         return error;
     }
 
-    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken)
+    public async Task<string?> DeleteOwnedVmsAndVerifyAsync(string jobId, bool createsSettled, CancellationToken cancellationToken, Action<VmDescriptor>? foundVm = null)
     {
         var owned = await calls.CallAsync(token => compute.FindByJobIdAsync(jobId, token), cancellationToken).ConfigureAwait(false);
+        // Issue #109: each VM the delete finds is an observation of that VM (VmSpan), whether or not the create that made it was settled.
+        foreach (var seen in owned)
+        {
+            foundVm?.Invoke(seen);
+        }
+
         string? deleteError = null;
         foreach (var vm in owned)
         {

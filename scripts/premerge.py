@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import os
 import re
 import shutil
@@ -84,6 +85,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
+
 import wt_venv  # noqa: E402
 
 PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
@@ -166,12 +168,50 @@ class Result:
 # ---------------------------------------------------------------------------
 
 
-def find_venv_python(root: Path) -> Path | None:
+def _own_venv_python(root: Path) -> Path | None:
     for rel in ("worker/.venv/Scripts/python.exe", "worker/.venv/bin/python"):
         candidate = root / rel
         if candidate.is_file():
             return candidate
     return None
+
+
+@functools.lru_cache(maxsize=8)
+def _primary_venv_dir(root: Path) -> Path | None:
+    """The primary checkout's venv dir from git's common dir: asked once per root (the answer cannot change mid-run)."""
+    try:
+        return wt_venv.primary_venv(root)
+    except wt_venv.LinkError:
+        return None
+
+
+def _primary_venv_python(root: Path) -> Path | None:
+    """The primary checkout's venv python (an agent worktree has no venv of its own, #1001)."""
+    venv = _primary_venv_dir(root)
+    return wt_venv.venv_python(venv) if venv else None
+
+
+def find_venv_python(root: Path) -> Path | None:
+    return _own_venv_python(root) or _primary_venv_python(root)
+
+
+def venv_fallback_note(root: Path, override: str | None) -> str | None:
+    """One line saying the primary checkout's venv is in use, or None when --python or the checkout's own venv decided."""
+    if override or _own_venv_python(root):
+        return None
+    found = _primary_venv_python(root)
+    return f"NOTE: no worker/.venv in {root}; using the primary checkout's venv python {found} (#1001)" if found else None
+
+
+def pythonpath_for(root: Path, env: dict[str, str] | os._Environ[str]) -> str:
+    """`<root>/worker/src` first on PYTHONPATH, so a shared venv's editable install cannot win the import (#937)."""
+    src = str((root / "worker" / "src").resolve())
+
+    def key(p: str) -> str:
+        return os.path.normcase(os.path.abspath(p))
+
+    rest = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and key(p) != key(src)]
+    return os.pathsep.join([src, *rest])
 
 
 def venv_python_or_marker(root: Path, override: str | None) -> str:
@@ -731,7 +771,11 @@ def _finish_basetemp(own_tmp: Path, results: Sequence[Result], emit: Callable[[s
 
 
 def run_all(
-    gates: Sequence[Gate], log_dir: Path | None = None, runner: Callable[[Gate], Result] | None = None, emit: Callable[[str], None] = print
+    gates: Sequence[Gate],
+    log_dir: Path | None = None,
+    runner: Callable[[Gate], Result] | None = None,
+    emit: Callable[[str], None] = print,
+    env: dict[str, str] | None = None,
 ) -> tuple[list[Result], str, int]:
     """Run the gates in order. Pytest gates each get a private --basetemp in a SHORT temp dir created here (never under
     `log_dir`: MEASURED 2026-10-02 #469, a basetemp 160+ chars deep made git fail inside test_land_pr's temp bare repos).
@@ -746,7 +790,7 @@ def run_all(
             (log_dir / "basetemp.txt").write_text(str(own_tmp) + "\n", encoding="utf-8", newline="\n")
 
         def default_runner(gate: Gate) -> Result:  # closes over the basetemp root
-            return run_gate(gate, basetemp_root=basetemp_root)
+            return run_gate(gate, env=env, basetemp_root=basetemp_root)
 
         runner = default_runner
 
@@ -992,7 +1036,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"AUDIT: {problem}")
     mode = "fast" if args.fast else "full"
     print(f"premerge ({mode}): {len(chosen)} gate(s), python for guards: {venv_python_or_marker(root, args.python)}")
-    _, summary, code = run_all(chosen, log_dir=args.log_dir)
+    note = venv_fallback_note(root, args.python)
+    if note:
+        print(note)
+    gate_env = {**os.environ, "PYTHONPATH": pythonpath_for(root, os.environ)}  # built locally: this process is not mutated
+    _, summary, code = run_all(chosen, log_dir=args.log_dir, env=gate_env)
     print(summary)
     if problems:
         print(f"PREMERGE: AUDIT FAILED - {len(problems)} workflow script(s) not covered by this runner")
