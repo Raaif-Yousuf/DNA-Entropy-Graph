@@ -15,13 +15,13 @@ public interface IProjectSetupGateway
     /// implementing the documented preflight chain had no call for its own
     /// first check.
     /// </summary>
-    Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken);
+    Task<ProjectLifecycleState> GetProjectStateAsync(CloudScope scope, CancellationToken cancellationToken);
 
-    Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken);
+    Task<bool> IsBillingEnabledAsync(CloudScope scope, CancellationToken cancellationToken);
 
-    Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken);
+    Task<bool> IsComputeApiEnabledAsync(CloudScope scope, CancellationToken cancellationToken);
 
-    Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken);
+    Task EnableComputeApiAsync(CloudScope scope, CancellationToken cancellationToken);
 }
 
 /// <summary>

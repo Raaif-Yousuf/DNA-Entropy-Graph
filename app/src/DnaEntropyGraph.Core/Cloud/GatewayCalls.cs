@@ -44,11 +44,11 @@ internal sealed class GatewayCalls(CloudRunSettings settings, IStorageGateway st
     }
 
     /// <summary>Reads a small object as text; null means it is not there. A body past <see cref="MaxResultChars"/> comes back cut at the limit, which no strict reader will accept as a result.</summary>
-    public Task<string?> TryReadTextAsync(string bucket, string key, CancellationToken cancellationToken)
+    public Task<string?> TryReadTextAsync(CloudScope scope, string bucket, string key, CancellationToken cancellationToken)
         => CallAsync(
             async token =>
             {
-                var stream = await storage.TryDownloadAsync(bucket, key, token).ConfigureAwait(false);
+                var stream = await storage.TryDownloadAsync(scope, bucket, key, token).ConfigureAwait(false);
                 if (stream is null)
                 {
                     return null;

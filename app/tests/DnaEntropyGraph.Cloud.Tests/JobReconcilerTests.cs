@@ -121,7 +121,7 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null) => new(
             Runner,
             compute ?? Gcp,
             Gcp,
@@ -135,7 +135,9 @@ public class JobReconcilerTests
             clock ?? new FixedClock(Launch),
             lookupTimeout,
             mutationTimeout,
-            log ?? Log);
+            log ?? Log,
+            additionalSweepScopes: additionalSweepScopes ?? (() => [new CloudScope(Project)]),
+            onSignInNeeded: onSignInNeeded);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -154,7 +156,7 @@ public class JobReconcilerTests
             var vmName = "deg-" + jobId;
             if (uploaded)
             {
-                var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
+                var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", Image, [StagedInput.ForAccession(accession, range)], options.OutputFolder!);
                 await Runner.UploadInputsAsync(request, CancellationToken.None);
                 vmName = request.Spec.VmName;
             }
@@ -219,7 +221,7 @@ public class JobReconcilerTests
                 AnnotationPath = annotationOriginal,
                 OutputFolder = TestInputs.OutputParent(jobId),
             };
-            var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", Image, annotationCopy is null ? [copy] : [copy, annotationCopy], options.OutputFolder!);
+            var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", Image, annotationCopy is null ? [copy] : [copy, annotationCopy], options.OutputFolder!);
             if (uploaded)
             {
                 await Runner.UploadInputsAsync(request, CancellationToken.None);
@@ -284,8 +286,86 @@ public class JobReconcilerTests
     }
 
     [Fact]
+    public async Task A_resumed_run_acts_in_the_project_its_row_names_and_never_in_the_one_selected_now()
+    {
+        // Issue #830, the observable: with another project selected at launch, every call the resumed run makes still goes to the project of its row.
+        var env = new Env(new FakeGcp().WithSelectedProject("selected-later"));
+        await env.SeedAsync("job-scope", JobPhase.Running, vm: true);
+
+        var outcome = await OneAsync(env.Reconciler(), "job-scope");
+
+        outcome.Action.ShouldBe(ReattachAction.Resumed);
+        var projects = env.Gcp.Calls.Select(c => c.ProjectId).Distinct().ToList();
+        projects.ShouldBe([Project], "the row names " + Project + "; the selection must not leak into a resumed run");
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_account_is_signed_out_reports_the_named_sign_in_outcome_and_touches_nothing()
+    {
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a").WithSelectedProject("selected-later"));
+        await env.SeedAsync("job-so", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var callsBefore = env.Gcp.Calls.Count;
+
+        var outcome = await OneAsync(env.Reconciler(), "job-so");
+
+        outcome.Action.ShouldBe(ReattachAction.NeedsSignIn, outcome.ErrorCode);
+        outcome.AccountSub.ShouldBe("sub-a");
+        outcome.ErrorCode.ShouldBe(AuthErrorCodes.SigninExpired);
+        env.Row("job-so").Phase.ShouldBe(JobPhase.Running, "nothing was decided about the run: the next launch looks again");
+        env.Gcp.Calls.Skip(callsBefore).Where(c => c.Method is "StopVm" or "DeleteVm" or "CreateVm").ShouldBeEmpty();
+        env.Gcp.Calls.Skip(callsBefore).Where(c => c.ProjectId != Project).ShouldBeEmpty("no call went to another project");
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_account_is_signed_out_tells_the_app_which_account_needs_to_sign_in()
+    {
+        // Issue #830 review M3: the outcome alone reaches nobody; the reconciler hands the account to the app so the shell can say "Sign in as ...".
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a"));
+        await env.SeedAsync("job-so2", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        await OneAsync(env.Reconciler(onSignInNeeded: told.Add), "job-so2");
+
+        told.ShouldBe(["sub-a"]);
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_account_merely_has_no_connection_does_not_ask_for_a_sign_in()
+    {
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable));
+        await env.SeedAsync("job-net", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        await OneAsync(env.Reconciler(onSignInNeeded: told.Add), "job-net");
+
+        told.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(AuthErrorCodes.NetworkUnavailable)]
+    [InlineData(AuthErrorCodes.SigninProxy)]
+    [InlineData(AuthErrorCodes.SigninCertificate)]
+    [InlineData(AuthErrorCodes.AccountsFileLocked)]
+    [InlineData(AuthErrorCodes.AccountsFileUnreadable)]
+    [InlineData(AuthErrorCodes.StorageFailed)]
+    [InlineData(AuthErrorCodes.SigninFailed)]
+    public async Task A_resumed_run_whose_account_cannot_be_used_for_another_reason_than_an_expired_sign_in_is_deferred_not_told_to_sign_in(string code)
+    {
+        // Issue #830 review M2: only an expired sign-in has "Sign in" as its action; a lost connection or a locked accounts file is retried by the reconnect probe.
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountFailure("sub-a", code));
+        await env.SeedAsync("job-fail", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+
+        var outcome = await OneAsync(env.Reconciler(), "job-fail");
+
+        outcome.Action.ShouldBe(ReattachAction.Deferred, outcome.ErrorCode);
+        outcome.ErrorCode.ShouldBe(code);
+        env.Row("job-fail").Phase.ShouldBe(JobPhase.Running);
+    }
+
+    [Fact]
     public async Task A_run_killed_while_Downloading_whose_VM_is_long_gone_still_completes()
     {
+        // Raw-Compute shape ON PURPOSE (#938 round 5 audit): the terminator tolerates a 404 on delete; the real gateway swallows it, so this proves the terminator's own tolerance only.
         var env = new Env(new FakeGcp().WithWorkerEndingItsOwnVm(WorkerSelfEnd.Delete).WithDeleteOfMissingVmNotFound());
         var request = await env.SeedAsync("job-d", JobPhase.Downloading, vm: true);
         await env.Gcp.DeleteVmAsync(request.Spec.VmName, Zone, CancellationToken.None);
@@ -817,7 +897,7 @@ public class JobReconcilerTests
             guard.Advance("same");
         });
         var compute = Substitute.For<IComputeGateway>();
-        compute.FindByJobIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw stuck);
+        compute.FindByJobIdAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw stuck);
         var reconciler = new JobReconciler(env.Runner, compute, env.Gcp, env.Repo, env.Inputs, env.Images, env.Active, env.Settings, (id, phase) => env.Notified.Add((id, phase)), () => Path.Combine(env.AppData, "downloads"), new FixedClock(Launch), null, null, env.Log);
         var before = env.Repo.AllRecordedInOrder.Count;
 

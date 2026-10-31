@@ -22,29 +22,29 @@ public class CloudJobRunnerEnsureBucketTimeoutTests
     {
         public int Completed { get; private set; }
 
-        public async Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken)
+        public async Task<string> EnsureBucketAsync(CloudScope scope, CancellationToken cancellationToken)
         {
             await Task.Yield();
             clock.Advance(SlowSequence);
             cancellationToken.ThrowIfCancellationRequested();
-            var name = await inner.EnsureBucketAsync(projectId, cancellationToken);
+            var name = await inner.EnsureBucketAsync(scope, cancellationToken);
             Completed++;
             return name;
         }
 
-        public Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken) => inner.UploadAsync(bucket, objectKey, content, cancellationToken);
+        public Task UploadAsync(CloudScope scope, string bucket, string objectKey, Stream content, CancellationToken cancellationToken) => inner.UploadAsync(scope, bucket, objectKey, content, cancellationToken);
 
-        public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.DownloadAsync(bucket, objectKey, cancellationToken);
+        public Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken) => inner.DownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-        public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
+        public Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-        public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken) => inner.ListBucketsAsync(projectId, cancellationToken);
+        public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListBucketsAsync(scope, cancellationToken);
 
-        public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+        public Task<PrefixUsage> GetPrefixUsageAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(scope, bucket, prefix, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(scope, bucket, prefix, cancellationToken);
 
-        public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(bucket, prefix, cancellationToken);
+        public Task<int> DeletePrefixAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(scope, bucket, prefix, cancellationToken);
     }
 
     private static VmSpec Spec(string jobId) => new(

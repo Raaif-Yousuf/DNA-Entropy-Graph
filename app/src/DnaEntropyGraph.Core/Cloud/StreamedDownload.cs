@@ -25,12 +25,12 @@ internal static class StreamedDownload
     /// <summary>The file's current length, or -1 when it does not exist yet. May throw <see cref="IOException"/> if the file vanishes or is locked mid-read.</summary>
     private static long ProbeLength(string path) => File.Exists(path) ? new FileInfo(path).Length : -1;
 
-    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken, Func<string, long>? lengthProbe = null, TimeSpan? cancelGrace = null)
+    public static async Task<bool> RunAsync(IStorageGateway storage, TimeProvider clock, CloudScope scope, string bucket, string objectKey, string tempPath, long? expectedBytes, TimeSpan stall, CancellationToken cancellationToken, Func<string, long>? lengthProbe = null, TimeSpan? cancelGrace = null)
     {
         using var inner = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var cap = TotalCap(expectedBytes);
         var started = clock.GetTimestamp();
-        var download = Task.Run(() => storage.TryDownloadToFileAsync(bucket, objectKey, tempPath, inner.Token), CancellationToken.None);
+        var download = Task.Run(() => storage.TryDownloadToFileAsync(scope, bucket, objectKey, tempPath, inner.Token), CancellationToken.None);
 
         var watcher = Task.Run(
             async () =>

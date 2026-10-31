@@ -82,7 +82,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
     [GeneratedRegex(@"\Adeg-[a-z0-9][a-z0-9._-]{0,57}\z", RegexOptions.CultureInvariant)]
     private static partial Regex ResultsBucketName();
 
-    public async Task DeleteJobObjectsAsync(string bucket, string jobPrefix, CancellationToken cancellationToken)
+    public async Task DeleteJobObjectsAsync(CloudScope scope, string bucket, string jobPrefix, CancellationToken cancellationToken)
     {
         if (bucket is null || !ResultsBucketName().IsMatch(bucket))
         {
@@ -98,7 +98,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         int before;
         try
         {
-            before = (await _storage.GetPrefixUsageAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
+            before = (await _storage.GetPrefixUsageAsync(scope, bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
@@ -111,19 +111,19 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
             return;
         }
 
-        await RequireOursAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
+        await RequireOursAsync(scope, bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
 
         ExceptionDispatchInfo? failure = null;
         try
         {
-            await _storage.DeletePrefixAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
+            await _storage.DeletePrefixAsync(scope, bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             failure = ExceptionDispatchInfo.Capture(ex);
         }
 
-        var left = await CountLeftAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
+        var left = await CountLeftAsync(scope, bucket, jobPrefix, cancellationToken).ConfigureAwait(false);
         if (left is null && failure is not null)
         {
             // The count after the sweep could not be read, and the sweep itself failed with a real, classified error: some objects may have gone before it
@@ -150,7 +150,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         throw new PartialCloudDeleteException(left, sweepCompleted: failure is null, failure?.SourceException);
     }
 
-    private async Task RequireOursAsync(string bucket, string jobPrefix, CancellationToken cancellationToken)
+    private async Task RequireOursAsync(CloudScope scope, string bucket, string jobPrefix, CancellationToken cancellationToken)
     {
         var installation = _installationId();
         if (!InstallationId.IsValidLabelValue(installation))
@@ -158,7 +158,7 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
             throw new CloudDeleteRefusedException(CloudDeleteRefusal.Unconfirmed, "This installation cannot be identified, so the folder is not known to be its own.");
         }
 
-        var stream = await _storage.TryDownloadAsync(bucket, jobPrefix + ManifestName, cancellationToken).ConfigureAwait(false);
+        var stream = await _storage.TryDownloadAsync(scope, bucket, jobPrefix + ManifestName, cancellationToken).ConfigureAwait(false);
         if (stream is null)
         {
             throw new CloudDeleteRefusedException(CloudDeleteRefusal.Unconfirmed, "The folder has no manifest, so it is not known to be this installation's.");
@@ -201,11 +201,11 @@ public sealed partial class JobObjectDeleter : IJobObjectDeleter
         }
     }
 
-    private async Task<int?> CountLeftAsync(string bucket, string jobPrefix, CancellationToken cancellationToken)
+    private async Task<int?> CountLeftAsync(CloudScope scope, string bucket, string jobPrefix, CancellationToken cancellationToken)
     {
         try
         {
-            return (await _storage.GetPrefixUsageAsync(bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
+            return (await _storage.GetPrefixUsageAsync(scope, bucket, jobPrefix, cancellationToken).ConfigureAwait(false)).ObjectCount;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -306,14 +306,14 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
     {
         var path = Path.Combine(_base, "abandoned.bedgraph.0123456789ab.part");
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), path, Arg.Any<CancellationToken>()).Returns(async _ =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), path, Arg.Any<CancellationToken>()).Returns(async _ =>
         {
             await using var held = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
             await Task.Delay(900, CancellationToken.None);
             return true;
         });
 
-        await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", path, null, TimeSpan.FromMilliseconds(200), CancellationToken.None, null, TimeSpan.FromMilliseconds(100)));
+        await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", path, null, TimeSpan.FromMilliseconds(200), CancellationToken.None, null, TimeSpan.FromMilliseconds(100)));
 
         var deadline = Stopwatch.StartNew();
         while (File.Exists(path) && deadline.Elapsed < TimeSpan.FromSeconds(10))

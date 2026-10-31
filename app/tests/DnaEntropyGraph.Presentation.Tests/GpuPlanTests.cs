@@ -87,7 +87,7 @@ public sealed class GpuPlanTests : IDisposable
         _started.ShouldNotBeNull();
         _started.GpuTier.ShouldBe(GpuTier.A100_40);
         var request = CloudJobRequestFactory.Create(
-            _started, "job-1", "p", "i", "0.0.1", null, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.fasta", "a.fasta")], @"C:\out");
+            _started, "job-1", new CloudScope("p"), "i", "0.0.1", null, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.fasta", "a.fasta")], @"C:\out");
         request.Spec.MachineType.ShouldBe("a2-highgpu-1g");
     }
 

@@ -3501,4 +3501,67 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
   </data>
+  <data name="RunAction_RunNotFound" xml:space="preserve">
+    <value>This run is no longer in your history, so the app cannot tell which Google account and project its rented computer is in. Open the Cloud page and stop or delete any computer left running there.</value>
+  </data>
+  <data name="RunSignIn_Prompt" xml:space="preserve">
+    <value>Sign in as {0} to stop or delete this run's computer.</value>
+  </data>
+  <data name="RunSignIn_PromptUnknown" xml:space="preserve">
+    <value>Sign in with the Google account this run started under to stop or delete its computer.</value>
+  </data>
+  <data name="RunProgressSignIn.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="RunError_account_signed_out" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its rented computer could not be reached. Sign in as that account (choose the Sign in button on this run's page or at the bottom of the window), then try again.</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Title" xml:space="preserve">
+    <value>Sign in to download</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its files could not be downloaded. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Download again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Title" xml:space="preserve">
+    <value>Sign in to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so nothing was deleted. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Delete cloud copy again.</value>
+  </data>
+  <data name="RunError_late_create_unconfirmed" xml:space="preserve">
+    <value>You cancelled this run, but a request for a rented computer was still on its way and we could not confirm it was deleted or stopped. Open the Cloud page and delete or stop any computer left for this run so it stops billing.</value>
+  </data>
+  <data name="SignInNeeded_Title" xml:space="preserve">
+    <value>Sign in as {0}</value>
+  </data>
+  <data name="SignInNeeded_TitleUnknown" xml:space="preserve">
+    <value>Sign in with the Google account a recent run started under</value>
+  </data>
+  <data name="SignInNeeded_Joiner" xml:space="preserve">
+    <value> or </value>
+  </data>
+  <data name="SignInNeeded_Message" xml:space="preserve">
+    <value>The app could not check on a computer that account started in Google Cloud, and a computer left running costs money. Sign in so the app can look at it and stop it.</value>
+  </data>
+  <data name="SignInNeededBarButton.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="LeftRunning_UnreadTitle" xml:space="preserve">
+    <value>Some computers could not be checked</value>
+  </data>
+  <data name="LeftRunning_UnreadBodySignIn" xml:space="preserve">
+    <value>The app could not look at the rented computers (VMs) started under {0}, because that Google account is signed out. A computer left running costs money until it ends itself at its time limit. Press Sign in to look again, or Close anyway and check the Cloud page later.</value>
+  </data>
+  <data name="LeftRunning_UnreadBodyOther" xml:space="preserve">
+    <value>The app could not reach Google to check every rented computer (VM) it may have started. A computer left running costs money until it ends itself at its time limit. Open the Cloud page when you are online to see what is running.</value>
+  </data>
+  <data name="LeftRunning_UnreadAccountUnknown" xml:space="preserve">
+    <value>a Google account you used for a recent run</value>
+  </data>
+  <data name="LeftRunning_UnreadSignIn" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
+    <value>Close anyway</value>
+  </data>
 </root>

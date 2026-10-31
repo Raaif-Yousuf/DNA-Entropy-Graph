@@ -67,18 +67,18 @@ public sealed class RunCloudResultsTests : IDisposable
         PutResult();
         var folder = Path.Combine(_root, "sample");
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadAsync(Bucket, Prefix + "result.json", Arg.Any<CancellationToken>()).Returns(ci => _gcp.TryDownloadAsync(Bucket, Prefix + "result.json", ci.Arg<CancellationToken>()));
-        storage.TryDownloadToFileAsync(Bucket, Prefix + "output/sample.bedgraph", Arg.Any<string>(), Arg.Any<CancellationToken>())
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "result.json", Arg.Any<CancellationToken>()).Returns(ci => _gcp.TryDownloadAsync(Bucket, Prefix + "result.json", ci.Arg<CancellationToken>()));
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "output/sample.bedgraph", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
-                File.WriteAllBytes(ci.ArgAt<string>(2), BedGraph);
+                File.WriteAllBytes(ci.ArgAt<string>(3), BedGraph);
                 return Task.FromResult(true);
             });
 
         (await Make(storage).RedownloadAsync(Run(folder), CancellationToken.None)).ShouldBe(CloudResultsStatus.Done);
 
         File.ReadAllBytes(Path.Combine(folder, "sample.bedgraph")).ShouldBe(BedGraph);
-        await storage.DidNotReceive().TryDownloadAsync(Bucket, Prefix + "output/sample.bedgraph", Arg.Any<CancellationToken>());
+        await storage.DidNotReceive().TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "output/sample.bedgraph", Arg.Any<CancellationToken>());
         Directory.GetFiles(folder, "*.part").ShouldBeEmpty();
     }
     [Fact]
@@ -466,7 +466,7 @@ public sealed class RunCloudResultsTests : IDisposable
     public async Task Any_unexpected_storage_failure_is_failed_not_thrown(Type exception)
     {
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadAsync(default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task<Stream?>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), default!, default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs<Task<Stream?>>(_ => throw (Exception)Activator.CreateInstance(exception)!);
 
         (await Make(storage).RedownloadAsync(Run(), CancellationToken.None)).ShouldBe(CloudResultsStatus.Failed);
     }
@@ -490,7 +490,7 @@ public sealed class RunCloudResultsTests : IDisposable
         var status = await Make().DeleteAsync(run, CancellationToken.None);
 
         status.ShouldBe(CloudResultsStatus.Done);
-        await _deleter.Received(1).DeleteJobObjectsAsync(Bucket, Prefix, Arg.Any<CancellationToken>());
+        await _deleter.Received(1).DeleteJobObjectsAsync(Arg.Any<CloudScope>(), Bucket, Prefix, Arg.Any<CancellationToken>());
         _runs.AllRecordedInOrder.Last().CloudResultsDeleted.ShouldBeTrue();
     }
 
