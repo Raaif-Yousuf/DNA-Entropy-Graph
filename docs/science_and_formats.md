@@ -315,11 +315,12 @@ their file has a bad character in it.
 (noticed, not an error); remove all whitespace; remove digits (handles pasted line
 numbers); uppercase.
 
+**Reader path types (#1029):** every file reader (`read_genbank`, `read_fasta`, `read_embl`, `read_gff3`, `read_snapgene`, `detect_kind`, `read_text`) is declared to take `str | os.PathLike[str]`, so a `pathlib.Path` type-checks. Pinned by `worker/tests/test_reader_path_types.py` and the pyright gate.
+
 **Encoding (issues #294, #330, MEASURED 2026-09-19):** every reader (`paste.py`,
 `fasta.py`, `genbank.py`, `detect.py`'s content sniff) decodes through the single shared
 `readers/encoding.py` rather than each calling `Path.read_text()` (or, for GenBank,
 letting Biopython open the file itself) independently:
-Every file reader (ead_genbank, ead_fasta, ead_embl, ead_gff3, ead_snapgene, detect_kind, ead_text) is declared to take str | os.PathLike[str], so a pathlib.Path type-checks (#1029; pinned by worker/tests/test_reader_path_types.py and the pyright gate):
 - A UTF-8 byte-order mark is stripped before anything else sees the text — Windows
   Notepad's default "UTF-8" save option adds one, and it used to decode into a literal
   `﻿` character that defeated every `>`/`LOCUS` check and validation's own alphabet

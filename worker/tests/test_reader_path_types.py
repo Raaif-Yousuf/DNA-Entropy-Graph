@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dna_entropy.readers.detect import detect_kind
 from dna_entropy.readers.embl import read_embl
 from dna_entropy.readers.encoding import read_text
 from dna_entropy.readers.fasta import read_fasta
-from dna_entropy.readers.genbank import read_genbank
+from dna_entropy.readers.genbank import GenBankReadError, read_genbank
 from dna_entropy.readers.gff3 import read_gff3
 from dna_entropy.readers.snapgene import read_snapgene
 
@@ -44,9 +46,19 @@ def test_detect_kind_accepts_a_path(tmp_path: Path) -> None:
     assert detect_kind(_write(tmp_path / "a.fa", ">x\nACGT\n")) == "fasta"
 
 
-def test_read_snapgene_accepts_a_path_and_names_a_non_snapgene_file(tmp_path: Path) -> None:
-    import pytest
-
+def test_read_snapgene_accepts_a_path_and_refuses_a_non_snapgene_file_in_its_own_words(
+    tmp_path: Path,
+) -> None:
     bad = _write(tmp_path / "a.dna", "not snapgene")
-    with pytest.raises(Exception):  # noqa: B017, PT011 (the exact class is the reader's business, not this test's)
+    # The reader's own class, not any exception (a TypeError from an unsupported Path must not pass).
+    with pytest.raises(GenBankReadError) as err:
         read_snapgene(bad)
+    # The refusal names the cause; it deliberately omits the file name (docs/threat_model.md).
+    assert "SnapGene's file header" in str(err.value)
+    assert "a.dna" not in str(err.value)
+
+
+def test_read_snapgene_names_a_missing_file_path_in_its_own_words(tmp_path: Path) -> None:
+    with pytest.raises(GenBankReadError) as err:
+        read_snapgene(tmp_path / "missing.dna")
+    assert "Could not open the SnapGene file" in str(err.value)
