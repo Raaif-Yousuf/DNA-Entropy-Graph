@@ -12,6 +12,8 @@ import json
 import re
 import urllib.error
 import urllib.parse
+from collections.abc import Callable
+from email.message import Message
 
 
 class _Resp:
@@ -76,7 +78,7 @@ class FakeGcs:
         self.lose_response_after_commit: set[int] = set()
         self.fail_before_commit: set[int] = set()
         self.break_download_after: int | None = None
-        self.on_chunk_put = None
+        self.on_chunk_put: Callable[[int], None] | None = None
 
     def __call__(self, req):
         url = req.full_url
@@ -107,12 +109,14 @@ class FakeGcs:
         if parsed.path.startswith(base + "/"):
             name = urllib.parse.unquote(parsed.path[len(base) + 1 :])
             if name not in self.objects:
-                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+                raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
             if qs.get("alt") != ["media"]:
                 return _Resp(b"{}")
             body_bytes = self.objects[name]
             rng = req.get_header("Range")
-            start = int(re.match(r"bytes=(\d+)-", rng).group(1)) if rng else 0
+            range_match = re.match(r"bytes=(\d+)-", rng) if rng else None
+            assert range_match is not None or not rng, f"bad Range: {rng!r}"
+            start = int(range_match.group(1)) if range_match else 0
             break_after = self.break_download_after
             self.break_download_after = None
             return _Resp(
@@ -151,10 +155,10 @@ class FakeGcs:
         assert start == len(buf), f"non-contiguous chunk: starts {start}, server has {len(buf)}"
         assert end - start + 1 == len(data)
         if idx in self.fail_before_commit:
-            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", Message(), None)
         buf += data
         if idx in self.lose_response_after_commit:
-            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", Message(), None)
         return self._progress(sess)
 
     def _progress(self, sess):
@@ -162,5 +166,7 @@ class FakeGcs:
         if len(buf) == sess["size"]:
             self.objects[sess["name"]] = bytes(buf)
             return _Resp(json.dumps({"name": sess["name"]}).encode())
-        headers = {"Range": f"bytes=0-{len(buf) - 1}"} if buf else {}
-        raise urllib.error.HTTPError("session", 308, "Resume Incomplete", headers, None)  # type: ignore[arg-type]
+        headers = Message()
+        if buf:
+            headers["Range"] = f"bytes=0-{len(buf) - 1}"
+        raise urllib.error.HTTPError("session", 308, "Resume Incomplete", headers, None)
