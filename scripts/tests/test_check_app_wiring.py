@@ -14,6 +14,7 @@ the repository's current state is a timer, not a test.
 
 from __future__ import annotations
 
+import functools
 import json
 import subprocess
 import sys
@@ -1173,25 +1174,32 @@ def test_pathological_generic_input_is_scanned_in_linear_time(tmp_path, name):
 # --- #844: one index per run, not a regex compile + full scan per name -------------------------------------
 
 
+@functools.cache
 def _ref_strip(text: str) -> str:
+    # Pure function of the text; memoised so the oracle strips each file once (#1017).
     return caw._COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
 
 
 def _ref_mentions(identifier: str, texts: dict[Path, str]) -> list[Path]:
-    """The pre-#844 implementation, verbatim: the golden reference."""
+    """The pre-#844 implementation, plus a substring prefilter (#1017): the golden reference."""
     import re
 
     pattern = re.compile(rf"\b{re.escape(identifier)}\b")
-    return [p for p, t in texts.items() if pattern.search(t)]
+    # The pattern is a literal bounded by \b, so `identifier in t` is necessary for a match: it
+    # skips the regex scan on files that cannot match, with identical results.
+    return [p for p, t in texts.items() if identifier in t and pattern.search(t)]
 
 
 def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | None, class_names: frozenset[str]) -> list[Path]:
-    """The pre-#844 implementation, verbatim (strip + regex per file per call)."""
+    """The pre-#844 implementation, plus a memoised strip and a prefilter on the stripped text (#1017)."""
     import re
 
     pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
     hits: list[Path] = []
     for path, text in texts.items():
+        # Exact, not just cheap: the regex runs on the stripped text, and it contains the literal.
+        if identifier not in _ref_strip(text):
+            continue
         for match in pattern.finditer(_ref_strip(text)):
             recv = match.group("recv")
             other_type = owner is not None and recv in class_names and recv != owner
@@ -1205,6 +1213,58 @@ def _ref_member_mentions(identifier: str, texts: dict[Path, str], owner: str | N
             hits.append(path)
             break
     return hits
+
+
+def test_the_fast_oracle_equals_the_verbatim_pre_844_scan_on_edge_texts():
+    """#1017: the golden reference gained a substring prefilter and a strip memo for speed.
+    Prove those shortcuts change nothing against the literal old loops (inlined below)."""
+    import re
+
+    def old_mentions(identifier, texts):
+        pattern = re.compile(rf"\b{re.escape(identifier)}\b")
+        return [p for p, t in texts.items() if pattern.search(t)]
+
+    def old_member_mentions(identifier, texts, owner, class_names):
+        def strip(text):
+            return caw._COMMENT_OR_STRING.sub(lambda m: m.group(0) if m.group(0)[0] in '@"' else " ", text)
+
+        pattern = re.compile(rf"(?P<recv>\w+)?(?P<access>\s*\.\s*|nameof\(\s*(?:[\w.]+\.)?){re.escape(identifier)}\b")
+        hits = []
+        for path, text in texts.items():
+            for match in pattern.finditer(strip(text)):
+                recv = match.group("recv")
+                other_type = owner is not None and recv in class_names and recv != owner
+                if owner is not None and recv and not other_type:
+                    declared = re.search(rf"(?<![\w.])([A-Z]\w*)(?:<[^>;]*>)?\??\s+{re.escape(recv)}\b", strip(text))
+                    other_type = bool(declared) and declared.group(1) in class_names and declared.group(1) != owner
+                if match.group("access").startswith("nameof"):
+                    other_type = False
+                if other_type:
+                    continue
+                hits.append(path)
+                break
+        return hits
+
+    texts = {
+        Path("a.cs"): "x.Name(); // Name in a comment",
+        Path("b.cs"): 'var s = "x.Name"; NameOther.Foo(); y.Nam();',
+        Path("c.cs"): "nameof(Owner.Name) + Name2",
+        Path("d.cs"): "int Name = 1; other.Name = 2; Peer p; p.Name();",
+        Path("e.cs"): "nothing here",
+        Path("f.cs"): "x.A/**/B(); Owner o; o.Name(); Peer q; q.Foo();",
+        Path("g.cs"): "/* Peer.Name */ Peer r; r.Name();",
+    }
+    classes = frozenset({"Owner", "Peer"})
+    nonempty = 0
+    for ident in ("Name", "Nam", "Foo", "Missing", "A B", "A", "B"):
+        assert _ref_mentions(ident, texts) == old_mentions(ident, texts), ident
+        for owner in ("Owner", None):
+            got = _ref_member_mentions(ident, texts, owner, classes)
+            assert got == old_member_mentions(ident, texts, owner, classes), (ident, owner)
+            nonempty += bool(got)
+    assert nonempty >= 6, "vacuous: the edge texts barely hit"
+    assert _ref_member_mentions("A B", texts, "Owner", classes) == [Path("f.cs")]
+    assert _ref_mentions("Name", texts) == [Path(n) for n in ("a.cs", "b.cs", "c.cs", "d.cs", "f.cs", "g.cs")]
 
 
 def test_comment_stripping_runs_once_per_file_not_once_per_candidate():
@@ -1241,7 +1301,9 @@ def test_indexed_checks_equal_the_reference_on_the_real_tree():
         assert caw._mentions(name, production) == _ref_mentions(name, production), name
     idents = {i for t in production.values() for i in caw._members_of(t)}
     assert idents, "vacuous: no members read"
-    for ident in sorted(idents)[:150]:
+    # Uncapped this took 72 s alone (MEASURED 2026-10-31), so take every 4th identifier: the sample
+    # spans the whole sorted range instead of the first 150 names.
+    for ident in sorted(idents)[::4]:
         got = caw._member_mentions(ident, production, "Zzz", class_names)
         assert got == _ref_member_mentions(ident, production, "Zzz", class_names), ident
 

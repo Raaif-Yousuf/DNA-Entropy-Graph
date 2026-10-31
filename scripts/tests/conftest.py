@@ -26,12 +26,33 @@ which prerequisite was missing, so a skip is never silent.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+
+
+def _apply_worker_import_isolation() -> None:
+    """Run worker/tests/conftest.py's import-isolation guard (#937) for a scripts-only session.
+
+    The shared venv's editable install points at the PRIMARY checkout; without this, `pytest
+    scripts/tests/...` from an agent worktree imports (and spawns children against) the primary
+    checkout's `dna_entropy`. Loaded by path under a private name (not as `conftest`) so there is one
+    implementation, not a copy that can drift; importing it runs the guard at module level.
+    """
+    path = SCRIPTS_DIR.parent / "worker" / "tests" / "conftest.py"
+    spec = importlib.util.spec_from_file_location("_deg_worker_import_guard", path)
+    assert spec is not None and spec.loader is not None, path
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+
+_apply_worker_import_isolation()
+
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
