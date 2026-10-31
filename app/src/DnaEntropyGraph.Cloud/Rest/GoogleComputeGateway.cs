@@ -262,12 +262,17 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
         if (!OwnedBy(instance.Labels, fromJobId))
         {
-            return LabelRestoreState.NewerOwner;
+            // Round 2 finding 4: a replay after a lost answer meets the VM already carrying the donor's labels: that is the restore done, not a newer run's VM.
+            return LabelsEqual(instance.Labels, target) ? LabelRestoreState.Restored : LabelRestoreState.NewerOwner;
         }
 
         if (ParseBootDisk(instance) is { } bootDisk)
         {
-            await RestoreBootDiskLabelsAsync(project, bootDisk, fromJobId, target, cancellationToken).ConfigureAwait(false);
+            if (await RestoreBootDiskLabelsAsync(project, bootDisk, fromJobId, target, cancellationToken).ConfigureAwait(false) == DiskRestore.NewerOwner)
+            {
+                // Round 2 finding 3: a newer run took the disk between our read and our write, so it took the VM too: neither is ours to write.
+                return LabelRestoreState.NewerOwner;
+            }
         }
 
         var body = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
@@ -303,32 +308,45 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     private static bool OwnedBy(IDictionary<string, string>? labels, string jobId)
         => labels is not null && labels.TryGetValue("job-id", out var owner) && string.Equals(owner, jobId, StringComparison.Ordinal);
 
-    /// <summary>The boot disk's half of <see cref="RestoreVmLabelsAsync"/>: only a disk that still carries the borrowing job's id is rewritten, under the fingerprint just read. A disk that moved on, or is gone, is left.</summary>
-    private async Task RestoreBootDiskLabelsAsync(string project, BootDisk disk, string fromJobId, Dictionary<string, string> target, CancellationToken cancellationToken)
+    private enum DiskRestore
     {
-        IDictionary<string, string>? labels;
-        string? fingerprint;
+        /// <summary>The disk carries the donor's labels now, or is gone, or was left as it was (it did not carry the borrowing job's id when read).</summary>
+        Done,
+
+        /// <summary>The disk's write was refused because a newer run took it meanwhile: the restore stops here.</summary>
+        NewerOwner,
+    }
+
+    private async Task<(IDictionary<string, string>? Labels, string? Fingerprint, bool Gone)> ReadDiskLabelsAsync(string project, BootDisk disk, CancellationToken cancellationToken)
+    {
         try
         {
             if (disk.Regional)
             {
                 var current = await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-                (labels, fingerprint) = (current.Labels, current.LabelFingerprint);
+                return (current.Labels, current.LabelFingerprint, false);
             }
-            else
-            {
-                var current = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
-                (labels, fingerprint) = (current.Labels, current.LabelFingerprint);
-            }
+
+            var zonal = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            return (zonal.Labels, zonal.LabelFingerprint, false);
         }
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
-            return;
+            return (null, null, true);
         }
+    }
 
-        if (!OwnedBy(labels, fromJobId))
+    /// <summary>
+    /// The boot disk's half of <see cref="RestoreVmLabelsAsync"/>: only a disk that still carries the borrowing job's id is rewritten, under the fingerprint just read. A disk that moved on when read, or is gone, is left.
+    /// A write refused with a 412 (round 2 finding 3) is judged by a second read: the donor's labels already there (our answer was lost) is done, another owner is <see cref="DiskRestore.NewerOwner"/>, and a disk
+    /// still carrying the borrowing job's labels is an error (never reported as restored).
+    /// </summary>
+    private async Task<DiskRestore> RestoreBootDiskLabelsAsync(string project, BootDisk disk, string fromJobId, Dictionary<string, string> target, CancellationToken cancellationToken)
+    {
+        var (labels, fingerprint, gone) = await ReadDiskLabelsAsync(project, disk, cancellationToken).ConfigureAwait(false);
+        if (gone || !OwnedBy(labels, fromJobId))
         {
-            return;
+            return DiskRestore.Done;
         }
 
         try
@@ -347,10 +365,28 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
             await AwaitOperationAsync(project, disk.Location, write, goneIsDone: false, cancellationToken, regional: disk.Regional).ConfigureAwait(false);
         }
-        catch (CloudOperationException ex) when (ex.Error.HttpStatus is 404 or 412)
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
         {
-            // Gone, or the fingerprint moved (our own answer was lost, or a newer run relabelled the disk): never overwrite on a stale read. The VM write that follows decides the outcome.
+            // Gone: nothing to write.
         }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            // The fingerprint moved: never overwrite on a stale read.
+            var (now, _, vanished) = await ReadDiskLabelsAsync(project, disk, cancellationToken).ConfigureAwait(false);
+            if (vanished || LabelsEqual(now, target))
+            {
+                return DiskRestore.Done;
+            }
+
+            if (!OwnedBy(now, fromJobId))
+            {
+                return DiskRestore.NewerOwner;
+            }
+
+            throw;
+        }
+
+        return DiskRestore.Done;
     }
 
     private readonly record struct BootDisk(string Name, string Location, bool Regional);

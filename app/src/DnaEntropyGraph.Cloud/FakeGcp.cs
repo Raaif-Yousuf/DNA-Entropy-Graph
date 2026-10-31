@@ -1480,6 +1480,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private bool _reuseStartLostThatLandsLater;
+
+    /// <summary>A reuse's start is accepted by Compute but the client gets a network failure (the answer was lost): the VM is still stopped under the new job's labels until <see cref="LandAcceptedReuseStartsAsync"/> runs it. Issue #970.</summary>
+    public FakeGcp WithReuseStartLostThatLandsLater()
+    {
+        _reuseStartLostThatLandsLater = true;
+        return this;
+    }
+
     private TaskCompletionSource? _reuseParkGate;
     private readonly TaskCompletionSource _reuseParked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1691,6 +1700,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
             _labelFingerprints[IncarnationOf(vm)] = NextFingerprint();
             _maxRunByVm[IncarnationOf(vm)] = reuse.MaxRunDuration;
+        }
+
+        if (_reuseStartLostThatLandsLater)
+        {
+            // The production shape of a reuse whose answer was lost AFTER Compute accepted instances.start: the client sees a network failure, the VM is still stopped and carries the new job's labels,
+            // and the start runs later (LandAcceptedReuseStartsAsync). Issue #970 review round 2, finding 1.
+            _acceptedReuseStarts.Enqueue((reuse, existingVmName, zone, vm));
+            throw Build(CloudErrorKind.Network, null, 503, "The service is unavailable: the answer to the start was lost.");
         }
 
         if (_reuseStartFailure is { } kind)

@@ -1,4 +1,5 @@
 using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using Shouldly;
 using Xunit;
@@ -202,6 +203,103 @@ public partial class LateCreateAfterCancelTests
         var row = rig.LastRow("job-n970g");
         row.Phase.ShouldBe(JobPhase.Cancelled);
         row.ErrorDetail.ShouldNotBeNull().ShouldContain("earlier labels were restored");
+    }
+
+    /// <summary>A failed run whose reuse start was accepted but whose answer was lost (a Network failure): the ladder fails the run through the failure funnel with the reuse still unanswered.</summary>
+    private static async Task<(string OldVm, IReadOnlyDictionary<string, string> DonorLabels, ProvisionResult Result)> FailARunWhoseReuseAnswerWasLostAsync(FakeGcp gcp, Rig rig, string oldJob, string newJob)
+    {
+        var oldSpec = await SeedStoppedDonorAsync(gcp, rig, oldJob);
+        var donorLabels = await LabelsOfAsync(gcp, oldSpec.VmName);
+        await rig.SeedRowAsync(newJob);
+        var spec = Spec(newJob);
+        var result = await rig.Provisioner.ProvisionAsync(TestInputs.Request(newJob, spec), spec, new RunProgress(), CancellationToken.None);
+        return (oldSpec.VmName, donorLabels, result);
+    }
+
+    [Fact]
+    public async Task D970r2_a_failed_run_whose_reuse_start_lands_late_ends_stopped_under_the_donors_labels_never_running_under_them()
+    {
+        var gcp = new FakeGcp().WithReuseStartLostThatLandsLater();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateGrace = TimeSpan.FromSeconds(30); // bounds only a start that never lands: this one does
+        var (oldVm, donorLabels, result) = await FailARunWhoseReuseAnswerWasLostAsync(gcp, rig, "job-old970d", "job-n970d");
+
+        result.Success.ShouldBeFalse("the lost answer fails the run through the failure funnel");
+        (await LabelsOfAsync(gcp, oldVm))["job-id"].ShouldBe("job-n970d", "the start has not answered, so the donor is NOT handed back yet: a late start would run it under the donor's labels and its keep-alive");
+
+        await gcp.LandAcceptedReuseStartsAsync(); // the start Compute had accepted runs now
+        var outcome = await rig.NextOutcomeAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        outcome.State.ShouldBe(LateCreateState.ReuseStopped);
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.Restored);
+        var vm = (await gcp.GetVmAsync(oldVm, ZoneA, CancellationToken.None))!;
+        vm.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        SameLabels(vm.Labels, donorLabels, "stopped first, then handed back");
+        gcp.DeleteAttempts.ShouldBeEmpty("#999: a borrowed VM is never deleted");
+    }
+
+    [Fact]
+    public async Task D970r2_a_failed_run_whose_reuse_start_never_lands_gets_the_donor_back_after_the_grace()
+    {
+        var gcp = new FakeGcp().WithReuseStartLostThatLandsLater();
+        var rig = new Rig(gcp); // the default grace is short
+        var (oldVm, donorLabels, _) = await FailARunWhoseReuseAnswerWasLostAsync(gcp, rig, "job-old970e", "job-n970e");
+
+        var outcome = await rig.NextOutcomeAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        outcome.State.ShouldBe(LateCreateState.ReuseStopped);
+        SameLabels(await LabelsOfAsync(gcp, oldVm), donorLabels, "the start never landed: the donor is stopped and back under its own labels");
+        rig.Provisioner.SentCount.ShouldBe(0, "the watch released what it held");
+        rig.Terminator.DonorStateCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public void D970r2_a_donor_whose_job_never_released_its_claimed_creates_is_dropped_once_it_is_older_than_the_watch_can_be()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-31T08:00:00Z"), timestampFollowsClock: true);
+        var rig = new Rig(new FakeGcp());
+        rig.Settings.TimeProvider = clock;
+        var labels = new Dictionary<string, string> { ["job-id"] = "job-donor" };
+        var scope = new CloudScope("my-project");
+
+        rig.Terminator.NoteDonor(scope, "job-leaked", "deg-job-donor", ZoneA, labels);
+        rig.Terminator.NoteDonor(scope, "job-young", "deg-job-donor", ZoneA, labels);
+        rig.Terminator.DonorCount.ShouldBe(2, "nothing is old yet");
+
+        clock.Advance(TimeSpan.FromHours(2)); // far beyond the reap window, the grace and the lifecycle waits
+        rig.Terminator.NoteDonor(scope, "job-new", "deg-job-donor", ZoneA, labels);
+
+        rig.Terminator.DonorCount.ShouldBe(1, "both older donors are dropped when the next one is noted; only the new one remains");
+    }
+
+    [Fact]
+    public async Task D970r2_a_stand_down_that_sees_the_Cancelled_row_does_not_take_the_restore_sentence_the_cancel_has_yet_to_write()
+    {
+        // The cancel records Cancelled and THEN annotates the row with what became of the donor's labels. A run that stood down in between reads a terminal Cancelled row: it must not throw the outcome away.
+        var gcp = new FakeGcp();
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo);
+        var spec = Spec("job-n970f");
+        var oldSpec = await SeedStoppedDonorRawAsync(gcp, "job-old970f");
+        var scope = new CloudScope("my-project");
+        runner.TerminatorForTests.NoteDonor(scope, "job-n970f", oldSpec.VmName, ZoneA, await LabelsOfAsync(gcp, oldSpec.VmName));
+        await runner.TerminatorForTests.RestoreAndNoteAsync("job-n970f", oldSpec.VmName, ZoneA); // the donor still carries its own job-id: a newer owner, an outcome to note
+        await repo.UpsertAsync(new RunRecord("job-n970f", JobPhase.Cancelled, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var result = await runner.RunAsync(TestInputs.Request("job-n970f", spec), CancellationToken.None);
+
+        result.FinalPhase.ShouldBe(JobPhase.Cancelled);
+        runner.TerminatorForTests.TakeDonorRestoreSentence("job-n970f").ShouldNotBeNull("the cancel's annotation still has its sentence to write");
+    }
+
+    private static async Task<VmSpec> SeedStoppedDonorRawAsync(FakeGcp gcp, string oldJob)
+    {
+        var oldSpec = Spec(oldJob);
+        await gcp.CreateVmAsync(oldSpec, ZoneA, CancellationToken.None);
+        await gcp.StopVmAsync(oldSpec.VmName, ZoneA, CancellationToken.None);
+        return oldSpec;
     }
 
     [Fact]

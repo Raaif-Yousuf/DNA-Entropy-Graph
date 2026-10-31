@@ -892,6 +892,68 @@ public class GoogleComputeGatewayTests
         thrown.Error.HttpStatus.ShouldBe(412);
     }
 
+    private static string RestoredOld() => StoppedOld().Replace("\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}", "\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\",\"lifecycle\":\"keepalive\"}");
+
+    private static string DiskWith(string jobId) => OldDiskBody().Replace("\"job-id\":\"job-old\"", "\"job-id\":\"" + jobId + "\"");
+
+    [Fact]
+    public async Task D970r2_a_disk_write_refused_with_412_whose_re_read_shows_the_donors_labels_is_done_and_the_instance_is_restored()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
+            .Returns(Get, OldDisk, 200, DiskWith("job-old"))
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"));
+
+        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
+
+        rig.Handler.To(Post, OldInstance + "/setLabels").Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task D970r2_a_disk_write_refused_with_412_whose_re_read_shows_another_owner_is_a_newer_owner_and_the_instance_is_not_written()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
+            .Returns(Get, OldDisk, 200, DiskWith("job-newer"));
+
+        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.NewerOwner);
+
+        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("the newer run owns the VM: nothing of ours is written to it");
+    }
+
+    [Fact]
+    public async Task D970r2_a_disk_write_refused_with_412_while_the_disk_still_carries_the_borrowing_jobs_labels_is_an_error_never_restored()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1());
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None));
+
+        thrown.Error.HttpStatus.ShouldBe(412);
+        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("a disk still under the failed job's labels is not reported restored by writing the instance");
+    }
+
+    [Fact]
+    public async Task D970r2_a_replay_after_a_lost_answer_finds_the_donors_labels_already_on_the_VM_and_is_restored_not_a_newer_owner()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, RestoredOld());
+
+        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
+
+        rig.Handler.Requests.ShouldAllBe(r => r.Method == Get, "nothing is written: the labels are already the donor's");
+    }
+
     [Fact]
     public async Task Restore_of_a_VM_that_is_gone_is_gone_not_an_error()
     {

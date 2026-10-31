@@ -36,6 +36,10 @@ public sealed record DonorRestoreOutcome(string JobId, DonorRestoreState State, 
     /// <summary>
     /// The sentence a failed or cancelled run's row gets about the VM it borrowed, or null when there is nothing to say (the VM is gone). Worded so no outcome reads as an all-clear it is not,
     /// and every one that needs the user names the Cloud page.
+    /// Round 2 finding 2: this is the DIAGNOSTICS sentence, not user copy. It is written to <c>RunRecord.ErrorDetail</c>, which the app never shows (<c>RunListItem.ReasonText</c> shows the
+    /// <c>RunError_*</c> resource of the row's code, and nothing in Presentation or App reads <c>ErrorDetail</c> or the result's failure message for display; MEASURED 2026-10-31 by grep), so it
+    /// stays English in Core like <see cref="EndFailure"/> and the cancel sentences beside it (Core has no string provider; <c>IStringResourceProvider</c> lives in Presentation). A surface that
+    /// shows it to the user must move it to Resources.resw under a code first.
     /// </summary>
     public static string? SentenceFor(IReadOnlyList<DonorRestoreOutcome> outcomes)
     {

@@ -261,6 +261,9 @@ public sealed class CloudJobRunner
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Tests: the terminator, to note a donor and read what became of its labels.</summary>
+    internal VmTerminator TerminatorForTests => _terminator;
+
     /// <summary>Tests: the canceller, to record an outcome of a chosen class (review F5).</summary>
     internal VmCanceller CancellerForTests => _canceller;
 
@@ -289,7 +292,12 @@ public sealed class CloudJobRunner
             if (JobStateMachine.IsTerminal(done.FinalPhase))
             {
                 _provisioner.ForgetPendingRequests(request.JobId);
-                _terminator.ForgetRestoreOutcomes(request.JobId); // a failed reuse that a fallback create then made good has nothing to say on the row
+                // a failed reuse that a fallback create then made good has nothing to say on the row. Not for a Cancelled row: the cancel records Cancelled and THEN annotates the row with the
+                // outcomes (VmCanceller.AnnotateDonorRestoreAsync takes them), so a stand-down that reads the Cancelled row in between must leave them (round 2 finding 7).
+                if (done.FinalPhase != JobPhase.Cancelled)
+                {
+                    _terminator.ForgetRestoreOutcomes(request.JobId);
+                }
             }
 
             return done;

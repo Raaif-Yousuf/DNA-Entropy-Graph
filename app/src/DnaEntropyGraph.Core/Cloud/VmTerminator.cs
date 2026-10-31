@@ -193,8 +193,10 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, name, zone, token), cancellationToken).ConfigureAwait(false);
                 if (vm is null || (action != AfterTaskAction.Delete && VmFacts.IsStopped(vm)))
                 {
-                    if (vm is not null && borrowed)
+                    if (vm is not null && borrowed && !ReuseUnanswered(request.JobId, name, zone))
                     {
+                        // Round 2 finding 1: never while a reuse of this VM has not answered (a Network failure the start POST may have survived): that start can still land and would run the VM under the donor's
+                        // labels and keep-alive. The watch the provisioner starts for that reuse stops the VM if it lands, and restores only then.
                         // Issue #970: the borrowed VM is confirmed stopped, so it goes back under the labels of the run it came from (its keep-alive expiry applies again, and no label of THIS job finds it).
                         await RestoreAndNoteAsync(request.JobId, name, zone).ConfigureAwait(false);
                     }
@@ -235,7 +237,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>The labels a borrowed VM carried BEFORE a reuse claimed it, and the project and account the run acts in (issue #830): what a failed or cancelled run puts back.</summary>
-    private sealed record Donor(CloudScope Scope, IReadOnlyDictionary<string, string> Labels);
+    private sealed record Donor(CloudScope Scope, IReadOnlyDictionary<string, string> Labels, long NotedAt);
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string JobId, string Name, string Zone), SentCreate> _reuseSends = new();
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string JobId, string Name, string Zone), Donor> _donors = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentQueue<DonorRestoreOutcome>> _restoreOutcomes = new(StringComparer.Ordinal);
@@ -245,7 +249,38 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// own job-id and lifecycle with it). The scope is the run's own (never whatever is selected later). A copy is kept: the caller's dictionary may be the descriptor's.
     /// </summary>
     public void NoteDonor(CloudScope scope, string jobId, string name, string zone, IReadOnlyDictionary<string, string> labels)
-        => _donors[(jobId, name, zone)] = new Donor(scope, new Dictionary<string, string>(labels, StringComparer.Ordinal));
+    {
+        PruneExpiredDonors();
+        _donors[(jobId, name, zone)] = new Donor(scope, new Dictionary<string, string>(labels, StringComparer.Ordinal), settings.StartClock());
+    }
+
+    /// <summary>
+    /// Round 2 finding 6: a donor is needed only until the run's VM end, a cancel and the late watch (bounded by <see cref="CloudRunSettings.LateCreateReapWindow"/> plus the grace and the lifecycle waits)
+    /// have had their turn. One whose job never released its claimed creates (a cancel that threw before it started its watch) would otherwise live for the whole process, so any older than that bound is
+    /// dropped whenever a new donor is noted.
+    /// </summary>
+    private void PruneExpiredDonors()
+    {
+        var bound = settings.LateCreateReapWindow + settings.LateCreateGrace + settings.CreateSettleTimeout + settings.LifecycleTimeout + settings.LifecycleTimeout;
+        foreach (var (key, donor) in _donors.ToList())
+        {
+            if (settings.ElapsedSince(donor.NotedAt) >= bound)
+            {
+                _donors.TryRemove(key, out _);
+                _reuseSends.TryRemove(key, out _);
+            }
+        }
+    }
+
+    /// <summary>Tests: how many donors are remembered.</summary>
+    internal int DonorCount => _donors.Count;
+
+    /// <summary>Round 2 finding 1: the reuse start sent for a donor, recorded BEFORE the gateway is called, so a restore can tell whether that start has answered.</summary>
+    public void NoteReuseSend(SentCreate sent) => _reuseSends[(sent.JobId, sent.Name, sent.Zone)] = sent;
+
+    /// <summary>True while a reuse start of this VM, sent for this job, has neither answered nor been refused: it may still land, so the donor's labels must not be put back yet.</summary>
+    internal bool ReuseUnanswered(string jobId, string name, string zone)
+        => _reuseSends.TryGetValue((jobId, name, zone), out var sent) && !sent.Answered && !sent.Refused;
 
     /// <summary>Drops the donors noted for a job whose run has ended (a restore that already happened removed its own).</summary>
     public void ForgetDonors(string jobId)
@@ -253,6 +288,11 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         foreach (var key in _donors.Keys.Where(k => k.JobId == jobId).ToList())
         {
             _donors.TryRemove(key, out _);
+        }
+
+        foreach (var key in _reuseSends.Keys.Where(k => k.JobId == jobId).ToList())
+        {
+            _reuseSends.TryRemove(key, out _);
         }
     }
 
@@ -278,7 +318,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// <summary>
     /// Issue #970: puts a borrowed VM's labels back to what the run it came from gave it, once the VM is STOPPED (waited for, bounded by <see cref="CloudRunSettings.LifecycleTimeout"/>): a label write
     /// on a VM whose start may still be on the wire would let that start run a VM no label of the failed job finds. The write is the gateway's fingerprinted read-then-write that leaves a VM a
-    /// newer run has taken. The donor is claimed for the restore (a concurrent restore of the same VM sees none), and kept again when the restore could not be done, so a later look can retry.
+    /// newer run has taken. The donor is claimed for the restore (a concurrent restore of the same VM sees none), and is NOT kept again whatever the outcome: nothing retries a restore (round 2 finding 5), so a NotStopped or Failed outcome names the Cloud page and the #938 by-name guards are the backstop.
     /// Null when no donor was noted (nothing was borrowed, or the labels were already put back). Never throws; the failure is the outcome, with its class only.
     /// </summary>
     internal async Task<DonorRestoreOutcome?> RestoreDonorLabelsAsync(string jobId, string name, string zone)
@@ -297,11 +337,6 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         catch (Exception ex)
         {
             outcome = new DonorRestoreOutcome(jobId, DonorRestoreState.Failed, ErrorClassOf(ex));
-        }
-
-        if (outcome.State is DonorRestoreState.NotStopped or DonorRestoreState.Failed)
-        {
-            _donors[key] = donor;
         }
 
         try
@@ -968,7 +1003,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
 
                     // Issue #970: the borrowed VM goes back under its donor's labels once it is stopped, but never while a reuse of it has not answered: that start may still land, and the late watch
                     // (which restores when it has seen the VM stopped again) must still find the VM by this job's label.
-                    if (stopError is null && !allSent.Any(c => c.IsReuse && c.Name == name && c.Zone == zone && !c.Answered && !c.Refused))
+                    if (stopError is null && !ReuseUnanswered(jobId, name, zone) && !allSent.Any(c => c.IsReuse && c.Name == name && c.Zone == zone && !c.Answered && !c.Refused))
                     {
                         await RestoreAndNoteAsync(jobId, name, zone).ConfigureAwait(false);
                     }

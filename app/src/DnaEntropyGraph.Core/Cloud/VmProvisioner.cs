@@ -69,6 +69,56 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
     }
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reuseWatches = new();
+
+    /// <summary>Tests: completes when every watch over a failed run's unanswered reuse has ended.</summary>
+    internal Task WhenReuseWatchesEndedAsync() => Task.WhenAll(_reuseWatches.Keys);
+
+    /// <summary>
+    /// Round 2 finding 1: a reuse that failed WITHOUT an answer (a lost answer, a poll that timed out) is handed to the late watch, claimed so the run's terminal forget leaves it, and released with its donor
+    /// when the watch ends (bounded by <see cref="CloudRunSettings.LateCreateReapWindow"/>). Reports how it ended to <see cref="CloudRunSettings.OnLateCreate"/> like a cancel's watch. Never throws.
+    /// </summary>
+    private void WatchUnansweredReuse(SentCreate sent)
+    {
+        if (!sent.TryClaim())
+        {
+            return; // a cancel owns it
+        }
+
+        var watch = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var outcome in await terminator.ReapLateCreatesAsync([sent]).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        settings.OnLateCreate?.Invoke(outcome);
+                    }
+                    catch (Exception)
+                    {
+                        // A listener that throws must not matter to the clean-up.
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Never throws: the VM end already ran.
+            }
+        });
+        _reuseWatches[watch] = 0;
+        _ = watch.ContinueWith(
+            finished =>
+            {
+                _reuseWatches.TryRemove(finished, out _);
+                ReleaseSent(sent);
+                terminator.ForgetDonors(sent.JobId);
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
     /// <summary>Tests: how many sent creates are still remembered (none may outlive the run that ended terminal, and a cancel's claimed ones are not dropped by it).</summary>
     internal int SentCount => _sent.Count;
 
@@ -862,6 +912,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         await ClaimAsync(progress, chosen.Zone, cancellationToken).ConfigureAwait(false); // before the start: a stale claim must not make this VM delete itself
         // Round 4 M3: recorded BEFORE the gateway is called, like a create: a cancel that gives up on this start claims it and the late watch stops the VM if the start lands afterwards.
         var sentReuse = NoteSent(request.ResolvedScope, request.JobId, chosen.Name, chosen.Zone, spec.InstallationId, generation, reuse: true);
+        terminator.NoteReuseSend(sentReuse);
         try
         {
             // Tracked like a create: a cancel that arrives between the claim and the start must wait for this to land, or the start
@@ -900,6 +951,14 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             // The claim may already have been made: whatever carries this job's label is ended before anything else is tried.
             var note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+
+            // Round 2 finding 1: a start whose answer was lost may still land after the stop above, and the donor's labels were NOT put back for it. The watch a cancel uses stops the VM if it lands and
+            // then restores the labels (or restores them after the grace when it never does); no cancel exists on this path, so this failure starts it.
+            if (!sentReuse.Refused)
+            {
+                WatchUnansweredReuse(sentReuse);
+            }
+
             if (note is not null || VmFacts.IsProjectWide(ex.Kind) || ex.Kind == CloudErrorKind.Network)
             {
                 return ProvisionResult.Failed(ex.Kind, ex.Error.Message, note, RunErrorCodes.For(ex.Error, ex.Kind));
