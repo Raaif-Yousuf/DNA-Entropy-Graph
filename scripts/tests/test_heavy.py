@@ -42,6 +42,7 @@ class _Lines:
         threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
 
     def _pump(self, proc: subprocess.Popen) -> None:
+        assert proc.stdout is not None  # spawned with stdout=PIPE
         for line in proc.stdout:
             self._q.put(line.rstrip("\r\n"))
         self._q.put(None)
@@ -461,6 +462,7 @@ def test_holders_reports_only_slots_whose_lock_is_held(tmp_path):
     (tmp_path / "slot-0.info").write_text("pid=999999\nlane=stale\nstart=x\ncmd=old\n", encoding="utf-8", newline="\n")
     assert heavy.holders(tmp_path, 1) == []
     held = heavy.try_acquire(tmp_path, 1)
+    assert held is not None
     try:
         heavy.write_info(tmp_path, held.index, lane="mine", command=["echo", "hi"])
         got = heavy.holders(tmp_path, 1)
@@ -472,6 +474,7 @@ def test_holders_reports_only_slots_whose_lock_is_held(tmp_path):
 
 def test_held_slot_without_info_is_still_listed(tmp_path):
     held = heavy.try_acquire(tmp_path, 1)
+    assert held is not None
     try:
         got = heavy.holders(tmp_path, 1)
         assert len(got) == 1 and got[0]["pid"] == "?"
