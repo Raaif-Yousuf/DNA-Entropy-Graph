@@ -227,6 +227,9 @@ class _SharedPredictor:
         status.update(stage="restoring-cache")
         try:
             if not is_cached(store, model_id):
+                # Issue #177: the structured twin of the notice below. It stays in status.json through
+                # model-loading (the long download), until the next stage that sets its own detail.
+                status.update(detail={"cache": "miss"})
                 status.notice(
                     f"model weights for {model_id} are not in the bucket cache; "
                     "the model loader will download them from Hugging Face"
@@ -234,11 +237,13 @@ class _SharedPredictor:
                 return False
             count = restore_from_cache(store, model_id, hf_dir)
         except Exception as exc:  # never fail the job over the cache
+            status.update(detail={"cache": "unavailable"})
             status.notice(
                 f"model weights for {model_id} could not be restored from the cache ({exc}); "
                 "downloading from Hugging Face instead"
             )
             return False
+        status.update(detail={"cache": "hit"})
         status.notice(f"model weights for {model_id} restored from the cache ({count} files)")
         return True
 

@@ -104,8 +104,9 @@ narration for a quota gap discovered mid-ladder; the user-actionable version is
 
 | Key | Text | Fires when |
 |---|---|---|
-| `ProgressCacheFirstRun` | First run in this project takes longer, about 8 minutes, while the analysis model is downloaded and cached. Every run after this one will be faster. | The bucket's `cache/models/<id>/` prefix is empty for this model; must appear **before** the wait, not after, per the coordinator's own framing: the user must not be left to conclude the app has hung |
-| `ProgressCacheWarm` | Reusing the model that was cached from a previous run. | The cache prefix already has this model |
+| `ProgressCacheFirstRun` | The analysis model is not saved in your cloud storage yet, so it is being downloaded now, which takes several minutes. A copy is saved afterwards when possible, so later runs can usually start faster. | The worker reports `detail.cache` = `miss` (issue #177; shown at `restoring-cache` and through `model-loading`); must appear **before** the wait, not after: the user must not be left to conclude the app has hung. Every sentence is true on EVERY miss (a deleted cache, a run after a failed one): no "first run in this project", no "every run after this one", because the worker's mirror step can skip the save (`_mirror_weights` in `worker/src/dna_entropy/worker/runner.py` returns without saving when the local cache was not empty before the load or nothing was downloaded, a cancel ends the save with no marker, and any failure is only a notice). No minute count: MEASURED 2026-10-31 none of the docs carries a measured download time (the earlier "about 8 minutes" had no MEASURED source), so "several minutes" is the claim. |
+| `ProgressCacheUnavailable` | The copy of the analysis model saved in your cloud storage could not be used, so the model is being downloaded instead, which takes several minutes. | The worker reports `detail.cache` = `unavailable` (the restore threw; the loader downloads from Hugging Face, the same wait as a miss), at `restoring-cache` and through `model-loading` |
+| `ProgressCacheWarm` | Reusing the analysis model that was saved by an earlier run. | The worker reports `detail.cache` = `hit` at `restoring-cache` |
 | `ProgressModelLoading` | Loading the analysis model onto the computer... | Worker `model-loading` stage |
 
 ### Analysing
@@ -120,11 +121,13 @@ Shipped in `Resources.resw` for the run page's detail line (issue #1086; `RunPro
 | Key | Text | Stage |
 |---|---|---|
 | `ProgressBooting` | The rented computer is starting up... | `booting` |
+| `ProgressInstalling` | The rented computer (a virtual machine, or VM) is downloading the analysis software it needs to run your sequence. | `installing` (no frequency or timing claim: unmeasured, and false on a warm image) |
+| `ProgressRestoringCache` | Looking in your cloud storage for the analysis model saved by an earlier run... | `restoring-cache` before the worker reports `detail.cache` |
 | `ProgressAnalysing` | Analysing your sequence... | `running`, before the first part finishes |
 | `ProgressAnalysingWindowCount` | Analysing your sequence: part {0} of {1} | `running`, with `detail.window` / `detail.windows` (a "window" is a part of the sequence; the plain word is used on screen) |
 | `ProgressGeneric` | Working on your run... | any other stage (the neutral line) |
 
-Stages with live text on the run page today: `booting`, `model-loading` and `running` (with and without the part counts). Every other stage, including `uploading`, shows the neutral `ProgressGeneric` line. MEASURED 2026-10-31: no worker code writes the stage `uploading` (grep of `worker/src` and `worker/vm`), so a "saving your results" line would never have shown; the `ProgressSaving` resw key was removed and the section 2 line `ProgressSaving` above is a design intent with no stage behind it.
+Stages with live text on the run page today: `booting`, `installing`, `restoring-cache` and `model-loading` (the cache lines above) and `running` (with and without the part counts). Every other stage, including `uploading`, shows the neutral `ProgressGeneric` line. MEASURED 2026-10-31: no worker code writes the stage `uploading` (grep of `worker/src` and `worker/vm`), so a "saving your results" line would never have shown; the `ProgressSaving` resw key was removed and the section 2 line `ProgressSaving` above is a design intent with no stage behind it.
 
 `ProgressAnalysingWindow` above (with `{inputName}`) is NOT used by the page: a line that names the input would put the user's file name on screen and in logs.
 

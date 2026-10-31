@@ -140,6 +140,48 @@ public class CloudJobRunnerStallTests
     }
 
     [Fact]
+    public async Task Regression_pin_the_installing_stage_the_startup_script_writes_is_published_exactly_once_while_the_run_waits_for_the_worker()
+    {
+        // REGRESSION PIN for the existing #1086 publish path, NOT evidence for #177: it passes without any #177 change (the cold review of the #177 commit found the publish of an installing
+        // snapshot already existed; the test asserts only the stage, which the #1086 tracker already carried). The #177 line text is proven in RunProgressViewModelTests and RunProgressWiringTests.
+        // Issue #177 / #1088: startup.sh writes stage "installing" (the docker pull) before the worker exists. ResultWaiter.WaitForBootAsync only looks at the VM's own status
+        // (never status.json); the stage is first visible in the result wait, which reads status.json on every look and publishes through ONE tracker per run. The script's snapshot has no
+        // worker version, so the run ends as an unhealthy VM once the first heartbeat is overdue; before that the many looks must yield one event, not one per look.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.Never);
+        var events = new ConcurrentQueue<DnaEntropyGraph.Core.Contract.ProgressEvent>();
+        var clock = new VirtualTimeProvider();
+        var wrote = false;
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromMilliseconds(200),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clock,
+            PollDelay = async (span, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (!wrote)
+                {
+                    wrote = true;
+                    await using var body = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("{\"stage\":\"installing\",\"heartbeatSeq\":1,\"detail\":{}}"));
+                    await gcp.UploadAsync(new CloudScope(Project), FakeGcp.BucketName(Project), "jobs/job-inst/status.json", body, token);
+                }
+
+                clock.Advance(span);
+            },
+            OnProgress = (_, ev) => events.Enqueue(ev),
+        };
+
+        await runner.RunAsync(TestInputs.Request("job-inst", Spec("job-inst")), CancellationToken.None);
+
+        wrote.ShouldBeTrue("the test never got to write the installing snapshot");
+        events.Select(e => e.Stage).ToList().ShouldBe(["installing"], "one event for the stage, not one per look");
+    }
+
+    [Fact]
     public async Task A_progress_handler_that_throws_never_breaks_a_cloud_run()
     {
         var thrown = 0;

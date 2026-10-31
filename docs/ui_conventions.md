@@ -199,7 +199,7 @@ this table draw from.
 | `Draft` / `Validating` | "Checking your files" | hidden | disabled | (not yet a Runs row visible in History until validation passes) |
 | `Uploading` | "Uploading" | hidden (no VM yet) | Cancel only | Running |
 | `Provisioning` | "Starting a GPU computer" (zone ladder narrated live: "Trying us-central1-a... no L4 capacity, trying us-central1-b") | running, VM not yet billing | Cancel, Stop VM now, Delete VM now | Running |
-| `Preparing` | "Preparing the computer" (first run in a project explains the cache fill: "First run in this project takes longer, about 8 minutes, while the model is cached") | running | Cancel, Stop VM now, Delete VM now | Running |
+| `Preparing` | "Preparing the computer" (a model that is not yet saved in the project's cloud storage says so and that it is being downloaded, which takes several minutes; see section 14b) | running | Cancel, Stop VM now, Delete VM now | Running |
 | `Running` | "Analysing" (per input, per contig, per window and direction, e.g. "SetTnpB - record 2 of 5 - window 3 of 7, forward") | running | Cancel, Stop VM now, Delete VM now | Running |
 | `Finalizing` | "Saving results" | final estimate shown, ticker still running (the VM is not yet confirmed stopped) | disabled (nothing left to stop) | Running |
 | `Downloading` | "Downloading" | final estimate | disabled | Running |
@@ -404,6 +404,26 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 ## 14. The Cloud page (issue #105)
 
 `CloudPage` (route `Cloud`) over `CloudResourcesViewModel`. Refresh lists through `InstallationCleanup.InventoryAsync` (this installation's computers and disks by label, job folders by manifest `createdBy.installationId`) and `IComputeGateway.ListAppVmsAsync` for the rest. A computer another installation labelled for this app is a read-only row tagged "Another computer" with no commands (Hard Rule 9; DECISION, reversible). Cost comes from `IPricingSource` (machine price while running, attached disks per day while stopped; empty when the price list cannot be read). Row commands live on `CloudVmRow`. Delete (one) and Delete everything go through `IDialogService.ConfirmAsync`; Delete everything names the counts and shows `CleanupReport` item by item, with the soft delete retention of job folders. Not built: typed confirmation, deleting the service account and role, a banner for a running computer with no run on this PC (the banner shows any running computer).
+
+## 14b. The stage line on the run page (issues #1086, #177)
+
+`RunProgressViewModel.StatusDetailText` is the one line under the progress bar. It is the existing live region (the page stays at two, which `KeyboardShortcutWiringTests` counts); the first-run and warm-cache text goes INTO this line, never into a new caption. The line is chosen from `RunProgressChangedMessage`'s `ProgressEvent` (stage id, fraction, window counts, cache field), which `WorkerProgressTracker` builds from `status.json`; Core builds no text (Hard Rule 13) and the page ignores an event after the run reached a terminal phase.
+
+| Stage and field | Resource key |
+|---|---|
+| `booting` | `ProgressBooting` |
+| `installing` | `ProgressInstalling` (says what is happening, the analysis software is being downloaded onto the rented computer, a VM; no frequency or timing claim, it is unmeasured and false on a warm image) |
+| `restoring-cache`, `detail.cache` = `miss` | `ProgressCacheFirstRun` |
+| `restoring-cache`, `detail.cache` = `hit` | `ProgressCacheWarm` |
+| `restoring-cache`, `detail.cache` = `unavailable` | `ProgressCacheUnavailable` (the saved copy could not be used, so the model is downloaded; several minutes) |
+| `restoring-cache`, no cache field yet | `ProgressRestoringCache` |
+| `model-loading`, `detail.cache` = `miss` | `ProgressCacheFirstRun` (the long download is in this stage, so the text stays up through it) |
+| `model-loading`, `detail.cache` = `unavailable` | `ProgressCacheUnavailable` (same wait as a miss) |
+| `model-loading`, anything else | `ProgressModelLoading` |
+| `running` with window counts | `ProgressAnalysingWindowCount` ("part N of M"); without, `ProgressAnalysing` |
+| any other stage (including `uploading`, which no worker code writes) | `ProgressGeneric`, never the raw stage id |
+
+The first-run signal is the worker's own `detail.cache` ("hit", "miss", "unavailable"), written when it looks in the bucket cache (`docs/job_contract.md` section 5), never the run history: a project whose cache was deleted, or a second computer after a failed first run, is told the truth. Every sentence of the miss and unavailable lines must be true on every miss (the worker's mirror step can skip the save), which is why they promise nothing about "first run" or "every later run" and carry no minute count. A This PC run and the mock predictor write no `restoring-cache` stage and no cache field, so they show `ProgressModelLoading` and never claim a cloud cache. The line never shows an input or file name (Hard Rule 14).
 
 ## 15. The slow-run notice and the stall question (issue #675)
 

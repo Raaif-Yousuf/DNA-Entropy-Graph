@@ -153,11 +153,17 @@ Click the **Run** button (or press Ctrl+Enter). What happens next, in plain word
    tries to find one that is free.
 4. **Preparing the computer**, the analysis software and, the first time in a project, the
    model itself are loaded onto the computer. This first-time load is genuinely slow,
-   often around eight extra minutes, because the model is a large file being downloaded
-   and cached for next time. Every run after the first in the same project is much
-   faster, because that cache is kept.
+   several extra minutes, because the model is a large file being downloaded. The app saves
+   a copy in your cloud storage when it can, so later runs in the same project can usually
+   start faster. The line under the progress bar follows what the computer itself reports.
+   First it says the analysis software is being downloaded onto the rented computer. Then,
+   if the model is not saved in your cloud storage yet, it says the model is being
+   downloaded, which explains the long wait; if the saved copy could not be used it says so
+   and that the model is being downloaded instead; if a saved copy is there it says the
+   saved model is being reused. A run on This PC never shows these lines, because it does
+   not use your cloud storage.
 5. **Analysing**, the actual entropy calculation, narrated by which part of your sequence
-   is being worked on right now.
+   is being worked on right now ("part 3 of 11"), with the bar moving as parts finish.
 6. **Saving results**, then **Downloading** them to your computer.
 7. **Cleaning up**, the rented computer is stopped (the default) or deleted, depending on
    your settings; see [06-costs-and-cleanup.md](06-costs-and-cleanup.md).

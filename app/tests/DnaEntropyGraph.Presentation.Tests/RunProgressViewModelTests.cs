@@ -107,6 +107,25 @@ public class RunProgressViewModelTests
     }
 
     [Theory]
+    [InlineData("restoring-cache", "miss", "ProgressCacheFirstRun")]
+    [InlineData("model-loading", "miss", "ProgressCacheFirstRun")]
+    [InlineData("restoring-cache", "hit", "ProgressCacheWarm")]
+    [InlineData("model-loading", "hit", "ProgressModelLoading")]
+    [InlineData("restoring-cache", "unavailable", "ProgressCacheUnavailable")]
+    [InlineData("restoring-cache", null, "ProgressRestoringCache")]
+    [InlineData("model-loading", "unavailable", "ProgressCacheUnavailable")]
+    [InlineData("model-loading", null, "ProgressModelLoading")]
+    [InlineData("installing", null, "ProgressInstalling")]
+    public void The_worker_cache_field_picks_the_first_run_or_warm_line_and_never_claims_a_cache_it_did_not_report(string stage, string? cache, string expectedKey)
+    {
+        var viewModel = ProgressViewModel(out var messenger, echoKeys: true);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.0, Cache: cache)));
+
+        viewModel.StatusDetailText.ShouldBe(expectedKey);
+    }
+
+    [Theory]
     [InlineData(JobPhase.Completed)]
     [InlineData(JobPhase.PartiallyCompleted)]
     [InlineData(JobPhase.Cancelled)]
@@ -179,13 +198,17 @@ public class RunProgressViewModelTests
         await vmActions.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
-    private static RunProgressViewModel ProgressViewModel(out IMessenger messenger)
+    private static RunProgressViewModel ProgressViewModel(out IMessenger messenger, bool echoKeys = false)
     {
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
-        strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
-        strings.GetString("ProgressModelLoading").Returns("Loading the analysis model onto the computer...");
-        strings.GetString("ProgressGeneric").Returns("Working on your run...");
+        if (!echoKeys)
+        {
+            strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
+            strings.GetString("ProgressModelLoading").Returns("Loading the analysis model onto the computer...");
+            strings.GetString("ProgressGeneric").Returns("Working on your run...");
+        }
+
         messenger = new WeakReferenceMessenger();
         return new RunProgressViewModel(
             Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),

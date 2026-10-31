@@ -7,7 +7,7 @@ namespace DnaEntropyGraph.Core.Contract;
 /// <see cref="WorkerVersion"/> is empty in the snapshots <c>worker/vm/startup.sh</c> writes for its own infra stages
 /// (booting, installing) and filled by the container's worker, which is how the two are told apart.
 /// </summary>
-public sealed record WorkerStatusSnapshot(string? Stage, long? HeartbeatSeq, string? UpdatedAt, string? WorkerVersion, string? StageStartedAt = null, string? StartedAt = null, bool CancelSeen = false, int? WindowsDone = null, string? LastProgressAt = null, double? Percent = null, int? Window = null, int? Windows = null)
+public sealed record WorkerStatusSnapshot(string? Stage, long? HeartbeatSeq, string? UpdatedAt, string? WorkerVersion, string? StageStartedAt = null, string? StartedAt = null, bool CancelSeen = false, int? WindowsDone = null, string? LastProgressAt = null, double? Percent = null, int? Window = null, int? Windows = null, string? Cache = null)
 {
     /// <summary>True once the container's worker (not only the startup script) has written the file: its heartbeat is running.</summary>
     public bool WorkerOwned => !string.IsNullOrEmpty(WorkerVersion);
@@ -59,7 +59,8 @@ public static class WorkerStatusReader
                 ReadString(root, "lastProgressAt"),
                 root.TryGetProperty("percent", out var percent) && percent.ValueKind == JsonValueKind.Number && percent.TryGetDouble(out var pct) && double.IsFinite(pct) ? pct : null,
                 ReadDetailInt(root, "window"),
-                ReadDetailInt(root, "windows"));
+                ReadDetailInt(root, "windows"),
+                ReadDetailCache(root));
         }
         catch (JsonException)
         {
@@ -101,6 +102,19 @@ public static class WorkerStatusReader
             && detail.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
             ? number
             : null;
+
+    // The worker's own words for the model cache (docs/job_contract.md section 5); anything else is treated as not reported.
+    private static string? ReadDetailCache(JsonElement root)
+    {
+        if (root.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.Object
+            && detail.TryGetProperty("cache", out var value) && value.ValueKind == JsonValueKind.String)
+        {
+            var cache = value.GetString();
+            return cache is "hit" or "miss" or "unavailable" ? cache : null;
+        }
+
+        return null;
+    }
 
     private static string? ReadString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

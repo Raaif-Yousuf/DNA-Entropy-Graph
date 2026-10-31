@@ -27,7 +27,7 @@ public sealed class WorkerProgressTracker
             _fraction = Math.Clamp(percent / 100.0, 0.0, 1.0);
         }
 
-        var next = new ProgressEvent(status.Stage, _fraction, status.Window, status.Windows);
+        var next = new ProgressEvent(status.Stage, _fraction, status.Window, status.Windows, status.Cache);
         if (next == _last)
         {
             return null;

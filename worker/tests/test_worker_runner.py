@@ -1926,3 +1926,86 @@ def test_percent_spans_all_inputs_equally(tmp_path: Path) -> None:
 
     second = [s for s in store.snapshots if s["detail"].get("input") == "in2" and s["percent"] > 0]
     assert second and min(s["percent"] for s in second) >= 50.0  # input 2 starts at the halfway mark
+
+
+# --- Issue #177: status.json says whether the model cache hit, as a field, not only a notice ----
+
+
+def _cache_details(rec: _StatusRecorder, stage: str) -> list:
+    return [s["detail"].get("cache") for s in rec.snapshots if s["stage"] == stage]
+
+
+def test_restoring_cache_with_an_empty_bucket_cache_reports_detail_cache_miss(tmp_path: Path) -> None:
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    inner = _evo_manifest_store(tmp_path)
+    rec = _StatusRecorder(inner)
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    assert "miss" in _cache_details(rec, "restoring-cache")
+    assert "miss" in _cache_details(rec, "model-loading"), "the long download is in model-loading"
+    assert all(s["detail"].get("cache") is None for s in rec.snapshots if s["stage"] == "running")
+
+
+def test_restoring_cache_with_a_populated_bucket_cache_reports_detail_cache_hit(tmp_path: Path) -> None:
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf1, hf2 = tmp_path / "vm1-hf", tmp_path / "vm2-hf"
+    run_job(
+        _evo_manifest_store(tmp_path / "a"),
+        predictor_factory=_downloading_factory(hf1, []),
+        cache_store=cache,
+        hf_cache_dir=hf1,
+    )
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path / "b"))
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf2, []),
+        cache_store=cache,
+        hf_cache_dir=hf2,
+    )
+
+    assert "hit" in _cache_details(rec, "restoring-cache")
+    assert "miss" not in _cache_details(rec, "restoring-cache") + _cache_details(rec, "model-loading")
+
+
+def test_a_cache_restore_failure_reports_detail_cache_unavailable(tmp_path: Path) -> None:
+    from dna_entropy.worker.weights import save_to_cache
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    src = tmp_path / "src"
+    (src / "blobs").mkdir(parents=True)
+    (src / "blobs" / "sha1").write_bytes(b"weights")
+    save_to_cache(cache, "evo2_7b", src)
+    cache.write_text("cache/models/evo2_7b/blobs/sha1", "bad")
+    hf = tmp_path / "hf"
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path / "j"))
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    assert "unavailable" in _cache_details(rec, "restoring-cache")
+
+
+def test_a_run_with_no_bucket_cache_never_reports_detail_cache(tmp_path: Path) -> None:
+    """This PC (no cache store) and the mock predictor: no restoring-cache stage, no cache claim."""
+    inner = LocalBlobstore(tmp_path / "job")
+    _write_manifest(inner)
+    _seed_fasta_input(inner)
+    rec = _StatusRecorder(inner)
+
+    run_job(cast(Blobstore, rec))
+
+    assert rec.snapshots
+    assert all("cache" not in s["detail"] for s in rec.snapshots)
+    assert "restoring-cache" not in [s["stage"] for s in rec.snapshots]

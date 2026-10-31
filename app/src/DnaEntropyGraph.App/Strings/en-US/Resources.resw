@@ -3669,4 +3669,19 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_KeptAside_Many" xml:space="preserve">
     <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
   </data>
+  <data name="ProgressInstalling" xml:space="preserve">
+    <value>The rented computer (a virtual machine, or VM) is downloading the analysis software it needs to run your sequence.</value>
+  </data>
+  <data name="ProgressRestoringCache" xml:space="preserve">
+    <value>Looking in your cloud storage for the analysis model saved by an earlier run...</value>
+  </data>
+  <data name="ProgressCacheFirstRun" xml:space="preserve">
+    <value>The analysis model is not saved in your cloud storage yet, so it is being downloaded now, which takes several minutes. A copy is saved afterwards when possible, so later runs can usually start faster.</value>
+  </data>
+  <data name="ProgressCacheUnavailable" xml:space="preserve">
+    <value>The copy of the analysis model saved in your cloud storage could not be used, so the model is being downloaded instead, which takes several minutes.</value>
+  </data>
+  <data name="ProgressCacheWarm" xml:space="preserve">
+    <value>Reusing the analysis model that was saved by an earlier run.</value>
+  </data>
 </root>

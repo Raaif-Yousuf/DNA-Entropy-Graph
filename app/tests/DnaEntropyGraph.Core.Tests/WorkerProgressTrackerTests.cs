@@ -19,6 +19,31 @@ public class WorkerProgressTrackerTests
         status.Windows.ShouldBe(11);
     }
 
+    [Theory]
+    [InlineData("miss")]
+    [InlineData("hit")]
+    [InlineData("unavailable")]
+    public void The_status_reader_reads_the_worker_cache_field_and_the_event_carries_it(string cache)
+    {
+        var json = "{\"stage\":\"restoring-cache\",\"percent\":0,\"detail\":{\"cache\":\"" + cache + "\"},\"heartbeatSeq\":2,\"worker\":{\"version\":\"1.0.0\"}}";
+
+        var status = WorkerStatusReader.TryParseStatus(json)!;
+        var ev = new WorkerProgressTracker().Next(status)!;
+
+        status.Cache.ShouldBe(cache);
+        ev.Cache.ShouldBe(cache);
+    }
+
+    [Fact]
+    public void A_change_of_only_the_cache_field_is_a_new_event()
+    {
+        var tracker = new WorkerProgressTracker();
+        var first = WorkerStatusReader.TryParseStatus("{\"stage\":\"restoring-cache\",\"detail\":{},\"heartbeatSeq\":1}")!;
+
+        tracker.Next(first).ShouldNotBeNull();
+        tracker.Next(first with { Cache = "miss" })!.Cache.ShouldBe("miss");
+    }
+
     [Fact]
     public void A_status_without_percent_or_detail_reads_them_as_unknown()
     {
@@ -27,6 +52,7 @@ public class WorkerProgressTrackerTests
         status.Percent.ShouldBeNull();
         status.Window.ShouldBeNull();
         status.Windows.ShouldBeNull();
+        status.Cache.ShouldBeNull();
     }
 
     [Fact]
