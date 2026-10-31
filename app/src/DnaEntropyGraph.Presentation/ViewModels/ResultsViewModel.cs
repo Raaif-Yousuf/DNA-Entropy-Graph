@@ -83,6 +83,13 @@ public sealed partial class ResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsNoticeVisible))]
     private string _noticeText = string.Empty;
 
+    // Issue #929: the run's download renamed changed files aside (Hard Rule 14); the page's Open the output folder button is the action it names.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsKeptAsideVisible))]
+    private string _keptAsideText = string.Empty;
+
+    public bool IsKeptAsideVisible => KeptAsideText.Length > 0;
+
     // Why the numbers are missing while the files are fine.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsStatsNoticeVisible))]
@@ -223,6 +230,8 @@ public sealed partial class ResultsViewModel : ObservableObject
                 return;
             }
 
+            // Only with a folder to open: a missing folder already has its notice, and a line over a disabled button would be a dead end.
+            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings) ?? string.Empty;
             Show(folder!, snapshot);
 
             await ShowGeneTablesAsync(folder!, generation);
@@ -258,6 +267,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _outputFiles = [];
         Title = string.Empty;
         CostText = string.Empty;
+        KeptAsideText = string.Empty;
         _annotationsJobId = null;
         NotesText = string.Empty;
         TagsText = string.Empty;
