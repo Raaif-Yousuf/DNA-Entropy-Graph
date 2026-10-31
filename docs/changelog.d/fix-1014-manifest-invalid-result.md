@@ -1,0 +1,1 @@
+- A manifest the worker cannot parse (bad JSON, wrong schema, a wrong-typed field) now leaves a terminal `result.json` with `MANIFEST_INVALID` and the field-naming message, so the app can name the failure instead of reporting a lost VM; exit code stays 2 (#1014)

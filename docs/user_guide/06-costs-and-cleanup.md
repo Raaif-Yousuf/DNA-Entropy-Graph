@@ -125,6 +125,23 @@ also change what happens after every run (Stop, Delete immediately, or Keep runn
 set number of minutes) in the run options, and delete a stopped computer yourself any
 time from the Cloud page.
 
+## Setting a monthly spending cap
+
+In **Settings > Spending** you can type a monthly warning cap in US dollars. The app keeps its
+own running total of what your runs have cost this calendar month (by your PC's clock), adding
+each run's computer time and disk from the moment its computer exists. A run still going is
+counted up to now, and the screens say "includes runs in progress". This is an **estimate** from
+our price list, not your Google bill. It only counts runs made with this app on this PC, and it
+does not count a computer left running or stopped after its run ended (the Cloud page lists those).
+
+- Before a run, if this month's total plus the run's estimate would reach the cap, the New run
+  page shows a yellow note. You can still run. To change the cap, open Settings.
+- If you tick **Hard stop**, the same situation refuses the run instead: the note turns red, the
+  Run button is switched off, and a run started another way is listed as
+  failed with the reason "spending cap", and nothing is created in Google Cloud. To go on, open
+  Settings and raise the cap or turn the hard stop off.
+- Leave the box empty for no cap (the starting state).
+
 ## How to see what is costing you money right now
 
 *Note: the Cloud page, the spending figure in the status bar and Settings > Budget are not in

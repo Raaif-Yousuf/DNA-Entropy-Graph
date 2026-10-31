@@ -1,0 +1,1 @@
+- tooling: `scripts/premerge_wt.py` (#958) is the one safe command for `premerge --fast` in an agent worktree (shared venv python, `PYTHONPATH=<wt>\worker\src`, no junction by default, `--junction` always unlinked in `finally`, stale junction cleared, shared venv verified); link helpers factored into `scripts/wt_venv.py`, shared with `land_wt.py`.

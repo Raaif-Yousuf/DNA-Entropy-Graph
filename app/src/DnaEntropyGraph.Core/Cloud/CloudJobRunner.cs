@@ -194,7 +194,7 @@ public sealed class CloudJobRunner
         _terminator = new VmTerminator(computeGateway, _calls, _settings);
         _provisioner = new VmProvisioner(computeGateway, _calls, _settings, _terminator, JobIsFinishedAsync, quotaGateway, BucketLocationAsync, ClaimZoneAsync);
         _canceller = new VmCanceller(_rows, _provisioner, _terminator, new GracefulCancel(computeGateway, storageGateway, _calls, _settings), _settings);
-        _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator);
+        _waiter = new ResultWaiter(computeGateway, _calls, _settings, _terminator, (jobId, at, token) => _rows.RecordHeartbeatAsync(jobId, at, token));
         _outcome = new RunOutcomeRecorder(_rows, _transfer, _terminator);
     }
 
@@ -375,6 +375,7 @@ public sealed class CloudJobRunner
             // the VM must not be left billing under a terminal Failed record nothing will ever look at again. The VM is
             // found by the zone when known and by its job-id label when not. Only the CALLER cancelling is not this (CancelAsync owns that
             // delete): an OperationCanceledException with the caller's token live is a gateway's own deadline, a failure like any other.
+            await _rows.StampVmSpanAsync(request.JobId, progress.VmCreatedAt, progress.VmEndedAt).ConfigureAwait(false);
             var note = await _terminator.EndVmAfterFailureAsync(progress.Resolve(request), progress.Zone).ConfigureAwait(false);
             throw VmEndNotes.Apply(ex, note);
         }
@@ -445,6 +446,20 @@ public sealed class CloudJobRunner
 
                 progress.Zone = owned.Count > 0 ? owned[0].Zone : null;
                 progress.VmName = owned.Count > 0 ? owned[0].Name : null;
+                // Issue #109: the one span rule (VmSpan). A VM still there says its own start (and its stop, if it stopped); a VM that deleted itself after the worker finished
+                // was alive until the last sign the app has of it, never until the app came back.
+                if (owned.Count > 0)
+                {
+                    progress.Observe(owned[0]);
+                }
+                else
+                {
+                    var row = await _rows.TryLatestRecordAsync(request.JobId).ConfigureAwait(false);
+                    progress.VmEndedAt ??= VmSpan.EndOfGone(progress.VmCreatedAt ?? row?.VmReadyAt, request.Spec.MaxRunDuration, _settings.TimeProvider.GetUtcNow(), row, VmSpan.ResultFinishedAt(finished));
+                }
+
+                await _rows.StampVmSpanAsync(request.JobId, progress.VmCreatedAt, progress.VmEndedAt).ConfigureAwait(false);
+
                 await RecordVmNameAsync(request.JobId, progress.VmName, cancellationToken).ConfigureAwait(false);
                 return await _outcome.FinishAsync(progress.Resolve(request), bucket, progress.Zone, finished, cancellationToken).ConfigureAwait(false);
             }
@@ -457,6 +472,8 @@ public sealed class CloudJobRunner
         {
             await _rows.SetPhaseAsync(request.JobId, JobPhase.Provisioning, cancellationToken).ConfigureAwait(false);
             var provisioned = await _provisioner.ProvisionAsync(attempt, token => CompleteSpecAsync(attempt, bucket, progress, token), progress, cancellationToken).ConfigureAwait(false);
+            // Before the failure branch: a VM that was created and then lost inside provisioning still billed, and the ledger books from here.
+            await _rows.StampVmSpanAsync(request.JobId, progress.VmCreatedAt, progress.VmEndedAt).ConfigureAwait(false);
             if (!provisioned.Success)
             {
                 return await _outcome.FailAsync(request.JobId, provisioned.FailureKind!.Value, provisioned.FailureCode!, WorkerAccountDetail.Append(provisioned.FailureMessage, progress.WorkerAccountEmail), provisioned.VmEndNote).ConfigureAwait(false);
@@ -492,6 +509,7 @@ public sealed class CloudJobRunner
                 progress.VmName = null;
                 progress.Zone = null;
                 progress.VmStartMark = null;
+                progress.VmEndedAt = null;
             }
         }
     }

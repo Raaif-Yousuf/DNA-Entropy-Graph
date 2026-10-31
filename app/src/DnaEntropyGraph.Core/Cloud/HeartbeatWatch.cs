@@ -56,12 +56,16 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
     private string? _progressKey;
     private TimeSpan _progressChange;
 
+    /// <summary>The worker's own write time (its status updatedAt) when the last <see cref="Observe"/> saw a heartbeat that is new (first seen, or its sequence or write time moved), else null: the run row records it as a sign of life (issue #109). The heartbeat's own time, never the app's clock, so a stale status.json found on a resume records its true age.</summary>
+    public DateTimeOffset? NewHeartbeatAt { get; private set; }
+
     /// <summary>True when the caller should also read <c>progress.jsonl</c>: a GPU tier whose worker is up and whose GPU is not yet confirmed.</summary>
     public bool NeedsProgress => expectsGpu && _workerSeen && !_gpuVerified;
 
     /// <summary>Null while the worker looks healthy; otherwise why the run must end. <paramref name="statusJson"/>/<paramref name="progressJsonl"/> are null when not (yet) there.</summary>
-    public HeartbeatVerdict? Observe(string? statusJson, string? progressJsonl, TimeSpan elapsed)
+    public HeartbeatVerdict? Observe(string? statusJson, string? progressJsonl, TimeSpan elapsed, DateTimeOffset? appNow = null)
     {
+        NewHeartbeatAt = null;
         var status = statusJson is null ? null : WorkerStatusReader.TryParseStatus(statusJson);
 
         // The stage clock restarts whenever the stage NAME changes, whoever wrote it (the startup script writes booting and installing).
@@ -80,6 +84,11 @@ internal sealed class HeartbeatWatch(bool expectsGpu, TimeSpan firstHeartbeatTim
             if (!_workerSeen || status.HeartbeatSeq != _lastSeq || status.UpdatedAt != _lastUpdatedAt)
             {
                 _lastChange = elapsed;
+                // The worker's own write time when it has a readable one. With none, a heartbeat that advanced while THIS watch was looking is alive now by the app's
+                // clock; the first look at a status.json (a resume may find an old one) proves nothing about now and records nothing.
+                NewHeartbeatAt = DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
+                    ? wrote
+                    : _workerSeen ? appNow : null;
             }
 
             // Issue #723: the forward-progress signal (windowsDone, lastProgressAt) moves only when the compute thread does, unlike the heartbeat. Judged by CHANGE

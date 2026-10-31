@@ -1123,7 +1123,19 @@ public class JobReconcilerLifecycleTests
         // Issue #559 review r4 F3: the lifecycle step throws; the run the reattach already handed to a driver must still be tracked and waited for.
         var rig = new Rig(g => g.WithWorker(FakeWorkerMode.Done));
         await rig.Env.SeedAsync("job-orph", JobPhase.Running, vm: true);
-        rig.Env.Repo.BeforeGetAll = (call, _) => call == 2 ? throw new InvalidOperationException("database is busy") : Task.CompletedTask;
+        // Throw in the lifecycle step's own read. Counting reads (it was "the second") also hit a read made by the driver the reattach started (its row writes read
+        // the table too), whenever that driver got there first: the driver then failed on the throw and the run ended Failed, which is not what this test is about.
+        var thrown = false;
+        rig.Env.Repo.BeforeGetAll = (_, _) =>
+        {
+            if (!Environment.StackTrace.Contains("EnforceLifecycleCoreAsync", StringComparison.Ordinal))
+            {
+                return Task.CompletedTask;
+            }
+
+            thrown = true;
+            throw new InvalidOperationException("database is busy");
+        };
         var reconciler = rig.Reconciler();
         using var observer = new ReconcileOnReconnect(new NullObserver(), () => reconciler);
 
@@ -1131,6 +1143,7 @@ public class JobReconcilerLifecycleTests
         await observer.WhenIdleAsync();
 
         var row = rig.Env.Row("job-orph");
+        thrown.ShouldBeTrue("the lifecycle step's own read was the one that threw");
         row.Phase.ShouldBe(JobPhase.Completed, row.ErrorCode);
     }
 

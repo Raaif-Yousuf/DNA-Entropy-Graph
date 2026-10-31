@@ -59,6 +59,13 @@ class ManifestError(ValueError):
 
     code = "MANIFEST_INVALID"
 
+    def __init__(self, message: str, *, public: str | None = None) -> None:
+        """``public`` is the VALUE-FREE text safe to persist in result.json (issue #1014): the
+        field path and what was expected, never the offending value (it may be a file name).
+        Omitted, the message is taken to carry no manifest value and is used as is."""
+        super().__init__(message)
+        self.public_message = public if public is not None else message
+
 
 class ManifestSchemaError(ManifestError):
     """``WORKER_VERSION_MISMATCH`` (issue #250): the manifest's schema version is not one
@@ -82,6 +89,59 @@ def _require(d: dict, key: str, *, where: str) -> object:
     if key not in d:
         raise ManifestError(f"manifest.json is missing required field {where}.{key!r}")
     return d[key]
+
+
+def _label(where: str, key: str) -> str:
+    return f"manifest.json {where}.{key}" if where else f"manifest.json {key!r}"
+
+
+def _int_field(d: dict, key: str, default: int, *, where: str) -> int:
+    """A whole-number field (issue #878): absent -> ``default``; a string, null, list, object,
+    bool or fractional number is refused with a :class:`ManifestError`, never coerced by ``int()``."""
+    raw = d.get(key, default)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ManifestError(
+            f"{_label(where, key)} must be a whole number, got {raw!r}",
+            public=f"{_label(where, key)} must be a whole number",
+        )
+    return raw
+
+
+def _str_field(d: dict, key: str, default: str, *, where: str) -> str:
+    """A text field (issue #878): absent -> ``default``; anything that is not a string is refused
+    rather than turned into text by ``str()`` (``str(None)`` would be the text ``'None'``)."""
+    raw = d.get(key, default)
+    if not isinstance(raw, str):
+        raise ManifestError(
+            f"{_label(where, key)} must be text, got {raw!r}", public=f"{_label(where, key)} must be text"
+        )
+    return raw
+
+
+def _required_str(d: dict, key: str, *, where: str) -> str:
+    _require(d, key, where=where)
+    return _str_field(d, key, "", where=where)
+
+
+def _bool_field(d: dict, key: str, default: bool, *, where: str) -> bool:
+    raw = d.get(key, default)
+    if not isinstance(raw, bool):
+        raise ManifestError(
+            f"{_label(where, key)} must be true or false, got {raw!r}",
+            public=f"{_label(where, key)} must be true or false",
+        )
+    return raw
+
+
+def _object_field(d: dict, key: str, *, where: str) -> dict:
+    """An optional JSON object section: absent -> ``{}``; anything else is refused."""
+    raw = d.get(key, {})
+    if not isinstance(raw, dict):
+        raise ManifestError(
+            f"{_label(where, key)} must be an object, got {raw!r}",
+            public=f"{_label(where, key)} must be an object",
+        )
+    return raw
 
 
 _AMBIGUITY_POLICIES: dict[str, AmbiguityPolicy] = {p.value: p for p in AmbiguityPolicy}
@@ -108,7 +168,10 @@ def _optional_text(d: dict, key: str, *, where: str) -> str | None:
         return None
     raw = d[key]
     if not isinstance(raw, str) or not raw.strip():
-        raise ManifestError(f"manifest.json {where}.{key} must be a non-empty string, got {raw!r}")
+        raise ManifestError(
+            f"manifest.json {where}.{key} must be a non-empty string, got {raw!r}",
+            public=f"manifest.json {where}.{key} must be a non-empty string",
+        )
     return raw
 
 
@@ -116,7 +179,10 @@ def parse_accession_range(text: str) -> tuple[int, int]:
     """``"100-500"`` (or ``"100..500"``) -> ``(100, 500)``; raises :class:`ManifestError`."""
     parts = text.replace("..", "-").split("-")
     if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
-        raise ManifestError(f"manifest.json inputs[].accessionRange {text!r} must look like 100-500")
+        raise ManifestError(
+            f"manifest.json inputs[].accessionRange {text!r} must look like 100-500",
+            public="manifest.json inputs[].accessionRange must look like 100-500",
+        )
     return int(parts[0]), int(parts[1])
 
 
@@ -157,23 +223,26 @@ class InputSpec:
 
     @staticmethod
     def from_dict(d: dict) -> InputSpec:
-        raw_policy = str(d.get("ambiguityPolicy", AmbiguityPolicy.KEEP.value))
+        raw_policy = _str_field(d, "ambiguityPolicy", AmbiguityPolicy.KEEP.value, where="inputs[]")
         policy = _AMBIGUITY_POLICIES.get(raw_policy)
         if policy is None:
             valid = sorted(_AMBIGUITY_POLICIES.keys())
             raise ManifestError(
-                f"manifest.json inputs[].ambiguityPolicy {raw_policy!r} is not one of {valid}"
+                f"manifest.json inputs[].ambiguityPolicy {raw_policy!r} is not one of {valid}",
+                public=f"manifest.json inputs[].ambiguityPolicy is not one of {valid}",
             )
-        raw_fasta_records = str(d.get("fastaRecords", "all"))
+        raw_fasta_records = _str_field(d, "fastaRecords", "all", where="inputs[]")
         if raw_fasta_records not in _FASTA_RECORDS_VALUES:
             valid = sorted(_FASTA_RECORDS_VALUES)
             raise ManifestError(
-                f"manifest.json inputs[].fastaRecords {raw_fasta_records!r} is not one of {valid}"
+                f"manifest.json inputs[].fastaRecords {raw_fasta_records!r} is not one of {valid}",
+                public=f"manifest.json inputs[].fastaRecords is not one of {valid}",
             )
-        informat = str(d.get("informat", "auto"))
+        informat = _str_field(d, "informat", "auto", where="inputs[]")
         if informat not in _INFORMAT_VALUES:
             raise ManifestError(
-                f"manifest.json inputs[].informat {informat!r} is not one of {sorted(_INFORMAT_VALUES)}"
+                f"manifest.json inputs[].informat {informat!r} is not one of {sorted(_INFORMAT_VALUES)}",
+                public=f"manifest.json inputs[].informat is not one of {sorted(_INFORMAT_VALUES)}",
             )
         annotation = _optional_text(d, "annotation", where="inputs[]")
         accession = _optional_text(d, "accession", where="inputs[]")
@@ -181,7 +250,7 @@ class InputSpec:
         if accession is None:
             if range_text is not None:
                 raise ManifestError("manifest.json inputs[].accessionRange needs inputs[].accession")
-            path = str(_require(d, "path", where="inputs[]"))
+            path = _required_str(d, "path", where="inputs[]")
         else:
             if d.get("path"):
                 raise ManifestError(
@@ -191,7 +260,9 @@ class InputSpec:
             if informat not in ("auto", "genbank"):
                 raise ManifestError(
                     f"manifest.json inputs[].informat {informat!r} cannot be combined with accession "
-                    "(a fetched record is always GenBank; use auto or genbank)"
+                    "(a fetched record is always GenBank; use auto or genbank)",
+                    public="manifest.json inputs[].informat cannot be combined with accession "
+                    "(a fetched record is always GenBank; use auto or genbank)",
                 )
             if annotation is not None:
                 raise ManifestError(
@@ -202,20 +273,24 @@ class InputSpec:
             try:
                 accession = entrez.validate_request(accession, span[0], span[1])
             except ValidationError as exc:
-                raise ManifestError(f"manifest.json inputs[].accession or accessionRange: {exc}") from exc
+                raise ManifestError(
+                    f"manifest.json inputs[].accession or accessionRange: {exc}",
+                    public="manifest.json inputs[].accession or accessionRange is not valid",
+                ) from exc
             path = ""
         if annotation is not None and informat in ("genbank", "embl", "snapgene"):
             raise ManifestError(
-                f"manifest.json inputs[].annotation needs a FASTA input, but informat is {informat!r}"
+                f"manifest.json inputs[].annotation needs a FASTA input, but informat is {informat!r}",
+                public="manifest.json inputs[].annotation needs a FASTA input",
             )
         return InputSpec(
-            id=str(_require(d, "id", where="inputs[]")),
+            id=_required_str(d, "id", where="inputs[]"),
             path=path,
-            name=str(_require(d, "name", where="inputs[]")),
+            name=_required_str(d, "name", where="inputs[]"),
             informat=informat,
-            start=int(d.get("start", 1)),
-            rna=bool(d.get("rna", False)),
-            genes=bool(d.get("genes", False)),
+            start=_int_field(d, "start", 1, where="inputs[]"),
+            rna=_bool_field(d, "rna", False, where="inputs[]"),
+            genes=_bool_field(d, "genes", False, where="inputs[]"),
             ambiguity_policy=policy,
             fasta_records=raw_fasta_records,
             annotation=annotation,
@@ -234,9 +309,9 @@ class PredictorSpec:
 
     @staticmethod
     def from_dict(d: dict) -> PredictorSpec:
-        kind = str(d.get("kind", "mock"))
-        model = str(d.get("model", "evo2_7b"))
-        precision = str(d.get("precision", "bf16"))
+        kind = _str_field(d, "kind", "mock", where="predictor")
+        model = _str_field(d, "model", "evo2_7b", where="predictor")
+        precision = _str_field(d, "precision", "bf16", where="predictor")
         # issue #343, decided: predictor.precision is cross-checked against the model's
         # OWN real hardware requirement (predictors/hardware.py's MODEL_REQUIREMENTS),
         # not treated as pure provenance. Nothing downstream reads this field to
@@ -259,14 +334,15 @@ class PredictorSpec:
                     f"model {model!r}'s required precision {expected!r} "
                     "(predictors/hardware.py's model/GPU matrix is authoritative -- "
                     "nothing reads this field to configure the predictor, so a "
-                    "mismatched value would be silently wrong rather than honored)."
+                    "mismatched value would be silently wrong rather than honored).",
+                    public="manifest.json predictor.precision does not match the model's required precision",
                 )
         return PredictorSpec(
             kind=kind,
             model=model,
             precision=precision,
-            device=str(d.get("device", "cuda")),
-            seed=int(d.get("seed", 0)),
+            device=_str_field(d, "device", "cuda", where="predictor"),
+            seed=_int_field(d, "seed", 0, where="predictor"),
         )
 
 
@@ -276,7 +352,10 @@ def _region_number(d: dict, key: str, default: float, *, whole: bool) -> float:
     raw = d.get(key, default)
     if isinstance(raw, bool) or not isinstance(raw, int | float) or (whole and not isinstance(raw, int)):
         kind = "a whole number" if whole else "a number"
-        raise ManifestError(f"manifest.json analysis region options: {key} must be {kind}, got {raw!r}")
+        raise ManifestError(
+            f"manifest.json analysis region options: {key} must be {kind}, got {raw!r}",
+            public=f"manifest.json analysis.{key} must be {kind}",
+        )
     return raw
 
 
@@ -307,41 +386,59 @@ class AnalysisSpec:
 
     @staticmethod
     def from_dict(d: dict) -> AnalysisSpec:
-        raw_direction = str(d.get("direction", Direction.BOTH_COMBINED.value))
+        raw_direction = _str_field(d, "direction", Direction.BOTH_COMBINED.value, where="analysis")
         direction = _DIRECTION_ALIASES.get(raw_direction)
         if direction is None:
             valid = sorted({*_DIRECTION_ALIASES.keys()})
-            raise ManifestError(f"manifest.json analysis.direction {raw_direction!r} is not one of {valid}")
-        raw_track_format = str(d.get("format", TrackFormat.BEDGRAPH.value))
+            raise ManifestError(
+                f"manifest.json analysis.direction {raw_direction!r} is not one of {valid}",
+                public=f"manifest.json analysis.direction is not one of {valid}",
+            )
+        raw_track_format = _str_field(d, "format", TrackFormat.BEDGRAPH.value, where="analysis")
         track_format = _TRACK_FORMAT_VALUES.get(raw_track_format)
         if track_format is None:
             valid = sorted(_TRACK_FORMAT_VALUES.keys())
-            raise ManifestError(f"manifest.json analysis.format {raw_track_format!r} is not one of {valid}")
-        raw_topology = str(d.get("topology", Topology.AUTO.value))
+            raise ManifestError(
+                f"manifest.json analysis.format {raw_track_format!r} is not one of {valid}",
+                public=f"manifest.json analysis.format is not one of {valid}",
+            )
+        raw_topology = _str_field(d, "topology", Topology.AUTO.value, where="analysis")
         try:
             topology = Topology(raw_topology)
         except ValueError:
             valid = sorted(t.value for t in Topology)
             raise ManifestError(
-                f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}"
+                f"manifest.json analysis.topology {raw_topology!r} is not one of {valid}",
+                public=f"manifest.json analysis.topology is not one of {valid}",
             ) from None
         raw_windows = d.get("smoothingWindows", list(DEFAULT_SMOOTHING_WINDOWS))
         if not isinstance(raw_windows, list):
             raise ManifestError(
                 f"manifest.json analysis.smoothingWindows {raw_windows!r} must be a list of odd whole "
-                "numbers (smoothing windows, in bases), for example [51]"
+                "numbers (smoothing windows, in bases), for example [51]",
+                public="manifest.json analysis.smoothingWindows must be a list of odd whole "
+                "numbers (smoothing windows, in bases), for example [51]",
             )
         try:
             smoothing_windows = list(validate_smoothing_windows(raw_windows))
         except ValueError as exc:
-            raise ManifestError(f"manifest.json analysis.smoothingWindows: {exc}") from exc
+            raise ManifestError(
+                f"manifest.json analysis.smoothingWindows: {exc}",
+                public="manifest.json analysis.smoothingWindows is not valid",
+            ) from exc
         gc_window = d.get("gcWindow", DEFAULT_GC_WINDOW)
         if isinstance(gc_window, bool) or not isinstance(gc_window, int):
-            raise ManifestError(f"manifest.json analysis.gcWindow {gc_window!r} must be an odd whole number")
+            raise ManifestError(
+                f"manifest.json analysis.gcWindow {gc_window!r} must be an odd whole number",
+                public="manifest.json analysis.gcWindow must be an odd whole number",
+            )
         try:
             validate_smoothing_windows([gc_window])
         except ValueError as exc:
-            raise ManifestError(f"manifest.json analysis.gcWindow: {exc}") from exc
+            raise ManifestError(
+                f"manifest.json analysis.gcWindow: {exc}",
+                public="manifest.json analysis.gcWindow is not valid",
+            ) from exc
         region_threshold = _region_number(d, "regionThreshold", DEFAULT_THRESHOLD_BITS, whole=False)
         region_min_length = _region_number(d, "regionMinLength", DEFAULT_MIN_LENGTH, whole=True)
         region_merge_gap = _region_number(d, "regionMergeGap", DEFAULT_MERGE_GAP, whole=True)
@@ -352,10 +449,13 @@ class AnalysisSpec:
                 merge_gap=int(region_merge_gap),
             )
         except ValueError as exc:
-            raise ManifestError(f"manifest.json analysis region options: {exc}") from exc
-        context_length = int(d.get("contextLength", 4096))
-        window = int(d.get("window", 8192))
-        stride = int(d.get("stride", 4096))
+            raise ManifestError(
+                f"manifest.json analysis region options: {exc}",
+                public="manifest.json analysis region options are not valid",
+            ) from exc
+        context_length = _int_field(d, "contextLength", 4096, where="analysis")
+        window = _int_field(d, "window", 8192, where="analysis")
+        stride = _int_field(d, "stride", 4096, where="analysis")
         # issue #345, RE-DECIDED 2026-09-19: an earlier pass on this issue concluded no
         # cross-check was needed, reasoning that S = W - K is a pure function of the same
         # two inputs (context_length, ceiling) that already determine window, so nothing
@@ -374,7 +474,9 @@ class AnalysisSpec:
                 f"manifest.json analysis.stride {stride!r} does not match "
                 f"window ({window}) - contextLength ({context_length}) = {expected_stride} "
                 "(stride is derived, never independently chosen -- see docs/science_and_formats.md "
-                "section 3; recompute it as window - contextLength before writing the manifest)."
+                "section 3; recompute it as window - contextLength before writing the manifest).",
+                public="manifest.json analysis.stride does not match window - contextLength "
+                "(stride is derived: recompute it as window - contextLength)",
             )
         return AnalysisSpec(
             context_length=context_length,
@@ -408,11 +510,11 @@ class Limits:
     @staticmethod
     def from_dict(d: dict) -> Limits:
         return Limits(
-            max_run_seconds=int(d.get("maxRunSeconds", 14400)),
-            cancel_poll_seconds=int(d.get("cancelPollSeconds", 10)),
-            heartbeat_seconds=int(d.get("heartbeatSeconds", 30)),
-            max_inputs=int(d.get("maxInputs", DEFAULT_MAX_INPUTS)),
-            max_total_nt=int(d.get("maxTotalNt", DEFAULT_MAX_TOTAL_NT)),
+            max_run_seconds=_int_field(d, "maxRunSeconds", 14400, where="limits"),
+            cancel_poll_seconds=_int_field(d, "cancelPollSeconds", 10, where="limits"),
+            heartbeat_seconds=_int_field(d, "heartbeatSeconds", 30, where="limits"),
+            max_inputs=_int_field(d, "maxInputs", DEFAULT_MAX_INPUTS, where="limits"),
+            max_total_nt=_int_field(d, "maxTotalNt", DEFAULT_MAX_TOTAL_NT, where="limits"),
         )
 
 
@@ -425,9 +527,9 @@ class Lifecycle:
     @staticmethod
     def from_dict(d: dict) -> Lifecycle:
         return Lifecycle(
-            after_task=str(d.get("afterTask", "stop")),
-            keep_alive_minutes=int(d.get("keepAliveMinutes", 0)),
-            after_keep_alive=str(d.get("afterKeepAlive", "stop")),
+            after_task=_str_field(d, "afterTask", "stop", where="lifecycle"),
+            keep_alive_minutes=_int_field(d, "keepAliveMinutes", 0, where="lifecycle"),
+            after_keep_alive=_str_field(d, "afterKeepAlive", "stop", where="lifecycle"),
         )
 
 
@@ -440,16 +542,19 @@ class StoreSpec:
 
     @staticmethod
     def from_dict(d: dict) -> StoreSpec:
-        kind = str(_require(d, "kind", where="store"))
+        kind = _required_str(d, "kind", where="store")
         if kind == "gcs":
             return StoreSpec(
                 kind=kind,
-                bucket=str(_require(d, "bucket", where="store")),
-                prefix=str(_require(d, "prefix", where="store")),
+                bucket=_required_str(d, "bucket", where="store"),
+                prefix=_required_str(d, "prefix", where="store"),
             )
         if kind == "localdir":
-            return StoreSpec(kind=kind, root=str(_require(d, "root", where="store")))
-        raise ManifestError(f"manifest.json store.kind {kind!r} is not 'gcs' or 'localdir'")
+            return StoreSpec(kind=kind, root=_required_str(d, "root", where="store"))
+        raise ManifestError(
+            f"manifest.json store.kind {kind!r} is not 'gcs' or 'localdir'",
+            public="manifest.json store.kind is not 'gcs' or 'localdir'",
+        )
 
 
 @dataclass
@@ -467,7 +572,10 @@ class WorkerRef:
 
     @staticmethod
     def from_dict(d: dict) -> WorkerRef:
-        return WorkerRef(image=str(d.get("image", "")), version=str(d.get("version", "")))
+        return WorkerRef(
+            image=_str_field(d, "image", "", where="worker"),
+            version=_str_field(d, "version", "", where="worker"),
+        )
 
 
 @dataclass
@@ -481,12 +589,18 @@ class PresetSpec:
     @staticmethod
     def from_dict(d: object) -> PresetSpec:
         if not isinstance(d, dict):
-            raise ManifestError(f"manifest.json preset must be an object with id and name, got {d!r}")
+            raise ManifestError(
+                f"manifest.json preset must be an object with id and name, got {d!r}",
+                public="manifest.json preset must be an object with id and name",
+            )
         out: dict[str, str] = {}
         for key in ("id", "name"):
             raw = d.get(key)
             if not isinstance(raw, str) or not raw.strip():
-                raise ManifestError(f"manifest.json preset.{key} must be a non-empty string, got {raw!r}")
+                raise ManifestError(
+                    f"manifest.json preset.{key} must be a non-empty string, got {raw!r}",
+                    public=f"manifest.json preset.{key} must be a non-empty string",
+                )
             out[key] = raw
         return PresetSpec(id=out["id"], name=out["name"])
 
@@ -518,31 +632,55 @@ class JobManifest:
             d = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ManifestError(f"manifest.json is not valid JSON: {exc}") from exc
+        except ValueError as exc:
+            # e.g. an integer of more than 4300 digits: a plain ValueError, not a JSONDecodeError.
+            raise ManifestError(
+                f"manifest.json is not valid JSON: {exc}",
+                public="manifest.json is not valid JSON (a number is too large to read)",
+            ) from exc
 
         if not isinstance(d, dict):
             raise ManifestError("manifest.json must be a JSON object")
         schema = _require(d, "schema", where="")
         if isinstance(schema, bool) or not isinstance(schema, int):
-            raise ManifestError(f"manifest.json 'schema' must be a whole number, got {schema!r}")
+            raise ManifestError(
+                f"manifest.json 'schema' must be a whole number, got {schema!r}",
+                public="manifest.json 'schema' must be a whole number",
+            )
         if schema not in SUPPORTED_SCHEMA_VERSIONS:
             raise ManifestSchemaError(schema)
 
-        job_id = str(_require(d, "jobId", where=""))
+        job_id = _required_str(d, "jobId", where="")
         inputs_raw = _require(d, "inputs", where="")
         if not isinstance(inputs_raw, list) or not inputs_raw:
             raise ManifestError("manifest.json 'inputs' must be a non-empty array")
+        for entry in inputs_raw:
+            if not isinstance(entry, dict):
+                raise ManifestError(
+                    f"manifest.json 'inputs' entries must be objects, got {entry!r}",
+                    public="manifest.json 'inputs' entries must be objects",
+                )
         inputs = [InputSpec.from_dict(i) for i in inputs_raw]
 
-        predictor = PredictorSpec.from_dict(d.get("predictor", {}))
-        analysis = AnalysisSpec.from_dict(d.get("analysis", {}))
-        outputs = [str(o) for o in d.get("outputs", [])]
-        limits = Limits.from_dict(d.get("limits", {}))
-        lifecycle = Lifecycle.from_dict(d.get("lifecycle", {}))
+        predictor = PredictorSpec.from_dict(_object_field(d, "predictor", where=""))
+        analysis = AnalysisSpec.from_dict(_object_field(d, "analysis", where=""))
+        outputs_raw = d.get("outputs", [])
+        if not isinstance(outputs_raw, list) or not all(isinstance(o, str) for o in outputs_raw):
+            raise ManifestError(
+                f"manifest.json 'outputs' must be a list of text names, got {outputs_raw!r}",
+                public="manifest.json 'outputs' must be a list of text names",
+            )
+        outputs = list(outputs_raw)
+        limits = Limits.from_dict(_object_field(d, "limits", where=""))
+        lifecycle = Lifecycle.from_dict(_object_field(d, "lifecycle", where=""))
         store_raw = _require(d, "store", where="")
         if not isinstance(store_raw, dict):
-            raise ManifestError(f"manifest.json 'store' must be an object, got {store_raw!r}")
+            raise ManifestError(
+                f"manifest.json 'store' must be an object, got {store_raw!r}",
+                public="manifest.json 'store' must be an object",
+            )
         store = StoreSpec.from_dict(store_raw)
-        worker = WorkerRef.from_dict(d.get("worker", {}))
+        worker = WorkerRef.from_dict(_object_field(d, "worker", where=""))
         preset = PresetSpec.from_dict(d["preset"]) if "preset" in d else None
 
         return JobManifest(

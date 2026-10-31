@@ -66,4 +66,22 @@ public class ProductionRunPersistenceTests
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
     }
+
+    [Fact]
+    public async Task The_registered_run_repository_keeps_the_conditional_phase_guard()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "deg-prodguard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: root, cloud: DnaEntropyGraph.App.Startup.CloudBackend.Fake);
+        await using var provider = services.BuildServiceProvider();
+        var runs = provider.GetRequiredService<IRunRepository>();
+        var now = DateTimeOffset.UtcNow;
+        await runs.UpsertAsync(new RunRecord("guard-1", JobPhase.Cancelled, now), TestContext.Current.CancellationToken);
+
+        var written = await runs.TryUpsertIfPhaseAsync(new RunRecord("guard-1", JobPhase.Completed, now), JobPhase.Running, TestContext.Current.CancellationToken);
+
+        written.ShouldBeFalse("the registered repository must refuse a write whose expected phase is stale");
+        (await runs.GetAllAsync(TestContext.Current.CancellationToken)).Single(r => r.JobId == "guard-1").Phase.ShouldBe(JobPhase.Cancelled);
+    }
 }

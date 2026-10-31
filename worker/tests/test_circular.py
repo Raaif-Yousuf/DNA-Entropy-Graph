@@ -18,6 +18,7 @@ import pytest
 from dna_entropy import pipeline
 from dna_entropy.analysis.direction import analyze_direction
 from dna_entropy.config import Direction, RunConfig, Topology
+from dna_entropy.predictors.base import Predictor
 from dna_entropy.readers.genbank import read_genbank
 
 K = 16
@@ -34,18 +35,18 @@ class _Local:
     def __init__(self) -> None:
         self.windows: list[int] = []
 
-    def predict(self, window: str) -> np.ndarray:
-        self.windows.append(len(window))
-        probs = np.full((len(window), 4), 0.25, dtype=np.float32)
-        for i in range(1, len(window)):
-            seed = zlib.crc32(window[max(0, i - 3) : i].encode("ascii"))
+    def predict(self, seq: str) -> np.ndarray:
+        self.windows.append(len(seq))
+        probs = np.full((len(seq), 4), 0.25, dtype=np.float32)
+        for i in range(1, len(seq)):
+            seed = zlib.crc32(seq[max(0, i - 3) : i].encode("ascii"))
             logits = np.random.default_rng(seed).standard_normal(4)
             e = np.exp(logits - logits.max())
             probs[i] = (e / e.sum()).astype(np.float32)
         return probs
 
 
-def _run(seq: str, direction: Direction, *, circular: bool, predictor=None, k: int = K):
+def _run(seq: str, direction: Direction, *, circular: bool, predictor: Predictor | None = None, k: int = K):
     return analyze_direction(
         predictor or _Local(), seq, context_length=k, ceiling=CEILING, direction=direction, circular=circular
     )
@@ -92,8 +93,11 @@ def test_rotating_a_circular_input_rotates_every_output(direction: Direction, sh
     a = _run(SEQ, direction, circular=True)
     b = _run(rotated, direction, circular=True)
     assert np.allclose(b.values, np.roll(a.values, -shift), atol=1e-6)
+    assert a.surprisal_values is not None and b.surprisal_values is not None
     assert np.allclose(b.surprisal_values, np.roll(a.surprisal_values, -shift), atol=1e-6)
     if direction is Direction.BOTH_SEPARATE:
+        assert a.forward_values is not None and b.forward_values is not None
+        assert a.reverse_values is not None and b.reverse_values is not None
         assert np.allclose(b.forward_values, np.roll(a.forward_values, -shift), atol=1e-6)
         assert np.allclose(b.reverse_values, np.roll(a.reverse_values, -shift), atol=1e-6)
 
@@ -286,9 +290,9 @@ def test_the_first_circular_window_starts_with_the_molecules_own_tail() -> None:
     seen: list[str] = []
 
     class _Spy(_Local):
-        def predict(self, window: str) -> np.ndarray:
-            seen.append(window)
-            return super().predict(window)
+        def predict(self, seq: str) -> np.ndarray:
+            seen.append(seq)
+            return super().predict(seq)
 
     _run(SEQ, Direction.FORWARD_ONLY, circular=True, predictor=_Spy())
     assert seen[0] == (SEQ[-K:] + SEQ)[:32]

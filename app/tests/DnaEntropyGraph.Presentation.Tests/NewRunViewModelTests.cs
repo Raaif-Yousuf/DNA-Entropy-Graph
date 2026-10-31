@@ -1236,6 +1236,145 @@ public sealed class NewRunViewModelTests : IDisposable
         (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.01, about 1 minute");
     }
 
+    private async Task<string> SpendCapTextWhen(Func<string, bool> done)
+    {
+        for (var i = 0; i < 200 && !done(_viewModel.SpendCapText); i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return _viewModel.SpendCapText;
+    }
+
+    [Fact]
+    public async Task A_warning_from_the_spend_gate_shows_the_cap_card_and_leaves_Run_allowed()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0)));
+
+        await AddOne(Write("w.fasta", ">a\n" + Dna + "\n"));
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapWarning:$8.00:$10.00");
+        _viewModel.HasSpendCap.ShouldBeTrue();
+        _viewModel.IsSpendCapBlocked.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_block_from_the_spend_gate_shows_the_blocked_card()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Blocked, 12.0, 10.0)));
+
+        await AddOne(Write("b.fasta", ">a\n" + Dna + "\n"));
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapBlocked:$12.00:$10.00");
+        _viewModel.IsSpendCapBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Choosing_the_A100_in_the_planner_makes_the_estimate_and_the_card_price_a2_highgpu_1g_and_Run_start_the_same_machine()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _viewModel.Gpu.SelectedGpu = _viewModel.Gpu.Gpus.Single(g => g.Tier == GpuTier.A100_40);
+        var spot = _viewModel.Gpu.RequiresSpot;
+
+        await AddOne(Write("spot.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        await _estimates.Received().EstimateAsync("a2-highgpu-1g", spot, Dna.Length, 150, Arg.Any<CancellationToken>());
+        await _viewModel.StartRunCommand.ExecuteAsync(null);
+        await _jobEngine.Received().StartRunAsync(
+            Arg.Is<RunOptions>(o => o.SpotVm == spot && o.GpuTier == GpuTier.A100_40),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_blocked_card_also_disables_Run_and_a_warning_does_not()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0)));
+        await AddOne(Write("w2.fasta", ">a\n" + Dna + "\n"));
+        await SpendCapTextWhen(t => t.Length > 0);
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeTrue();
+
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Blocked, 12.0, 10.0)));
+        _viewModel.ReceiveNavigationParameterCommand.Execute(null);
+        await SpendCapTextWhen(t => t.StartsWith("NewRunSpendCapBlocked", StringComparison.Ordinal));
+
+        _viewModel.IsSpendCapBlocked.ShouldBeTrue();
+        _viewModel.StartRunCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_card_says_when_runs_in_progress_are_part_of_the_month()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0, InProgressUsd: 1.5)));
+
+        await AddOne(Write("l.fasta", ">a\n" + Dna + "\n"));
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapWarning:$8.00:$10.00 NewRunSpendCapInProgress");
+    }
+
+    [Fact]
+    public async Task Showing_the_page_again_asks_the_cap_again_so_a_changed_cap_shows_at_once()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.None, 1.0, null)));
+        await AddOne(Write("s.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+        _viewModel.HasSpendCap.ShouldBeFalse();
+
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 1.0, 1.0)));
+        _viewModel.ReceiveNavigationParameterCommand.Execute(null);
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldStartWith("NewRunSpendCapWarning");
+    }
+
+    [Fact]
+    public async Task With_no_file_chosen_a_cap_already_reached_still_shows()
+    {
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Blocked, 12.0, 10.0)));
+
+        _viewModel.ReceiveNavigationParameterCommand.Execute(null);
+
+        (await SpendCapTextWhen(t => t.Length > 0)).ShouldBe("NewRunSpendCapBlocked:$12.00:$10.00");
+    }
+
+    [Fact]
+    public async Task A_cap_check_that_throws_does_not_take_the_estimate_away()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<SpendCapStatus?>>(_ => throw new InvalidOperationException("ledger locked"));
+
+        await AddOne(Write("t2.fasta", ">a\n" + Dna + "\n"));
+
+        (await EstimateTextWhen(t => t.Length > 0)).ShouldBe("Estimate: about $0.13, about 9 minutes");
+        _viewModel.HasSpendCap.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task No_cap_means_no_card()
+    {
+        EstimateReturns(Point(9, 0.13));
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.None, 1.0, null)));
+
+        await AddOne(Write("n.fasta", ">a\n" + Dna + "\n"));
+        await EstimateTextWhen(t => t.Length > 0);
+
+        _viewModel.HasSpendCap.ShouldBeFalse();
+    }
+
     [Fact]
     public async Task A_file_with_a_problem_has_no_estimate_and_the_service_is_not_asked()
     {
@@ -1828,6 +1967,9 @@ public sealed class NewRunViewModelTests : IDisposable
             ["NewRunEstimateNoSpotPrice"] = "No estimate: no Spot price for this machine yet",
             ["NewRunEstimateModelPoint"] = "Estimate: about {0}, about {1}, no earlier runs",
             ["NewRunEstimateStoppedDisk"] = "Stopped disk: about {0} a day",
+            ["NewRunSpendCapWarning"] = "NewRunSpendCapWarning:{0}:{1}",
+            ["NewRunSpendCapBlocked"] = "NewRunSpendCapBlocked:{0}:{1}",
+            ["NewRunSpendCapInProgress"] = "NewRunSpendCapInProgress",
         };
 
         public string GetString(string key) => Templates.GetValueOrDefault(key, key);

@@ -46,8 +46,37 @@ internal enum BootOutcome
 /// (including the worker's own error code from <c>status.json</c>). Every way out but success ends the run through
 /// <see cref="RunFailureException"/>, with the VM ended first and the outcome of that recorded (Hard Rule 11).
 /// </summary>
-internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator)
+internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, CloudRunSettings settings, VmTerminator terminator, Func<string, DateTimeOffset, CancellationToken, Task>? recordHeartbeat = null)
 {
+    /// <summary>The most often a fresh worker heartbeat is written to the run row (issue #109): the row only needs "alive until about here", not every poll.</summary>
+    private static readonly TimeSpan HeartbeatRecordInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>Writes the heartbeat the run just saw to its row, at most once per <see cref="HeartbeatRecordInterval"/> (monotonic). A record, not a step: a failure never ends the run.</summary>
+    private async Task<long?> RecordHeartbeatAsync(string jobId, DateTimeOffset? heartbeatAt, long? lastMark, CancellationToken cancellationToken)
+    {
+        if (heartbeatAt is not { } reported || recordHeartbeat is null || (lastMark is { } mark && settings.ElapsedSince(mark) < HeartbeatRecordInterval))
+        {
+            return lastMark;
+        }
+
+        // The worker's clock can run ahead of the app's. A heartbeat "from the future" would be stored, refuse every later real one (only newer replaces) and be booked as the VM's end:
+        // the row holds the earlier of the worker's time and the app's own now.
+        var now = settings.TimeProvider.GetUtcNow();
+        var at = reported < now ? reported : now;
+
+        var written = settings.StartClock();
+        try
+        {
+            await recordHeartbeat(jobId, at, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // The row keeps its last heartbeat; the run goes on. A cancelled run is the one thing that is not swallowed.
+        }
+
+        return written;
+    }
+
     /// <summary>The newest incarnation (instance id, creation time) of each job's VM this waiter has looked at alive: what a preemption lookup is bound to (#91).</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, VmIncarnation> _seenIncarnations = new(StringComparer.Ordinal);
 
@@ -283,6 +312,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         var limit = settings.ResultTimeout ?? ResultWaitLimit(request.Spec.MaxRunDuration);
         var clockStart = settings.StartClock();
         string? lastTransient = null;
+        long? heartbeatMark = null; // when the row last took a heartbeat (monotonic), so it is written at most once a minute
         DateTimeOffset? vmCreatedAt = null; // when the platform's limit clock last started, on the PLATFORM's clock (see VmDescriptor.RunClockStart)
         PlatformReading? platform = null; // the platform's time at the last look that found the VM, with a monotonic mark (issue #691); none until one does
 
@@ -355,7 +385,8 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 // heartbeat in status.json is the health signal; a dead or frozen worker process ends the run here, not at the result limit.
                 var statusText = await calls.TryReadTextAsync(bucket, statusKey, cancellationToken).ConfigureAwait(false);
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
-                var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart));
+                var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart), settings.TimeProvider.GetUtcNow());
+                heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.NewHeartbeatAt, heartbeatMark, cancellationToken).ConfigureAwait(false);
                 if (watch.TakeSlowNotice() is { } slow)
                 {
                     Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));
