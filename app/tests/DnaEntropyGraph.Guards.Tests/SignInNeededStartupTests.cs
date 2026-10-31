@@ -71,4 +71,21 @@ public sealed class SignInNeededStartupTests : IDisposable
         bar.IsOpen.ShouldBeTrue("the launch pass could not look at job-a (its account is signed out) and the shell must say so");
         bar.Title.ShouldContain("a@example.org");
     }
+
+    [Fact]
+    public void The_run_page_sign_in_prompt_copy_fits_both_stop_and_delete()
+    {
+        // Issue #830 review M2 (e): the same prompt follows a failed Stop and a failed Delete, so neither word may be missing from it.
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in RepoPaths.AllReswFiles)
+        {
+            foreach (var data in System.Xml.Linq.XDocument.Load(file).Descendants("data"))
+            {
+                values[data.Attribute("name")!.Value] = data.Element("value")?.Value ?? string.Empty;
+            }
+        }
+
+        values["RunSignIn_Prompt"].ShouldContain("stop or delete");
+        values["RunSignIn_PromptUnknown"].ShouldContain("stop or delete");
+    }
 }

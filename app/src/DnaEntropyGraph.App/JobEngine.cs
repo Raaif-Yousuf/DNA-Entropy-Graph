@@ -256,19 +256,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // cancel writes its own phase, so there is one writer at a time.
         // Issue #830: the run's own project and account, from its row, never the current selection.
         var scope = await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false);
-        if (scope is null)
-        {
-            return;
-        }
-
         await _activeRuns.CancelAsync(jobId, () => _runner.CancelAsync(scope, jobId, cancellationToken)).ConfigureAwait(false);
     }
 
-    /// <summary>Issue #830: the scope a run's resources live in, from its row; null when this history has no such run (nothing of it exists to act on).</summary>
-    private async Task<CloudScope?> ScopeOfRunAsync(string jobId, CancellationToken cancellationToken)
+    /// <summary>Issue #830: the scope a run's resources live in, from its row. No row is a <see cref="RunNotFoundException"/> (review M5): the app cannot say where the run's computer is, and returning silently would leave the person thinking it was stopped.</summary>
+    private async Task<CloudScope> ScopeOfRunAsync(string jobId, CancellationToken cancellationToken)
     {
         var rows = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
-        return rows.LastOrDefault(r => r.JobId == jobId) is { } row ? RunScope.Of(row) : null;
+        return rows.LastOrDefault(r => r.JobId == jobId) is { } row ? RunScope.Of(row) : throw new RunNotFoundException(jobId);
     }
 
     private async Task<bool> IsLocalRunAsync(string jobId, CancellationToken cancellationToken)
@@ -279,18 +274,14 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
     public async Task StopVmAsync(string jobId, CancellationToken cancellationToken)
     {
-        if (await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false) is { } scope)
-        {
-            await _runner.StopVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
-        }
+        var scope = await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false);
+        await _runner.StopVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteVmAsync(string jobId, CancellationToken cancellationToken)
     {
-        if (await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false) is { } scope)
-        {
-            await _runner.DeleteVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
-        }
+        var scope = await ScopeOfRunAsync(jobId, cancellationToken).ConfigureAwait(false);
+        await _runner.DeleteVmAsync(scope, jobId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>The staged copy of the chosen input, or null when there is no input or it cannot be read (the caller records <see cref="RunErrorCodes.InputMissing"/>).</summary>

@@ -30,7 +30,7 @@ public class WizardGpuAskTests
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         _account.SelectedProjectId.Returns(Project);
-        _account.SelectedScope().Returns(TestScopes.Of(Project));
+        _account.SelectedScope().Returns(new CloudScope(Project, "sub-1"));
         _account.CurrentAccount.Returns(new AccountInfo("sub-1", "lab@example.org"));
         _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Billing, SetupStatus.Ok));
         _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.Ok));

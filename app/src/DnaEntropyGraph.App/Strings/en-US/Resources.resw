@@ -97,11 +97,14 @@
   <data name="ConfirmStopVm_Body" xml:space="preserve">
     <value>Its storage still costs a small amount until you delete it. Your run stops making progress.</value>
   </data>
+  <data name="RunAction_RunNotFound" xml:space="preserve">
+    <value>This run is no longer in your history, so the app cannot tell which Google account and project its rented computer is in. Open the Cloud page and stop or delete any computer left running there.</value>
+  </data>
   <data name="RunSignIn_Prompt" xml:space="preserve">
-    <value>Sign in as {0} to stop this run's computer.</value>
+    <value>Sign in as {0} to stop or delete this run's computer.</value>
   </data>
   <data name="RunSignIn_PromptUnknown" xml:space="preserve">
-    <value>Sign in with the Google account this run started under to stop its computer.</value>
+    <value>Sign in with the Google account this run started under to stop or delete its computer.</value>
   </data>
   <data name="RunProgressSignIn.Content" xml:space="preserve">
     <value>Sign in</value>

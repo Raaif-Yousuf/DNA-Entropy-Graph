@@ -91,7 +91,13 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed[0].Error!).Throw();
         }
 
-        return new LeftRunningReport([.. ok.SelectMany(r => r.RunningVms)], [.. ok.SelectMany(r => r.StoppedDisks)], failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }))]);
+        // Issue #830 review (d): a project two accounts can both reach is listed once per account; a computer is one computer, so each is kept once by (project, name, zone). A live run on either listing counts.
+        var vms = ok.SelectMany(r => r.RunningVms)
+            .GroupBy(v => (Project: v.Scope?.ProjectId, v.Name, v.Zone))
+            .Select(g => g.Count() == 1 ? g.First() : g.First() with { HasLiveRun = g.Any(v => v.HasLiveRun) })
+            .ToList();
+        var disks = ok.SelectMany(r => r.StoppedDisks).GroupBy(d => (Project: d.Scope?.ProjectId, d.Name, d.Zone)).Select(g => g.First()).ToList();
+        return new LeftRunningReport(vms, disks, failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }))]);
     }
 
     private static TimeSpan? RemainingOf(VmDescriptor vm, DateTimeOffset localNow)

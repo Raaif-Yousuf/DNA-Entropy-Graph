@@ -109,6 +109,16 @@ public sealed partial class RunProgressViewModel : ObservableObject
 
     public bool HasSignInPrompt => SignInPromptText.Length > 0;
 
+    /// <summary>The account the sign-in prompt asks for (its sub, never the email); null when the prompt is not showing or the account is not known.</summary>
+    private string? _promptSub;
+
+    /// <summary>Issue #830 review M5: set when Stop, Delete or Cancel found no history row for this run (the app cannot say where its computer is), naming the Cloud page. Empty otherwise.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActionNotice))]
+    private string _actionNoticeText = string.Empty;
+
+    public bool HasActionNotice => ActionNoticeText.Length > 0;
+
     /// <summary>The prompt's button: starts Google sign-in; on success the prompt goes away and the person presses Stop or Delete again. A failed or cancelled sign-in keeps the prompt.</summary>
     [RelayCommand]
     private async Task SignInAsync(CancellationToken cancellationToken)
@@ -121,7 +131,13 @@ public sealed partial class RunProgressViewModel : ObservableObject
         try
         {
             await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
-            SetSignInPrompt(string.Empty);
+
+            // The sign-in can end as ANY Google account: the prompt goes only when the run's own account is signed in again (an unknown account cannot be checked, so any sign-in answers it).
+            var promptSub = _promptSub;
+            if (promptSub is null || _account.Accounts.Any(a => a.Sub == promptSub && !a.NeedsSignIn))
+            {
+                SetSignInPrompt(string.Empty);
+            }
         }
         catch (AccountAuthException)
         {
@@ -136,9 +152,16 @@ public sealed partial class RunProgressViewModel : ObservableObject
         {
             await action().ConfigureAwait(false);
             SetSignInPrompt(string.Empty);
+            SetActionNotice(string.Empty);
+        }
+        catch (RunNotFoundException)
+        {
+            SetSignInPrompt(string.Empty);
+            SetActionNotice(_strings.GetString("RunAction_RunNotFound"));
         }
         catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
         {
+            _promptSub = ex.AccountSub;
             var email = _account?.Accounts.FirstOrDefault(a => a.Sub == ex.AccountSub)?.Email;
             SetSignInPrompt(email is null
                 ? _strings.GetString("RunSignIn_PromptUnknown")
@@ -147,6 +170,8 @@ public sealed partial class RunProgressViewModel : ObservableObject
     }
 
     private void SetSignInPrompt(string text) => _dispatcher.Enqueue(() => SignInPromptText = text);
+
+    private void SetActionNotice(string text) => _dispatcher.Enqueue(() => ActionNoticeText = text);
 
     /// <summary>The "taking longer than usual" or "looks stuck" line for this run (issue #675); empty when there is none.</summary>
     [ObservableProperty]
@@ -265,7 +290,14 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _jobEngine.CancelRunAsync(JobId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _jobEngine.CancelRunAsync(JobId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RunNotFoundException)
+        {
+            SetActionNotice(_strings.GetString("RunAction_RunNotFound"));
+        }
     }
 
     [RelayCommand(CanExecute = nameof(IsVmActionable))]

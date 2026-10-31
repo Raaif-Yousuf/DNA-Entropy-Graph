@@ -142,6 +142,21 @@ public sealed class LeftRunningScopesTests
     }
 
     [Fact]
+    public async Task A_project_two_accounts_can_both_reach_lists_each_computer_once()
+    {
+        // Issue #830 review (d): the scan lists once per (project, account), so a shared project is listed twice; the merged report must not name one computer twice.
+        var rig = new Rig("project-x");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-x");
+        await rig.VmAsync("project-x", FakeGcp.DefaultAccountSub, "job-x");
+        await rig.RowAsync("job-x", JobPhase.Completed, "project-x", "sub-a", Start);
+
+        var report = await rig.Scanner.ScanAllAsync(rig.Gcp.SelectedScope(), CancellationToken.None);
+
+        report.RunningVms.Count.ShouldBe(1);
+        report.RunningVms.Select(v => v.Name).Distinct().Count().ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Every_scope_unreadable_throws_so_the_caller_can_degrade()
     {
         var rig = new Rig("project-b");

@@ -230,7 +230,7 @@ public class RunProgressViewModelTests
             strings.GetString("RunSignIn_Prompt").Returns("Sign in as {0} to stop this run's computer");
             Account.Accounts.Returns(accounts ?? [new AccountInfo("sub-a", "a@example.org")]);
             Dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
-            ViewModel = new RunProgressViewModel(Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Dialogs, VmActions, Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), Messenger, Account)
+            ViewModel = new RunProgressViewModel(Engine, new ImmediateDispatcher(), Dialogs, VmActions, Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), Messenger, Account)
             {
                 JobId = "job-1",
             };
@@ -238,6 +238,8 @@ public class RunProgressViewModelTests
         }
 
         public IGcpAccount Account { get; } = Substitute.For<IGcpAccount>();
+
+        public IJobEngine Engine { get; } = Substitute.For<IJobEngine>();
 
         public IDialogService Dialogs { get; } = Substitute.For<IDialogService>();
 
@@ -322,5 +324,58 @@ public class RunProgressViewModelTests
         await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
 
         rig.ViewModel.HasSignInPrompt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_sign_in_as_somebody_else_keeps_the_prompt_until_the_runs_own_account_is_signed_in()
+    {
+        // Issue #830 review M2 (e): the button starts a Google sign-in that can end as ANY account; only the run's own account being signed in again answers the prompt.
+        var rig = new SignInRig([new AccountInfo("sub-a", "a@example.org", NeedsSignIn: true)]);
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")));
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+        rig.ViewModel.HasSignInPrompt.ShouldBeTrue("sub-a is still signed out");
+        rig.ViewModel.SignInPromptText.ShouldContain("a@example.org", Case.Sensitive, "the kept prompt still says which account");
+
+        rig.Account.Accounts.Returns([new AccountInfo("sub-a", "a@example.org")]);
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+        rig.ViewModel.HasSignInPrompt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Stopping_the_VM_of_a_run_with_no_history_row_says_so_and_names_the_Cloud_page()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(new RunNotFoundException("job-1")));
+
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasActionNotice.ShouldBeTrue();
+        rig.ViewModel.ActionNoticeText.ShouldBe("RunAction_RunNotFound");
+        rig.ViewModel.HasSignInPrompt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Cancelling_a_run_with_no_history_row_says_so()
+    {
+        var rig = new SignInRig();
+        rig.Engine.CancelRunAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(new RunNotFoundException("job-1")));
+
+        await rig.ViewModel.CancelCommand.ExecuteAsync(null);
+
+        rig.ViewModel.ActionNoticeText.ShouldBe("RunAction_RunNotFound");
+    }
+
+    [Fact]
+    public async Task A_later_stop_that_succeeds_clears_the_notice()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(new RunNotFoundException("job-1")), Task.CompletedTask);
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasActionNotice.ShouldBeFalse();
     }
 }

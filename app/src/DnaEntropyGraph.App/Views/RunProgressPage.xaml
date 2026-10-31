@@ -42,6 +42,12 @@
                     <Button x:Uid="RunProgressSignIn" Command="{x:Bind ViewModel.SignInCommand}" />
                 </InfoBar.ActionButton>
             </InfoBar>
+            <!-- Issue #830 review M5: no history row for this run, so the app cannot say where its computer is; the message names the Cloud page. -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasActionNotice, Mode=OneWay}"
+                Message="{x:Bind ViewModel.ActionNoticeText, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False" />
         </StackPanel>
 
         <TextBlock
