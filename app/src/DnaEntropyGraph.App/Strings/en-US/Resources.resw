@@ -2310,7 +2310,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
   </data>
   <data name="RunError_input_accession_too_large" xml:space="preserve">
-    <value>That NCBI record is larger than one run can read. Ask for a smaller range of it (the From base and To base boxes), then start the run again.</value>
+    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
@@ -2686,7 +2686,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
   <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+    <value>This run was made on another computer, so this app does not delete its cloud copy. Choose Open storage page to delete it in Google Cloud.</value>
   </data>
   <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
     <value>Drag along the strip to open the viewer at that part of the sequence.</value>
@@ -2922,6 +2922,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="PrototypeImportNothingFound" xml:space="preserve">
     <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
   </data>
+  <data name="PrototypeImportOnlyRemoved" xml:space="preserve">
+    <value>The earlier runs found here are either in Runs already or ones you removed from the list. To see the removed ones again, choose Reset all settings on the Settings page (this also resets your other settings).</value>
+  </data>
   <data name="PrototypeImportAlreadyDone" xml:space="preserve">
     <value>Every earlier run found is already in Runs.</value>
   </data>
@@ -2933,6 +2936,12 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
     <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_ImportedNoLink" xml:space="preserve">
+    <value>This run was made on another computer, so this app cannot delete its cloud copy. To take it off this list, choose Remove from list.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_PrototypeNoFolder" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete, and its folder is no longer here. To take it off this list, choose Remove from list.</value>
   </data>
   <data name="PageTitle_RunProgress" xml:space="preserve">
     <value>Run progress</value>
@@ -3029,9 +3038,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="DiagnosticsIncludeNotesBox.Content" xml:space="preserve">
     <value>Include my run notes and tags in the file (they are your own words, so they are left out unless you tick this)</value>
-  </data>
-  <data name="Results_NotesShortened" xml:space="preserve">
-    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
   </data>
   <data name="Results_NotesEditedDuringSave" xml:space="preserve">
     <value>What you had written when you pressed Save notes is saved. You kept typing after that, so press Save notes again to keep your latest changes.</value>
@@ -3344,5 +3350,8 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
     <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
+  </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
   </data>
 </root>
