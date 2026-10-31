@@ -64,6 +64,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+import check_control_bytes as ccb  # noqa: E402
 import check_totest_format as ctf  # noqa: E402
 import wt_venv  # noqa: E402
 
@@ -71,9 +72,8 @@ REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
 VENV_REL = wt_venv.VENV_REL
-# NUL..BS, VT, FF and SO..US except ESC. ESC (0x1b) is allowed on purpose: captured logs and test output carry ANSI
-# colour and no measured corruption produced it. VT (0x0b, the MEASURED `\v` case) and FF are refused; TAB, LF, CR are text.
-CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]")
+# The byte set (and why ESC is allowed) lives in check_control_bytes.py; re-exported for the existing tests.
+CONTROL_BYTES = ccb.CONTROL_BYTES
 PROTECTED = {"main", "master", "head"}
 LOCK_DIR = "locks"
 LOCK_MAX_AGE_SECONDS = 24 * 3600
@@ -340,7 +340,8 @@ def unlink_dir_link(link: Path) -> None:
 
 
 def find_control_bytes(files: dict[str, bytes]) -> list[str]:
-    return sorted(name for name, data in files.items() if CONTROL_BYTES.search(data))
+    # One implementation: scripts/check_control_bytes.py (#1016), also run by premerge --fast and CI.
+    return sorted({f.path for f in ccb.find_control_bytes_in(files)})
 
 
 def split_conflicts(unmerged: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -494,16 +495,17 @@ def _resolve_tip(ctx: Ctx, branch: str, sha: str) -> str:
 def _changed_text_files(ctx: Ctx, sha: str) -> dict[str, bytes]:
     # -z: NUL-terminated records with unquoted paths, so a name holding a tab, quote or newline is read exactly.
     raw = git(ctx.repo, "diff", "--numstat", "-z", "--no-renames", "--diff-filter=AM", f"{REMOTE}/{BASE}...{sha}").stdout
-    files: dict[str, bytes] = {}
+    names: list[str] = []
     for record in raw.split(b"\0"):
         if not record:
             continue
         added, _deleted, name_bytes = record.split(b"\t", 2)
         if added == b"-":  # git's verdict: binary
             continue
-        name = name_bytes.decode("utf-8", errors="surrogateescape")
-        files[name] = git(ctx.repo, "show", f"{sha}:{name}").stdout
-    return files
+        names.append(name_bytes.decode("utf-8", errors="surrogateescape"))
+    # The same `-text` / `binary` attribute skip premerge's check_control_bytes applies, read from the landing commit's tree.
+    skip = ccb.text_attr_unset(ctx.repo, [n for n in names if n not in ccb.ALLOWLIST], source=sha)
+    return {name: git(ctx.repo, "show", f"{sha}:{name}").stdout for name in names if name not in skip}
 
 
 def _remove_worktree(ctx: Ctx, wt: Path) -> None:

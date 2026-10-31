@@ -1,0 +1,1 @@
+- Control bytes (a mangled backslash escape such as a vertical tab) are now caught by `scripts/check_control_bytes.py` in `premerge --fast` and CI, naming file:line:column, instead of only at LAND time; `land_wt.py` shares the same scanner and allowlist (#1016).
