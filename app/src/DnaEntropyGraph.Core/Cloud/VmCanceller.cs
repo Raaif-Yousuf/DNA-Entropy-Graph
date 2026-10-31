@@ -163,6 +163,10 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             if (create.Landed || create.Settled || create.Refused)
             {
                 provisioner.ReleaseSent(create);
+                if (create.IsReuse)
+                {
+                    terminator.ForgetDonor(create); // round 4 finding 5: released, so nothing will restore it later
+                }
             }
             else
             {
@@ -199,8 +203,10 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     {
         foreach (var create in creates.Where(c => c.IsReuse))
         {
-            terminator.ForgetDonor(create.JobId, create.Name, create.Zone);
+            terminator.ForgetDonor(create);
         }
+
+        terminator.PruneDonors(); // round 4 finding 5
     }
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reaps = new();

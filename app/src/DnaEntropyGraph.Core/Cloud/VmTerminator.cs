@@ -311,13 +311,52 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     /// <summary>
-    /// Round 3 finding 1: drops the donor and the reuse record of ONE VM of a job. The watch that owned that VM has ended; a later attempt of the same job may hold a donor (and an unanswered reuse)
-    /// of a DIFFERENT VM, which a job-wide forget would lose.
+    /// Round 3 finding 1, round 4 finding 3: drops the donor and the reuse record of ONE reuse send, the one the ending watch owned. The key is (job, VM, zone) and a later attempt of the same job can pick the
+    /// same VM (a claim that never wrote leaves the donor's labels on it, and VmProvisioner's candidate filter excludes only a VM already labelled with this job), noting its own donor and send under that key:
+    /// when the recorded send is not <paramref name="sent"/> the entry is a later attempt's and is left alone.
     /// </summary>
-    public void ForgetDonor(string jobId, string name, string zone)
+    public void ForgetDonor(SentCreate sent)
     {
-        _donors.TryRemove((jobId, name, zone), out _);
-        _reuseSends.TryRemove((jobId, name, zone), out _);
+        var key = (sent.JobId, sent.Name, sent.Zone);
+        if (_reuseSends.TryGetValue(key, out var current))
+        {
+            if (!ReferenceEquals(current, sent))
+            {
+                return;
+            }
+
+            _reuseSends.TryRemove(key, out _);
+        }
+
+        _donors.TryRemove(key, out _);
+    }
+
+    /// <summary>Round 4 finding 5: drops donors and outcomes older than a watch can be; called when a watch or a run's bookkeeping ends, not only when the next donor is noted.</summary>
+    public void PruneDonors() => PruneExpiredDonors();
+
+    /// <summary>
+    /// Round 4 finding 2: a reuse start that never answered may still land, so NO label is written while it may be on the wire (a VM that then ran under the donor's labels would have nothing stopping it
+    /// until the next app launch). The VM stays stopped under this job's labels (the #938 by-name guards are the backstop; #1052 tracks restart-safe recovery). The donor is NOT consumed here (a newer
+    /// attempt may share its key); the watch's end forgets it. Null when no donor was noted. Logs the state and the class only.
+    /// </summary>
+    private DonorRestoreOutcome? NoteStartUnanswered(SentCreate sent)
+    {
+        if (!_donors.ContainsKey((sent.JobId, sent.Name, sent.Zone)))
+        {
+            return null;
+        }
+
+        var outcome = new DonorRestoreOutcome(sent.JobId, DonorRestoreState.NotRestored, "StartUnanswered");
+        try
+        {
+            settings.OnDonorRestore?.Invoke(outcome);
+        }
+        catch (Exception)
+        {
+            // A listener that throws must not matter to the clean-up.
+        }
+
+        return outcome;
     }
 
     /// <summary>The sentence the row of a failed run gets about the VM it borrowed, taken once; null when nothing was restored, left or failed for the job.</summary>
@@ -874,7 +913,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             case DeleteDecision.Superseded:
                 return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
             case DeleteDecision.Defer:
-                return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+                return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteStartUnanswered(sent)) : null;
         }
 
         VmDescriptor? vm;
@@ -936,10 +975,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 return null;
             }
 
-            // Round 3 finding 6: a start call that never answered (a hang the CreateTimeout cut off) leaves a STOPPED donor under the dead job's labels for the whole window. The window is the bound
-            // on how long a start is waited for, so the donor goes back now (the same restore, which logs `donor-restore` with its state, NotStopped included). A start that lands after this runs the
-            // VM under the donor's own labels and its own keep-alive (the reconciler's lifecycle pass at the next launch, and maxRunDuration, are the backstops; see cloud_design.md #970).
-            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent.JobId, sent.Name, sent.Zone).ConfigureAwait(false));
+            // Round 4 finding 2 (replaces round 3 finding 6): a start call that never answered (a hang the CreateTimeout cut off) may still land, so the window ending is no licence to write labels: the donor is
+            // NOT restored, the VM stays stopped under this job's labels and the outcome says NotRestored (see NoteStartUnanswered).
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteStartUnanswered(sent));
         }
 
         sent.Landed = true; // seen running: the start landed

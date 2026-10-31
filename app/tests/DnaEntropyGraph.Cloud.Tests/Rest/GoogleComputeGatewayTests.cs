@@ -847,20 +847,36 @@ public class GoogleComputeGatewayTests
     }
 
     [Fact]
-    public async Task Restore_of_a_VM_whose_boot_disk_a_newer_run_already_relabelled_is_a_newer_owner_and_writes_neither()
+    public async Task D970r4_an_instance_owned_by_the_borrowing_job_is_restored_even_when_the_boot_disk_carries_a_third_jobs_id_and_the_disk_is_left_alone()
     {
-        // Round 3 finding 3 (replaces the round 2 test that expected the instance to be overwritten): a disk another job owns means a newer claim is under way on this VM, so nothing of ours is written to it.
+        // Round 4 finding 1 (replaces the round 3 test that returned NewerOwner on a foreign disk): the INSTANCE is the ownership authority (a claim writes it first, and every job-id lookup reads it).
+        // Disk writes are best effort, so a disk can carry a dead job's id; that must not leave the instance under the borrowing job's labels.
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, ClaimedByJob1())
-            .Returns(Get, OldDisk, 200, OldDiskBody().Replace("\"job-id\":\"job-old\"", "\"job-id\":\"job-newer\""))
+            .Returns(Get, OldDisk, 200, DiskWith("job-dead"))
             .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"));
 
         var state = await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None);
 
-        state.ShouldBe(LabelRestoreState.NewerOwner);
-        rig.Handler.To(Post, OldDisk + "/setLabels").ShouldBeEmpty("the disk belongs to the newer run now");
-        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("a newer claim that relabelled the disk is not overwritten on the instance");
+        state.ShouldBe(LabelRestoreState.Restored);
+        rig.Handler.To(Post, OldInstance + "/setLabels").Count.ShouldBe(1, "the instance is written");
+        rig.Handler.To(Post, OldDisk + "/setLabels").ShouldBeEmpty("a disk under another job is never overwritten");
+    }
+
+    [Fact]
+    public async Task D970r4_a_boot_disk_write_that_throws_something_other_than_a_cloud_error_is_still_restored()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Calls(Post, OldDisk + "/setLabels", _ => throw new InvalidOperationException("boom"));
+
+        var state = await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None);
+
+        state.ShouldBe(LabelRestoreState.Restored);
     }
 
     [Fact]

@@ -112,7 +112,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             {
                 _reuseWatches.TryRemove(finished, out _);
                 ReleaseSent(sent);
-                terminator.ForgetDonor(sent.JobId, sent.Name, sent.Zone); // round 3 finding 1: this watch's VM only; a later attempt of the job may hold another VM's donor
+                terminator.ForgetDonor(sent); // round 3 finding 1, round 4 finding 3: this watch's own send only; a later attempt of the job may hold the same or another VM's donor
+                terminator.PruneDonors(); // round 4 finding 5
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
@@ -499,6 +500,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             terminator.ForgetDonors(jobId);
         }
 
+        terminator.PruneDonors(); // round 4 finding 5: expired donors do not wait for the next reuse to be dropped
         PruneIfIdle(jobId);
     }
 

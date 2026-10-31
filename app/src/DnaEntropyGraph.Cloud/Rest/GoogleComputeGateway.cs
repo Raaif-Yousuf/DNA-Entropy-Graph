@@ -237,7 +237,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
 
     /// <summary>
     /// Issue #970. Undoes the claim of <see cref="ReuseVmAsync"/>: READS the instance, and only when its <c>job-id</c> label is still <paramref name="fromJobId"/> writes the donor's labels back with the
-    /// label fingerprint just read (the boot disk read, then the instance, then the disk, each write under its own fingerprint). A newer run that took the VM since moved the labels (and the
+    /// label fingerprint just read (the instance first, then the boot disk best effort and only while it still carries <paramref name="fromJobId"/>, each write under its own fingerprint). A newer run that took the VM since moved the labels (and the
     /// fingerprint), so the check or the 412 leaves its labels alone. THEORY (unverified, ToTest #970, no live project): <c>instances.setLabels</c> is the call the claim already makes on a stopped VM, so it is accepted
     /// on a stopped one, and on one that is still STOPPING.
     /// </summary>
@@ -266,17 +266,10 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             return LabelsEqual(instance.Labels, target) ? LabelRestoreState.Restored : LabelRestoreState.NewerOwner;
         }
 
-        // Round 3 findings 3 and 4. The boot disk is READ first (no write): a disk another job owns means a newer claim is under way on this VM, so neither resource is written. Then the INSTANCE is written,
-        // because every job-id lookup (the new job's adoption and sweeps, the donor's keep-alive sweep) reads the instance's labels, and only then the disk, whose job-id nothing reads (the disk listing is
-        // by installation). So a failure of the disk write leaves the VM found under the donor's job: it is swallowed, never reported as a failed restore.
-        var disk = ParseBootDisk(instance) is { } bootDisk
-            ? await ReadDiskForRestoreAsync(project, bootDisk, fromJobId, target, cancellationToken).ConfigureAwait(false)
-            : DiskPlan.Skip;
-        if (disk.Kind == DiskPlanKind.NewerOwner)
-        {
-            return LabelRestoreState.NewerOwner;
-        }
-
+        // Round 4 finding 1. The INSTANCE is the ownership authority: a claim writes the instance first, and every job-id lookup (adoption, sweeps, the donor's keep-alive sweep) reads the instance. So ownership
+        // comes only from the instance read above and the fingerprint/412 rules below; a boot disk carrying a dead job's id (disk writes are best effort) must not keep the instance under the borrowing
+        // job's labels. The disk is written afterwards, best effort, and only while it still carries this job's id.
+        var bootDisk = ParseBootDisk(instance);
         var body = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
         try
         {
@@ -304,15 +297,21 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             throw;
         }
 
-        if (disk.Kind == DiskPlanKind.Write)
+        if (bootDisk is { } disk)
         {
             try
             {
-                await WriteBootDiskLabelsAsync(project, disk.Disk, target, disk.Fingerprint, cancellationToken).ConfigureAwait(false);
+                var plan = await ReadDiskForRestoreAsync(project, disk, fromJobId, cancellationToken).ConfigureAwait(false);
+                if (plan.Write)
+                {
+                    await WriteBootDiskLabelsAsync(project, disk, target, plan.Fingerprint, cancellationToken).ConfigureAwait(false);
+                }
             }
-            catch (CloudOperationException)
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
-                // The instance is restored; a disk that keeps the dead job's label is invisible to every job-id lookup (round 3 finding 4).
+                // The instance is restored; a disk that keeps the dead job's label is invisible to every job-id lookup (round 3 finding 4), so any failure here (a cloud error or not) is cosmetic.
+                // Only caller cancellation propagates. The class only is traced, never a message.
+                System.Diagnostics.Trace.TraceWarning($"compute.restore.disk-labels-skipped: {ex.GetType().Name}");
             }
         }
 
@@ -322,22 +321,7 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     private static bool OwnedBy(IDictionary<string, string>? labels, string jobId)
         => labels is not null && labels.TryGetValue("job-id", out var owner) && string.Equals(owner, jobId, StringComparison.Ordinal);
 
-    private enum DiskPlanKind
-    {
-        /// <summary>Nothing to write to the disk: it is gone, already the donor's, carries no job-id, or the instance lists no boot disk.</summary>
-        Skip,
-
-        /// <summary>The disk still carries the borrowing job's id: written after the instance, under the fingerprint read now.</summary>
-        Write,
-
-        /// <summary>The disk carries another job's id (neither the borrowing job's nor the donor's): a newer run is claiming this VM, so the restore writes nothing.</summary>
-        NewerOwner,
-    }
-
-    private readonly record struct DiskPlan(DiskPlanKind Kind, BootDisk Disk = default, string? Fingerprint = null)
-    {
-        public static DiskPlan Skip { get; } = new(DiskPlanKind.Skip);
-    }
+    private readonly record struct DiskPlan(bool Write, string? Fingerprint);
 
     private async Task<(IDictionary<string, string>? Labels, string? Fingerprint, bool Gone)> ReadDiskLabelsAsync(string project, BootDisk disk, CancellationToken cancellationToken)
     {
@@ -359,27 +343,15 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>
-    /// The boot disk's half of <see cref="RestoreVmLabelsAsync"/>, READ only: a disk that still carries the borrowing job's id is to be rewritten (<see cref="DiskPlanKind.Write"/>, under the fingerprint just
-    /// read); one that carries another job's id (not the borrowing job's, not the donor's) means a newer run is claiming the VM (<see cref="DiskPlanKind.NewerOwner"/>); a disk that is gone, already the
-    /// donor's, or has no job-id is left (<see cref="DiskPlanKind.Skip"/>).
+    /// The boot disk's half of <see cref="RestoreVmLabelsAsync"/>, READ only: the disk is to be rewritten (under the fingerprint just read) only while it still carries the borrowing job's id. A disk that is gone,
+    /// has no job-id, or carries any other job's id (the donor's own, or a third job's) is left alone: never overwritten under another job (round 4 finding 1).
     /// </summary>
-    private async Task<DiskPlan> ReadDiskForRestoreAsync(string project, BootDisk disk, string fromJobId, Dictionary<string, string> target, CancellationToken cancellationToken)
+    private async Task<DiskPlan> ReadDiskForRestoreAsync(string project, BootDisk disk, string fromJobId, CancellationToken cancellationToken)
     {
         var (labels, fingerprint, gone) = await ReadDiskLabelsAsync(project, disk, cancellationToken).ConfigureAwait(false);
-        if (gone || labels is null || !labels.TryGetValue("job-id", out var owner))
-        {
-            return DiskPlan.Skip;
-        }
-
-        if (string.Equals(owner, fromJobId, StringComparison.Ordinal))
-        {
-            return new DiskPlan(DiskPlanKind.Write, disk, fingerprint);
-        }
-
-        // The donor's labels are back when the disk equals them, or carries the donor's own job id (a disk's labels at creation need not be the instance's whole set).
-        return LabelsEqual(labels, target) || (target.TryGetValue("job-id", out var donorJob) && string.Equals(owner, donorJob, StringComparison.Ordinal))
-            ? DiskPlan.Skip
-            : new DiskPlan(DiskPlanKind.NewerOwner);
+        return !gone && labels is not null && labels.TryGetValue("job-id", out var owner) && string.Equals(owner, fromJobId, StringComparison.Ordinal)
+            ? new DiskPlan(true, fingerprint)
+            : new DiskPlan(false, null);
     }
 
     /// <summary>Writes the donor's labels to the boot disk under the fingerprint read. A 404 (gone) and a 412 (the labels moved since the read: never overwrite on a stale read) leave it as it is; any other failure reaches the caller, which treats it as cosmetic.</summary>

@@ -25,6 +25,9 @@ public enum DonorRestoreState
 
     /// <summary>The restore call failed; <see cref="DonorRestoreOutcome.ErrorClass"/> says why. The VM is stopped and still carries the borrowing job's labels.</summary>
     Failed,
+
+    /// <summary>Round 4: no label was written because the reuse start may still be on the wire (it never answered); the VM stays stopped under the borrowing job's labels and the by-name guards are the backstop (#1052).</summary>
+    NotRestored,
 }
 
 /// <summary>What became of the labels of a VM a run borrowed by reuse once that run failed or was cancelled. Ids and classes only: never a name, a zone or a message.</summary>
@@ -52,6 +55,7 @@ public sealed record DonorRestoreOutcome(string JobId, DonorRestoreState State, 
                 DonorRestoreState.NewerOwner => "The earlier VM this run borrowed now belongs to a newer run, so its labels were left alone.",
                 DonorRestoreState.NotStopped => "The earlier VM this run borrowed could not be confirmed stopped, so its labels were not restored. Stop it from the Cloud page.",
                 DonorRestoreState.Failed => $"The earlier VM this run borrowed was stopped, but its earlier labels could not be restored ({outcome.ErrorClass ?? RunErrorCodes.Other}), so the Cloud page lists it under this run. Check the Cloud page.",
+                DonorRestoreState.NotRestored => "The earlier VM this run borrowed could not be confirmed started or refused, so its labels were left as they are. Check the Cloud page and stop it if it is running.",
                 _ => null,
             };
             if (part is not null && !parts.Contains(part))

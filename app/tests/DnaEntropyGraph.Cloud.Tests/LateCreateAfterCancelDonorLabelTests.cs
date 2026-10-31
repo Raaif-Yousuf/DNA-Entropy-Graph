@@ -316,7 +316,7 @@ public partial class LateCreateAfterCancelTests
 
             sentence.ShouldNotBeNull();
             sentence.ShouldNotContain("—");
-            if (state is DonorRestoreState.NotStopped or DonorRestoreState.Failed)
+            if (state is DonorRestoreState.NotStopped or DonorRestoreState.Failed or DonorRestoreState.NotRestored)
             {
                 sentence.ShouldContain("Cloud page", Case.Sensitive, "Hard Rule 13: every error names one action");
             }
@@ -335,10 +335,11 @@ public partial class LateCreateAfterCancelTests
         var scope = TestScopedGateways.Default;
         rig.Terminator.NoteDonor(scope, "job-r3", "deg-job-vma", ZoneA, labels);
         rig.Terminator.NoteDonor(scope, "job-r3", "deg-job-vmb", ZoneA, labels);
-        rig.Terminator.NoteReuseSend(UnansweredReuse("job-r3", "deg-job-vma"));
+        var vmaSend = UnansweredReuse("job-r3", "deg-job-vma");
+        rig.Terminator.NoteReuseSend(vmaSend);
         rig.Terminator.NoteReuseSend(UnansweredReuse("job-r3", "deg-job-vmb"));
 
-        rig.Terminator.ForgetDonor("job-r3", "deg-job-vma", ZoneA);
+        rig.Terminator.ForgetDonor(vmaSend);
 
         rig.Terminator.DonorCount.ShouldBe(1, "only the VM whose watch ended is forgotten");
         rig.Terminator.ReuseUnanswered("job-r3", "deg-job-vma", ZoneA).ShouldBeFalse();
@@ -380,15 +381,17 @@ public partial class LateCreateAfterCancelTests
     }
 
     [Fact]
-    public async Task D970r3_a_hung_reuse_start_that_outlasts_the_reap_window_restores_the_donor_when_it_reads_stopped()
+    public async Task D970r4_a_hung_reuse_start_that_outlasts_the_reap_window_writes_no_label_and_logs_NotRestored_StartUnanswered()
     {
-        // The start call never answers and never fails (the gateway parks it): the CreateTimeout returns the call, the watch waits the window out, and the VM reads STOPPED under the dead job's labels.
+        // Round 4 finding 2 (replaces the round 3 test that expected a restore): the start POST may still land after the CreateTimeout cut the call off, so no label is written while it may be on the wire.
+        // The VM stays stopped under this job's labels; the #938 by-name guards are the backstop (#1052 tracks restart-safe recovery).
         var gcp = new FakeGcp().WithReuseParkedAfterClaim();
         var rig = new Rig(gcp);
+        var logged = new List<DonorRestoreOutcome>();
+        rig.Settings.OnDonorRestore = logged.Add;
         rig.Settings.CreateTimeout = TimeSpan.FromMilliseconds(100);
         rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(400);
         var oldSpec = await SeedStoppedDonorAsync(gcp, rig, "job-old970i");
-        var donorLabels = await LabelsOfAsync(gcp, oldSpec.VmName);
         await rig.SeedRowAsync("job-n970i");
         var spec = Spec("job-n970i");
 
@@ -397,9 +400,94 @@ public partial class LateCreateAfterCancelTests
         await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         outcome.State.ShouldBe(LateCreateState.GaveUp);
-        outcome.Restore.ShouldNotBeNull("round 3 finding 6: a watch that gave up on a stopped donor still hands it back (the log carries a donor-restore line)").State.ShouldBe(DonorRestoreState.Restored);
-        SameLabels(await LabelsOfAsync(gcp, oldSpec.VmName), donorLabels, "stopped, and the window the start could land in is over");
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.NotRestored);
+        outcome.Restore.ErrorClass.ShouldBe("StartUnanswered");
+        logged.ShouldContain(o => o.LogClass == "NotRestored:StartUnanswered", "the donor-restore log line carries the state and the class only");
+        gcp.RestoreAttempts.ShouldBe(0, "no label write while a start may be on the wire");
+        (await LabelsOfAsync(gcp, oldSpec.VmName))["job-id"].ShouldBe("job-n970i", "left stopped under this job's labels");
+        rig.Terminator.DonorCount.ShouldBe(0, "the watch's end forgets the donor");
         gcp.ReleaseParkedReuse();
+    }
+
+    [Fact]
+    public async Task D970r4_a_watch_that_defers_to_a_newer_attempt_and_gives_up_writes_no_label_and_says_NotRestored()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var oldSpec = await SeedStoppedDonorAsync(gcp, rig, "job-old970j");
+        var labels = await LabelsOfAsync(gcp, oldSpec.VmName);
+        var scope = TestScopedGateways.Default;
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970j", CancellationToken.None); // generation 1: the sent reuse's
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970j", CancellationToken.None); // generation 2: a newer attempt is pending, so the watch defers
+        rig.Terminator.NoteDonor(scope, "job-n970j", oldSpec.VmName, ZoneA, labels);
+        var sent = new SentCreate(scope, "job-n970j", oldSpec.VmName, ZoneA, 1, "install-1", isReuse: true);
+        rig.Terminator.NoteReuseSend(sent);
+
+        var outcomes = await rig.Terminator.ReapLateCreatesAsync([sent]);
+
+        var outcome = outcomes.ShouldHaveSingleItem();
+        outcome.State.ShouldBe(LateCreateState.GaveUp);
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.NotRestored);
+        gcp.RestoreAttempts.ShouldBe(0);
+    }
+
+    [Fact]
+    public void D970r4_a_watch_that_ends_forgets_only_its_own_send_never_a_later_attempts_of_the_same_VM()
+    {
+        // Round 4 finding 3. A reuse whose claim never wrote leaves the donor's labels on the VM, so a later attempt of the SAME job can pick the same VM (VmProvisioner's candidate filter excludes only a VM
+        // already labelled with this job): the first attempt's watch must not drop the second attempt's donor and unanswered-reuse record, which share the (job, name, zone) key.
+        var rig = new Rig(new FakeGcp());
+        var scope = TestScopedGateways.Default;
+        var labels = new Dictionary<string, string> { ["job-id"] = "job-donor" };
+        var first = UnansweredReuse("job-r4", "deg-job-vma");
+        var second = UnansweredReuse("job-r4", "deg-job-vma");
+        rig.Terminator.NoteDonor(scope, "job-r4", "deg-job-vma", ZoneA, labels);
+        rig.Terminator.NoteReuseSend(first);
+        rig.Terminator.NoteDonor(scope, "job-r4", "deg-job-vma", ZoneA, labels);
+        rig.Terminator.NoteReuseSend(second);
+
+        rig.Terminator.ForgetDonor(first);
+
+        rig.Terminator.DonorCount.ShouldBe(1, "the second attempt's donor survives the first watch's end");
+        rig.Terminator.ReuseUnanswered("job-r4", "deg-job-vma", ZoneA).ShouldBeTrue();
+
+        rig.Terminator.ForgetDonor(second);
+        rig.Terminator.DonorCount.ShouldBe(0);
+        rig.Terminator.ReuseUnanswered("job-r4", "deg-job-vma", ZoneA).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void D970r4_ending_a_job_without_a_watch_prunes_the_donors_of_other_jobs_that_expired()
+    {
+        // Round 4 finding 5: pruning ran only inside NoteDonor, so a leaked donor lived until the next reuse of any job.
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-31T08:00:00Z"), timestampFollowsClock: true);
+        var rig = new Rig(new FakeGcp());
+        rig.Settings.TimeProvider = clock;
+        rig.Terminator.NoteDonor(new CloudScope("my-project"), "job-leaked", "deg-job-donor", ZoneA, new Dictionary<string, string> { ["job-id"] = "job-donor" });
+
+        clock.Advance(TimeSpan.FromHours(2));
+        rig.Provisioner.ForgetPendingRequests("job-unrelated");
+
+        rig.Terminator.DonorCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task D970r4_the_end_of_a_watch_prunes_donors_that_expired()
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-31T08:00:00Z"), timestampFollowsClock: true);
+        var gcp = new FakeGcp().WithReuseStartLostThatLandsLater();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateGrace = TimeSpan.FromSeconds(30);
+        _ = await FailARunWhoseReuseAnswerWasLostAsync(gcp, rig, "job-old970k", "job-n970k");
+        rig.Settings.TimeProvider = clock;
+        rig.Terminator.NoteDonor(new CloudScope("my-project"), "job-leaked", "deg-job-donor", ZoneA, new Dictionary<string, string> { ["job-id"] = "job-donor" });
+        clock.Advance(TimeSpan.FromHours(2));
+
+        await gcp.LandAcceptedReuseStartsAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        rig.Terminator.DonorCount.ShouldBe(0, "the leaked donor expired and the watch's end pruned it");
     }
 
     [Fact]
