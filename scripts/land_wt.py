@@ -495,16 +495,17 @@ def _resolve_tip(ctx: Ctx, branch: str, sha: str) -> str:
 def _changed_text_files(ctx: Ctx, sha: str) -> dict[str, bytes]:
     # -z: NUL-terminated records with unquoted paths, so a name holding a tab, quote or newline is read exactly.
     raw = git(ctx.repo, "diff", "--numstat", "-z", "--no-renames", "--diff-filter=AM", f"{REMOTE}/{BASE}...{sha}").stdout
-    files: dict[str, bytes] = {}
+    names: list[str] = []
     for record in raw.split(b"\0"):
         if not record:
             continue
         added, _deleted, name_bytes = record.split(b"\t", 2)
         if added == b"-":  # git's verdict: binary
             continue
-        name = name_bytes.decode("utf-8", errors="surrogateescape")
-        files[name] = git(ctx.repo, "show", f"{sha}:{name}").stdout
-    return files
+        names.append(name_bytes.decode("utf-8", errors="surrogateescape"))
+    # The same `-text` / `binary` attribute skip premerge's check_control_bytes applies, read from the landing commit's tree.
+    skip = ccb.text_attr_unset(ctx.repo, [n for n in names if n not in ccb.ALLOWLIST], source=sha)
+    return {name: git(ctx.repo, "show", f"{sha}:{name}").stdout for name in names if name not in skip}
 
 
 def _remove_worktree(ctx: Ctx, wt: Path) -> None:

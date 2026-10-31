@@ -13,7 +13,9 @@ WHAT IS FLAGGED   NUL..BS, VT, FF and SO..US except ESC. TAB, LF, CR are text. E
                   purpose: captured logs and test output carry ANSI colour.
 WHAT IS SCANNED   Every tracked and untracked-but-not-ignored file in the working tree (MEASURED
                   2026-10-30: 1671 files in 0.17 s, so there is no reason to scan only the diff, and a
-                  file that was already bad on main is found too).
+                  file that was already bad on main is found too). Untracked files (premerge may run
+                  before a commit) above MAX_UNTRACKED_BYTES are skipped and their findings are
+                  labelled "(untracked file)" so the cause is obvious.
 BINARY RULE       A file is skipped when git would call it binary (a NUL in the first 8000 bytes, git's own
                   heuristic, the same verdict land_wt's `git diff --numstat` uses) or when .gitattributes
                   marks it `-text` / `binary` (the malformed-input fuzz corpus is bytes on purpose).
@@ -28,15 +30,19 @@ import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]")
 BINARY_SNIFF_BYTES = 8000
 MAX_PER_FILE = 5
+MAX_UNTRACKED_BYTES = 2 * 1024 * 1024
 
-# Vendored third-party files that legitimately hold a control byte. An entry that no longer has one
-# FAILS (test_repo_allowlist_entries_are_not_stale), so this list cannot rot.
+# Vendored third-party files that legitimately hold a control byte. This is NOT derived from
+# scripts/vendored_assets.json on purpose: that manifest lists every vendored asset, most of which hold no
+# control byte, and the stale-entry rule below needs exactly the ones that do. A test keeps every entry
+# here listed in the manifest. An entry that no longer has a control byte FAILS
+# (test_repo_allowlist_entries_are_not_stale), so this list cannot rot.
 ALLOWLIST: frozenset[str] = frozenset(
     {
         # MEASURED 2026-10-30: minified igv.js carries a literal 0x01 inside a string table.
@@ -51,9 +57,11 @@ class Finding:
     line: int
     column: int
     byte: int
+    untracked: bool = False
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line}:{self.column}: control byte 0x{self.byte:02x}"
+        suffix = " (untracked file)" if self.untracked else ""
+        return f"{self.path}:{self.line}:{self.column}: control byte 0x{self.byte:02x}{suffix}"
 
 
 class NotAGitRepo(Exception):
@@ -97,11 +105,17 @@ def _git(root: Path, *args: str, stdin: bytes | None = None) -> bytes:
     return proc.stdout
 
 
-def _text_attr_unset(root: Path, names: list[str]) -> set[str]:
-    """Paths whose `text` attribute is unset (`-text` or `binary`)."""
+def text_attr_unset(root: Path, names: list[str], source: str | None = None) -> set[str]:
+    """Paths whose `text` attribute is unset (`-text` or `binary`).
+
+    `source` (a commit) reads .gitattributes from that tree instead of the working tree, so land_wt
+    applies the same rule to the commit it is about to land that premerge applies to the working tree.
+    """
     if not names:
         return set()
-    raw = _git(root, "check-attr", "-z", "--stdin", "text", stdin=b"\0".join(n.encode() for n in names) + b"\0")
+    argv = ["check-attr", *(["--source", source] if source else []), "-z", "--stdin", "text"]
+    stdin = b"\0".join(n.encode("utf-8", errors="surrogateescape") for n in names) + b"\0"
+    raw = _git(root, *argv, stdin=stdin)
     parts = raw.split(b"\0")
     unset: set[str] = set()
     for i in range(0, len(parts) - 2, 3):
@@ -111,18 +125,27 @@ def _text_attr_unset(root: Path, names: list[str]) -> set[str]:
 
 
 def check_repo(root: Path) -> list[Finding]:
-    listed = _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-    names = sorted({n.decode("utf-8", errors="surrogateescape") for n in listed.split(b"\0") if n})
-    skip = _text_attr_unset(root, [n for n in names if n not in ALLOWLIST])
+    def listing(*flags: str) -> set[str]:
+        raw = _git(root, "ls-files", "-z", *flags)
+        return {n.decode("utf-8", errors="surrogateescape") for n in raw.split(b"\0") if n}
+
+    tracked = listing("--cached")
+    untracked = listing("--others", "--exclude-standard") - tracked
+    names = sorted(tracked | untracked)
+    skip = text_attr_unset(root, [n for n in names if n not in ALLOWLIST])
     files: dict[str, bytes] = {}
     for name in names:
         if name in skip:
             continue
+        path = root / name
         try:
-            files[name] = (root / name).read_bytes()
+            # Untracked files belong to no commit (owner scratch, build output not in .gitignore): never slurp a big one.
+            if name in untracked and path.stat().st_size > MAX_UNTRACKED_BYTES:
+                continue
+            files[name] = path.read_bytes()
         except OSError:
             continue  # tracked but deleted in the working tree
-    return scan_files(files)
+    return [replace(f, untracked=f.path in untracked) for f in scan_files(files)]
 
 
 def self_test() -> bool:

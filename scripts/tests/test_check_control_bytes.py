@@ -6,6 +6,8 @@ real guard never flags it.
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -76,8 +78,19 @@ def test_scan_files_skips_binary_and_allowlisted() -> None:
     assert [f.path for f in found] == ["bad.txt"]
 
 
+def test_repo_allowlist_paths_are_listed_in_vendored_assets_json() -> None:
+    """The allowlist duplicates a vendored path on purpose (see ALLOWLIST); this keeps the two from drifting."""
+    manifest = json.loads((SCRIPTS_DIR / "vendored_assets.json").read_text(encoding="utf-8"))
+    vendored = {a["path"] for a in manifest["assets"]}
+    assert ccb.ALLOWLIST, "vacuity: the allowlist must not be empty"
+    assert set(ccb.ALLOWLIST) <= vendored
+
+
 def test_repo_allowlist_entries_are_not_stale() -> None:
-    """Every allowlisted path must still exist and still hold a control byte, else delete the entry."""
+    """Every allowlisted path must still exist and still hold a control byte, else delete the entry.
+
+    An empty allowlist passes this loop by design (nothing to be stale); the test above guards vacuity.
+    """
     repo = SCRIPTS_DIR.parent
     for rel in ccb.ALLOWLIST:
         data = (repo / rel).read_bytes()
@@ -101,6 +114,63 @@ def test_check_repo_names_planted_byte_in_tracked_and_untracked(tmp_path: Path) 
     subprocess.run(["git", "add", "ok.txt"], cwd=root, check=True, capture_output=True)  # sub/bad.txt stays untracked
     found = ccb.check_repo(root)
     assert [(f.path, f.line, f.column) for f in found] == [("sub/bad.txt", 2, 4)]
+
+
+@needs_git
+def test_untracked_findings_are_labelled_and_tracked_ones_are_not(tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"t.txt": b"a" + BS, "u.txt": b"a" + BS})
+    subprocess.run(["git", "add", "t.txt"], cwd=root, check=True, capture_output=True)
+    by_path = {f.path: str(f) for f in ccb.check_repo(root)}
+    assert by_path["u.txt"] == "u.txt:1:2: control byte 0x08 (untracked file)"
+    assert by_path["t.txt"] == "t.txt:1:2: control byte 0x08"
+
+
+@needs_git
+def test_untracked_files_above_the_size_cap_are_skipped_but_tracked_ones_are_not(tmp_path: Path) -> None:
+    big = b"a" + BS + b"x" * ccb.MAX_UNTRACKED_BYTES
+    root = _repo(tmp_path, {"big_untracked.txt": big, "big_tracked.txt": big})
+    subprocess.run(["git", "add", "big_tracked.txt"], cwd=root, check=True, capture_output=True)
+    assert [f.path for f in ccb.check_repo(root)] == ["big_tracked.txt"]
+
+
+@needs_git
+def test_non_utf8_file_name_does_not_crash(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        # Windows file names are UTF-16; a lone surrogate name cannot be created on NTFS via Python.
+        # Exercise the same code path through the attribute helper with a surrogate-escaped name instead.
+        root = _repo(tmp_path, {"a.txt": b"x\n"})
+        assert ccb.text_attr_unset(root, ["bad\udcffname.txt"]) == set()
+        return
+    root = _repo(tmp_path, {})  # pragma: no cover
+    with open(os.fsencode(root) + b"/bad\xffname.txt", "wb") as fh:  # pragma: no cover
+        fh.write(b"a" + BS)
+    assert len(ccb.check_repo(root)) == 1  # pragma: no cover
+
+
+@needs_git
+def test_text_attr_unset_with_source_reads_attributes_from_that_tree(tmp_path: Path) -> None:
+    root = _repo(tmp_path, {"raw/x.txt": b"a" + BS, "y.txt": b"a"}, gitattributes="raw/** -text\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.invalid", "-c", "user.name=t", "commit", "-q", "-m", "m"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+    # Remove the attributes file from index and working tree: only --source=<sha> still knows the rule.
+    subprocess.run(["git", "rm", "-q", "-f", ".gitattributes"], cwd=root, check=True, capture_output=True)
+    assert ccb.text_attr_unset(root, ["raw/x.txt", "y.txt"]) == set()
+    assert ccb.text_attr_unset(root, ["raw/x.txt", "y.txt"], source=sha) == {"raw/x.txt"}
+
+
+@needs_git
+def test_main_outside_a_git_repo_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    probe = subprocess.run(["git", "rev-parse"], cwd=tmp_path, capture_output=True, check=False)
+    if probe.returncode == 0:
+        pytest.skip("tmp dir is inside a git repository on this machine")
+    assert ccb.main(["--root", str(tmp_path)]) == 2
 
 
 @needs_git
