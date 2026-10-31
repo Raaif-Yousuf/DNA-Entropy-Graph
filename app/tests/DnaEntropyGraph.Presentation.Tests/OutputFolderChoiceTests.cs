@@ -29,7 +29,7 @@ public sealed class OutputFolderChoiceTests
     [Theory]
     [InlineData(@"D:\Lab")]
     [InlineData(@"D:\Lab\")]
-    [InlineData(@"C:\Users\bob\Downloads")]
+    [InlineData(@"C:\Lab\bob\Downloads")]
     [InlineData(@"\\nas\share")]
     [InlineData(@"\\nas\share\runs")]
     public void A_folder_inside_a_drive_or_a_network_share_is_accepted(string path)

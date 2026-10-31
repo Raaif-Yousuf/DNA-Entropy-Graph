@@ -17,7 +17,7 @@ namespace DnaEntropyGraph.Presentation.Tests;
 public sealed class HistoryViewModelOutputFolderSafetyTests
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 3, 15, 0, 0, TimeSpan.Zero);
-    private const string Folder = @"C:\Users\bob\Documents";
+    private const string Folder = @"C:\People\bob\Documents";
 
     private sealed class UtcClock : TimeProvider
     {
