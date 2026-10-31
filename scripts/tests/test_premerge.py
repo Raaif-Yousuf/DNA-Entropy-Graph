@@ -305,14 +305,14 @@ def test_a_red_or_filtered_run_writes_no_stamp(tmp_path, monkeypatch):
 def test_scripts_format_is_gated_in_premerge_and_in_ci_docs():
     """The bulk `ruff format scripts` (r2) is only worth keeping if a drifting file goes red in both places."""
     found = next(g for g in pm.build_gates(REPO_ROOT) if g.name == "ruff-scripts-format")
-    assert list(found.argv) == ["uvx", "ruff", "format", "--check", "scripts"]
+    assert list(found.argv) == ["uvx", "ruff@0.17.3", "format", "--check", "scripts"]  # the pin: scripts/check_ruff_pin.py
     ci = (REPO_ROOT / ".github" / "workflows" / "ci-docs.yml").read_text(encoding="utf-8")
-    assert "uvx ruff format --check scripts" in ci
+    assert "uvx ruff@0.17.3 format --check scripts" in ci
 
 
 def test_scripts_are_ruff_formatted_now():
     """Vacuity guard: the tree the gate checks is clean today, via the same command."""
-    proc = subprocess.run(["uvx", "ruff", "format", "--check", "scripts"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    proc = subprocess.run(["uvx", "ruff@0.17.3", "format", "--check", "scripts"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout[-800:]
 
 

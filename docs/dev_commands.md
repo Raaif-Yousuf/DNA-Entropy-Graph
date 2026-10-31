@@ -47,13 +47,13 @@ worker\.venv\Scripts\python.exe -m dna_entropy --help
 runs rather than printing a skip notice. Run via `uvx` (not installed into
 the dev venv itself — nothing in `worker/pyproject.toml`'s own dependency
 groups pulls `ruff` in, on purpose, so the venv stays exactly what the
-package itself needs):
+package itself needs). **One pinned version (#1027):** ruff is `0.17.3` everywhere, named in `scripts/ruff.toml` (`required-version`, which ruff itself enforces) and repeated as `uvx ruff@0.17.3` in `premerge.py`, `ci-docs.yml`, `ci-worker.yml`, `worker/pyproject.toml` and these docs; `python scripts\check_ruff_pin.py` (auto-run by premerge --fast and CI) fails when any site disagrees or runs ruff through `uvx` without a version. **The one command a lane uses is `uvx ruff@0.17.3 ...` as below, never a call with no `@version` (neither `uvx` nor `uv tool run`).** To bump, change every site in one commit:
 
 ```powershell
-uvx ruff check worker
-uvx ruff format --check worker
-uvx ruff check scripts                      # lint for scripts/ (#430): see the scripts/tests section
-uvx ruff format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
+uvx ruff@0.17.3 check worker
+uvx ruff@0.17.3 format --check worker
+uvx ruff@0.17.3 check scripts                      # lint for scripts/ (#430): see the scripts/tests section
+uvx ruff@0.17.3 format --check scripts             # format gate for scripts/ (premerge ruff-scripts-format, ci-docs)
 ```
 
 **`[evo]` extras (torch, evo2) — container only.** Do not
@@ -422,6 +422,7 @@ python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behavio
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
 python scripts\check_actions_pinned.py       # every workflow `uses:` is a 40-char commit SHA with a `# vX.Y.Z` comment; local and docker:// are exempt (#485). Dependabot's github-actions entry bumps SHA and comment together
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
+python scripts\check_ruff_pin.py            # one ruff version everywhere (#1027): scripts/ruff.toml and worker/pyproject.toml equired-version plus every `uvx ruff@X` in premerge.py, the workflows and these docs must agree; a `uvx` ruff call with no version fails; a scanner that finds fewer pins than expected fails. Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_control_bytes.py        # no stray control byte (a mangled backslash escape, e.g. 0x0b) in any tracked or untracked text file; ESC allowed, binary by git's NUL rule or `-text` skipped; untracked files over 2 MB skipped and untracked findings labelled `(untracked file)`; named file:line:column. land_wt.py uses the same scanner, allowlist and `-text` skip (attributes read from the landing commit) at LAND time (#1016). Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_doc_headings.py         # every docs/**/*.md: top-level numbered `## N.` headings are strictly ascending with no number reused (fenced code and `###` ignored); a failure names file:line and both headings (#883). Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
@@ -481,12 +482,12 @@ uv run --with pytest --with pytest-xdist --with pytest-timeout --with pyyaml pyt
 A hung test now fails after 300 s with every thread's traceback (pytest-timeout, #840), instead of stalling the gate until its 1800 s bound.
 
 **Lint for `scripts/` (#430):** `scripts/ruff.toml` is the config (line length 145, rules E F I UP B SIM, the
-worker's family). Run `uvx ruff check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
+worker's family). Run `uvx ruff@0.17.3 check scripts`; `ci-docs.yml`'s `scripts-tests` job and `premerge.py` run it.
 **Parallel (#959):** `scripts/tests` runs under pytest-xdist (MIT, a dev-only `uv run --with`, like pyyaml, so not in `THIRD-PARTY-NOTICES.md`, which lists the `[dev]` extra only). `premerge.py` passes `-n scripts_test_workers()` (half the CPUs, 2 to 8, so 8 on a 16-core box; the log shows `created: N/N workers`), `ci-docs.yml` passes `-n auto`. MEASURED 2026-10-29: serial `1874 passed, 19 skipped in 1600.06s` vs `-n 8` `1879 passed, 19 skipped in 549.17s` under the same agent load. `--basetemp` becomes per-worker (`popen-gwN`). To debug one test, run it serially without `-n`. Running in parallel exposed a landed-PR lock race in the old O_EXCL `premerge_stamp` lock (PermissionError on a delete-pending lock); it is superseded by the OS byte-range lock of `fix/landed-prs-record-race`.
-**Format for `scripts/`:** `uvx ruff format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
+**Format for `scripts/`:** `uvx ruff@0.17.3 format --check scripts` is a gate in `ci-docs.yml` (`scripts-tests`) and in `premerge.py`
 (`ruff-scripts-format`). The tree was reformatted in one mechanical commit on 2026-10-15 (56 of 71 files, MEASURED: the full
-`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff format scripts`; the
-preview is `uvx ruff format --diff scripts`.
+`scripts/tests` run was 1172 passed, 5 skipped before and after). To fix a red gate run `uvx ruff@0.17.3 format scripts`; the
+preview is `uvx ruff@0.17.3 format --diff scripts`.
 
 ## `scripts/hooks/` (Claude Code `PreToolUse`/`SessionStart`/`Stop`) — exist today
 
