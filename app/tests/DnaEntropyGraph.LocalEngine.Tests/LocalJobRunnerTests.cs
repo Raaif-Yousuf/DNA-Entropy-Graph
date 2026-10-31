@@ -393,36 +393,53 @@ public sealed class LocalJobRunnerTests : IDisposable
     /// </summary>
     private static async Task AdvanceUntilAsync(VirtualTimeProvider clock, Func<bool> condition, Task? ends = null, Action? eachStep = null, TimeSpan? step = null)
     {
-        var safetyNet = Task.Delay(TimeSpan.FromSeconds(30));
+        using var stop = new CancellationTokenSource();
+        var safetyNet = Task.Delay(TimeSpan.FromSeconds(30), stop.Token);
         var never = new TaskCompletionSource().Task;
-        while (!condition())
+
+        // True once the runner's poll timer is armed (it has handled the last tick); false when the run itself ended first.
+        async Task<bool> WhenArmedAsync()
         {
-            if (safetyNet.IsCompleted)
+            // Count read BEFORE the pending check: a timer armed in between still completes the wait at once instead of being missed.
+            var created = clock.TimersCreated;
+            if (clock.PendingTimers > 0)
             {
-                throw new TimeoutException("condition not reached on virtual time");
+                return true;
             }
 
-            var created = clock.TimersCreated;
-            if (clock.PendingTimers == 0)
+            var armed = clock.WhenTimerCreatedAsync(created);
+            var first = await Task.WhenAny(armed, ends ?? never, safetyNet);
+            return first == safetyNet ? throw new TimeoutException("the runner never re-armed its poll timer") : first == armed;
+        }
+
+        try
+        {
+            while (true)
             {
-                // Count read BEFORE the pending check: a timer armed in between still completes this at once instead of being missed.
-                var armed = clock.WhenTimerCreatedAsync(created);
-                var first = await Task.WhenAny(armed, ends ?? never, safetyNet);
-                if (first == safetyNet)
+                if (safetyNet.IsCompleted)
                 {
-                    throw new TimeoutException("the runner never re-armed its poll timer");
+                    throw new TimeoutException("condition not reached on virtual time");
                 }
 
-                if (first != armed)
+                if (condition())
+                {
+                    // The step that made the condition true has not been seen by the runner yet: let it handle that tick before the caller asserts.
+                    await WhenArmedAsync();
+                    return;
+                }
+
+                if (!await WhenArmedAsync())
                 {
                     return;
                 }
 
-                continue;
+                eachStep?.Invoke();
+                clock.Advance(step ?? TimeSpan.FromSeconds(1));
             }
-
-            eachStep?.Invoke();
-            clock.Advance(step ?? TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            await stop.CancelAsync();
         }
     }
 
@@ -435,6 +452,9 @@ public sealed class LocalJobRunnerTests : IDisposable
         var run = TimedRunner(new FakeProcessLauncher(_ => worker), clock).RunAsync(Request(), CancellationToken.None);
         await WaitUntilAsync(() => _runs.Latest(JobId).Phase == JobPhase.Running);
 
+        // The poll timer must exist before the clock moves: otherwise the runner would take its start time at 55 s and the check below would prove nothing.
+        await clock.WhenTimerCreatedAsync(0).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        clock.PendingTimers.ShouldBe(1);
         clock.Advance(TimeSpan.FromSeconds(55));
         // Negative evidence, real time (#841): the runner must NOT kill the worker, so a window too short to let it react can only hide a regression, never fail correct code.
         await Task.Delay(50, TestContext.Current.CancellationToken);
