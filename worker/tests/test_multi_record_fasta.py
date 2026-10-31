@@ -277,5 +277,6 @@ def test_pipeline_multi_record_fasta_all_values_concatenates_every_contig(
 ) -> None:
     cfg = RunConfig(name="three", input_path=str(three_record_fasta), out_dir=str(tmp_path))
     result = pipeline.run(cfg)
+    assert result.all_values is not None
     assert result.all_values.shape == (32 * 3,)
     assert np.array_equal(result.all_values[:32], result.values)  # values = first contig

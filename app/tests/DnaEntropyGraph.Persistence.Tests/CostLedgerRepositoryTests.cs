@@ -20,6 +20,20 @@ public class CostLedgerRepositoryTests
     }
 
     [Fact]
+    public async Task Get_by_kind_returns_only_that_kind()
+    {
+        using var paths = new TempPaths();
+        var repository = new CostLedgerRepository(new SqliteDatabase(paths.DatabasePath));
+        await repository.AppendAsync(new CostLedgerEntry("vm_runtime", DateTimeOffset.UtcNow, "r1", UsdEst: 1.0), CancellationToken.None);
+        await repository.AppendAsync(new CostLedgerEntry("storage", DateTimeOffset.UtcNow, "r1", UsdEst: 2.0), CancellationToken.None);
+
+        var rows = await repository.GetByKindAsync("vm_runtime", CancellationToken.None);
+
+        rows.Select(r => r.Kind).ShouldBe(["vm_runtime"], "the other kind is filtered in the query, not read and thrown away");
+        (await repository.GetByKindAsync("nothing", CancellationToken.None)).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Appending_twice_never_overwrites_the_first_entry_a_ledger_is_append_only()
     {
         using var paths = new TempPaths();

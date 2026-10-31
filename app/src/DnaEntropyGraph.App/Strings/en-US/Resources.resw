@@ -3480,4 +3480,22 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_DeleteCloud_Hint_PrototypeNoFolder" xml:space="preserve">
     <value>This run came from the earlier version, so it has no copy in your cloud storage to delete, and its folder is no longer here. To take it off this list, choose Remove from list.</value>
   </data>
+  <data name="Results_CostEstimate" xml:space="preserve">
+    <value>Estimated cost: about ${0}. This is an estimate from the time the rented computer ran and its list price, not your Google bill.</value>
+  </data>
+  <data name="Results_CostEstimateSpot" xml:space="preserve">
+    <value>Estimated cost: about ${0}, at the discounted (Spot) price. This is an estimate from the time the rented computer ran and its list price, not your Google bill.</value>
+  </data>
+  <data name="Results_CostNoCloud" xml:space="preserve">
+    <value>No cloud cost: this run used this PC, not a rented computer.</value>
+  </data>
+  <data name="Results_CostShort" xml:space="preserve">
+    <value>Cost: about ${0} (estimate)</value>
+  </data>
+  <data name="Results_CostShortSpot" xml:space="preserve">
+    <value>Cost: about ${0} (estimate, Spot price)</value>
+  </data>
+  <data name="Results_CostShortNoCloud" xml:space="preserve">
+    <value>No cloud cost</value>
+  </data>
 </root>

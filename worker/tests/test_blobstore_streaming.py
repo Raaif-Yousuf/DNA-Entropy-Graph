@@ -130,11 +130,12 @@ def test_a_chunk_that_keeps_failing_gives_up_with_a_blobstore_error(tmp_path: Pa
 
 def test_a_non_retriable_session_error_does_not_retry(tmp_path: Path) -> None:
     import urllib.error
+    from email.message import Message
 
     fake = FakeGcs("bkt")
 
     def _boom(idx: int) -> None:
-        raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)  # type: ignore[arg-type]
+        raise urllib.error.HTTPError("u", 403, "Forbidden", Message(), None)
 
     fake.on_chunk_put = _boom
     src = tmp_path / "shard.bin"

@@ -581,7 +581,7 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
     cut = tmp_path / "trunc.gb"
     cut.write_text(text[: len(text) - 200], encoding="utf-8", newline="\n")  # chops record 2 mid-ORIGIN
     with pytest.raises(GenBankReadError) as exc:
-        read_genbank(cut)
+        read_genbank(str(cut))
     msg = str(exc.value)
     assert "record 2" in msg, msg
     assert "truncated" in msg  # the action stays: check the file was not truncated
@@ -589,7 +589,7 @@ def test_a_truncated_multi_record_genbank_names_the_record_that_failed(tmp_path:
 
 def test_a_malformed_first_record_is_named_record_1() -> None:
     with pytest.raises(GenBankReadError, match="record 1"):
-        read_genbank(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb")
+        read_genbank(str(MALFORMED_DIR / "genbank_qualifier_missing_slash.gb"))
 
 
 # --- issue #536: a truncated file (a LOCUS length, no ORIGIN sequence) is the reader's own error ---
@@ -648,7 +648,7 @@ def test_a_feature_line_shorter_than_the_qualifier_indent_is_the_readers_own_err
     line shorter than Biopython's qualifier column raised a raw ``IndexError`` out of
     ``Bio.GenBank.Scanner.parse_features``, which the parse try-block did not catch."""
     with pytest.raises(GenBankReadError, match="record 1") as exc:
-        read_genbank(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb")
+        read_genbank(str(MALFORMED_DIR / "genbank_feature_line_shorter_than_qualifier_indent.gb"))
     assert "Check" in str(exc.value)  # names the action
     assert "string index out of range" not in str(exc.value)  # a Python-internal phrase, not a fact
 
