@@ -1225,6 +1225,15 @@
   <data name="Runs_DeleteLocal_Link_Body" xml:space="preserve">
     <value>This run's folder, or a folder above it, is a shortcut (a junction or symbolic link) to somewhere else, so nothing was deleted. Open the folder in File Explorer to see where it leads, and delete it there if you want it gone.</value>
   </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Title" xml:space="preserve">
+    <value>Some files were deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open folder to see what is left in File Explorer, and delete it yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Toast_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open on this run, then Open folder on the page that appears, to see what is left, and delete it yourself if you want it gone.</value>
+  </data>
   <data name="Runs_Rerun_Failed_Title" xml:space="preserve">
     <value>Could not start the run</value>
   </data>

@@ -199,6 +199,12 @@ public static class RunsCopy
         _ => DeleteLocal(status),
     };
 
+    /// <summary>A delete that stopped on a link after it had already deleted some files (issue #934): says some files are gone and the rest were left, never "nothing was deleted". One action: Open folder.</summary>
+    public static readonly RunsMessage DeleteLocalLinkPartial = Pair("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Body", ToastSeverity.Error);
+
+    /// <summary>The toast form of <see cref="DeleteLocalLinkPartial"/>: a toast has no Open folder button, so it names the row's Open button instead.</summary>
+    public static readonly RunsMessage DeleteLocalLinkPartialAsToast = Pair("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Toast_Body", ToastSeverity.Error);
+
     /// <summary>The toast form of <see cref="Redownload"/> for a run saved straight to a drive (see <see cref="DeleteLocalAsToast"/>).</summary>
     public static readonly RunsMessage RedownloadDriveRootAsToast = Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Toast_Body", ToastSeverity.Error);
 
@@ -221,7 +227,7 @@ public static class RunsCopy
         .. Enum.GetValues<CloudErrorKind>().SelectMany(k => Flatten(DeleteCloudPartialMaybe(k))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocal(s))).Distinct(),
         .. Enum.GetValues<LocalDeleteStatus>().SelectMany(s => Flatten(DeleteLocalAsToast(s))).Distinct(),
-        .. Flatten(RedownloadDriveRootAsToast),
+        .. Flatten(RedownloadDriveRootAsToast), .. Flatten(DeleteLocalLinkPartial), .. Flatten(DeleteLocalLinkPartialAsToast),
     ];
 
     // Whole literal keys on purpose: scripts/check_app_wiring.py finds a resource's reader by its literal text.

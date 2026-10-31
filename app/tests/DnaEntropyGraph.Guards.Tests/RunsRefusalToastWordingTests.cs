@@ -36,6 +36,7 @@ public sealed class RunsRefusalToastWordingTests
             RunsCopy.DeleteLocalAsToast(LocalDeleteStatus.DriveRootRefused).Body,
             RunsCopy.DeleteLocalAsToast(LocalDeleteStatus.ProtectedFolderRefused).Body,
             RunsCopy.RedownloadDriveRootAsToast.Body,
+            RunsCopy.DeleteLocalLinkPartialAsToast.Body,
         };
 
         foreach (var key in bodies)

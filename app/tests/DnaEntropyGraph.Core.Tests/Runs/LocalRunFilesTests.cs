@@ -369,6 +369,41 @@ public sealed class LocalRunFilesTests : IDisposable
 
     private LocalRunFiles MakeWithShellAndHook(Action<string> hook) => MakeWithShell(hook);
 
+    // Issue #934 cold review round 3: the link check runs before EVERY file delete, not once per folder, so a swap between two deletes in one folder is caught.
+    [Fact]
+    public void A_folder_swapped_for_a_junction_between_two_deletes_in_it_stops_before_the_second_and_reports_what_went()
+    {
+        var folder = MakeRunFolder();
+        var sub = Path.Combine(folder, "keep-sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "k1.txt"), "k1");
+        File.WriteAllText(Path.Combine(sub, "k2.txt"), "k2");
+        var target = MakePreciousFolder();
+        File.WriteAllText(Path.Combine(target, "k1.txt"), "precious k1");
+        File.WriteAllText(Path.Combine(target, "k2.txt"), "precious k2");
+        var inSub = 0;
+        var swapped = false;
+        var files = new LocalRunFiles(_inputs, () => _root, [_appData], null, null, file =>
+        {
+            if (string.Equals(Path.GetDirectoryName(file), sub, StringComparison.OrdinalIgnoreCase) && ++inSub == 2)
+            {
+                Directory.Move(sub, sub + "-moved");
+                MakeJunction(sub, target);
+                swapped = true;
+            }
+        });
+
+        var result = files.DeleteOutputFolder(Run(folder));
+
+        swapped.ShouldBeTrue();
+        result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
+        result.FilesDeleted.ShouldBeGreaterThan(0, "the first file in the folder went before the swap, and the result must say so");
+        File.ReadAllText(Path.Combine(target, "k1.txt")).ShouldBe("precious k1");
+        File.ReadAllText(Path.Combine(target, "k2.txt")).ShouldBe("precious k2");
+        File.Exists(Path.Combine(target, "precious.txt")).ShouldBeTrue();
+        Directory.Exists(folder).ShouldBeTrue("the folder is not removed after a refusal");
+    }
+
     [Fact]
     public void An_ordinary_subfolder_output_root_still_deletes_its_run_folder()
     {

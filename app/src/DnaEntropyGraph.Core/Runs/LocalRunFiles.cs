@@ -102,17 +102,21 @@ public sealed class LocalRunFiles : ILocalRunFiles
     private readonly IReadOnlyList<string> _protectedPaths;
     private readonly Func<ShellFolderSet> _shellFolders;
     private readonly Action<string>? _beforeFirstDelete;
+    private readonly Action<string>? _beforeEachDelete;
 
     /// <param name="protectedPaths">Folders that must never be deleted from or through (the app data folder holding the input copies).</param>
     /// <param name="shellFolders">The user's own folders an unmarked folder may not be or sit directly inside; null reads them from Windows. A test seam.</param>
     /// <param name="beforeFirstDelete">Called with the folder after it was listed and before the first file is deleted, so a test can change the disk in the gap the re-check closes. A test seam.</param>
+    /// <param name="beforeEachDelete">Called with each file's path immediately before that file's link check and delete, so a test can change the disk between two deletes. A test seam.</param>
     public LocalRunFiles(
         IRunInputStore inputs,
         Func<string> defaultOutputParent,
         IReadOnlyList<string> protectedPaths,
         Func<ShellFolderSet>? shellFolders = null,
-        Action<string>? beforeFirstDelete = null)
+        Action<string>? beforeFirstDelete = null,
+        Action<string>? beforeEachDelete = null)
     {
+        _beforeEachDelete = beforeEachDelete;
         _inputs = inputs;
         _defaultOutputParent = defaultOutputParent;
         _protectedPaths = protectedPaths;
@@ -307,19 +311,14 @@ public sealed class LocalRunFiles : ILocalRunFiles
         }
 
         int deleted = 0, inUse = 0, denied = 0;
-        string? verifiedDirectory = null;
         foreach (var file in files)
         {
-            // A folder inside the run's folder can be swapped for a junction after the listing, and File.Delete follows it: check each folder just before deleting the files in it.
-            var directory = Path.GetDirectoryName(file)!;
-            if (!string.Equals(directory, verifiedDirectory, StringComparison.OrdinalIgnoreCase))
+            // A folder inside the run's folder can be swapped for a junction after the listing, and File.Delete follows it: check the file's folder chain
+            // immediately before each delete (a few attribute reads), not once per folder, so no swap can land between the check and the delete.
+            _beforeEachDelete?.Invoke(file);
+            if (HasLinkBetween(Path.GetDirectoryName(file)!, root))
             {
-                if (HasLinkBetween(directory, root))
-                {
-                    return new(LocalDeleteStatus.LinkRefused, deleted, inUse + denied);
-                }
-
-                verifiedDirectory = directory;
+                return new(LocalDeleteStatus.LinkRefused, deleted, inUse + denied);
             }
 
             try

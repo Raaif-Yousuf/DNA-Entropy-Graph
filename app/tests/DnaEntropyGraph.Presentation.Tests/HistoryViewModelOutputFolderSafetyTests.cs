@@ -279,6 +279,46 @@ public sealed class HistoryViewModelOutputFolderSafetyTests
         await _choice.Received(1).ChooseAsync("Runs_DeleteLocal_OtherRun_Title", "Runs_DeleteLocal_OtherRun_Body", Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
+    // Issue #934 cold review round 3: a link refusal after some files were deleted must not say "nothing was deleted".
+    [Fact]
+    public async Task A_link_refusal_after_some_files_were_deleted_says_so_and_offers_to_open_the_folder()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.Proceed);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.LinkRefused, 3, 0));
+        var item = await Loaded(Row());
+
+        await Press(item.DeleteLocalCommand);
+
+        await _choice.Received(1).ChooseAsync("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Body", Arg.Is<IReadOnlyList<string>>(l => l[0] == RunsCopy.OpenFolderLabel), Arg.Any<CancellationToken>());
+        _launcher.Received(1).OpenFolder(Folder);
+        _toasts.DidNotReceiveWithAnyArgs().ShowToast(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task A_link_refusal_after_some_files_were_deleted_without_a_dialog_toasts_the_variant_that_names_the_Open_button()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.Proceed);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.LinkRefused, 3, 0));
+        var item = await Loaded(Row(), withChoice: false);
+
+        await Press(item.DeleteLocalCommand);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Toast_Body", ToastSeverity.Error);
+    }
+
+    [Fact]
+    public async Task A_link_refusal_with_nothing_deleted_keeps_the_nothing_was_deleted_copy()
+    {
+        _local.PlanDelete(Arg.Any<RunRecord>()).Returns(LocalDeletePlan.Proceed);
+        _local.DeleteOutputFolder(Arg.Any<RunRecord>()).Returns(new LocalDeleteResult(LocalDeleteStatus.LinkRefused));
+        var item = await Loaded(Row());
+
+        await Press(item.DeleteLocalCommand);
+
+        _toasts.Received(1).ShowToast("Runs_DeleteLocal_Link_Title", "Runs_DeleteLocal_Link_Body", ToastSeverity.Error);
+        await _choice.DidNotReceiveWithAnyArgs().ChooseAsync(default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public void Every_new_refusal_status_has_copy_that_names_an_action()
     {
@@ -299,7 +339,7 @@ public sealed class HistoryViewModelOutputFolderSafetyTests
         RunsCopy.AllKeys.ShouldContain(RunsCopy.RedownloadHintDriveRoot);
         RunsCopy.AllKeys.ShouldContain("Runs_DeleteLocal_OtherRun_Body");
         RunsCopy.AllKeys.ShouldContain("Runs_Redownload_DriveRoot_Title");
-        foreach (var key in new[] { "Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", "Runs_DeleteLocal_Protected_Toast_Body", "Runs_DeleteLocal_OtherRun_Toast_Body", "Runs_DeleteLocal_DriveRoot_Toast_Body", "Runs_Redownload_DriveRoot_Toast_Body" })
+        foreach (var key in new[] { "Runs_DeleteLocal_Protected_Title", "Runs_DeleteLocal_Protected_Body", "Runs_DeleteLocal_Protected_Toast_Body", "Runs_DeleteLocal_OtherRun_Toast_Body", "Runs_DeleteLocal_DriveRoot_Toast_Body", "Runs_Redownload_DriveRoot_Toast_Body", "Runs_DeleteLocal_LinkPartial_Title", "Runs_DeleteLocal_LinkPartial_Body", "Runs_DeleteLocal_LinkPartial_Toast_Body" })
         {
             RunsCopy.AllKeys.ShouldContain(key);
         }

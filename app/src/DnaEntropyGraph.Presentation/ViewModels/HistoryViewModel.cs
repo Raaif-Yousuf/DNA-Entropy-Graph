@@ -641,6 +641,12 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return await RefuseDeleteAsync(run, result.Status);
             }
 
+            // A link met after some files were already deleted is not "nothing was deleted": say what went and offer the folder.
+            if (result.Status == LocalDeleteStatus.LinkRefused && result.FilesDeleted > 0)
+            {
+                return await RefuseWithOpenFolderAsync(run, RunsCopy.DeleteLocalLinkPartial, RunsCopy.DeleteLocalLinkPartialAsToast);
+            }
+
             if (result.Status != LocalDeleteStatus.Partial)
             {
                 return RunsCopy.DeleteLocal(result.Status);

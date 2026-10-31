@@ -33,6 +33,30 @@ public sealed class RunFolderMarkerTests : IDisposable
     }
 
     [Fact]
+    public void A_marker_write_that_fails_after_creating_the_file_leaves_neither_the_folder_nor_a_stray_marker()
+    {
+        var before = Directory.GetFileSystemEntries(_parent);
+
+        // The disk filled up: the file exists (empty) and the write then throws.
+        var ex = Should.Throw<IOException>(() => RunOutputFolders.CreateUnique(_parent, "sample", null, "job-9", (folder, _) =>
+        {
+            File.WriteAllText(Path.Combine(folder, RunFolderMarker.FileName), string.Empty);
+            throw new IOException("disk full");
+        }));
+
+        ex.Message.ShouldBe("disk full");
+        Directory.GetFileSystemEntries(_parent).ShouldBe(before, "the new folder and its partial marker are both gone");
+    }
+
+    [Fact]
+    public void A_marker_write_that_fails_before_creating_any_file_still_removes_the_empty_folder()
+    {
+        Should.Throw<UnauthorizedAccessException>(() => RunOutputFolders.CreateUnique(_parent, "sample", null, "job-9", (_, _) => throw new UnauthorizedAccessException()));
+
+        Directory.GetFileSystemEntries(_parent).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void CreateUnique_without_a_job_id_writes_no_marker()
     {
         var folder = RunOutputFolders.CreateUnique(_parent, "sample");

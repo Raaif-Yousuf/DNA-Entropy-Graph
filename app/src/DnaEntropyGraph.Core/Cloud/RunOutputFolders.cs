@@ -66,6 +66,10 @@ public static class RunOutputFolders
     /// <param name="jobId">The run this folder is for (issue #934): when given, the folder gets its <see cref="RunFolderMarker"/> before it is returned, which a later recursive
     /// delete requires. A marker that cannot be written fails like any other write into the folder (the empty folder is removed again).</param>
     public static string CreateUnique(string parent, string name, Action<string>? removeStaging = null, string? jobId = null)
+        => CreateUnique(parent, name, removeStaging, jobId, RunFolderMarker.Write);
+
+    /// <summary>The same with the marker writer supplied, so a test can fail it after the file was created (a disk that filled up).</summary>
+    internal static string CreateUnique(string parent, string name, Action<string>? removeStaging, string? jobId, Action<string, string> writeMarker)
     {
         var safe = Sanitize(name);
         Directory.CreateDirectory(parent);
@@ -76,7 +80,7 @@ public static class RunOutputFolders
             {
                 if (!string.IsNullOrWhiteSpace(jobId))
                 {
-                    WriteMarkerOrRemove(candidate, jobId);
+                    WriteMarkerOrRemove(candidate, jobId, writeMarker);
                 }
 
                 return candidate;
@@ -84,16 +88,27 @@ public static class RunOutputFolders
         }
     }
 
-    private static void WriteMarkerOrRemove(string folder, string jobId)
+    private static void WriteMarkerOrRemove(string folder, string jobId, Action<string, string> writeMarker)
     {
         try
         {
-            RunFolderMarker.Write(folder, jobId);
+            writeMarker(folder, jobId);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // The folder is ours and still empty: leave no trace of a run that could not start (best effort), then fail like any unwritable folder.
-            RunFolderMarker.TryRemoveEmptyFolder(folder, jobId);
+            // The folder is ours and was empty a moment ago: leave no trace of a run that could not start (best effort), then fail like any unwritable folder.
+            // A failed write can leave a partial marker (a full disk leaves it empty), which TryRemoveEmptyFolder would refuse as another run's, so remove exactly
+            // that one file first, then the folder (non-recursive: it goes only if nothing else is in it).
+            try
+            {
+                File.Delete(Path.Combine(folder, RunFolderMarker.FileName));
+                Directory.Delete(folder, recursive: false);
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
+                // Best effort: the original failure is the one to report.
+            }
+
             throw;
         }
     }
