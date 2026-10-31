@@ -78,14 +78,15 @@ public static class RunFolderMarker
         => Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).All(entry => IsMarkerOf(folder, entry));
 
     /// <summary>
-    /// Removes <paramref name="folder"/> only when <see cref="IsEmptyApartFromMarker"/>: the marker (a file the app wrote) and then the empty folder, never anything recursive. Best
-    /// effort and never throws; false when the folder was not removed (it holds something, is gone, or is refused), and then its marker is left in place.
+    /// Removes <paramref name="folder"/> only when <see cref="IsEmptyApartFromMarker"/> and the marker is this job's or absent: the marker (a file the app wrote) and then the empty
+    /// folder, never anything recursive. A folder holding another run's marker (or one that cannot be trusted) is never removed. Best effort and never throws; false when the folder
+    /// was not removed (it holds something, is gone, or is refused), and then its marker is left in place.
     /// </summary>
-    public static bool TryRemoveEmptyFolder(string folder)
+    public static bool TryRemoveEmptyFolder(string folder, string jobId)
     {
         try
         {
-            if (!IsEmptyApartFromMarker(folder))
+            if (Check(folder, jobId) == RunFolderMarkerState.OtherRun || !IsEmptyApartFromMarker(folder))
             {
                 return false;
             }

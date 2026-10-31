@@ -121,9 +121,36 @@ public sealed class RunFolderMarkerTests : IDisposable
         var folder = RunOutputFolders.CreateUnique(_parent, "sample", jobId: "job-a");
 
         RunFolderMarker.IsEmptyApartFromMarker(folder).ShouldBeTrue();
-        RunFolderMarker.TryRemoveEmptyFolder(folder).ShouldBeTrue();
+        RunFolderMarker.TryRemoveEmptyFolder(folder, "job-a").ShouldBeTrue();
 
         Directory.Exists(folder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_folder_holding_only_another_runs_marker_is_kept()
+    {
+        var folder = RunOutputFolders.CreateUnique(_parent, "sample", jobId: "job-other");
+
+        RunFolderMarker.TryRemoveEmptyFolder(folder, "job-a").ShouldBeFalse("another run's folder is not ours to remove, even when it is empty");
+
+        File.Exists(Path.Combine(folder, RunFolderMarker.FileName)).ShouldBeTrue();
+        RunFolderMarker.Check(folder, "job-other").ShouldBe(RunFolderMarkerState.Matches);
+    }
+
+    [Fact]
+    public void A_folder_with_a_marker_that_cannot_be_trusted_is_kept_and_an_empty_unmarked_folder_is_removed()
+    {
+        var oversized = Path.Combine(_parent, "oversized");
+        Directory.CreateDirectory(oversized);
+        File.WriteAllText(Path.Combine(oversized, RunFolderMarker.FileName), "job-a\n" + new string('x', 600));
+        var unmarked = Path.Combine(_parent, "unmarked");
+        Directory.CreateDirectory(unmarked);
+
+        RunFolderMarker.TryRemoveEmptyFolder(oversized, "job-a").ShouldBeFalse();
+        RunFolderMarker.TryRemoveEmptyFolder(unmarked, "job-a").ShouldBeTrue();
+
+        Directory.Exists(oversized).ShouldBeTrue();
+        Directory.Exists(unmarked).ShouldBeFalse();
     }
 
     [Fact]
@@ -133,7 +160,7 @@ public sealed class RunFolderMarkerTests : IDisposable
         File.WriteAllText(Path.Combine(folder, "a.bedgraph"), "x");
 
         RunFolderMarker.IsEmptyApartFromMarker(folder).ShouldBeFalse();
-        RunFolderMarker.TryRemoveEmptyFolder(folder).ShouldBeFalse();
+        RunFolderMarker.TryRemoveEmptyFolder(folder, "job-a").ShouldBeFalse();
 
         File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
         File.Exists(Path.Combine(folder, RunFolderMarker.FileName)).ShouldBeTrue("a folder that is not removed keeps its marker");

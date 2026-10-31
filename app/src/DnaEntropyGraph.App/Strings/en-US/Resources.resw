@@ -1178,7 +1178,7 @@
     <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open folder to see it in File Explorer, and delete it yourself if you want it gone.</value>
   </data>
   <data name="Runs_DeleteLocal_OtherRun_Toast_Body" xml:space="preserve">
-    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open on this run to see its folder in File Explorer, and delete it yourself if you want it gone.</value>
+    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open on this run, then Open folder on the page that appears, and delete the folder yourself if you want it gone.</value>
   </data>
   <data name="Runs_DeleteLocal_Protected_Title" xml:space="preserve">
     <value>Not deleted</value>
@@ -1187,13 +1187,13 @@
     <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open folder to see it in File Explorer, and delete only what you want gone yourself.</value>
   </data>
   <data name="Runs_DeleteLocal_Protected_Toast_Body" xml:space="preserve">
-    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open on this run to see its folder in File Explorer, and delete only what you want gone yourself.</value>
+    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete only what you want gone yourself.</value>
   </data>
   <data name="Runs_DeleteLocal_DriveRoot_Toast_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open on this run to see its folder in File Explorer, and delete the run's files yourself.</value>
+    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete the run's files yourself.</value>
   </data>
   <data name="Runs_Redownload_DriveRoot_Toast_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open on this run to see the files already saved there.</value>
+    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open on this run, then Open folder on the page that appears, to see the files already saved there.</value>
   </data>
   <data name="Runs_DeleteLocal_DriveRoot_Title" xml:space="preserve">
     <value>Not deleted</value>

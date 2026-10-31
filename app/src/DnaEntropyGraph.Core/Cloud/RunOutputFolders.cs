@@ -93,7 +93,7 @@ public static class RunOutputFolders
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // The folder is ours and still empty: leave no trace of a run that could not start (best effort), then fail like any unwritable folder.
-            RunFolderMarker.TryRemoveEmptyFolder(folder);
+            RunFolderMarker.TryRemoveEmptyFolder(folder, jobId);
             throw;
         }
     }

@@ -188,18 +188,34 @@ public sealed class LocalRunFilesTests : IDisposable
 
     // ---- issue #934 cold review: the user's own folders are never deletable without a marker, whatever the user confirms ----
 
-    private LocalRunFiles MakeWithShell(Action<string>? beforeFirstDelete = null)
+    private LocalRunFiles MakeWithShell(Action<string>? beforeFirstDelete = null, ShellFolderSet? shell = null)
     {
         // A pretend profile under the test folder: user-home paths are built at runtime, never written out.
         var profile = Path.Combine(_base, "bob");
-        return new LocalRunFiles(
-            _inputs,
-            () => _root,
-            [_appData],
-            () => new ShellFolderSet(
-                [profile, Path.Combine(profile, "Desktop"), Path.Combine(profile, "Documents"), Path.Combine(profile, "Pictures"), Path.Combine(profile, "Music"), Path.Combine(profile, "Videos")],
-                [Path.Combine(profile, "Downloads")]),
-            beforeFirstDelete);
+        var set = shell ?? ShellFolderSet.Build(
+            profile,
+            Path.Combine(profile, "Desktop"),
+            Path.Combine(profile, "Documents"),
+            Path.Combine(profile, "Pictures"),
+            Path.Combine(profile, "Music"),
+            Path.Combine(profile, "Videos"),
+            Path.Combine(profile, "Downloads"));
+        return new LocalRunFiles(_inputs, () => _root, [_appData], () => set, beforeFirstDelete);
+    }
+
+    [Fact]
+    public void When_Windows_cannot_name_the_profile_no_unmarked_folder_is_ever_deleted()
+    {
+        var folder = MakeRunFolder(marker: null);
+        var failClosed = ShellFolderSet.Build("", "", "", "", "", "", null);
+
+        MakeWithShell(shell: failClosed).PlanDelete(Run(folder)).ShouldBe(LocalDeletePlan.ProtectedFolder);
+        MakeWithShell(shell: failClosed).DeleteUnmarkedOutputFolder(Run(folder)).Status.ShouldBe(LocalDeleteStatus.ProtectedFolderRefused);
+        File.Exists(Path.Combine(folder, "a.bedgraph")).ShouldBeTrue();
+
+        // A folder this run's own marker vouches for is not an unmarked folder: it is still deletable.
+        var marked = MakeRunFolder("marked");
+        MakeWithShell(shell: failClosed).DeleteOutputFolder(Run(marked)).Status.ShouldBe(LocalDeleteStatus.Deleted);
     }
 
     public static TheoryData<string[], bool> ShellCases() => new()
@@ -210,8 +226,9 @@ public sealed class LocalRunFilesTests : IDisposable
         { ["Music"], true },
         { ["Videos"], true },
         { ["Downloads"], true },
-        { ["Documents", "thesis"], true },
-        { ["Desktop", "lab"], true },
+        // Issue #934 DECISION (agent-made, reversible): the children of Documents and the like are where older runs live when the user chose such a folder, so they get the one confirmation.
+        { ["Documents", "thesis"], false },
+        { ["Desktop", "lab"], false },
         { ["Downloads", "run-1"], false },
         { ["Documents", "lab", "run-1"], false },
         { ["Misc"], true },
@@ -321,6 +338,33 @@ public sealed class LocalRunFilesTests : IDisposable
         result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
         File.Exists(Path.Combine(target, "precious.txt")).ShouldBeTrue();
         File.Exists(Path.Combine(folder + "-moved", "a.bedgraph")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_subfolder_swapped_for_a_junction_after_the_listing_is_not_followed_by_the_delete()
+    {
+        var folder = MakeRunFolder();
+        var sub = Path.Combine(folder, "keep-sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "k.txt"), "k");
+        var target = MakePreciousFolder();
+        File.WriteAllText(Path.Combine(target, "k.txt"), "precious k");
+        var swapped = false;
+        var files = MakeWithShellAndHook(_ =>
+        {
+            // After the folder was listed, and with the top folder unchanged, a folder inside it becomes a link to somewhere else.
+            Directory.Move(sub, sub + "-moved");
+            MakeJunction(sub, target);
+            swapped = true;
+        });
+
+        var result = files.DeleteOutputFolder(Run(folder));
+
+        swapped.ShouldBeTrue();
+        result.Status.ShouldBe(LocalDeleteStatus.LinkRefused);
+        File.ReadAllText(Path.Combine(target, "k.txt")).ShouldBe("precious k");
+        File.Exists(Path.Combine(target, "precious.txt")).ShouldBeTrue();
+        File.Exists(Path.Combine(sub + "-moved", "k.txt")).ShouldBeTrue("the real subfolder was never touched");
     }
 
     private LocalRunFiles MakeWithShellAndHook(Action<string> hook) => MakeWithShell(hook);

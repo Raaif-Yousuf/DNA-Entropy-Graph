@@ -386,7 +386,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         {
             var folder = (await rows.LatestRecordAsync(jobId, CancellationToken.None).ConfigureAwait(false))?.OutputDir;
             // The folder may hold the app's own marker (issue #934); TryRemoveEmptyFolder removes that and the empty folder, nothing else (Hard Rule 14).
-            if (!string.IsNullOrWhiteSpace(folder) && RunFolderMarker.TryRemoveEmptyFolder(folder))
+            if (!string.IsNullOrWhiteSpace(folder) && RunFolderMarker.TryRemoveEmptyFolder(folder, jobId))
             {
                 await rows.UpdateRowAsync(jobId, row => row with { OutputDir = null }, CancellationToken.None).ConfigureAwait(false);
             }

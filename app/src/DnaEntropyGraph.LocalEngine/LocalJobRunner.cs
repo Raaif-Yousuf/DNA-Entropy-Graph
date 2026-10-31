@@ -623,7 +623,7 @@ public sealed class LocalJobRunner
         try
         {
             // The app's own marker does not make the folder "not empty" (issue #934); only that marker and the empty folder are removed.
-            if (RunFolderMarker.TryRemoveEmptyFolder(runFolder))
+            if (RunFolderMarker.TryRemoveEmptyFolder(runFolder, jobId))
             {
                 await UpdateRowAsync(jobId, row => row with { OutputDir = null }).ConfigureAwait(false);
             }

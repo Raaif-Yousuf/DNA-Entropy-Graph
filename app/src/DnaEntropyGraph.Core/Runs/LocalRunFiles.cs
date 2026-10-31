@@ -61,51 +61,6 @@ public enum LocalDeletePlan
     ProtectedFolder,
 }
 
-/// <summary>The user's own folders an unmarked run folder may not be, or sit directly inside (issue #934). Paths are compared without case and without a trailing separator.</summary>
-/// <param name="SelfAndChildren">The folder itself and anything directly inside it is protected (the profile, Documents, Desktop, Pictures, Music, Videos).</param>
-/// <param name="SelfOnly">Only the folder itself is protected: Downloads holds ordinary run folders directly inside it.</param>
-public sealed record ShellFolderSet(IReadOnlyList<string> SelfAndChildren, IReadOnlyList<string> SelfOnly)
-{
-    /// <summary>The current user's folders as Windows reports them.</summary>
-    public static ShellFolderSet FromEnvironment()
-    {
-        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string[] both =
-        [
-            profile,
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
-        ];
-        return new(
-            both.Where(p => !string.IsNullOrWhiteSpace(p)).ToList(),
-            string.IsNullOrWhiteSpace(profile) ? [] : [Path.Combine(profile, "Downloads")]);
-    }
-
-    /// <summary>True when <paramref name="folder"/> is one of these folders, or (for <see cref="SelfAndChildren"/>) directly inside one. Lexical; a path that cannot be read counts as protected.</summary>
-    public bool Protects(string folder)
-    {
-        try
-        {
-            var full = Norm(folder);
-            var parent = Path.GetDirectoryName(full);
-            return SelfOnly.Any(p => Same(full, p))
-                   || SelfAndChildren.Any(p => Same(full, p) || (parent is not null && Same(parent, p)));
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return true;
-        }
-    }
-
-    private static string Norm(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-
-    private static bool Same(string normalized, string other)
-        => string.Equals(normalized, Norm(other), StringComparison.OrdinalIgnoreCase);
-}
-
 /// <summary>What a local delete did. The counts are files, not folders, and are set for <see cref="LocalDeleteStatus.Deleted"/> and <see cref="LocalDeleteStatus.Partial"/>.</summary>
 public sealed record LocalDeleteResult(LocalDeleteStatus Status, int FilesDeleted = 0, int FilesRemaining = 0);
 
@@ -352,8 +307,21 @@ public sealed class LocalRunFiles : ILocalRunFiles
         }
 
         int deleted = 0, inUse = 0, denied = 0;
+        string? verifiedDirectory = null;
         foreach (var file in files)
         {
+            // A folder inside the run's folder can be swapped for a junction after the listing, and File.Delete follows it: check each folder just before deleting the files in it.
+            var directory = Path.GetDirectoryName(file)!;
+            if (!string.Equals(directory, verifiedDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                if (HasLinkBetween(directory, root))
+                {
+                    return new(LocalDeleteStatus.LinkRefused, deleted, inUse + denied);
+                }
+
+                verifiedDirectory = directory;
+            }
+
             try
             {
                 File.Delete(file);
