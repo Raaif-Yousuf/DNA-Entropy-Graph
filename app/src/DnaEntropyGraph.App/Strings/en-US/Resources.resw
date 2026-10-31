@@ -3564,4 +3564,37 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
     <value>Close anyway</value>
   </data>
+  <data name="Runs_OtherAccount_Hidden_One" xml:space="preserve">
+    <value>1 run started under another Google account is hidden here.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hidden_Many" xml:space="preserve">
+    <value>{0} runs started under other Google accounts are hidden here.</value>
+  </data>
+  <data name="Runs_OtherAccount_Switch" xml:space="preserve">
+    <value>Switch to {0}</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_Switch" xml:space="preserve">
+    <value>Choose Switch to, below, to use the account that started them and see them.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_SignIn" xml:space="preserve">
+    <value>Some were started as {0}, which is signed out on this computer. Choose Sign in again and sign in as that account to see them.</value>
+  </data>
+  <data name="Runs_OtherAccount_Hint_SignInUnknown" xml:space="preserve">
+    <value>Some were started under a Google account that is not signed in on this computer. Choose Sign in again and sign in as that account to see them.</value>
+  </data>
+  <data name="RunsSignInAgainButton.Content" xml:space="preserve">
+    <value>Sign in again</value>
+  </data>
+  <data name="Runs_OtherAccount_SwitchFailed_Title" xml:space="preserve">
+    <value>Could not switch accounts</value>
+  </data>
+  <data name="Runs_OtherAccount_SwitchFailed_Body" xml:space="preserve">
+    <value>That account is no longer signed in on this computer. Choose Sign in again on this page, then sign in as that account.</value>
+  </data>
+  <data name="Runs_OtherAccount_SignInFailed_Title" xml:space="preserve">
+    <value>Could not sign in</value>
+  </data>
+  <data name="Runs_OtherAccount_SignInFailed_Body" xml:space="preserve">
+    <value>The Google sign-in did not finish. Choose Sign in again on this page and finish it in the browser window.</value>
+  </data>
 </root>

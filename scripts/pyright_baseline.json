@@ -1,9 +1,5 @@
 {
   "_about": "Per-file pyright error debt. May only go down: scripts/check_pyright.py --lower. worker/src is at 0 and may not be listed. See scripts/check_pyright.py.",
   "pyright": "1.1.407",
-  "files": {
-    "scripts/tests/test_heavy.py": 4,
-    "worker/tests/test_worker_manifest_fields.py": 2,
-    "worker/tests/test_worker_runner.py": 23
-  }
+  "files": {}
 }

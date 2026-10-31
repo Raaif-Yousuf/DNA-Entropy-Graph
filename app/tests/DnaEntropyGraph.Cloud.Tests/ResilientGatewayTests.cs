@@ -322,6 +322,11 @@ public class ResilientGatewayTests
             return new VmIncarnation(1, null);
         }
 
+        if (type == typeof(IReadOnlyDictionary<string, string>))
+        {
+            return new Dictionary<string, string> { ["app"] = "dna-entropy-graph" };
+        }
+
         if (type == typeof(QuotaIncreaseRequest))
         {
             return new QuotaIncreaseRequest(QuotaMetrics.GpusAllRegions, null, 1, "deg-sample", "sample");

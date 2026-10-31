@@ -5,7 +5,9 @@
 Every run you have ever started, whether it finished, failed, or was cancelled, appears
 on the **Runs** page, grouped by day. Each entry shows its name, what was in it, which
 model and computer type were used, how long it took, roughly what it cost, and whether
-its results are still available in the cloud or only on your own computer.
+its results are still available in the cloud or only on your own computer. A new run's name
+is the name its results folder gets (from the run name box on the New run page, for example
+`SetTnpB_evo2_7b`); a run that failed before it began has no name yet and shows its run code.
 
 Next to its time, a run that used a rented computer shows its estimated cost (the same figure as the top of its Results page, worked out from the computer's running time and list price, not your Google bill). A run on your own PC says there was no cloud cost, and a run that never got a rented computer shows no cost.
 
@@ -26,6 +28,12 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
   copies are kept for a while after a run finishes (90 days by default, adjustable in
   Settings) and then automatically deleted; once that happens, Download again is no longer
   possible (the button is greyed out) and only Run again will get you a fresh result.
+  When the history row still remembers a results folder (even one you deleted), Download
+  again puts the files back in that same folder. Only when the row remembers no folder does
+  the app make a new one, named the way the run named its folder (from the run name pattern
+  you chose, using the run's start time, which can differ by a few minutes from when the
+  folder was first made, with a number added if that name is taken). If it cannot tell what
+  the input was, it uses the run's id instead.
 - **Delete files on this PC** / **Delete cloud copy**: free up space on your computer or in
   your cloud storage. Each asks you to confirm first. These are separate actions; deleting
   one does not delete the other. Deleting files on this PC removes only that run's own
@@ -50,6 +58,9 @@ Open a run's results and use **Your notes** to write a note (for example, "the c
 
 When something you did finishes or cannot finish (a delete, a download, a new theme), the app shows a message bar at the bottom of its window. Good news and plain information close by themselves after a few seconds. A warning or a problem stays until you press its close button, so you cannot miss it, and it names what to do next.
 
+## If more than one Google account is signed in on this computer
+
+The Runs page lists only the runs started while the account you are using now was in use. A run started under another account is not deleted: it is hidden, a line above the list says how many, and under it is the one thing to do. If that account is still signed in on this computer, there is a **Switch to** button for it, and the list changes at once with no restart (the Cloud page follows). If it is signed out here, there is a **Sign in again** button; sign in as that account and its runs come back. A new account therefore sees an empty Runs page until it runs something. A run that was made on this computer's own graphics card, and one from before the app knew about accounts, show under every account. If nobody is signed in, every run is listed.
 ## If you use the app on more than one computer
 
 Two computers signed into the same Google account do not automatically see each other's

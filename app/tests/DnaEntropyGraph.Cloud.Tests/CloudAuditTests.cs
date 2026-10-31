@@ -414,6 +414,7 @@ public class CloudAuditTests
                 ("CreateVmAsync", "Compute.CreateVm"), ("ReuseVmAsync", "Compute.ReuseVm"), ("StartVmAsync", "Compute.StartVm"),
                 ("StopVmAsync", "Compute.StopVm"), ("DeleteVmAsync", "Compute.DeleteVm"), ("DeleteDiskAsync", "Compute.DeleteDisk"),
                 ("EndVmAsync", "Compute.DeleteVm"), // ArgFor passes delete: true
+                ("RestoreVmLabelsAsync", "Compute.RestoreVmLabels"), // issue #970
             ],
             ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync", "WasPreemptedAsync"]),
         [typeof(IStorageGateway)] = (
@@ -485,6 +486,7 @@ public class CloudAuditTests
         _ when type == typeof(QuotaIncreaseRequest) => new QuotaIncreaseRequest("NVIDIA_L4_GPUS", "us-central1", 1, "pref-1", "JUSTIFICATION-" + Secret),
         _ when type == typeof(BudgetSpec) => new BudgetSpec("acct-1", "p", "i", 50m),
         _ when type == typeof(IReadOnlyList<string>) => new[] { "compute.googleapis.com" },
+        _ when type == typeof(IReadOnlyDictionary<string, string>) => new Dictionary<string, string> { ["app"] = "dna-entropy-graph" },
         _ => throw new NotSupportedException("teach CloudAuditTests.ArgFor to build a " + type.Name),
     };
 

@@ -322,7 +322,7 @@ public sealed class RunCloudResults : IRunCloudResults
         if (string.IsNullOrWhiteSpace(run.OutputDir))
         {
             // Issue #934: a folder made here is the run's own, so it gets the marker a later delete requires.
-            var created = RunOutputFolders.CreateUnique(root, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, jobId: run.JobId);
+            var created = RunOutputFolders.CreateUnique(root, RunOutputFolders.RedownloadFolderName(run), jobId: run.JobId);
             await _runs.UpsertAsync(run with { OutputDir = created }, cancellationToken).ConfigureAwait(false);
             return Path.TrimEndingDirectorySeparator(Path.GetFullPath(created));
         }

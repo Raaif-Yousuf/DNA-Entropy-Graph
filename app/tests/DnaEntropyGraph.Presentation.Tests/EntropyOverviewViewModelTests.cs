@@ -179,6 +179,25 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_templated_runs_picture_goes_into_its_templated_results_folder_and_makes_no_exports_folder()
+    {
+        // Issue #955: only an earlier-version import gets an exports folder (named from its own name, no template exists for it); a templated run's picture
+        // goes into the run folder the template named, so no second folder is made and none needs the run marker.
+        var own = Path.Combine(_dir, "seq_evo2_7b");
+        Directory.CreateDirectory(own);
+        var exports = Path.Combine(_dir, "exports955");
+        Directory.CreateDirectory(exports);
+        var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = @"C:\data\seq.fasta", NameTemplate = "{file}_{model}" };
+        var vm = await ResultsFor(Row("cloud-955", own) with { Target = "cloud", OptionsJson = RunOptionsJson.Serialize(options) }, exports, WritingExporter());
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        File.Exists(Path.Combine(own, "chr1.entropy.png")).ShouldBeTrue();
+        Directory.EnumerateFileSystemEntries(exports).ShouldBeEmpty();
+        Directory.EnumerateDirectories(_dir).Select(Path.GetFileName).ShouldNotContain(n => n!.Contains("exports", StringComparison.Ordinal) && n.Contains("seq", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Two_pictures_of_an_earlier_version_run_share_one_exports_folder_and_the_second_is_numbered()
     {
         var own = Path.Combine(_dir, "proto3");
