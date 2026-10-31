@@ -13,15 +13,22 @@ internal sealed class MemoryProjectStore : IProjectSettingsStore
 
     public Exception? FailListWith { get; set; }
 
-    public Task<IReadOnlyList<ProjectSettings>> GetKnownAsync(string? accountSub, CancellationToken cancellationToken)
+    /// <summary>Runs inside <see cref="GetKnownAsync"/>, as the real store's awaited read would: a test switches the account here to prove nothing is written for the wrong one.</summary>
+    public Action? DuringGetKnown { get; set; }
+
+    /// <summary>Runs inside <see cref="EnsureAsync"/> after the row is written (the account changes while a switch is saving).</summary>
+    public Action? DuringEnsure { get; set; }
+
+    public async Task<IReadOnlyList<ProjectSettings>> GetKnownAsync(string? accountSub, CancellationToken cancellationToken)
     {
+        await Task.Yield();
+        DuringGetKnown?.Invoke();
         if (FailListWith is not null)
         {
             throw FailListWith;
         }
 
-        return Task.FromResult<IReadOnlyList<ProjectSettings>>(
-            accountSub is null ? [] : Rows.Values.Where(p => Chosen.GetValueOrDefault(accountSub)?.Contains(p.ProjectId) == true).ToList());
+        return accountSub is null ? [] : Rows.Values.Where(p => Chosen.GetValueOrDefault(accountSub)?.Contains(p.ProjectId) == true).ToList();
     }
 
     public Task<ProjectSettings?> GetAsync(string projectId, CancellationToken cancellationToken) => Task.FromResult(Rows.GetValueOrDefault(projectId));
@@ -44,6 +51,7 @@ internal sealed class MemoryProjectStore : IProjectSettingsStore
             set.Add(projectId);
         }
 
+        DuringEnsure?.Invoke();
         return Task.CompletedTask;
     }
 

@@ -81,11 +81,18 @@ public sealed partial class ProjectSwitchSettingsViewModel : ObservableObject
     {
         if (_dispatcher is null)
         {
-            _ = LoadAsync();
+            StartAccountRefresh();
             return;
         }
 
-        _dispatcher.Enqueue(() => _ = LoadAsync());
+        _dispatcher.Enqueue(StartAccountRefresh);
+    }
+
+    /// <summary>"Switched to X" (or a failure) belongs to the previous account's card: clear it, then list for the account that is active now.</summary>
+    private void StartAccountRefresh()
+    {
+        Status = string.Empty;
+        _ = LoadAsync();
     }
 
     [RelayCommand]
@@ -104,7 +111,12 @@ public sealed partial class ProjectSwitchSettingsViewModel : ObservableObject
         {
             // Whatever the store or the run history threw (a disk, a locked database, anything unforeseen): one message with its action, never an exception on a task nobody reads.
             System.Diagnostics.Trace.TraceWarning($"project list failed: {ex.GetType().Name}");
-            Status = _strings.GetString("ProjectListFailed");
+            if (generation == Volatile.Read(ref _refreshGeneration))
+            {
+                // Only the newest refresh reports: an older one failing must not overwrite what the newer one is about to show.
+                Status = _strings.GetString("ProjectListFailed");
+            }
+
             return;
         }
 

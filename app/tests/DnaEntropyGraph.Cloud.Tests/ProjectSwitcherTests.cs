@@ -263,6 +263,32 @@ public class ProjectSwitcherTests
     }
 
     [Fact]
+    public async Task An_account_change_while_the_list_is_read_never_files_the_new_accounts_project_under_the_old_account()
+    {
+        // The card refreshes on exactly AccountChanged: the account (and its project) can change while the store is being read.
+        var gcp = NewGcp("project-a").WithAccount("sub-2", "b@example.test", "project-z").WithAccountProject("sub-2", "project-z");
+        _store.DuringGetKnown = () => gcp.SwitchAccountAsync("sub-2", CancellationToken.None).GetAwaiter().GetResult();
+
+        await Switcher(gcp).ListAsync(CancellationToken.None);
+
+        gcp.SelectedProjectId.ShouldBe("project-z", "vacuity: the account really changed during the read");
+        _store.Chosen.Values.SelectMany(x => x).ShouldNotContain("project-z", "the new account's project is never written under the old sub");
+        _store.Chosen.ContainsKey("sub-2").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_account_change_while_the_switch_is_being_saved_selects_nothing()
+    {
+        var gcp = NewGcp("project-a").WithAccount("sub-2", "b@example.test", "project-z").WithAccountProject("sub-2", "project-z");
+        _store.DuringEnsure = () => gcp.SwitchAccountAsync("sub-2", CancellationToken.None).GetAwaiter().GetResult();
+
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => Switcher(gcp).SwitchAsync("project-b", CancellationToken.None));
+
+        failure.Code.ShouldBe(AuthErrorCodes.AccountChangedDuringSwitch);
+        gcp.SelectedProjectId.ShouldBe("project-z", "the account now active keeps ITS project");
+    }
+
+    [Fact]
     public async Task One_switch_reads_the_account_once_check_remember_and_select_all_use_that_one()
     {
         var gcp = NewGcp("project-a");

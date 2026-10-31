@@ -39,7 +39,9 @@ public sealed class ProjectSwitcher
     /// </summary>
     public async Task<IReadOnlyList<ProjectSettings>> ListAsync(CancellationToken cancellationToken)
     {
+        // The account and its project are read together, before any await: the card refreshes on exactly AccountChanged, so the account can change while the store is read.
         var sub = _account.CurrentAccount?.Sub;
+        var currentProject = _account.SelectedProjectId;
         var known = (await _store.GetKnownAsync(sub, cancellationToken).ConfigureAwait(false)).ToDictionary(p => p.ProjectId, StringComparer.Ordinal);
 
         var rows = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
@@ -55,11 +57,16 @@ public sealed class ProjectSwitcher
             }
         }
 
-        if (_account.SelectedProjectId is { Length: > 0 } current)
+        if (currentProject is { Length: > 0 } current)
         {
             // A project chosen in the wizard (or before the AccountProjects table existed) was never written for this account. Record it now, so it stays in the list after a
-            // switch away from it. Best effort: the list still shows it as the current project when the store cannot be written.
-            await TryRecordAsync(current, sub, cancellationToken).ConfigureAwait(false);
+            // switch away from it. Best effort: the list still shows it as the current project when the store cannot be written. Only while the account and project read
+            // above are still the active ones: otherwise the NEW account's project would be written permanently under the OLD account (the refresh for the change follows).
+            if (string.Equals(_account.CurrentAccount?.Sub, sub, StringComparison.Ordinal) && string.Equals(_account.SelectedProjectId, current, StringComparison.Ordinal))
+            {
+                await TryRecordAsync(current, sub, cancellationToken).ConfigureAwait(false);
+            }
+
             if (!known.ContainsKey(current))
             {
                 known[current] = await _store.GetAsync(current, cancellationToken).ConfigureAwait(false) ?? new ProjectSettings(current);
@@ -93,13 +100,18 @@ public sealed class ProjectSwitcher
             EnsureSameAccount(sub);
         }
 
+        // Nothing is written for an account other than the one the switch started with, and the project left is recorded only while it is still the one selected.
+        EnsureSameAccount(sub);
+        var recordLeaving = leaving is { Length: > 0 }
+            && !string.Equals(projectId, leaving, StringComparison.Ordinal)
+            && string.Equals(_account.SelectedProjectId, leaving, StringComparison.Ordinal);
         ProjectSettings settings;
         try
         {
-            if (leaving is { Length: > 0 } && !string.Equals(projectId, leaving, StringComparison.Ordinal))
+            if (recordLeaving)
             {
                 // The project being LEFT is recorded for the account too (the wizard never wrote it), so it is still offered after the switch.
-                await _store.EnsureAsync(leaving, sub, cancellationToken).ConfigureAwait(false);
+                await _store.EnsureAsync(leaving!, sub, cancellationToken).ConfigureAwait(false);
             }
 
             await _store.EnsureAsync(projectId, sub, cancellationToken).ConfigureAwait(false);

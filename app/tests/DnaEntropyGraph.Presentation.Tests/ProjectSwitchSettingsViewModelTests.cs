@@ -197,6 +197,24 @@ public class ProjectSwitchSettingsViewModelTests
         _store.ReceivedCalls().Count().ShouldBe(calls, "a detached card no longer reacts to the account");
     }
 
+    [Fact]
+    public async Task An_account_change_clears_the_previous_accounts_status_message()
+    {
+        var vm = new ProjectSwitchSettingsViewModel(new ProjectSwitcher(_account, _store, _runs, _setup), _account, _strings, new InlineDispatcher());
+        await vm.LoadAsync();
+        vm.ChosenProjectId = "project-b";
+        await vm.SwitchCommand.ExecuteAsync(null);
+        vm.Status.ShouldContain("ProjectSwitched", customMessage: "vacuity: there was a message to clear");
+
+        _account.CurrentAccount.Returns(new AccountInfo("sub-2", "b@example.test"));
+        _account.SelectedProjectId.Returns("project-z");
+        _store.GetKnownAsync("sub-2", Arg.Any<CancellationToken>()).Returns([new ProjectSettings("project-z")]);
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+
+        await WaitUntilAsync(() => vm.CurrentProjectId == "project-z");
+        vm.Status.ShouldBeEmpty();
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         for (var i = 0; i < 200 && !condition(); i++)

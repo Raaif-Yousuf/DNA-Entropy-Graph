@@ -171,6 +171,8 @@ public sealed partial class WizardViewModel : ObservableObject
     [RelayCommand]
     private async Task ChooseProjectAsync(string? projectId, CancellationToken cancellationToken)
     {
+        // The account the choice is made under, read before the call that applies it to whoever is active.
+        var sub = _gcpAccount.CurrentAccount?.Sub;
         try
         {
             await _gcpAccount.SelectProjectAsync(projectId ?? string.Empty, cancellationToken).ConfigureAwait(false);
@@ -185,7 +187,7 @@ public sealed partial class WizardViewModel : ObservableObject
             return;
         }
 
-        await RecordChosenProjectAsync(projectId, cancellationToken).ConfigureAwait(false);
+        await RecordChosenProjectAsync(projectId, sub, cancellationToken).ConfigureAwait(false);
         OnUiThread(() =>
         {
             ProjectErrorText = string.Empty;
@@ -199,10 +201,11 @@ public sealed partial class WizardViewModel : ObservableObject
     /// Records the chosen project in the signed-in account's own list (issue #260), so the Settings project list still offers it after a switch to another. The choice itself is already
     /// stored on the account; this is the convenience copy, so a store that cannot be written never turns a good choice into an error.
     /// </summary>
-    private async Task RecordChosenProjectAsync(string? projectId, CancellationToken cancellationToken)
+    private async Task RecordChosenProjectAsync(string? projectId, string? sub, CancellationToken cancellationToken)
     {
-        var sub = _gcpAccount.CurrentAccount?.Sub;
-        if (_projectStore is null || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(sub))
+        // Under the account the choice started with, and only while that account is still the active one: a change in between must not file the project under the other account.
+        if (_projectStore is null || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(sub)
+            || !string.Equals(_gcpAccount.CurrentAccount?.Sub, sub, StringComparison.Ordinal))
         {
             return;
         }

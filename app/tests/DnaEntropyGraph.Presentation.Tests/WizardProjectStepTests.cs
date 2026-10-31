@@ -65,6 +65,21 @@ public class WizardProjectStepTests
     }
 
     [Fact]
+    public async Task A_project_chosen_while_the_account_changes_is_not_filed_under_the_other_account()
+    {
+        var account = NewAccount();
+        account.CurrentAccount.Returns(new AccountInfo("sub-1", "a@example.test"));
+        account.SelectProjectAsync("my-project-1", Arg.Any<CancellationToken>()).Returns(Task.CompletedTask)
+            .AndDoes(_ => account.CurrentAccount.Returns(new AccountInfo("sub-2", "b@example.test")));
+        var store = Substitute.For<IProjectSettingsStore>();
+        var viewModel = new WizardViewModel(account, Substitute.For<IDialogService>(), Substitute.For<INavigator>(), Strings(), projectStore: store);
+
+        await viewModel.ChooseProjectCommand.ExecuteAsync("my-project-1");
+
+        await store.DidNotReceive().EnsureAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task A_store_that_cannot_be_written_never_turns_a_good_choice_into_an_error()
     {
         var account = NewAccount();
