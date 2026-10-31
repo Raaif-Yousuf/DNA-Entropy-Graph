@@ -289,7 +289,7 @@ def run_bounded(
         if kill_job is not None:
             kill_job.close()
         raise
-    if job and os.name == "nt" and not assigned:
+    if job and wt_venv.needs_taskkill_fallback(assigned):
         print("WARNING: no job object for the premerge tree; falling back to taskkill /T by PID", file=sys.stderr, flush=True)
         if kill_job is not None:
             kill_job.close()

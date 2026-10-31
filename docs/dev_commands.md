@@ -303,7 +303,10 @@ queued from hung (#996). It passes the child's exit code through, and on Ctrl-C 
 (its own job object, then `taskkill /T`; #930) and exits 130 (tested in-process with the wait stubbed to raise `KeyboardInterrupt`).
 `heavy.py --status` lists every slot and exits 0: for a held slot its lane, pid, start, age, whether the pid is alive and the cumulative
 CPU of its process tree (ctypes Toolhelp32 on Windows, `/proc` elsewhere, no psutil; exited descendants are not counted, so CPU is a
-lower bound); a free slot prints `slot N: free`. Slots are OS-held file locks under `%TEMP%\deg-heavy\`
+lower bound); a free slot prints `slot N: free`. All `heavy:` diagnostics (waiting, still queued, note, warning) go to stderr; stdout is the
+command's own. `--status` and the waiting line probe a slot by briefly taking its lock, so a launch racing a probe can print one spurious
+waiting line, and a slot's `.info` can be stale between a holder taking the lock and writing it: the output is a snapshot, not a
+transaction (no redesign planned). Slots are OS-held file locks under `%TEMP%\deg-heavy\`
 (`--lock-dir` or `$HEAVY_LOCK_DIR` to move them), so a killed agent frees its slot; each holder also writes
 `slot-N.info` (pid, lane, start, first 80 characters of the command), and a leftover info file next to a free
 slot is ignored. The lock is **per user**: it lives in that user's `%TEMP%`, so two Windows accounts on one

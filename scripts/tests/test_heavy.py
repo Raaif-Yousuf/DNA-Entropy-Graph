@@ -594,16 +594,41 @@ def test_slot_status_marks_a_dead_pid_not_alive_and_without_cpu(tmp_path):
     assert row["alive"] is False and row["cpu_s"] is None and row["age_s"] is not None and row["age_s"] > 3600
 
 
-def test_tree_cpu_counts_a_child_process():
-    child = subprocess.Popen([sys.executable, "-c", "x = 0\nfor i in range(3_000_000): x += i\nimport time; time.sleep(30)"])
+def test_tree_cpu_counts_a_grandchild_through_its_child(tmp_path):
+    """child -> grandchild burner. `_descendants(child)` must contain the grandchild (a version returning only {root} fails here)
+    and the tree's CPU must be at least what the grandchild alone has used."""
+    pidfile = tmp_path / "gc.pid"
+    burner = "x = 0\nfor i in range(4_000_000): x += i\nimport time; time.sleep(60)"
+    child_code = (
+        "import subprocess, sys, time\n"
+        f"p = subprocess.Popen([sys.executable, '-c', {burner!r}])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    child = subprocess.Popen([sys.executable, "-c", child_code])
+    gc_pid = 0
     try:
-        time.sleep(1.5)
-        mine = heavy.tree_cpu_seconds(os.getpid())
-        child_only = heavy.tree_cpu_seconds(child.pid)
-        assert child_only is not None and child_only > 0
-        assert mine is not None and mine >= child_only
+        deadline = time.time() + 30
+        while not pidfile.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        gc_pid = int(pidfile.read_text())
+        time.sleep(2.0)  # let the burner run
+        table = heavy._win_process_table() if heavy.IS_WINDOWS else {c: v[0] for c, v in heavy._posix_process_table().items()}
+        assert gc_pid in heavy._descendants(child.pid, table)
+        gc_cpu = heavy.tree_cpu_seconds(gc_pid)
+        tree = heavy.tree_cpu_seconds(child.pid)
+        assert gc_cpu is not None and gc_cpu > 0
+        assert tree is not None and tree >= gc_cpu
     finally:
         _kill_pid(child.pid)
+        if gc_pid:
+            _kill_pid(gc_pid)
+
+
+def test_descendants_walks_several_levels_whatever_the_table_order():
+    parents = {5: 4, 4: 3, 3: 1, 9: 8}  # 5 -> 4 -> 3 -> 1, listed child-first; 9 is someone else's
+    assert heavy._descendants(1, parents) == {1, 3, 4, 5}
+    assert heavy._descendants(7, parents) == {7}
 
 
 def test_waiting_line_says_how_long_the_holder_has_held_the_slot():
@@ -627,7 +652,9 @@ def test_acquire_slot_ticks_while_waiting_and_not_before_the_interval(tmp_path):
     slot = heavy.acquire_slot(tmp_path, 1, poll=0.05, on_wait=waits.append, on_tick=lambda h, waited: ticks.append(waited), tick_interval=0.5)
     slot.release()
     assert len(waits) == 1
-    assert 1 <= len(ticks) <= 3 and ticks == sorted(ticks) and ticks[0] >= 0.5
+    assert ticks, "no tick while queued past the interval"
+    assert ticks == sorted(ticks) and ticks[0] >= 0.5  # never before the interval
+    assert len(ticks) < ticks[-1] / 0.5 + 1  # never faster than one per interval (no upper bound on lateness: load makes it flaky)
 
 
 def test_the_waiting_line_goes_to_stderr_not_stdout(tmp_path):
@@ -640,13 +667,24 @@ def test_the_waiting_line_goes_to_stderr_not_stdout(tmp_path):
         stderr=subprocess.PIPE,
         text=True,
     )
+    err_q: queue.Queue[str | None] = queue.Queue()
+
+    def pump_stderr() -> None:
+        assert p2.stderr is not None
+        for line in p2.stderr:
+            err_q.put(line)
+        err_q.put(None)
+
+    threading.Thread(target=pump_stderr, daemon=True).start()
     try:
-        time.sleep(1.0)
+        first = err_q.get(timeout=60)  # the waiting line itself, not a sleep, says it is queued
     finally:
         gate.write_text("go", encoding="utf-8", newline="\n")
-    out, err = p2.communicate(timeout=60)
+    assert p2.stdout is not None
+    out = p2.stdout.read()  # not communicate(): the stderr thread owns that pipe
+    p2.wait(timeout=60)
     p1.wait(timeout=30)
-    assert "heavy: waiting" in err and "holder" in err
+    assert first is not None and "heavy: waiting" in first and "holder" in first
     assert "waiting" not in out
 
 
@@ -686,3 +724,135 @@ def test_ctrl_c_ends_a_detached_grandchild_whose_parent_already_exited(tmp_path,
         assert not _pid_alive(pid), f"detached grandchild {pid} survived Ctrl-C"
     finally:
         _kill_pid(pid)
+
+
+# --- review round: pid_alive access denied, kill ordering, diagnostics on stderr, errno None -----
+
+
+@pytest.mark.skipif(not heavy.IS_WINDOWS, reason="OpenProcess is Windows only")
+@pytest.mark.parametrize(("last_error", "alive"), [(5, True), (87, False)])
+def test_pid_alive_treats_access_denied_as_alive_and_invalid_parameter_as_gone(monkeypatch, last_error, alive):
+    import ctypes
+
+    class K32:
+        @staticmethod
+        def OpenProcess(*_a):  # noqa: N802 (a ctypes name)
+            return 0
+
+    monkeypatch.setattr(heavy, "_win_k32", lambda: K32)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error)
+    assert heavy.pid_alive(4242) is alive
+
+
+class _FakeProc:
+    def __init__(self):
+        self.waited = False
+
+    def wait(self, timeout=None):
+        self.waited = True
+        return 0
+
+
+class _FakeJob:
+    def __init__(self, result=True, raises=False):
+        self.result, self.raises, self.terminated = result, raises, False
+
+    def terminate(self):
+        self.terminated = True
+        if self.raises:
+            raise OSError("boom")
+        return self.result
+
+
+def test_kill_child_tree_skips_taskkill_when_the_job_terminated(monkeypatch):
+    calls: list[object] = []
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda proc: calls.append(proc))
+    proc, job = _FakeProc(), _FakeJob(result=True)
+    heavy._kill_child_tree(proc, job)  # type: ignore[arg-type]
+    assert job.terminated and calls == [] and proc.waited
+
+
+def test_kill_child_tree_falls_back_to_kill_tree_when_the_job_failed_or_raised(monkeypatch):
+    for job in (_FakeJob(result=False), _FakeJob(raises=True), None):
+        calls: list[object] = []
+        monkeypatch.setattr(heavy.wt_venv, "kill_tree", lambda proc, calls=calls: calls.append(proc))
+        proc = _FakeProc()
+        heavy._kill_child_tree(proc, job)  # type: ignore[arg-type]
+        assert calls == [proc], f"kill_tree not reached for {job!r}"
+        assert proc.waited
+
+
+def test_kill_child_tree_still_waits_when_kill_tree_raises(monkeypatch):
+    def boom(_proc):
+        raise OSError("taskkill missing")
+
+    monkeypatch.setattr(heavy.wt_venv, "kill_tree", boom)
+    proc = _FakeProc()
+    heavy._kill_child_tree(proc, _FakeJob(result=False))  # type: ignore[arg-type]
+    assert proc.waited
+
+
+def test_the_no_job_note_goes_to_stderr(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: "CreateJobObject error 5")
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "heavy: note: no kill-on-close job" in captured.err
+    assert "heavy:" not in captured.out
+
+
+def test_an_oserror_without_errno_prints_its_message_not_errno_none(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+
+    def refuse(*_a, **_k):
+        raise OSError("could not resume the suspended process 99")
+
+    monkeypatch.setattr(heavy.wt_venv, "spawn_in_job", refuse)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", sys.executable, "-c", "pass"])
+    err = capsys.readouterr().err
+    assert rc == 127
+    assert "errno None" not in err
+    assert "could not resume the suspended process 99" in err
+    assert err.isascii()
+
+
+def test_an_oserror_with_an_errno_still_prints_it(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(heavy, "kill_children_with_me", lambda: None)
+    rc = heavy.main(["--slots", "1", "--lock-dir", str(tmp_path), "--", str(tmp_path / "no-such-program-xyz")])
+    err = capsys.readouterr().err
+    assert rc == 127 and "errno 2" in err
+
+
+def test_kill_children_with_me_joins_the_shared_job_helper(monkeypatch):
+    """No second ctypes job implementation: heavy asks wt_venv.create_kill_job and assigns its own process to it."""
+    events: list[str] = []
+
+    class Job:
+        def assign_self(self):
+            events.append("assign_self")
+            return True
+
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: Job())
+    monkeypatch.setattr(heavy, "_JOB_HANDLE", None)
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    assert heavy.kill_children_with_me() is None
+    assert events == ["assign_self"]
+
+
+def test_kill_children_with_me_reports_why_it_could_not(monkeypatch):
+    monkeypatch.setattr(heavy, "IS_WINDOWS", True)
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: None)
+    assert "CreateJobObject" in (heavy.kill_children_with_me() or "")
+
+    class Job:
+        closed = False
+
+        def assign_self(self):
+            return False
+
+        def close(self):
+            Job.closed = True
+
+    monkeypatch.setattr(heavy.wt_venv, "create_kill_job", lambda: Job())
+    assert "AssignProcessToJobObject" in (heavy.kill_children_with_me() or "")
+    assert Job.closed

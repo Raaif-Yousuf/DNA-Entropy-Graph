@@ -118,9 +118,17 @@ class KillJob:
             return False
         return bool(self._k32.AssignProcessToJobObject(self._handle, int(child)))
 
-    def terminate(self) -> None:
-        if self._handle is not None:
-            self._k32.TerminateJobObject(self._handle, 1)
+    def assign_self(self) -> bool:
+        """Put THIS process in the job (heavy.py's wrapper: a hard-killed wrapper then takes its children with it)."""
+        if self._handle is None:
+            return False
+        return bool(self._k32.AssignProcessToJobObject(self._handle, self._k32.GetCurrentProcess()))
+
+    def terminate(self) -> bool:
+        """End every process in the job. True only when Windows accepted the call (a False means nothing is known to be dead)."""
+        if self._handle is None:
+            return False
+        return bool(self._k32.TerminateJobObject(self._handle, 1))
 
     def close(self) -> None:
         if self._handle is not None:
@@ -188,7 +196,8 @@ def spawn_in_job(
     job: KillJob | None,
     **popen_kwargs: Any,  # noqa: ANN401  (stdout=, stderr=, ...)
 ) -> tuple[subprocess.Popen[bytes], bool]:
-    """Start `argv` with inherited stdio and put it in `job` BEFORE it runs (Windows: CREATE_SUSPENDED, assign, resume), so
+    """Start `argv` (stdio inherited unless `popen_kwargs` redirect it) and put it in `job` BEFORE it runs
+    (Windows: CREATE_SUSPENDED, assign, resume), so
     nothing it starts can be outside the job. Returns (process, assigned). An assignment that fails still resumes the child
     (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job. `popen_kwargs` (stdout=, stderr=)
     go to Popen; `creationflags` is not accepted (it is how the child is suspended)."""
@@ -202,8 +211,18 @@ def spawn_in_job(
             raise OSError(f"could not resume the suspended process {proc.pid}")  # it would sit suspended forever
     except BaseException:
         proc.kill()  # any failure, Ctrl-C included, leaves no suspended or orphaned child
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):  # the caller never sees `proc`, so nobody else would close these
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
         raise
     return proc, assigned
+
+
+def needs_taskkill_fallback(assigned: bool) -> bool:
+    """True when a child started with `spawn_in_job` is NOT covered by a job (Windows only: POSIX uses the process group), so the
+    caller must warn and rely on `taskkill /T`. The one place that decides this."""
+    return os.name == "nt" and not assigned
 
 
 def create_kill_job() -> KillJob | None:
@@ -249,6 +268,8 @@ def create_kill_job() -> KillJob | None:
         k32.AssignProcessToJobObject.restype = wintypes.BOOL
         k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
         k32.TerminateJobObject.restype = wintypes.BOOL
+        k32.GetCurrentProcess.argtypes = []
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
         k32.CloseHandle.argtypes = [wintypes.HANDLE]
         k32.CloseHandle.restype = wintypes.BOOL
         handle = k32.CreateJobObjectW(None, None)

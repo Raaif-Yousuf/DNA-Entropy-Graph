@@ -503,22 +503,24 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> bool:
     only the direct child leaves a grandchild holding the output pipe, so the gate would block.
     Windows: terminate the gate's Job Object first (it holds a grandchild whose parent already exited, which
     `taskkill /T` cannot reach: MEASURED 2026-10-30, a detached grandchild of an exited child survived it),
-    then `taskkill /T` by PID as a belt. A terminated job counts as a successful kill.
+    then `taskkill /T` by PID as a belt. The kill counts as done when Windows accepted TerminateJobObject OR taskkill exited 0.
     Never raises; returns False when the tree kill itself did not work."""
     ok = True
     job = _GATE_JOBS.get(proc.pid)
+    job_terminated = False
+    if job is not None:
+        with contextlib.suppress(OSError):
+            job_terminated = job.terminate()
     try:
-        if job is not None:
-            job.terminate()
         if os.name == "nt":
             done = subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=60)
-            ok = done.returncode == 0 or job is not None  # taskkill finds nothing once the direct child has exited
+            ok = job_terminated or done.returncode == 0  # taskkill finds nothing once the direct child has exited
         else:
             os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # the group was already gone: nothing survived
     except (OSError, subprocess.SubprocessError):
-        ok = False
+        ok = job_terminated
     finally:
         with contextlib.suppress(OSError):
             proc.kill()
@@ -547,7 +549,7 @@ def _run_capture(argv: list[str], cwd: Path, timeout: float, env: dict[str, str]
         if job is not None:
             job.close()
         raise
-    if os.name == "nt" and not assigned:
+    if wt_venv.needs_taskkill_fallback(assigned):
         print(
             "WARNING: no job object for a gate tree; falling back to taskkill /T by PID "
             "(a grandchild whose parent exited may survive a timeout)",

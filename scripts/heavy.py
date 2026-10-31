@@ -24,7 +24,10 @@ line names the holders whose lock is held right now and says to stop a stuck one
 
 The child's stdout/stderr are inherited (a long run streams). Its exit code is this script's exit
 code. Ctrl-C ends the command's whole tree (its own job object, then taskkill /T; #930) and exits 130. `--status` lists the
-slot holders (#996); the waiting lines go to stderr. Exit 2 is
+slot holders (#996). Every `heavy:` diagnostic (waiting, still queued, note, warning) goes to stderr; stdout is the command's own.
+`--status` and the waiting line probe a slot by briefly taking its lock, so a launch racing a probe can print one spurious waiting
+line, and a slot's .info can be stale for the moment between taking the lock and writing it (the row then shows the previous
+holder or `?`). A snapshot, not a transaction; no redesign planned. Exit 2 is
 a usage error; 127 means the command could not be started.
 
 Hard kill: on Windows the wrapper puts itself in a job object with KILL_ON_JOB_CLOSE before it starts
@@ -178,67 +181,21 @@ def inject_artifacts_path(argv: list[str], lane: str, base: str) -> list[str]:
     return argv + extra
 
 
-_JOB_HANDLE = None  # kept open for the process lifetime: closing it is what kills the group
+_JOB_HANDLE: wt_venv.KillJob | None = None  # kept open for the process lifetime: closing it is what kills the group
 
 
 def kill_children_with_me() -> str | None:
-    """Windows: join a kill-on-close job object. Returns None on success, else a short ASCII reason."""
+    """Windows: join a kill-on-close job object (the shared `wt_venv.KillJob`, #958/#930). Returns None on success, else a short ASCII reason."""
     global _JOB_HANDLE
     if not IS_WINDOWS:
         return None
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        class _Basic(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", ctypes.c_int64),
-                ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", wintypes.DWORD),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t),
-                ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class _Io(ctypes.Structure):
-            _fields_ = [(n, ctypes.c_uint64) for n in ("ro", "wo", "oo", "rb", "wb", "ob")]
-
-        class _Extended(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", _Basic),
-                ("IoInfo", _Io),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.CreateJobObjectW.restype = wintypes.HANDLE
-        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-        k32.SetInformationJobObject.restype = wintypes.BOOL
-        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-        k32.AssignProcessToJobObject.restype = wintypes.BOOL
-        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        k32.GetCurrentProcess.restype = wintypes.HANDLE
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-
-        job = k32.CreateJobObjectW(None, None)
-        if not job:
-            return f"CreateJobObject error {ctypes.get_last_error()}"
-        info = _Extended()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):  # 9 = ExtendedLimitInformation
-            err = ctypes.get_last_error()
-            k32.CloseHandle(job)
-            return f"SetInformationJobObject error {err}"
-        if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
-            err = ctypes.get_last_error()
-            k32.CloseHandle(job)
-            return f"AssignProcessToJobObject error {err}"
+        job = wt_venv.create_kill_job()
+        if job is None:
+            return "CreateJobObject/SetInformationJobObject failed"
+        if not job.assign_self():
+            job.close()
+            return "AssignProcessToJobObject failed"
         _JOB_HANDLE = job
         return None
     except Exception as e:  # never let the safety net stop the run
@@ -465,7 +422,7 @@ def pid_alive(pid: int) -> bool:
         k32 = _win_k32()
         handle = k32.OpenProcess(0x1000, False, pid)
         if not handle:
-            return False
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists, we may not query it (87 = no such pid)
         try:
             code = wintypes.DWORD()
             return bool(k32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
@@ -625,11 +582,16 @@ def _wait_child(proc: subprocess.Popen[bytes]) -> int:
 
 def _kill_child_tree(proc: subprocess.Popen[bytes], job: wt_venv.KillJob | None) -> None:
     """Ctrl-C: end the command's whole tree (#930), including a grandchild whose parent already exited. The job first
-    (Windows), then taskkill /T by PID or the process group as the fallback. Never raises."""
+    (Windows); taskkill /T by PID or the process group only when there was no job or it did not accept the call.
+    Each step is guarded on its own, so one failing never skips the next. Never raises."""
+    terminated = False
+    if job is not None:
+        with contextlib.suppress(Exception):
+            terminated = job.terminate()
+    if not terminated:
+        with contextlib.suppress(Exception):
+            wt_venv.kill_tree(proc)
     with contextlib.suppress(Exception):
-        if job is not None:
-            job.terminate()
-        wt_venv.kill_tree(proc)
         proc.wait(timeout=10)
 
 
@@ -650,7 +612,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--set-slots", type=int, default=None, metavar="N", help="record the machine-wide limit in <lock-dir>/slots.txt and exit"
     )
-    parser.add_argument("--status", action="store_true", help="list each slot's holder (pid, lane, start, age, alive, tree CPU) and exit 0")
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="list each slot's holder (pid, lane, start, age, alive, tree CPU) and exit 0; a snapshot, see the docstring",
+    )
     parser.add_argument("--lane", default=None, help="required for dotnet build|test|run|pack|publish: names the --artifacts-path dir")
     parser.add_argument("--lock-dir", type=Path, default=None, help="slot directory (default $HEAVY_LOCK_DIR or %%TEMP%%\\deg-heavy)")
     parser.add_argument("--poll", type=float, default=DEFAULT_POLL, help="seconds between slot checks while waiting")
@@ -702,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
     child_job: wt_venv.KillJob | None = None
     job_problem = kill_children_with_me()
     if job_problem:
-        print(f"heavy: note: no kill-on-close job ({job_problem}); a hard-killed wrapper will not stop its child", flush=True)
+        print(f"heavy: note: no kill-on-close job ({job_problem}); a hard-killed wrapper will not stop its child", file=sys.stderr, flush=True)
     try:
         try:
             slot = acquire_slot(
@@ -723,13 +689,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             proc, assigned = wt_venv.spawn_in_job(resolve_executable(command), dotnet_env(command, dict(os.environ)), Path.cwd(), child_job)
         except OSError as e:
+            why = f"errno {e.errno}" if e.errno is not None else ascii(str(e))
             print(
-                f"ERROR: could not start {ascii(command[0])} ({type(e).__name__}, errno {e.errno}). "
-                "Check the command name and that it is on PATH.",
+                f"ERROR: could not start {ascii(command[0])} ({type(e).__name__}, {why}). Check the command name and that it is on PATH.",
                 file=sys.stderr,
             )
             return 127
-        if IS_WINDOWS and not assigned:
+        if wt_venv.needs_taskkill_fallback(assigned):
             print(
                 "heavy: WARNING: no job object for the command's tree; Ctrl-C falls back to taskkill /T by PID "
                 "(a grandchild whose parent already exited may survive)",
