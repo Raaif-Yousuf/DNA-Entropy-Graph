@@ -99,6 +99,7 @@ public static class RunsCopy
         CloudResultsStatus.ResultNotFound => Pair("Runs_Redownload_ResultNotFound_Title", "Runs_Redownload_ResultNotFound_Body", ToastSeverity.Error),
         CloudResultsStatus.Refused => Pair("Runs_Redownload_Refused_Title", "Runs_Redownload_Refused_Body", ToastSeverity.Error),
         CloudResultsStatus.DriveRootRefused => Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Body", ToastSeverity.Error),
+        CloudResultsStatus.OutputFolderGone => Pair("Runs_Redownload_FolderGone_Title", "Runs_Redownload_FolderGone_Body", ToastSeverity.Error),
         CloudResultsStatus.SignInNeeded => Pair("Runs_Redownload_SignIn_Title", "Runs_Redownload_SignIn_Body", ToastSeverity.Warning),
         _ => Pair("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error),
     };

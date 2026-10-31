@@ -46,6 +46,9 @@ public enum CloudResultsStatus
 
     /// <summary>Issue #830 review M6: the Google account this run was made under is signed out, so nothing could be fetched or deleted. The action is to sign in as that account.</summary>
     SignInNeeded,
+
+    /// <summary>Issue #1047: the folder this run's results were saved to, and the folder that held it, are gone (a disconnected drive, a removed folder). Nothing was made or written. The action is to reconnect the drive or restore the folder, then choose Download again.</summary>
+    OutputFolderGone,
 }
 
 /// <summary>
@@ -198,6 +201,12 @@ public sealed class RunCloudResults : IRunCloudResults
             }
 
             var folder = await ResolveFolderAsync(run, cancellationToken).ConfigureAwait(false);
+            if (folder is null && RootIsGone(run))
+            {
+                // Issue #1047: nothing was made, and retrying cannot fix it, so it is named and the action is to bring the folder back.
+                return CloudResultsStatus.OutputFolderGone;
+            }
+
             if (folder is null)
             {
                 // Issue #954: a drive root is the one refusal the user can do something about, so it says so.
@@ -333,6 +342,13 @@ public sealed class RunCloudResults : IRunCloudResults
             return null;
         }
 
+        // Issue #1047: whatever the row, a missing output root makes nothing here (a re-lettered drive, a folder the user removed). The file download would otherwise
+        // CreateDirectory every missing ancestor, root included, unmarked. RootIsGone names the outcome.
+        if (!EntryExists(folder) && !EntryExists(root))
+        {
+            return null;
+        }
+
         // Issue #1047: Delete files on this PC leaves OutputDir on the row, so a recorded folder that is gone is made again here, with this run's marker, exactly as a folder
         // made by CreateUnique is. Only the one level CreateUnique ever makes (directly inside the output root); anything deeper is a damaged row and keeps the earlier behaviour.
         // A recorded folder that is still there is never touched (an unmarked one stays unmarked, so a pre-marker run keeps its confirmation question), and neither is a link,
@@ -342,6 +358,19 @@ public sealed class RunCloudResults : IRunCloudResults
             RunOutputFolders.CreateMarked(folder, run.JobId, root);
         }
         return folder;
+    }
+
+    /// <summary>True for a row whose recorded folder is inside the output root, whose folder is not there, and whose root is not there either (see <see cref="ResolveFolderAsync"/>).</summary>
+    private bool RootIsGone(RunRecord run)
+    {
+        if (string.IsNullOrWhiteSpace(run.OutputDir))
+        {
+            return false;
+        }
+
+        var root = RunOutputRoot.Resolve(run, _defaultOutputParent);
+        var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
+        return RunOutputRoot.IsContained(folder, root) && !EntryExists(folder) && !EntryExists(root);
     }
 
     private static bool IsDirectChildOf(string folder, string root)

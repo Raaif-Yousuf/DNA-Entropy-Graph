@@ -93,12 +93,12 @@ public sealed class RunCloudResultsRedownloadMarkerTests : IDisposable
     }
 
     [Fact]
-    public async Task A_missing_output_root_is_not_brought_back_by_a_download_again()
+    public async Task A_missing_output_root_is_not_brought_back_by_a_download_again_and_says_the_folder_is_gone()
     {
         Directory.Delete(_root);
         var folder = Path.Combine(_root, "sample");
 
-        (await Results().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldNotBe(CloudResultsStatus.Done);
+        (await Results().RedownloadAsync(Run(folder), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.OutputFolderGone);
 
         Directory.Exists(_root).ShouldBeFalse("a re-lettered drive or a root the user removed is not recreated on their behalf");
     }
@@ -114,6 +114,29 @@ public sealed class RunCloudResultsRedownloadMarkerTests : IDisposable
         File.Exists(Path.Combine(nested, RunFolderMarker.FileName)).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task A_nested_recorded_folder_under_a_missing_output_root_makes_nothing_at_all()
+    {
+        Directory.Delete(_root);
+        var nested = Path.Combine(_root, "a", "b");
+
+        (await Results().RedownloadAsync(Run(nested), CancellationToken.None)).Status.ShouldBe(CloudResultsStatus.OutputFolderGone);
+
+        Directory.Exists(_root).ShouldBeFalse("the root is not made by the file download's CreateDirectory either");
+        Directory.Exists(nested).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_row_with_no_job_id_under_a_missing_output_root_makes_nothing_at_all()
+    {
+        Directory.Delete(_root);
+        var folder = Path.Combine(_root, "sample");
+
+        (await Results().RedownloadAsync(Run(folder) with { JobId = " " }, CancellationToken.None)).Status.ShouldNotBe(CloudResultsStatus.Done);
+
+        Directory.Exists(_root).ShouldBeFalse();
+        Directory.Exists(folder).ShouldBeFalse();
+    }
     [Fact]
     public async Task A_dangling_junction_at_the_recorded_path_is_not_recreated_through_the_link()
     {
