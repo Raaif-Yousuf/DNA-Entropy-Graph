@@ -779,6 +779,23 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
+    public async Task A_finished_run_whose_account_is_signed_out_is_reported_as_needing_sign_in_and_another_accounts_resources_are_untouched()
+    {
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        await rig.SeedFinishedAsync("job-mine", AfterTaskAction.Delete); // the current account's own run, same pass
+        var callsBefore = rig.Gcp.Calls.Count;
+
+        var outcomes = await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        var signIn = outcomes.Single(o => o.JobId == "job-a");
+        signIn.Action.ShouldBe(LifecycleAction.NeedsSignIn, signIn.ErrorCode);
+        signIn.AccountSub.ShouldBe("sub-a");
+        outcomes.Single(o => o.JobId == "job-mine").Action.ShouldBe(LifecycleAction.VmDeleted, "one account being signed out does not stop the pass");
+        rig.Gcp.Calls.Skip(callsBefore).Where(c => c.AccountSub == "sub-a" && c.Method is "StopVm" or "DeleteVm").ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_row_finished_long_ago_is_left_to_the_idle_sweep_not_looked_up()
     {
         var rig = new Rig();

@@ -299,6 +299,23 @@ public class JobReconcilerTests
     }
 
     [Fact]
+    public async Task A_resumed_run_whose_account_is_signed_out_reports_the_named_sign_in_outcome_and_touches_nothing()
+    {
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a").WithSelectedProject("selected-later"));
+        await env.SeedAsync("job-so", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var callsBefore = env.Gcp.Calls.Count;
+
+        var outcome = await OneAsync(env.Reconciler(), "job-so");
+
+        outcome.Action.ShouldBe(ReattachAction.NeedsSignIn, outcome.ErrorCode);
+        outcome.AccountSub.ShouldBe("sub-a");
+        outcome.ErrorCode.ShouldBe(AuthErrorCodes.SigninExpired);
+        env.Row("job-so").Phase.ShouldBe(JobPhase.Running, "nothing was decided about the run: the next launch looks again");
+        env.Gcp.Calls.Skip(callsBefore).Where(c => c.Method is "StopVm" or "DeleteVm" or "CreateVm").ShouldBeEmpty();
+        env.Gcp.Calls.Skip(callsBefore).Where(c => c.ProjectId != Project).ShouldBeEmpty("no call went to another project");
+    }
+
+    [Fact]
     public async Task A_run_killed_while_Downloading_whose_VM_is_long_gone_still_completes()
     {
         // Raw-Compute shape ON PURPOSE (#938 round 5 audit): the terminator tolerates a 404 on delete; the real gateway swallows it, so this proves the terminator's own tolerance only.

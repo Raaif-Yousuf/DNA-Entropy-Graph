@@ -35,10 +35,13 @@ public enum ReattachAction
 
     /// <summary>Not a cloud run (a local-engine run has no cloud state to reattach).</summary>
     Skipped,
+
+    /// <summary>Issue #830: the Google account this run was made under is signed out, so nothing could be asked about it. The row is untouched (nothing about the run was decided) and <see cref="ReattachOutcome.AccountSub"/> names the account to sign in as. Never reported as an unexpected error, and it does not keep the reconnect probe alive.</summary>
+    NeedsSignIn,
 }
 
 /// <summary>One row's outcome. <paramref name="FinalPhase"/> and <paramref name="ErrorCode"/> are what the row ended as, when it ended.</summary>
-public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPhase? FinalPhase = null, string? ErrorCode = null);
+public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPhase? FinalPhase = null, string? ErrorCode = null, string? AccountSub = null);
 
 /// <summary>What the lifecycle enforcement did with one VM (issue #530).</summary>
 public enum LifecycleAction
@@ -57,10 +60,13 @@ public enum LifecycleAction
 
     /// <summary>The cloud refused the stop or delete (permission, org policy, billing). Nothing was changed; <see cref="LifecycleOutcome.ErrorCode"/> names why.</summary>
     Failed,
+
+    /// <summary>Issue #830: the Google account this run's computer belongs to is signed out. Nothing was changed; <see cref="LifecycleOutcome.AccountSub"/> names the account to sign in as, and the pass went on with every other account's rows.</summary>
+    NeedsSignIn,
 }
 
 /// <summary>One VM the lifecycle enforcement acted on, or could not. A VM it looked at and left alone has no outcome.</summary>
-public sealed record LifecycleOutcome(string JobId, string VmName, LifecycleAction Action, string? ErrorCode = null);
+public sealed record LifecycleOutcome(string JobId, string VmName, LifecycleAction Action, string? ErrorCode = null, string? AccountSub = null);
 
 /// <summary>
 /// Issue #59 (docs/architecture.md section 6, "Crash-safe resumption"): on launch, every run a killed or closed app left in a
@@ -540,6 +546,11 @@ public sealed class JobReconciler
         {
             listed = await Lookup(token => _compute.ListByInstallationAsync(scope, installation, token), cancellationToken).ConfigureAwait(false);
         }
+        catch (AccountAuthException ex)
+        {
+            RecordUnexpected(outcomes, string.Empty, string.Empty, ex);
+            return;
+        }
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
             Record(outcomes, string.Empty, string.Empty, ex);
@@ -654,7 +665,10 @@ public sealed class JobReconciler
     {
         lock (outcomes)
         {
-            outcomes.Add(new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name));
+            // Issue #830: an account that is signed out is a named, fixable state (sign in as it), not an error nobody foresaw.
+            outcomes.Add(ex is AccountAuthException auth
+                ? new LifecycleOutcome(jobId, vmName, LifecycleAction.NeedsSignIn, auth.Code, auth.AccountSub)
+                : new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name));
         }
     }
 
@@ -763,6 +777,12 @@ public sealed class JobReconciler
             // A failing repository or an unforeseen error must not stop the other runs from being reattached; the row is
             // left as it is and the next launch tries again. Only a missing answer from the cloud (network class) is Deferred and keeps the
             // reconnect probe alive; anything else is logged by class and left for the next launch (issue #559).
+            if (ex is AccountAuthException auth)
+            {
+                _log.Warning("reconciler", row.JobId, "account-signed-out");
+                return new ReattachOutcome(row.JobId, ReattachAction.NeedsSignIn, null, auth.Code, auth.AccountSub);
+            }
+
             if (IsNoAnswerException(ex))
             {
                 return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, ex is CloudOperationException c ? c.Error.Code : "TIMEOUT");

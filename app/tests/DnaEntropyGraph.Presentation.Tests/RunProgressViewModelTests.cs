@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
@@ -216,5 +217,110 @@ public class RunProgressViewModelTests
         viewModel.JobId = "job-1";
 
         viewModel.LogTailText.ShouldBe($"line one{Environment.NewLine}line two");
+    }
+
+    // ---- Issue #830: a run whose Google account is signed out says which account to sign in as, with a button ----
+
+    private sealed class SignInRig
+    {
+        public SignInRig(IReadOnlyList<AccountInfo>? accounts = null)
+        {
+            var strings = Substitute.For<IStringResourceProvider>();
+            strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+            strings.GetString("RunSignIn_Prompt").Returns("Sign in as {0} to stop this run's computer");
+            Account.Accounts.Returns(accounts ?? [new AccountInfo("sub-a", "a@example.org")]);
+            Dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+            ViewModel = new RunProgressViewModel(Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Dialogs, VmActions, Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), Messenger, Account)
+            {
+                JobId = "job-1",
+            };
+            Messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Running));
+        }
+
+        public IGcpAccount Account { get; } = Substitute.For<IGcpAccount>();
+
+        public IDialogService Dialogs { get; } = Substitute.For<IDialogService>();
+
+        public IRunVmActions VmActions { get; } = Substitute.For<IRunVmActions>();
+
+        public WeakReferenceMessenger Messenger { get; } = new();
+
+        public RunProgressViewModel ViewModel { get; }
+
+        public static AccountAuthException SignedOut(string? sub) => new(AuthErrorCodes.SigninExpired, "signed out", accountSub: sub);
+    }
+
+    [Fact]
+    public async Task Stopping_the_VM_of_a_run_whose_account_is_signed_out_offers_to_sign_in_as_that_account()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")));
+
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasSignInPrompt.ShouldBeTrue();
+        rig.ViewModel.SignInPromptText.ShouldBe("Sign in as a@example.org to stop this run's computer");
+    }
+
+    [Fact]
+    public async Task Deleting_the_VM_of_a_run_whose_account_is_signed_out_offers_the_same_sign_in()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.DeleteVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")));
+
+        await rig.ViewModel.DeleteVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasSignInPrompt.ShouldBeTrue();
+        rig.ViewModel.SignInPromptText.ShouldContain("a@example.org");
+    }
+
+    [Fact]
+    public async Task A_signed_out_account_the_list_no_longer_knows_gets_the_prompt_without_an_email()
+    {
+        var rig = new SignInRig([]);
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-gone")));
+
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasSignInPrompt.ShouldBeTrue();
+        rig.ViewModel.SignInPromptText.ShouldBe("RunSignIn_PromptUnknown");
+    }
+
+    [Fact]
+    public async Task The_sign_in_button_starts_sign_in_and_clears_the_prompt_when_it_succeeds()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")));
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+
+        await rig.Account.Received(1).SignInAsync(Arg.Any<CancellationToken>());
+        rig.ViewModel.HasSignInPrompt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_sign_in_that_fails_keeps_the_prompt_so_the_person_can_try_again()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")));
+        rig.Account.SignInAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException(new AccountAuthException(AuthErrorCodes.SigninCancelled)));
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        await rig.ViewModel.SignInCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasSignInPrompt.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_stop_that_succeeds_clears_an_earlier_sign_in_prompt()
+    {
+        var rig = new SignInRig();
+        rig.VmActions.StopVmAsync("job-1", Arg.Any<CancellationToken>()).Returns(Task.FromException(SignInRig.SignedOut("sub-a")), Task.CompletedTask);
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        await rig.ViewModel.StopVmCommand.ExecuteAsync(null);
+
+        rig.ViewModel.HasSignInPrompt.ShouldBeFalse();
     }
 }

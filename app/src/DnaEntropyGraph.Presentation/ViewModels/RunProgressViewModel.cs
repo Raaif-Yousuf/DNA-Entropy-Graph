@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -32,6 +33,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly IRunRepository _runRepository;
     private readonly INavigator _navigator;
+    private readonly IGcpAccount? _account;
 
     [ObservableProperty]
     private string? _jobId;
@@ -78,8 +80,10 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IStringResourceProvider strings,
         IRunRepository runRepository,
         INavigator navigator,
-        IMessenger messenger)
+        IMessenger messenger,
+        IGcpAccount? account = null)
     {
+        _account = account;
         _jobEngine = jobEngine;
         _dispatcher = dispatcher;
         _dialogService = dialogService;
@@ -94,6 +98,55 @@ public sealed partial class RunProgressViewModel : ObservableObject
         messenger.Register<RunProgressViewModel, RunProgressChangedMessage>(this, static (recipient, message) => recipient.OnRunProgressChanged(message));
         messenger.Register<RunProgressViewModel, RunNoticeMessage>(this, static (recipient, message) => recipient.OnRunNotice(message));
     }
+
+    /// <summary>
+    /// Issue #830: set when this run's Google account is signed out and a stop or delete of its computer could not be sent: "Sign in as (the account) to stop this run's computer".
+    /// Empty when there is nothing to sign in to. The account named is the run's own, never the one that happens to be current.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSignInPrompt))]
+    private string _signInPromptText = string.Empty;
+
+    public bool HasSignInPrompt => SignInPromptText.Length > 0;
+
+    /// <summary>The prompt's button: starts Google sign-in; on success the prompt goes away and the person presses Stop or Delete again. A failed or cancelled sign-in keeps the prompt.</summary>
+    [RelayCommand]
+    private async Task SignInAsync(CancellationToken cancellationToken)
+    {
+        if (_account is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
+            SetSignInPrompt(string.Empty);
+        }
+        catch (AccountAuthException)
+        {
+            // The sign-in screen said why (cancelled, timed out); the prompt stays so the person can try again.
+        }
+    }
+
+    /// <summary>Runs a stop or delete of this run's computer; a signed-out account becomes the sign-in prompt instead of an unhandled exception.</summary>
+    private async Task RunVmActionAsync(Func<Task> action)
+    {
+        try
+        {
+            await action().ConfigureAwait(false);
+            SetSignInPrompt(string.Empty);
+        }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            var email = _account?.Accounts.FirstOrDefault(a => a.Sub == ex.AccountSub)?.Email;
+            SetSignInPrompt(email is null
+                ? _strings.GetString("RunSignIn_PromptUnknown")
+                : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("RunSignIn_Prompt"), email));
+        }
+    }
+
+    private void SetSignInPrompt(string text) => _dispatcher.Enqueue(() => SignInPromptText = text);
 
     /// <summary>The "taking longer than usual" or "looks stuck" line for this run (issue #675); empty when there is none.</summary>
     [ObservableProperty]
@@ -234,7 +287,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _vmActions.StopVmAsync(JobId, cancellationToken).ConfigureAwait(false);
+        await RunVmActionAsync(() => _vmActions.StopVmAsync(JobId, cancellationToken)).ConfigureAwait(false);
     }
 
     [RelayCommand(CanExecute = nameof(IsVmActionable))]
@@ -256,7 +309,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _vmActions.DeleteVmAsync(JobId, cancellationToken).ConfigureAwait(false);
+        await RunVmActionAsync(() => _vmActions.DeleteVmAsync(JobId, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>

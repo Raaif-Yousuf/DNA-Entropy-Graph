@@ -97,6 +97,15 @@
   <data name="ConfirmStopVm_Body" xml:space="preserve">
     <value>Its storage still costs a small amount until you delete it. Your run stops making progress.</value>
   </data>
+  <data name="RunSignIn_Prompt" xml:space="preserve">
+    <value>Sign in as {0} to stop this run's computer.</value>
+  </data>
+  <data name="RunSignIn_PromptUnknown" xml:space="preserve">
+    <value>Sign in with the Google account this run started under to stop its computer.</value>
+  </data>
+  <data name="RunProgressSignIn.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
   <data name="ConfirmDeleteVm_Title" xml:space="preserve">
     <value>Delete this rented computer now?</value>
   </data>
