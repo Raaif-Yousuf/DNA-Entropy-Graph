@@ -337,7 +337,8 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 sp.GetRequiredService<LocalEngineLayout>(),
                 sp.GetRequiredService<AppDataRoot>().RunsDirectory,
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
+                onProgress: (jobId, progress) => messenger.Send(new RunProgressChangedMessage(jobId, progress))) // Issue #1086: the run page's bar and detail line.
             {
                 DefaultOutputParent = () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             };
@@ -376,6 +377,8 @@ public static class ServiceRegistration
                 // default for a runner built without a UI (tests, the reconciler's own runner).
                 OnStall = sp.GetRequiredService<RunStallCoordinator>().AskAsync,
                 OnNotice = sp.GetRequiredService<RunStallCoordinator>().OnNotice,
+                // Issue #1086: each new progress in the worker's status.json (a reattached run goes through this same runner) moves the run page's bar and detail line.
+                OnProgress = (jobId, progress) => messenger.Send(new RunProgressChangedMessage(jobId, progress)),
             };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.

@@ -99,6 +99,16 @@ At launch, after the single-instance hand-off, `StartupDataRoot.CheckDatabase` r
 publishes `RunProgressChanged`/`RunPhaseChanged` over `WeakReferenceMessenger` so any page
 can subscribe without the runner needing a reference back to the UI.
 
+**Progress flow (issue #1086)**: `RunProgressChangedMessage` has one sender per runner, both in
+`ServiceRegistration`: `CloudJobRunner.OnProgress` (called by `ResultWaiter` for each poll of the
+worker's `status.json`) and the `onProgress` argument of `LocalJobRunner` (called from its 500 ms
+status poll). Both feed the snapshot through `WorkerProgressTracker` (Core/Contract), which gives an
+event only when the stage, percent or window text changed, so an unchanged file is not re-sent every
+poll. The message text is "Window N of M" or the stage name, never the input or contig name. A run
+reattached after a restart goes through the same `CloudJobRunner`, so it publishes too.
+`Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>`
+receiver and no `Send(new ...)` sender anywhere in `app/src`.
+
 **Implemented (issue #428)**: `JobEngine` delegates a cloud run to `CloudJobRunner`, which
 `ServiceRegistration` registers as a singleton whose phase callback sends
 `RunPhaseChangedMessage` (after the runner has written the phase to `IRunRepository`).

@@ -271,6 +271,8 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
 
 `cancelSeen` (issue #675) is `false` until the worker first sees `control/cancel`, then `true` (written at once): the worker's explicit acknowledgement of a cancel request (section 6).
 
+`percent` and `detail.window` / `detail.windows` (issue #1086) are what the app's run page shows as its bar and "Window N of M" line: each runner reads them from every poll of `status.json` and publishes one progress event per change (`WorkerProgressTracker`). The app never shows `detail.input` or `detail.contig` on that line. A status without them (the startup script's own stages) shows the stage name and leaves the bar where it was.
+
 `error`, when non-null, is `{code, message, detail, retriable, remediation}`, with `code`
 drawn from the error taxonomy in `cloud_design.md` section 5. **The worker's own subset of
 that taxonomy - the codes Python code under `dna_entropy` (or `worker/vm/startup.sh`) can

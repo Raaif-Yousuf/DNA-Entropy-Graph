@@ -321,6 +321,62 @@ public sealed class LocalJobRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task Each_new_progress_in_status_json_is_published_once_and_an_unchanged_one_is_not_repeated()
+    {
+        // Issue #1086: RunProgressChangedMessage had a receiver and no sender, so the bar never moved on a This PC run.
+        var published = new List<(string JobId, ProgressEvent Event)>();
+        var worker = new FakeProcess();
+        var launcher = new FakeProcessLauncher(spec =>
+        {
+            File.WriteAllText(Path.Combine(RootOf(spec), "status.json"), "{\"stage\":\"running\",\"percent\":25,\"detail\":{\"window\":2,\"windows\":8},\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}");
+            return worker;
+        });
+        var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), onProgress: (jobId, ev) => { lock (published) { published.Add((jobId, ev)); } })
+        {
+            PollInterval = TimeSpan.FromMilliseconds(20),
+        };
+
+        var run = runner.RunAsync(Request(), CancellationToken.None);
+        await WaitUntilAsync(() => { lock (published) { return published.Count == 1; } });
+        await Task.Delay(200, TestContext.Current.CancellationToken); // many more polls of the same file
+        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":50,\"detail\":{\"window\":4,\"windows\":8},\"heartbeatSeq\":2,\"worker\":{\"version\":\"0.0.1\"}}");
+        await WaitUntilAsync(() => { lock (published) { return published.Count == 2; } });
+        worker.End(1);
+        await run;
+
+        lock (published)
+        {
+            published.Select(p => p.JobId).ShouldAllBe(id => id == JobId);
+            published.Select(p => p.Event.Message).ShouldBe(["Window 2 of 8", "Window 4 of 8"]);
+            published.Select(p => p.Event.FractionComplete).ShouldBe([0.25, 0.5]);
+        }
+    }
+
+    [Fact]
+    public async Task A_progress_handler_that_throws_never_breaks_the_run()
+    {
+        var worker = new FakeProcess();
+        var launcher = new FakeProcessLauncher(spec =>
+        {
+            File.WriteAllText(Path.Combine(RootOf(spec), "status.json"), "{\"stage\":\"running\",\"percent\":25,\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}");
+            return worker;
+        });
+        var called = 0;
+        var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), onProgress: (_, _) => { Interlocked.Increment(ref called); throw new InvalidOperationException("a broken UI"); })
+        {
+            PollInterval = TimeSpan.FromMilliseconds(20),
+        };
+
+        var run = runner.RunAsync(Request(), CancellationToken.None);
+        await WaitUntilAsync(() => Volatile.Read(ref called) >= 1);
+        worker.End(1);
+        var result = await run;
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerCrashed, "the run ended as a crash of the fake worker, not as an app-side exception");
+    }
+
+    [Fact]
     public async Task A_cancel_writes_control_cancel_and_waits_for_the_worker_to_stop_by_itself()
     {
         var worker = new FakeProcess();
