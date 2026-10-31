@@ -26,6 +26,9 @@ internal sealed class CloudRunSettings
     /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Null means nobody is listening (it is still done).</summary>
     public Action<LateCreateOutcome>? OnLateCreate { get; set; }
 
+    /// <summary>Issue #970: told how the restore of a borrowed VM's earlier labels ended (ids and classes only). Null means nobody is listening (it is still done).</summary>
+    public Action<DonorRestoreOutcome>? OnDonorRestore { get; set; }
+
     public TimeSpan? UploadTimeout { get; set; }
 
     public TimeSpan BootTimeout { get; set; } = TimeSpan.FromMinutes(8);

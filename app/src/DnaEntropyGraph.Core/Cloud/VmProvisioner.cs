@@ -38,7 +38,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     }
 
     /// <summary>Records, BEFORE the gateway is called, that this attempt is about to ask Compute for <paramref name="name"/> in <paramref name="zone"/>. It owns nothing yet: ownership moves only when the create answers.</summary>
-    private SentCreate NoteSent(CloudScope scope, string jobId, string name, string zone, string installationId, long generation, bool reuse = false)
+    internal SentCreate NoteSent(CloudScope scope, string jobId, string name, string zone, string installationId, long generation, bool reuse = false)
     {
         // Stamped with the attempt that SENDS it, never the job's newest attempt: a send that comes after a newer attempt began is still the older attempt's.
         var sent = new SentCreate(scope, jobId, name, zone, generation, installationId, reuse);
@@ -67,6 +67,57 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         {
             Ledger.Prune(jobId);
         }
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reuseWatches = new();
+
+    /// <summary>Tests: completes when every watch over a failed run's unanswered reuse has ended.</summary>
+    internal Task WhenReuseWatchesEndedAsync() => Task.WhenAll(_reuseWatches.Keys);
+
+    /// <summary>
+    /// Round 2 finding 1: a reuse that failed WITHOUT an answer (a lost answer, a poll that timed out) is handed to the late watch, claimed so the run's terminal forget leaves it, and released with its donor
+    /// when the watch ends (bounded by <see cref="CloudRunSettings.LateCreateReapWindow"/>). Reports how it ended to <see cref="CloudRunSettings.OnLateCreate"/> like a cancel's watch. Never throws.
+    /// </summary>
+    private void WatchUnansweredReuse(SentCreate sent)
+    {
+        if (!sent.TryClaim())
+        {
+            return; // a cancel owns it
+        }
+
+        var watch = Task.Run(async () =>
+        {
+            try
+            {
+                foreach (var outcome in await terminator.ReapLateCreatesAsync([sent]).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        settings.OnLateCreate?.Invoke(outcome);
+                    }
+                    catch (Exception)
+                    {
+                        // A listener that throws must not matter to the clean-up.
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Never throws: the VM end already ran.
+            }
+        });
+        _reuseWatches[watch] = 0;
+        _ = watch.ContinueWith(
+            finished =>
+            {
+                _reuseWatches.TryRemove(finished, out _);
+                ReleaseSent(sent);
+                terminator.ForgetDonor(sent); // round 3 finding 1, round 4 finding 3: this watch's own send only; a later attempt of the job may hold the same or another VM's donor
+                terminator.PruneDonors(); // round 4 finding 5
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Tests: how many sent creates are still remembered (none may outlive the run that ended terminal, and a cancel's claimed ones are not dropped by it).</summary>
@@ -443,6 +494,13 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             _sent.TryRemove(unclaimed, out _);
         }
 
+        // Issue #970: the donors a run noted are needed only until its VM end ran (and by a cancel's watch, which holds claimed creates): once nothing of the job is held, they are forgotten.
+        if (!_sent.Keys.Any(e => e.JobId == jobId))
+        {
+            terminator.ForgetDonors(jobId);
+        }
+
+        terminator.PruneDonors(); // round 4 finding 5: expired donors do not wait for the next reuse to be dropped
         PruneIfIdle(jobId);
     }
 
@@ -849,9 +907,14 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
 
         progress.VmMayExist = true;
+
+        // Issue #970: the reuse replaces the VM's whole label set (its job-id and lifecycle with it). Recorded BEFORE the gateway is called, with the run's own scope, so every way this run ends
+        // without keeping the VM (a failed start, a failure later in the run, a cancel, a late landing) can put the donor's labels back.
+        terminator.NoteDonor(request.ResolvedScope, request.JobId, chosen.Name, chosen.Zone, chosen.Labels!);
         await ClaimAsync(progress, chosen.Zone, cancellationToken).ConfigureAwait(false); // before the start: a stale claim must not make this VM delete itself
         // Round 4 M3: recorded BEFORE the gateway is called, like a create: a cancel that gives up on this start claims it and the late watch stops the VM if the start lands afterwards.
         var sentReuse = NoteSent(request.ResolvedScope, request.JobId, chosen.Name, chosen.Zone, spec.InstallationId, generation, reuse: true);
+        terminator.NoteReuseSend(sentReuse);
         try
         {
             // Tracked like a create: a cancel that arrives between the claim and the start must wait for this to land, or the start
@@ -889,7 +952,26 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             }
 
             // The claim may already have been made: whatever carries this job's label is ended before anything else is tried.
-            var note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+            string? note;
+            try
+            {
+                note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (SentCreate.ReuseNeverSent(ex))
+                {
+                    terminator.ForgetDonor(sentReuse); // round 6 finding 5, round 7 finding 3: after the failure funnel had its chance to restore it, even when it threw; nothing will ask for this donor or send again
+                }
+            }
+
+            // Round 2 finding 1: a start whose answer was lost may still land after the stop above, and the donor's labels were NOT put back for it. The watch a cancel uses stops the VM if it lands and
+            // then restores the labels (or restores them after the grace when it never does); no cancel exists on this path, so this failure starts it.
+            if (!sentReuse.Refused)
+            {
+                WatchUnansweredReuse(sentReuse);
+            }
+
             if (note is not null || VmFacts.IsProjectWide(ex.Kind) || ex.Kind == CloudErrorKind.Network)
             {
                 return ProvisionResult.Failed(ex.Kind, ex.Error.Message, note, RunErrorCodes.For(ex.Error, ex.Kind));

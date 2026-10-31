@@ -53,11 +53,32 @@
                 SelectedItem="{x:Bind ViewModel.SelectedStatusFilter, Mode=TwoWay}" />
         </Grid>
 
-        <TextBlock
-            Grid.Row="2"
-            Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
-            Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}"
-            TextWrapping="Wrap" />
+        <StackPanel Grid.Row="2" Spacing="8">
+            <!-- Issue #112: runs of another Google account are not listed; say so, and offer the button that shows them. -->
+            <TextBlock
+                Text="{x:Bind ViewModel.HiddenRunsText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.HasHiddenRuns, Mode=OneWay}"
+                TextWrapping="Wrap" />
+            <TextBlock
+                Text="{x:Bind ViewModel.HintText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.HasHiddenRuns, Mode=OneWay}"
+                TextWrapping="Wrap" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.SwitchAccounts}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AccountSwitchItem">
+                        <Button Content="{x:Bind Label}" Command="{x:Bind SwitchCommand}" Margin="0,0,0,4" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Button
+                x:Uid="RunsSignInAgainButton"
+                Command="{x:Bind ViewModel.SignInAgainCommand}"
+                Visibility="{x:Bind ViewModel.HasSignInAgain, Mode=OneWay}" />
+            <TextBlock
+                Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.IsEmpty, Mode=OneWay}"
+                TextWrapping="Wrap" />
+        </StackPanel>
 
         <ScrollViewer Grid.Row="3">
             <ItemsControl ItemsSource="{x:Bind ViewModel.Groups}">
@@ -123,7 +144,7 @@
                                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                                     <Button x:Uid="RunsOpenButton" Command="{x:Bind OpenCommand}" />
                                                     <Button x:Uid="RunsRerunButton" Command="{x:Bind RerunCommand}" />
-                                                    <Button Content="{x:Bind RedownloadLabel}" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" />
+                                                    <Button Content="{x:Bind RedownloadLabel}" Command="{x:Bind RedownloadCommand}" IsEnabled="{x:Bind CanRedownload}" ToolTipService.ToolTip="{x:Bind RedownloadHint}" />
                                                     <Button x:Uid="RunsDeleteCloudButton" Command="{x:Bind DeleteCloudCommand}" IsEnabled="{x:Bind CanDeleteCloud}" ToolTipService.ToolTip="{x:Bind DeleteCloudHint}" />
                                                     <Button x:Uid="RunsDeleteLocalButton" Command="{x:Bind DeleteLocalCommand}" IsEnabled="{x:Bind CanDeleteLocal}" ToolTipService.ToolTip="{x:Bind DeleteLocalHint}" />
                                                     <Button x:Uid="RunsRemoveButton" Command="{x:Bind RemoveCommand}" IsEnabled="{x:Bind CanRemove}" />

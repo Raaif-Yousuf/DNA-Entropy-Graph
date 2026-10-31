@@ -17,6 +17,12 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
             code = RunErrorCodes.VmEndUnconfirmed;
         }
 
+        // Issue #970: when the run had borrowed a VM (a reuse) and ended it, the row says what became of that VM's labels (ids and states only).
+        if (terminator.TakeDonorRestoreSentence(jobId) is { } restored)
+        {
+            detail = string.IsNullOrEmpty(detail) ? restored : $"{detail} {restored}";
+        }
+
         // CancellationToken.None: recording the terminal state must not itself be cancellable.
         await rows.SetPhaseAsync(jobId, JobPhase.Failed, CancellationToken.None, code, detail).ConfigureAwait(false);
         await transfer.RemoveEmptyRunFolderAsync(jobId).ConfigureAwait(false);

@@ -164,10 +164,12 @@ public partial class LateCreateAfterCancelTests
         var spec = Spec(jobId);
         await rig.Provisioner.ProvisionAsync(TestInputs.Request(jobId, spec), spec, new RunProgress(), CancellationToken.None);
 
-        var held = rig.Provisioner.ClaimSentCreates(jobId);
+        // Round 2 (#970): the failed run no longer leaves the held reuse for a cancel that may never come; it hands it to its own late watch, which owns the claim and reports how it ended.
+        var outcome = await rig.NextOutcomeAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
-        held.ShouldContain(c => c.IsReuse, "the error may have come after the start POST: dropping the watch could leave a GPU VM running");
-        held.Single(c => c.IsReuse).Refused.ShouldBeFalse("Refused means no VM exists; a reuse that raised this class cannot say so");
+        outcome.State.ShouldBe(LateCreateState.ReuseStopped, "the error may have come after the start POST: the watch looked, saw the VM and ended it stopped, so no GPU VM is left running");
+        rig.Provisioner.ClaimSentCreates(jobId).ShouldBeEmpty("the watch released what it held");
     }
 
     [Fact]

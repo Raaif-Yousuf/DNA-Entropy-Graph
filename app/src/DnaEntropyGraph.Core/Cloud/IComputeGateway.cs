@@ -39,6 +39,16 @@ public interface IComputeGateway
     Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Issue #970: undoes the label claim of <see cref="ReuseVmAsync"/> for a reuse that failed or was cancelled: puts <paramref name="donorLabels"/> (the labels the VM carried before the claim, so the
+    /// run it came from finds it again by label, with its keep-alive expiry) back on the VM and on its boot disk. READ-THEN-WRITE with the label fingerprint, and only while the VM still carries
+    /// <paramref name="fromJobId"/> as its <c>job-id</c>: a VM a newer run has taken since (or one whose fingerprint moved under the write) is left exactly as it is
+    /// (<see cref="LabelRestoreState.NewerOwner"/>). A VM that is gone is <see cref="LabelRestoreState.Gone"/>, never an error. The caller stops the VM first: this changes labels only.
+    /// A failure throws like any other write. The default throws, so a gateway that cannot do this is reported as a failed restore (never as a silent success): a gateway that can MUST override it.
+    /// </summary>
+    Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+        => Task.FromException<LabelRestoreState>(new CloudOperationException(new CloudError("RESTORE_LABELS_UNSUPPORTED", null, "This gateway cannot restore a borrowed VM's labels."), CloudErrorKind.Other));
+
+    /// <summary>
     /// Issue #670: the zones that offer <paramref name="acceleratorType"/> (<c>nvidia-l4</c>, see <see cref="ZoneCandidates.AcceleratorFor"/>),
     /// the zone universe the ladder builds its candidates from. A real gateway implements this with <c>acceleratorTypes.aggregatedList</c>
     /// filtered to that name. An empty list means "the gateway does not know", never "no zone has it": the caller then falls back to the
