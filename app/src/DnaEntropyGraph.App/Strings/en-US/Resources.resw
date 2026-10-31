@@ -184,6 +184,21 @@
   <data name="RunError_lifecycle_unverified" xml:space="preserve">
     <value>Your results were saved, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
+  <data name="RunError_account_signed_out" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its rented computer could not be reached. Sign in as that account (choose the Sign in button on this run's page or at the bottom of the window), then try again.</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Title" xml:space="preserve">
+    <value>Sign in to download</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its files could not be downloaded. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Download again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Title" xml:space="preserve">
+    <value>Sign in to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so nothing was deleted. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Delete cloud copy again.</value>
+  </data>
   <data name="RunError_cancel_failed" xml:space="preserve">
     <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
   </data>

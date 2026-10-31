@@ -139,8 +139,8 @@ public sealed class GpuQuotaRequester
             throw new ArgumentException("The region is not a Google Cloud region name such as us-central1.", nameof(region));
         }
 
-        // Issue #830: the wizard's selection path: the project it was asked about, as the current account, read once for the whole request.
-        var scope = new CloudScope(projectId, _account.CurrentAccount?.Sub);
+        // Issue #830: the wizard's selection path: the project it was asked about, as the account of the selection (ONE SelectedScope read for the whole request, never a separate read of the current account).
+        var scope = new CloudScope(projectId, _account.SelectedScope()?.AccountSub);
         var read = await _quota.ReadQuotaAsync(scope, cancellationToken).ConfigureAwait(false);
         var readFailure = read.Failures.FirstOrDefault();
         var items = new List<QuotaRequestItem>

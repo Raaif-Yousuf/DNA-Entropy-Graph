@@ -115,7 +115,9 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
     /// <summary>What the row records when the cancel itself threw: the error class and the action, never the exception's message (it can carry a path or a name).</summary>
     private static string UnexpectedFailure(Exception ex)
-        => $"The cancel could not finish ({VmTerminator.ErrorClassOf(ex)}). Check the Cloud page and delete or stop any VM left for this run.";
+        => VmTerminator.ErrorClassOf(ex) == RunErrorCodes.AccountSignedOut
+            ? $"The cancel could not finish ({RunErrorCodes.AccountSignedOut}). Sign in as the Google account this run was made under, then cancel again."
+            : $"The cancel could not finish ({VmTerminator.ErrorClassOf(ex)}). Check the Cloud page and delete or stop any VM left for this run.";
 
     /// <summary>
     /// A create whose outcome is unknown (still in flight, or ended Canceled or by a network failure: Compute may have accepted it) stays under watch, by name, after the outcome is recorded: ONE loop
@@ -235,7 +237,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
     /// </summary>
     internal static string? SentenceFor(IReadOnlyList<LateCreateOutcome> outcomes, RunRecord row)
     {
-        var failedRow = row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed;
+        var failedRow = row.Phase == JobPhase.Failed && RunErrorCodes.IsUnconfirmedCancel(row.ErrorCode);
         if (!failedRow && row.Phase != JobPhase.Cancelled)
         {
             return null;
@@ -309,7 +311,9 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
             }
             else
             {
-                await rows.SetPhaseAsync(jobId, JobPhase.Failed, CancellationToken.None, RunErrorCodes.CancelFailed, failure).ConfigureAwait(false);
+                // Issue #830 review M6: a sign-in is its own action (the Cloud page lists the SELECTED account, not this run's), so it gets its own code; the reconciler treats both as an unconfirmed cancel.
+                var code = failure.Contains($"({RunErrorCodes.AccountSignedOut})", StringComparison.Ordinal) ? RunErrorCodes.AccountSignedOut : RunErrorCodes.CancelFailed;
+                await rows.SetPhaseAsync(jobId, JobPhase.Failed, CancellationToken.None, code, failure).ConfigureAwait(false);
             }
         }
         catch (Exception)

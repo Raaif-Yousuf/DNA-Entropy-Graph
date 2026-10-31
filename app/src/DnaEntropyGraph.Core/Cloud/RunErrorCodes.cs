@@ -118,7 +118,12 @@ public static class RunErrorCodes
 
     /// <summary>The run was ended because its computer was stopped from the exit window (issue #113) while the run was still live: the row is Cancelled, never left Running.</summary>
     public const string StoppedByCleanup = "cleanup_stopped";
+    /// <summary>Issue #830 review M6: the Google account the run was made under is signed out, so its computer (or its cloud copy) could not be reached. Action: Sign in as that account.</summary>
+    public const string AccountSignedOut = "account_signed_out";
     public const string Other = "other";
+
+    /// <summary>A Failed row a cancel left because it could not confirm the computer gone: <see cref="CancelFailed"/>, or <see cref="AccountSignedOut"/> when the run's account was signed out at the time. Both are retried by the reconciler.</summary>
+    public static bool IsUnconfirmedCancel(string? code) => code is CancelFailed or AccountSignedOut;
 
     /// <summary>Every code a run can be recorded under.</summary>
     public static IReadOnlyList<string> All { get; } =
@@ -127,7 +132,7 @@ public static class RunErrorCodes
         InputMissing, WorkerImageUnavailable, WorkerImageRefused, ResultTimeout, RunTimeLimit, WorkerStageStuck, WorkerProgressStalled, WorkerNoHeartbeat, WorkerHeartbeatStale, VmEndUnconfirmed, WorkerFailed, DownloadFailed, DownloadCorrupt,
         GpuNotVisible, ImagePullFailed, ManifestInvalid, WorkerCrashed, CloudNotConnected,
         ModelNeedsHopper, ModelOom, BatchLimitExceeded, InputInvalid, WorkerVersionMismatch, OutputFolderUnusable,
-        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup,
+        InputInvalidCharacter, InputAmbiguityRefused, InputRna, InputNotUtf8, InputEmpty, InputTooLong, InputAccessionInvalid, InputAccessionNotFound, InputAccessionTooLarge, InputAccessionUnreachable, InstallationIdUnusable, LocalEngineNotReady, LocalGpuNotUsable, LocalWorkerCrashed, LocalWorkerNoHeartbeat, LocalWorkerStalled, LocalWorkerTimedOut, LocalWorkerExitedNonzero, LocalRunInterrupted, WorkerDefaultAccount, PermissionActAs, WorkerDefaultAccountMissing, WorkerIdentityNotApplied, DeletedByCleanup, StoppedByCleanup, AccountSignedOut,
         "billing", "api_disabled", "quota", "stockout", "already_exists", "permission", "org_policy", "network", Other,
         ProxyBlocked, NetworkCertificate,
     ];
@@ -231,6 +236,7 @@ public static class RunErrorCodes
         LifecycleUnverified => "RunError_lifecycle_unverified",
         ChangedFilesKeptAside => "RunError_changed_files_kept_aside",
         CancelFailed => "RunError_cancel_failed",
+        AccountSignedOut => "RunError_account_signed_out",
         LateCreateUnconfirmed => "RunError_late_create_unconfirmed",
         InputMissing => "RunError_input_missing",
         WorkerImageUnavailable => "RunError_no_worker_image",

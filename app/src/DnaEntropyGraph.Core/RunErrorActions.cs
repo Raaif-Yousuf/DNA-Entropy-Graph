@@ -28,6 +28,7 @@ public enum RunErrorAction
     CheckAccession,
     NarrowRange,
     OpenOutputFolder,
+    SignIn,
 }
 
 /// <summary>
@@ -49,6 +50,7 @@ public static class RunErrorActions
         [RunErrorCodes.LifecycleUnverified] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.ChangedFilesKeptAside] = RunErrorAction.OpenOutputFolder,
         [RunErrorCodes.CancelFailed] = RunErrorAction.OpenCloudPage,
+        [RunErrorCodes.AccountSignedOut] = RunErrorAction.SignIn,
         [RunErrorCodes.LateCreateUnconfirmed] = RunErrorAction.OpenCloudPage,
         [RunErrorCodes.InputMissing] = RunErrorAction.ChooseFile,
         [RunErrorCodes.WorkerImageUnavailable] = RunErrorAction.UpdateApp,
@@ -145,6 +147,7 @@ public static class RunErrorActions
         RunErrorAction.CheckAccession => ["Check the accession"],
         RunErrorAction.NarrowRange => ["smaller range"],
         RunErrorAction.OpenOutputFolder => ["Open the output folder"],
+        RunErrorAction.SignIn => ["Sign in as"],
         _ => [],
     };
 }

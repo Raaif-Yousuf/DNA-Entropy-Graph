@@ -557,7 +557,7 @@ public sealed class JobReconciler
     /// or one whose cancel could not confirm its VM gone (<see cref="RunErrorCodes.CancelFailed"/>).
     /// </summary>
     private static bool CancelOwnsTheVm(RunRecord row)
-        => (row.Phase == JobPhase.Cancelled && (string.IsNullOrEmpty(row.ErrorCode) || row.ErrorCode == RunErrorCodes.LateCreateUnconfirmed)) || (row.Phase == JobPhase.Failed && row.ErrorCode == RunErrorCodes.CancelFailed);
+        => (row.Phase == JobPhase.Cancelled && (string.IsNullOrEmpty(row.ErrorCode) || row.ErrorCode == RunErrorCodes.LateCreateUnconfirmed)) || (row.Phase == JobPhase.Failed && RunErrorCodes.IsUnconfirmedCancel(row.ErrorCode));
 
     /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read (null in the LISTING) say nothing against it (its job id already matched a row of this installation); null labels on a re-read of a VM the listing showed with labels mean they were removed, and that VM is skipped (round 13 M2).</summary>
     private static bool IsOurs(VmDescriptor vm, string installation)
@@ -1019,7 +1019,7 @@ public sealed class JobReconciler
             return ReattachAction.CancelFinished;
         }
 
-        if (finalPhase == JobPhase.Failed && (errorCode == RunErrorCodes.CancelFailed || underway == ReattachAction.CancelFinished))
+        if (finalPhase == JobPhase.Failed && (RunErrorCodes.IsUnconfirmedCancel(errorCode) || underway == ReattachAction.CancelFinished))
         {
             return ReattachAction.CancelFailed;
         }

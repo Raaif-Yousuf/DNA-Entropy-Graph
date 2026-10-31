@@ -40,6 +40,9 @@ public enum CloudResultsStatus
 
     /// <summary>The results bucket was not found, so nothing was deleted and the run row is unchanged.</summary>
     StorageNotFound,
+
+    /// <summary>Issue #830 review M6: the Google account this run was made under is signed out, so nothing could be fetched or deleted. The action is to sign in as that account.</summary>
+    SignInNeeded,
 }
 
 /// <summary>
@@ -207,6 +210,10 @@ public sealed class RunCloudResults : IRunCloudResults
             var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
             return new(string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial, tally.Count);
         }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            return new(CloudResultsStatus.SignInNeeded, tally.Count);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             // Network, storage, disk or a malformed result: every one is "download failed, try again", never a crash.
@@ -273,6 +280,10 @@ public sealed class RunCloudResults : IRunCloudResults
         {
             // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
             return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud), ListingStuck: IsStuck(cloud));
+        }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            return CloudResultsStatus.SignInNeeded;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

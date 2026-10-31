@@ -273,7 +273,9 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     }
 
     internal static string ErrorClassOf(Exception ex)
-        => ex is CloudOperationException cloud ? RunErrorCodes.For(cloud.Kind) : "other"; // the shared roster (api_disabled, org_policy), never Kind.ToString()
+        => ex is CloudOperationException cloud ? RunErrorCodes.For(cloud.Kind)
+            : ex is AccountAuthException { Code: AuthErrorCodes.SigninExpired } ? RunErrorCodes.AccountSignedOut // issue #830 review M6: the run's account is signed out, not "other"
+            : "other"; // the shared roster (api_disabled, org_policy), never Kind.ToString()
 
     /// <summary>The name a VM THIS run created carries (<see cref="VmSpec.VmName"/> without an existing VM). A VM reused from another run keeps that run's name, so a different name means "borrowed".</summary>
     internal static string OwnVmName(string jobId) => $"deg-{jobId}";

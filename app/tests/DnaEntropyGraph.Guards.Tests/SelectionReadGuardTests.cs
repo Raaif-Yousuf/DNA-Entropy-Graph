@@ -16,24 +16,28 @@ public class SelectionReadGuardTests
 {
     private static readonly Regex Read = new(@"\bSelectedProjectId\b|\bCurrentAccount\b|\bSelectedScope\(", RegexOptions.Compiled);
 
-    /// <summary>File name to why the selection is read there. A file is matched by its name, so two files of one name would share an entry (none do).</summary>
-    private static readonly Dictionary<string, string> Allowed = new(StringComparer.Ordinal)
+    /// <summary>
+    /// File name to (why the selection is read there, how many lines read it). A file is matched by its name, so two files of one name would share an entry (none do). The COUNT makes the entry
+    /// exact: a second read added to an allowed file (a new one inside <c>JobEngine.CancelRunAsync</c>, say) changes the count and fails, instead of riding on the file's allowance.
+    /// </summary>
+    private static readonly Dictionary<string, (string Reason, int Reads)> Allowed = new(StringComparer.Ordinal)
     {
-        ["IGcpAccount.cs"] = "the definition of the selection",
-        ["GoogleAccountService.cs"] = "the real implementation of the selection",
-        ["FakeGcp.cs"] = "the fake's implementation of the selection",
-        ["FakeGcp.Scope.cs"] = "the fake's implementation of the selection",
-        ["WizardViewModel.cs"] = "the setup wizard chooses the account and project",
-        ["SetupStepsViewModel.cs"] = "the setup steps act on the project being set up",
-        ["SetupCheckService.cs"] = "the setup checks act on the project being set up, as the current account",
-        ["ShellViewModel.cs"] = "the status pill names the current account",
-        ["BudgetSettingsViewModel.cs"] = "budget and billing settings are about the selected project",
-        ["QuotaRequest.cs"] = "a quota increase is asked for the selected project, as the current account",
-        ["JobEngine.cs"] = "the ONE capture of the selected scope when a new run is created; the run keeps it from then on",
-        ["CloudResourcesViewModel.cs"] = "the Cloud page lists the selected project; each row keeps the scope it was listed in",
-        ["HistoryViewModel.cs"] = "importing an existing run adopts the selected project and account",
-        ["LeftRunningGuard.cs"] = "the left-running scan adds the selected scope to the scopes of recent runs",
-        ["ServiceRegistration.cs"] = "hands the selected project to the budget gateway and the selected scope to the reconciler's sweeps",
+        ["IGcpAccount.cs"] = ("the definition of the selection", 3),
+        ["GoogleAccountService.cs"] = ("the real implementation of the selection", 3),
+        ["FakeGcp.cs"] = ("the fake's implementation of the selection", 2),
+        ["FakeGcp.Scope.cs"] = ("the fake's implementation of the selection", 3),
+        ["WizardViewModel.cs"] = ("the setup wizard chooses the account and project", 6),
+        ["SetupStepsViewModel.cs"] = ("the setup steps act on the project being set up", 4),
+        ["SetupCheckService.cs"] = ("the setup checks act on the project being set up, as the account of the selection (one SelectedScope read)", 1),
+        ["ShellViewModel.cs"] = ("the status pill names the current account", 1),
+        ["BudgetSettingsViewModel.cs"] = ("budget and billing settings are about the selected project", 1),
+        ["QuotaRequest.cs"] = ("a quota increase is asked for the project being set up, as the account of the selection (one SelectedScope read)", 1),
+        ["JobEngine.cs"] = ("the ONE capture of the selected scope when a new run is created; the run keeps it from then on", 1),
+        ["CloudResourcesViewModel.cs"] = ("the Cloud page lists the selected project; each row keeps the scope it was listed in", 6),
+        ["HistoryViewModel.cs"] = ("importing an existing run adopts the selected project and account", 2),
+        ["LeftRunningGuard.cs"] = ("the left-running scan adds the selected scope to the scopes of recent runs", 1),
+        ["ServiceRegistration.cs"] = ("hands the selected project to the budget gateway and the selected scope to the reconciler's sweeps", 2),
+        ["RunAccountBackfill.cs"] = ("the one-time backfill gives a run row from before accounts were recorded the account that is current at the first launch after the upgrade", 1),
     };
 
     private static IEnumerable<(string Path, int Count)> Reads(IEnumerable<(string Path, string Text)> files)
@@ -41,15 +45,21 @@ public class SelectionReadGuardTests
             .Select(f => (f.Path, Count: f.Text.Split('\n').Count(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal) && Read.IsMatch(line))))
             .Where(f => f.Count > 0);
 
-    private static IEnumerable<string> Violations(IEnumerable<(string Path, string Text)> files)
-        => Reads(files).Where(r => !Allowed.ContainsKey(Path.GetFileName(r.Path))).Select(r => r.Path);
+    /// <summary>A file that reads the selection and is not allowed, or an allowed file whose number of reading lines is not the one its entry states.</summary>
+    private static IEnumerable<string> Violations(IEnumerable<(string Path, string Text)> files, IReadOnlyDictionary<string, (string Reason, int Reads)>? allowed = null)
+    {
+        allowed ??= Allowed;
+        return Reads(files)
+            .Where(r => !allowed.TryGetValue(Path.GetFileName(r.Path), out var entry) || entry.Reads != r.Count)
+            .Select(r => r.Path);
+    }
 
     [Fact]
     public void The_selection_is_read_only_in_the_named_selection_paths()
     {
         var files = RepoPaths.AllCSharpFiles.Select(p => (p, File.ReadAllText(p))).ToList();
 
-        Violations(files).ShouldBeEmpty("take a CloudScope as an argument (or RunScope.Of(row)); read the selection only in an allowlisted selection path");
+        Violations(files).ShouldBeEmpty("take a CloudScope as an argument (or RunScope.Of(row)); read the selection only in an allowlisted selection path, and change an entry's count only with its reason");
     }
 
     [Fact]
@@ -59,6 +69,17 @@ public class SelectionReadGuardTests
 
         found.ShouldContain("IGcpAccount.cs", "vacuity: the scan must see the definition, or it reads nothing");
         Allowed.Keys.Where(k => !found.Contains(k)).ShouldBeEmpty("a stale entry: delete it from the allowlist (and say so in the commit)");
+    }
+
+    [Fact]
+    public void A_second_read_in_an_allowed_file_is_caught_by_its_count()
+    {
+        var allowed = new Dictionary<string, (string Reason, int Reads)> { ["JobEngine.cs"] = ("the one capture", 1) };
+        var oneRead = ("src/App/JobEngine.cs", "var scope = _account.SelectedScope();");
+        var twoReads = ("src/App/JobEngine.cs", "var scope = _account.SelectedScope();\n        var again = _account.SelectedScope();");
+
+        Violations([oneRead], allowed).ShouldBeEmpty();
+        Violations([twoReads], allowed).ShouldBe(["src/App/JobEngine.cs"]);
     }
 
     [Fact]
