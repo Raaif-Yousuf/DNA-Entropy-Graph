@@ -811,7 +811,9 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   never writes `result.json`; the container's own failures do write it. Whenever the VM is found not
   running with no `result.json`, the runner reads `status.json` and records `gpu_not_visible`,
   `image_pull_failed`, `manifest_invalid` or `worker_crashed` (each with its own copy and one action);
-  any other or missing code stays `vm_unhealthy`. (An earlier version of this document said
+  any other or missing code stays `vm_unhealthy`. (Still true for `startup.sh`'s manifest download
+  failure; but a worker-side manifest PARSE failure now does write a terminal `result.json`, see
+  `job_contract.md` section 7, issue #1014.) (An earlier version of this document said
   `result.json` is always written first. It is written first only by a worker that got as far as a
   result.)
 - **Resume.** A run resumed from Provisioning onward (a create can have been accepted before the app died)
