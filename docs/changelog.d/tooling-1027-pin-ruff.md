@@ -1,0 +1,1 @@
+- tooling: ruff is pinned to one version (0.17.3) in `scripts/ruff.toml` and `worker/pyproject.toml` (`required-version`, enforced by ruff itself) and as `uvx ruff@0.17.3` in `premerge.py`, `ci-docs.yml`, `ci-worker.yml` and the docs; new guard `scripts/check_ruff_pin.py` (auto-run by premerge and CI) fails when a site disagrees or runs ruff unpinned (#1027).
