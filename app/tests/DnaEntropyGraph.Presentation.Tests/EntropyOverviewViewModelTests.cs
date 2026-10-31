@@ -222,6 +222,45 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_chosen_folder_that_is_not_there_is_not_made_by_a_save()
+    {
+        var missing = Path.Combine(_dir, "chosen-gone");
+        var settings = new MemorySettings();
+        settings.Values[OutputFolderViewModel.SettingKey] = missing;
+        var vm = await ImportedRunWith(ResultsExportRoot.FromSettings(settings, () => Path.Combine(_dir, "dl-unused"), appOwned: true), "imp-missing");
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(missing).ShouldBeFalse("the user's own folder is not brought back, even when the default root is the app's own");
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
+    }
+
+    [Fact]
+    public async Task A_setting_that_changes_during_one_save_cannot_mix_one_folders_target_with_anothers_required_root()
+    {
+        // The target and the "must already exist" root of one save come from ONE read: here the first read answers a missing chosen folder and every later read answers none.
+        var missing = Path.Combine(_dir, "chosen-flip");
+        var reads = 0;
+        var root = new ResultsExportRoot(() => Path.Combine(_dir, "dl-flip"), appOwned: true, chosenFolder: () => Interlocked.Increment(ref reads) == 1 ? missing : null);
+        var vm = await ImportedRunWith(root, "imp-flip");
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(missing).ShouldBeFalse("a later read of the setting must not turn the chosen folder into one the app may create");
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
+    }
+
+    [Fact]
+    public void A_chosen_folder_is_returned_as_its_full_path()
+    {
+        var settings = new MemorySettings();
+        var mine = Path.Combine(_dir, "mine-full");
+        settings.Values[OutputFolderViewModel.SettingKey] = Path.Combine(mine, "sub", "..");
+
+        ResultsExportRoot.FromSettings(settings, () => "x").Parent().ShouldBe(mine);
+    }
+
+    [Fact]
     public async Task A_second_export_never_overwrites_the_first()
     {
         var own = Path.Combine(_dir, "mine");

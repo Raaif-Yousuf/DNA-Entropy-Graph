@@ -39,8 +39,8 @@ public static class OutputFolderSetting
 
         try
         {
-            _ = Path.GetFullPath(path);
-            return OutputFolderChoice.IsRefused(path) ? null : path;
+            var full = Path.GetFullPath(path);
+            return OutputFolderChoice.IsRefused(full) ? null : full;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {

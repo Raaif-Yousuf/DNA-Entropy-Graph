@@ -24,9 +24,19 @@ public sealed class ResultsExportRoot
     /// True when the folder is the app's own (portable <c>outputs</c>), so it may be made on first use; false for the user's own (Downloads, or a folder they
     /// chose), which must already be there. A chosen folder is always the user's own.
     /// </summary>
-    public bool AppOwned => _defaultIsAppOwned && _chosen() is null;
+    public bool AppOwned => Resolve().AppOwned;
 
-    public string Parent() => _chosen() ?? _defaultParent();
+    public string Parent() => Resolve().Parent;
+
+    /// <summary>
+    /// The parent and its ownership from ONE read of the setting. A save uses this once, so a change on Settings in the middle of it cannot pair one
+    /// folder's target with another's "must already exist" root.
+    /// </summary>
+    public (string Parent, bool AppOwned) Resolve()
+    {
+        var chosen = _chosen();
+        return chosen is null ? (_defaultParent(), _defaultIsAppOwned) : (chosen, false);
+    }
 
     /// <summary>Reads the chosen folder from the saved setting at each call (drive roots and an unreadable setting mean the default).</summary>
     public static ResultsExportRoot FromSettings(ISettingsStore store, Func<string> defaultParent, bool appOwned = false)

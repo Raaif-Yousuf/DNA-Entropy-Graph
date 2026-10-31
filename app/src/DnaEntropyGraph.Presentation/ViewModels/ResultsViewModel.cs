@@ -495,8 +495,10 @@ public sealed partial class ResultsViewModel : ObservableObject
             (path, written) = await Task.Run(
                 () =>
                 {
+                    // One read of the export root per save (Parent and AppOwned together): the setting may change while this runs.
+                    var exportParent = ownFolder && _exportRoot is not null ? _exportRoot.Resolve() : default;
                     var target = ownFolder && _exportRoot is not null && run is not null
-                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
+                        ? RunOutputFolders.ExportsFolder(exportParent.Parent, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
                         : folder;
                     var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
 
@@ -508,7 +510,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                     {
                         // The user's own export root (Downloads) must still be there: a deleted one is not brought back; only the exports folder is
                         // made. A root the app owns (portable outputs) is made on first use, since nothing makes it at startup.
-                        made = RunOutputFolders.CreateFolderChain(target, _exportRoot!.AppOwned ? null : _exportRoot.Parent());
+                        made = RunOutputFolders.CreateFolderChain(target, exportParent.AppOwned ? null : exportParent.Parent);
                     }
                     else if (!Directory.Exists(target))
                     {
