@@ -1,0 +1,1 @@
+- Download again after Delete files on this PC now makes the run's folder again with its marker, so a later Delete files on this PC proceeds without the older-run question; a recorded folder that is still there is left as it is (#1047).

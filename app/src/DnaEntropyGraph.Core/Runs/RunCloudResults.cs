@@ -317,7 +317,19 @@ public sealed class RunCloudResults : IRunCloudResults
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsContained(folder, root) ? folder : null;
+        if (!RunOutputRoot.IsContained(folder, root))
+        {
+            return null;
+        }
+
+        // Issue #1047: Delete files on this PC leaves OutputDir on the row, so a recorded folder that is gone is made again here, with this run's marker, exactly as a folder
+        // made by CreateUnique is. A recorded folder that is still there is never touched: an unmarked one stays unmarked (a pre-marker run keeps its confirmation question).
+        if (!Path.Exists(folder) && !string.IsNullOrWhiteSpace(run.JobId))
+        {
+            RunOutputFolders.CreateMarked(folder, run.JobId);
+        }
+
+        return folder;
     }
 
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>

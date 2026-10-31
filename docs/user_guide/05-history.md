@@ -22,7 +22,7 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
   files back into the run's folder. They are only what was finished before the stop. It is
   not offered when the run never saved anything online.
 - **Download again**: if you deleted the local copy of a run's results but they are still in
-  your cloud storage, this fetches them again without re-running the analysis. Cloud
+  your cloud storage, this fetches them again without re-running the analysis, into the same folder name as before (made again if it is gone, so Delete files on this PC can remove it later without asking). Cloud
   copies are kept for a while after a run finishes (90 days by default, adjustable in
   Settings) and then automatically deleted; once that happens, Download again is no longer
   possible (the button is greyed out) and only Run again will get you a fresh result.
