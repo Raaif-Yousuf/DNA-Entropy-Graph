@@ -413,13 +413,13 @@ public sealed class JobReconciler
         }
 
         // Review F4: the shell bar is only for an account with something that could still be running (an unfinished run, an unconfirmed end, an unexpired keep-alive); otherwise it is logged only.
-        // Round 5 L2: an outcome that names no account (a row with none) acted as the ACTIVE account, so it is resolved to it here (the selection path's scope carries it); only when there is none does it match rows with no account alone.
+        // Round 5 L2: an outcome that names no account (a row with none) acted as the ACTIVE account, so it is resolved to it here (the selection path's scope carries it); only when there is none does it match rows with no account alone. The resolution happens BEFORE the distinct, so a null-sub outcome and a named one of the same account are one account and one message.
         var activeSub = extra.FirstOrDefault(s => s.AccountSub is not null)?.AccountSub;
-        var signedOutSubs = signedOut.Select(o => o.AccountSub).Distinct().ToList();
+        var signedOutSubs = signedOut.Select(o => o.AccountSub ?? activeSub).Distinct().ToList();
         foreach (var sub in signedOutSubs)
         {
             var key = sub ?? string.Empty;
-            if (RunObligations.ExistForAccount(all, sub ?? activeSub, installation, now))
+            if (RunObligations.ExistForAccount(all, sub, installation, now))
             {
                 lock (_loggedNoObligation)
                 {

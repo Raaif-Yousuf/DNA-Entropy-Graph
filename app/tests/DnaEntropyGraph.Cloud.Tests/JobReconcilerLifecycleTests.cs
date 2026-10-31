@@ -214,6 +214,20 @@ public class JobReconcilerLifecycleTests
         signInFor.Count.ShouldBe(1, "the named row of the active account matches once the null account is resolved to it");
     }
 
+    [Fact]
+    public async Task A_null_sub_and_a_named_signed_out_failure_of_the_same_account_give_one_shell_message()
+    {
+        // The row-level look fails naming no account; the idle sweep of the active account's scope fails naming sub-a. One account, one message, under the resolved sub.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "my-project").WithAccountSignedOut("sub-a"));
+        await rig.Env.SeedAsync("job-a", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, keepAliveMinutes: 600, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), AccountSub = "sub-a" });
+        var compute = new ScriptedCompute(rig.Gcp) { FindThrows = new AccountAuthException(AuthErrorCodes.SigninExpired) };
+        var signInFor = new List<string?>();
+
+        await rig.Reconciler(compute: compute, additionalSweepScopes: () => [new CloudScope("my-project", "sub-a")], onSignInNeeded: sub => signInFor.Add(sub)).EnforceLifecycleAsync(CancellationToken.None);
+
+        signInFor.ShouldBe(["sub-a"]);
+    }
+
     [Theory]
     [InlineData(AfterKeepAliveAction.Delete, null)]
     [InlineData(AfterKeepAliveAction.Stop, "STOPPED")]
