@@ -130,6 +130,20 @@ public sealed class JobReconciler
     /// </summary>
     internal Action<string>? CancelSettleArmed { get; set; }
     private readonly IDiagnosticsLog _log;
+    private readonly Action<string?>? _onSignInNeeded;
+
+    /// <summary>Tells the app an account needs to sign in (review M3); the handler is the app's and must not be able to break a reconcile pass.</summary>
+    private void SignInNeeded(string? accountSub)
+    {
+        try
+        {
+            _onSignInNeeded?.Invoke(accountSub);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("reconciler", null, ex.GetType().Name);
+        }
+    }
 
     /// <summary>Jobs whose last reattach could not ask the cloud (Deferred), until a later pass judges them (issue #559).</summary>
     private readonly ConcurrentDictionary<string, byte> _deferredRuns = new();
@@ -232,6 +246,7 @@ public sealed class JobReconciler
     /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
     /// <param name="additionalSweepScopes">Issue #830: the scopes, besides those of every recent run row, the installation-wide sweeps (idle sweep) list in; the app passes the selected scope, so a VM no row names is still found.</param>
+    /// <param name="onSignInNeeded">Issue #830 review M3: told with the account's sub (null when it is not known) each time a run or computer could not be looked at because its Google account is signed out, so the shell can offer "Sign in as ...". A failing handler never stops the pass. Never given the email.</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
         CloudJobRunner runner,
@@ -249,8 +264,10 @@ public sealed class JobReconciler
         TimeSpan? mutationTimeout = null,
         IDiagnosticsLog? log = null,
         TimeSpan? cancelSettleTimeout = null,
-        Func<IEnumerable<CloudScope>>? additionalSweepScopes = null)
+        Func<IEnumerable<CloudScope>>? additionalSweepScopes = null,
+        Action<string?>? onSignInNeeded = null)
     {
+        _onSignInNeeded = onSignInNeeded;
         _additionalSweepScopes = additionalSweepScopes ?? (() => []);
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
@@ -385,6 +402,17 @@ public sealed class JobReconciler
         }
 
         SetLifecycleDeferred(generation, deferred);
+
+        LifecycleOutcome[] signedOut;
+        lock (outcomes)
+        {
+            signedOut = [.. outcomes.Where(o => o.Action == LifecycleAction.NeedsSignIn)];
+        }
+
+        foreach (var sub in signedOut.Select(o => o.AccountSub).Distinct())
+        {
+            SignInNeeded(sub);
+        }
 
         return outcomes;
     }
@@ -784,6 +812,7 @@ public sealed class JobReconciler
             if (ex is AccountAuthException auth && NeedsSignIn(auth))
             {
                 _log.Warning("reconciler", row.JobId, "account-signed-out");
+                SignInNeeded(auth.AccountSub);
                 return new ReattachOutcome(row.JobId, ReattachAction.NeedsSignIn, null, auth.Code, auth.AccountSub);
             }
 

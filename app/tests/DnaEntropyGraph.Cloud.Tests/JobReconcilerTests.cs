@@ -121,7 +121,7 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null) => new(
             Runner,
             compute ?? Gcp,
             Gcp,
@@ -136,7 +136,8 @@ public class JobReconcilerTests
             lookupTimeout,
             mutationTimeout,
             log ?? Log,
-            additionalSweepScopes: additionalSweepScopes ?? (() => [new CloudScope(Project)]));
+            additionalSweepScopes: additionalSweepScopes ?? (() => [new CloudScope(Project)]),
+            onSignInNeeded: onSignInNeeded);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -313,6 +314,31 @@ public class JobReconcilerTests
         env.Row("job-so").Phase.ShouldBe(JobPhase.Running, "nothing was decided about the run: the next launch looks again");
         env.Gcp.Calls.Skip(callsBefore).Where(c => c.Method is "StopVm" or "DeleteVm" or "CreateVm").ShouldBeEmpty();
         env.Gcp.Calls.Skip(callsBefore).Where(c => c.ProjectId != Project).ShouldBeEmpty("no call went to another project");
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_account_is_signed_out_tells_the_app_which_account_needs_to_sign_in()
+    {
+        // Issue #830 review M3: the outcome alone reaches nobody; the reconciler hands the account to the app so the shell can say "Sign in as ...".
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountSignedOut("sub-a"));
+        await env.SeedAsync("job-so2", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        await OneAsync(env.Reconciler(onSignInNeeded: told.Add), "job-so2");
+
+        told.ShouldBe(["sub-a"]);
+    }
+
+    [Fact]
+    public async Task A_resumed_run_whose_account_merely_has_no_connection_does_not_ask_for_a_sign_in()
+    {
+        var env = new Env(new FakeGcp().WithAccount("sub-a", "a@example.org", Project).WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable));
+        await env.SeedAsync("job-net", JobPhase.Running, vm: true, tweak: row => row with { AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        await OneAsync(env.Reconciler(onSignInNeeded: told.Add), "job-net");
+
+        told.ShouldBeEmpty();
     }
 
     [Theory]

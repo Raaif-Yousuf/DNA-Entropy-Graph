@@ -25,6 +25,9 @@ public sealed partial class FakeGcp
     {
         public AccountInfo Info { get; } = info;
 
+        /// <summary>The account as the account list shows it: a signed-out account is listed as needing a sign-in, like the real service.</summary>
+        public AccountInfo Listed => SignedIn ? Info : Info with { NeedsSignIn = true };
+
         public HashSet<string> Projects { get; } = projects;
 
         public bool SignedIn { get; set; } = true;

@@ -1,0 +1,74 @@
+using DnaEntropyGraph.App.Startup;
+using DnaEntropyGraph.Cloud;
+using DnaEntropyGraph.Core;
+using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Presentation.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
+using Shouldly;
+using Xunit;
+
+namespace DnaEntropyGraph.Guards.Tests;
+
+/// <summary>
+/// Issue #830 review M3, through the production wiring: a finished run made under a Google account that is signed out is found by the launch
+/// pass (<see cref="AppStartup.BeginAsync"/>), and the shell's "Sign in as ..." bar (<see cref="SignInNeededViewModel"/>, resolved from the real container) opens
+/// naming that account. A reconciler whose outcome is never handed to the bar leaves it closed here.
+/// </summary>
+public sealed class SignInNeededStartupTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "deg-signin-needed-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // SQLite may still hold the file for a moment.
+        }
+    }
+
+    [Fact]
+    public async Task A_run_whose_account_is_signed_out_opens_the_shells_sign_in_bar_naming_the_account()
+    {
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
+        services.AddSingleton<FakeGcp>(_ => new FakeGcp()
+            .WithSelectedProject("my-project")
+            .WithAccount("sub-a", "a@example.org", "project-a")
+            .WithAccountSignedOut("sub-a"));
+        services.AddSingleton<IGcpAccount>(sp => sp.GetRequiredService<FakeGcp>());
+        using var provider = services.BuildServiceProvider();
+
+        using (var connection = provider.GetRequiredService<DnaEntropyGraph.Persistence.SqliteDatabase>().OpenConnection())
+        {
+            using var insert = connection.CreateCommand();
+            insert.CommandText = "INSERT OR IGNORE INTO Projects (ProjectId) VALUES ('project-a')";
+            insert.ExecuteNonQuery();
+        }
+
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(
+            new RunRecord(
+                "job-a",
+                JobPhase.Completed,
+                DateTimeOffset.UtcNow.AddMinutes(-30),
+                Target: "cloud",
+                ProjectId: "project-a",
+                AccountSub: "sub-a",
+                InstallationId: InstallationId.GetOrCreate(provider.GetRequiredService<ISettingsStore>()),
+                FinishedAt: DateTimeOffset.UtcNow.AddMinutes(-10)),
+            CancellationToken.None);
+
+        await AppStartup.BeginAsync(provider, CancellationToken.None);
+
+        var bar = provider.GetRequiredService<SignInNeededViewModel>();
+        bar.IsOpen.ShouldBeTrue("the launch pass could not look at job-a (its account is signed out) and the shell must say so");
+        bar.Title.ShouldContain("a@example.org");
+    }
+}

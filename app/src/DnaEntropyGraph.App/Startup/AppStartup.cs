@@ -33,6 +33,9 @@ public static class AppStartup
             // The rows stay non-terminal and are judged again next launch.
         }
 
+        // Issue #830 review M3: the shell's "Sign in as ..." bar listens from before the first run is judged (it is built on first resolve).
+        _ = services.GetRequiredService<Presentation.ViewModels.SignInNeededViewModel>();
+
         // Issue #830: before any run is judged, a row from before accounts were recorded takes the account signed in now (once).
         try
         {

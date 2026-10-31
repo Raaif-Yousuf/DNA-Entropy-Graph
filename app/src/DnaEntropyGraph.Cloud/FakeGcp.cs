@@ -185,9 +185,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     private string? _signInErrorCode;
 
-    public AccountInfo? CurrentAccount => ActiveIsDefault ? (_signedIn ? FakeAccount : null) : _modeled[_activeSub].Info;
+    public AccountInfo? CurrentAccount => ActiveIsDefault ? (_signedIn ? FakeAccount : null) : _modeled[_activeSub].Listed;
 
-    public IReadOnlyList<AccountInfo> Accounts => [.. (_signedIn ? new[] { FakeAccount } : []), .. _modeled.Values.Select(m => m.Info)];
+    public IReadOnlyList<AccountInfo> Accounts => [.. (_signedIn ? new[] { FakeAccount } : []), .. _modeled.Values.Select(m => m.Listed)];
 
     public event EventHandler? AccountChanged;
 

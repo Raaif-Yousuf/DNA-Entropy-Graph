@@ -1826,6 +1826,21 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="UpdateRestartButton.Content" xml:space="preserve">
     <value>Restart to update</value>
   </data>
+  <data name="SignInNeeded_Title" xml:space="preserve">
+    <value>Sign in as {0}</value>
+  </data>
+  <data name="SignInNeeded_TitleUnknown" xml:space="preserve">
+    <value>Sign in with the Google account a recent run started under</value>
+  </data>
+  <data name="SignInNeeded_Joiner" xml:space="preserve">
+    <value> or </value>
+  </data>
+  <data name="SignInNeeded_Message" xml:space="preserve">
+    <value>The app could not check on a computer that account started in Google Cloud, and a computer left running costs money. Sign in so the app can look at it and stop it.</value>
+  </data>
+  <data name="SignInNeededBarButton.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
   <data name="UpdateBarRestartButton.Content" xml:space="preserve">
     <value>Restart to update</value>
   </data>

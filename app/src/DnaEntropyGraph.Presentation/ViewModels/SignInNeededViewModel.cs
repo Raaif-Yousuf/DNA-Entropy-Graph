@@ -1,0 +1,107 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Presentation.Messaging;
+using DnaEntropyGraph.Presentation.Services;
+
+namespace DnaEntropyGraph.Presentation.ViewModels;
+
+/// <summary>
+/// Issue #830 review M3: the shell's "Sign in as (the account)" bar. The startup reconcile cannot look at a run, or stop its computer, when the Google
+/// account the run was made under is signed out; the reconciler tells the app (<see cref="AccountSignInNeededMessage"/>) and this keeps the list of
+/// accounts waiting. An entry goes away only when that account is signed in again (checked on the account list, never assumed from "a sign-in happened"),
+/// so signing in as somebody else leaves the bar. A bar the person closed stays closed until a NEW account needs a sign-in (the reconnect probe repeats
+/// the same message). The email is looked up for the text and never logged.
+/// </summary>
+public sealed partial class SignInNeededViewModel : ObservableObject
+{
+    /// <summary>The marker for an account whose id was not known.</summary>
+    private const string UnknownSub = "";
+
+    private readonly IGcpAccount _account;
+    private readonly IStringResourceProvider _strings;
+    private readonly IDispatcher _dispatcher;
+    private readonly HashSet<string> _waiting = new(StringComparer.Ordinal);
+
+    [ObservableProperty]
+    private bool _isOpen;
+
+    [ObservableProperty]
+    private string _title = string.Empty;
+
+    public SignInNeededViewModel(IGcpAccount account, IMessenger messenger, IStringResourceProvider strings, IDispatcher dispatcher)
+    {
+        _account = account;
+        _strings = strings;
+        _dispatcher = dispatcher;
+        messenger.Register<SignInNeededViewModel, AccountSignInNeededMessage>(this, static (vm, message) => vm._dispatcher.Enqueue(() => vm.Add(message.AccountSub)));
+
+        // The shell lives as long as the app, so no unsubscribe.
+        account.AccountChanged += (_, _) => _dispatcher.Enqueue(Prune);
+    }
+
+    /// <summary>What the bar says under its title: one line, the action and why.</summary>
+    public string Message => _strings.GetString("SignInNeeded_Message");
+
+    private void Add(string? sub)
+    {
+        var grew = _waiting.Add(sub ?? UnknownSub);
+        Prune();
+        if (grew && _waiting.Count > 0)
+        {
+            IsOpen = true;
+        }
+    }
+
+    /// <summary>Drops every account that is signed in again and rewrites the title; closes the bar when none is left.</summary>
+    private void Prune()
+    {
+        var accounts = _account.Accounts;
+        _waiting.RemoveWhere(sub => sub.Length > 0 && accounts.Any(a => a.Sub == sub && !a.NeedsSignIn));
+        Title = BuildTitle(accounts);
+        if (_waiting.Count == 0)
+        {
+            IsOpen = false;
+        }
+    }
+
+    private string BuildTitle(IReadOnlyList<AccountInfo> accounts)
+    {
+        if (_waiting.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var emails = _waiting
+            .Select(sub => accounts.FirstOrDefault(a => a.Sub == sub)?.Email)
+            .Where(email => !string.IsNullOrEmpty(email))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return emails.Count == 0
+            ? _strings.GetString("SignInNeeded_TitleUnknown")
+            : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("SignInNeeded_Title"), string.Join(_strings.GetString("SignInNeeded_Joiner"), emails));
+    }
+
+    /// <summary>The bar's button: starts Google sign-in. A cancelled or failed sign-in keeps the bar; the sign-in screen already said why.</summary>
+    [RelayCommand]
+    private async Task SignInAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (AccountAuthException)
+        {
+            return;
+        }
+
+        // An account whose id was never known cannot be matched to the list, so any completed sign-in answers it.
+        _dispatcher.Enqueue(() =>
+        {
+            _waiting.Remove(UnknownSub);
+            Prune();
+        });
+    }
+}

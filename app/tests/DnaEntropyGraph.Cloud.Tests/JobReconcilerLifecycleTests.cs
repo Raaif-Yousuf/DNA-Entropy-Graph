@@ -53,7 +53,7 @@ public class JobReconcilerLifecycleTests
 
         public FakeGcp Gcp => Env.Gcp;
 
-        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null, DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog? log = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, log: log, compute: compute, additionalSweepScopes: additionalSweepScopes);
+        public JobReconciler Reconciler(TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IComputeGateway? compute = null, DnaEntropyGraph.Core.Abstractions.IDiagnosticsLog? log = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null) => Env.Reconciler(Clock, lookupTimeout, mutationTimeout, log: log, compute: compute, additionalSweepScopes: additionalSweepScopes, onSignInNeeded: onSignInNeeded);
 
         /// <summary>A finished run (<paramref name="phase"/>) whose VM exists, finished ten minutes before launch.</summary>
         public async Task SeedFinishedAsync(
@@ -812,6 +812,19 @@ public class JobReconcilerLifecycleTests
         signIn.AccountSub.ShouldBe("sub-a");
         outcomes.Single(o => o.JobId == "job-mine").Action.ShouldBe(LifecycleAction.VmDeleted, "one account being signed out does not stop the pass");
         rig.Gcp.Calls.Skip(callsBefore).Where(c => c.AccountSub == "sub-a" && c.Method is "StopVm" or "DeleteVm").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_finished_run_whose_account_is_signed_out_tells_the_app_which_account_needs_to_sign_in()
+    {
+        // Issue #830 review M3.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a"));
+        await rig.SeedFinishedAsync("job-a", AfterTaskAction.Delete, tweak: row => row with { ProjectId = "project-a", AccountSub = "sub-a" });
+        var told = new List<string?>();
+
+        await rig.Reconciler(onSignInNeeded: told.Add).EnforceLifecycleAsync(CancellationToken.None);
+
+        told.Distinct().ShouldBe(["sub-a"]);
     }
 
     [Fact]

@@ -407,7 +407,8 @@ public static class ServiceRegistration
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
                 log: sp.GetRequiredService<IDiagnosticsLog>(),
-                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().SelectedScope() is { } selected ? [selected] : []);
+                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().SelectedScope() is { } selected ? [selected] : [],
+                onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)));
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
@@ -466,6 +467,7 @@ public static class ServiceRegistration
         // Issue #143: one tour state shared by the window's tips and the Settings replay button.
         services.AddSingleton<TourSettings>();
         services.AddSingleton<TourViewModel>();
+        services.AddSingleton<SignInNeededViewModel>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
         services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
         services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();
