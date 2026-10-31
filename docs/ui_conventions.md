@@ -299,10 +299,13 @@ memory effect itself was not measured, only that the release is explicit.
   `RunNamePreview`. The preview, `RunTransfer` (cloud) and `LocalJobRunner` (This PC) all name the folder with the one
   function `RunOutputFolders.RunFolderName` (over `RunNamer`), so the page cannot promise a name the runner will not
   use; `RunOutputFolders.CreateUnique` adds `_2` against the real disk. The template is not remembered between launches.
-- **Price source line (issue #814).** `NewRunViewModel.PriceSourceText` sits under the estimate and is read from `IPricingStatus.Current` right after each estimate
-  (asking for the estimate is what lets the day's catalog read finish or fail). Catalog/Cache from today: "Prices from Google's price list, as of <date>". `CacheStale`,
-  or a Catalog/Cache whose `AsOf` is before today (a session that crossed midnight): "older prices". `Shipped`: "the list that came with this app", then the
-  `PricingFallbackReason` in plain words with its one action (plain words; there is no button for it on this page). Empty when there is no estimate.
+- **Price source line (issue #814).** `NewRunViewModel.PriceSourceText` sits under the estimate and is read from `IPricingStatus.Current` after each estimate.
+  The estimate waits only a few seconds for the day's catalog read, so a slower read can finish (or fail) later: `CostEstimateService` then raises `PricesChanged`
+  when the prices OR the status (origin, reason, as-of date) changed, and the page estimates again, so the line corrects itself without the user doing anything.
+  Catalog/Cache from today: "Prices from Google's price list, as of <date>". `CacheStale` (the real `CatalogPricingSource` ages a catalog read at midnight itself; the page does
+  no date check of its own): "older prices", or "from an earlier day" when it has no date. A catalog date up to a day ahead of the clock (accepted by the source) is shown as today.
+  `Shipped`: "the list that came with this app", then the `PricingFallbackReason` in plain words with its one action (there is no button for it on this page); with no
+  reason it means the read is not finished or was not tried. Empty when there is no estimate.
   `NewRunPriceSourceTests` pins one line per origin and per reason against the real `Resources.resw` text.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.

@@ -234,11 +234,19 @@ public sealed class NewRunPriceSourceTests : IDisposable
     [Fact]
     public async Task With_no_estimate_there_is_no_price_line()
     {
-        EstimateReturns(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
-        // The cap card is written in the same step as the estimate and price lines, last: once it shows, the step has run (no fixed wait).
+        // The real estimate is held at the gate. The cap card is written in the same step as the estimate and price lines, last, and the substitute
+        // gives a cap only after the gate opened, so a card that shows can only have come from the real estimate's step (the no-file step asks
+        // earlier and gets none): once it shows, that step has run and had its chance to write a price line.
+        var gate = new TaskCompletionSource<CostEstimateResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opened = false;
+        _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(gate.Task);
         _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0)));
+            .Returns(_ => Task.FromResult<SpendCapStatus?>(Volatile.Read(ref opened) ? new SpendCapStatus(SpendCapLevel.Warning, 8.0, 10.0) : null));
         var vm = await OpenWithAFileAsync();
+        vm.SpendCapText.ShouldBeEmpty("the real estimate has not answered yet");
+
+        Volatile.Write(ref opened, true);
+        gate.SetResult(CostEstimateResult.Unavailable(EstimateUnavailable.UnknownSize));
         await WaitForAsync(vm, nameof(NewRunViewModel.SpendCapText), () => vm.SpendCapText.Length > 0);
 
         vm.EstimateText.ShouldBeEmpty();
