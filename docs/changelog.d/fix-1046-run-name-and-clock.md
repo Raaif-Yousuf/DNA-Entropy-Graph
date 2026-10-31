@@ -1,1 +1,2 @@
 - Fix #1046: a new run is recorded under its run name (the same name template result that names its output folder) instead of its job id, so History shows e.g. `SetTnpB_evo2_7b`; `JobEngine` and `LocalRunDriver` now take their timestamps from the injected `TimeProvider`.
+- A `RunRecord` printed in a log line or message now withholds its name, output folder, options and manifest (they carry the input file name), like its notes, tags and account.
