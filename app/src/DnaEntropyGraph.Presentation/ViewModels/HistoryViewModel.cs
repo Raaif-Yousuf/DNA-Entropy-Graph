@@ -39,6 +39,8 @@ public sealed partial class HistoryViewModel : ObservableObject
     private readonly ImportedRunDismissals? _dismissals;
     private IReadOnlyList<RunListItem> _items = [];
     private int _loadGeneration;
+    private readonly IDispatcher? _dispatcher;
+    private bool _loaded;
 
     [ObservableProperty]
     private string _searchText = string.Empty;
@@ -123,6 +125,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             new(RunStatusFilter.Cancelled, _strings.GetString("Runs_Filter_Cancelled")),
         ];
         _selectedStatusFilter = StatusFilters[0];
+        _dispatcher = dispatcher;
+        WeakAccountSubscription.Attach(account, this, static vm => vm.OnAccountChanged());
     }
 
     /// <summary>
@@ -192,6 +196,121 @@ public sealed partial class HistoryViewModel : ObservableObject
         _ => RunsCopy.ImportFailed,
     };
 
+    // ----- Issue #112: only the active account's runs -----
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasHiddenRuns))]
+    private string _hiddenRunsText = string.Empty;
+
+    /// <summary>The one line under the count that names what to do (the Switch to buttons, or Sign in again); empty with nothing hidden.</summary>
+    [ObservableProperty]
+    private string _hintText = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasSignInAgain;
+
+    /// <summary>True when runs of another account exist in the history and are not listed; the page then says so.</summary>
+    public bool HasHiddenRuns => HiddenRunsText.Length > 0;
+
+    /// <summary>One button per other account that owns hidden runs and is still signed in on this PC.</summary>
+    public ObservableCollection<AccountSwitchItem> SwitchAccounts { get; } = [];
+
+    /// <summary>The reload started by the last account change; the list follows a switch by itself, so tests await this.</summary>
+    public Task AccountRefresh { get; private set; } = Task.CompletedTask;
+
+    private void OnAccountChanged()
+    {
+        // A page that was never opened has nothing on screen to correct.
+        if (!_loaded)
+        {
+            return;
+        }
+
+        void Reload() => AccountRefresh = RefreshAsync(CancellationToken.None);
+        if (_dispatcher is null)
+        {
+            Reload();
+        }
+        else
+        {
+            _dispatcher.Enqueue(Reload);
+        }
+    }
+
+    /// <summary>
+    /// DECISION (agent-made, reversible; issue #112): a run is listed under the account that was current when Run was pressed (its <c>AccountSub</c>, kept for the run's whole life).
+    /// A row with no account (a This PC row, which belongs to the computer, or a row older than the column that the one-time backfill has not reached) is listed under every account.
+    /// With nobody signed in at all every row is listed, so an empty page is never mistaken for lost history; this is a view filter, not an access control.
+    /// </summary>
+    private static bool IsListedFor(RunRecord run, string? activeSub) => activeSub is null || run.AccountSub is null || run.AccountSub == activeSub;
+
+    private void ShowHidden(IReadOnlyList<RunRecord> hidden, string? active)
+    {
+        SwitchAccounts.Clear();
+        if (hidden.Count == 0)
+        {
+            HiddenRunsText = string.Empty;
+            HintText = string.Empty;
+            HasSignInAgain = false;
+            return;
+        }
+
+        HiddenRunsText = hidden.Count == 1
+            ? _strings.GetString(RunsCopy.HiddenOne)
+            : string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.HiddenMany), hidden.Count);
+
+        var accounts = _account.Accounts;
+        var owners = hidden.Select(r => r.AccountSub).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        var signedInOwners = accounts.Where(a => a.Sub != active && !a.NeedsSignIn && owners.Contains(a.Sub)).ToList();
+        foreach (var other in signedInOwners)
+        {
+            var sub = other.Sub;
+            SwitchAccounts.Add(new AccountSwitchItem(
+                string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.SwitchLabel), other.Email),
+                new AsyncRelayCommand(() => SwitchToAsync(sub))));
+        }
+
+        // Owners that cannot be switched to: signed out here (their email is known), or forgotten by this PC (it is not).
+        var signedOut = owners.Where(sub => signedInOwners.All(a => a.Sub != sub)).ToList();
+        var signedOutEmails = signedOut
+            .Select(sub => accounts.FirstOrDefault(a => a.Sub == sub)?.Email)
+            .Where(email => !string.IsNullOrEmpty(email))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        HasSignInAgain = signedOut.Count > 0;
+        HintText = signedOut.Count == 0 ? _strings.GetString(RunsCopy.HintSwitch)
+            : signedOutEmails.Count > 0
+                ? string.Format(CultureInfo.CurrentCulture, _strings.GetString(RunsCopy.HintSignIn), string.Join(_strings.GetString("SignInNeeded_Joiner"), signedOutEmails))
+                : _strings.GetString(RunsCopy.HintSignInUnknown);
+    }
+
+    private async Task SwitchToAsync(string sub)
+    {
+        try
+        {
+            // The account service raises AccountChanged, and that reloads this page (OnAccountChanged).
+            await _account.SwitchAccountAsync(sub, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Toast(RunsCopy.SwitchFailed);
+        }
+    }
+
+    /// <summary>The button for hidden runs of an account that is signed out here: the same Google sign-in as the shell's bar. The list reloads on the account change the sign-in raises.</summary>
+    [RelayCommand]
+    private async Task SignInAgainAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _account.SignInAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _log?.Warning("runs-sign-in-again", null, ex.GetType().Name);
+            Toast(RunsCopy.SignInFailed);
+        }
+    }
     public IReadOnlyList<RunStatusFilterOption> StatusFilters { get; }
 
     public ObservableCollection<RunDayGroup> Groups { get; } = [];
@@ -205,9 +324,14 @@ public sealed partial class HistoryViewModel : ObservableObject
         // Every load (page open, Refresh, after an action) takes a number; only the newest may write the list, so a slow older
         // load that finishes last cannot put stale rows back.
         var generation = Interlocked.Increment(ref _loadGeneration);
+        _loaded = true;
         try
         {
-            var runs = await _runRepository.GetAllAsync(cancellationToken);
+            // The account is read before the history, so a switch that lands mid-load is followed by its own reload (a newer generation), never mixed in.
+            var activeSub = _account.CurrentAccount?.Sub;
+            var all = await _runRepository.GetAllAsync(cancellationToken);
+            var runs = all.Where(r => IsListedFor(r, activeSub)).ToList();
+            var hidden = all.Where(r => !IsListedFor(r, activeSub)).ToList();
 
             // One disk probe per row: off the UI thread.
             var rows = await Task.Run(() => runs.OrderByDescending(r => r.CreatedUtc).Select(r => (Run: r, HasFolder: _local.OutputFolderExists(r))).ToList(), cancellationToken);
@@ -223,6 +347,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             }
 
             _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder, booked.TryGetValue(r.Run.JobId, out var usd) ? usd : null))];
+            ShowHidden(hidden, activeSub);
             ApplyFilter();
             SparklineWork = LoadSparklinesAsync(_items, generation, cancellationToken);
         }

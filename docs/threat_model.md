@@ -128,6 +128,9 @@ the scope Google requires for this feature set to work at all.
 - **At rest:** `%LOCALAPPDATA%\DNAEntropyGraph\auth\<sub>.tok` is the whole token response encrypted with DPAPI
   (CurrentUser, fixed app entropy). `accounts.json` beside it lists `sub` and email for the switcher and holds
   no token. Account email is therefore on disk in clear; it is never logged or sent anywhere.
+  The Runs page lists only the active account's runs (issue #112, docs/cloud_design.md section 24.1): this is a view filter
+  so a second account does not see the first one's history by accident, not an access control; both accounts belong to
+  the same Windows user and can read the same files. pp.db holds the account sub on a run row, never the email.
 - **The id token is read, not verified.** It arrives over TLS straight from Google's token endpoint in answer
   to this app's own request, which OpenID Connect Core 3.1.3.7 allows to be trusted without a signature
   check. Only `sub` and `email` are read, only to key and label the local account. No authorization decision

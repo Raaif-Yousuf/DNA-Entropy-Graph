@@ -50,6 +50,9 @@ Open a run's results and use **Your notes** to write a note (for example, "the c
 
 When something you did finishes or cannot finish (a delete, a download, a new theme), the app shows a message bar at the bottom of its window. Good news and plain information close by themselves after a few seconds. A warning or a problem stays until you press its close button, so you cannot miss it, and it names what to do next.
 
+## If more than one Google account is signed in on this computer
+
+The Runs page lists only the runs started while the account you are using now was in use. A run started under another account is not deleted: it is hidden, a line above the list says how many, and under it is the one thing to do. If that account is still signed in on this computer, there is a **Switch to** button for it, and the list changes at once with no restart (the Cloud page follows). If it is signed out here, there is a **Sign in again** button; sign in as that account and its runs come back. A new account therefore sees an empty Runs page until it runs something. A run that was made on this computer's own graphics card, and one from before the app knew about accounts, show under every account. If nobody is signed in, every run is listed.
 ## If you use the app on more than one computer
 
 Two computers signed into the same Google account do not automatically see each other's
