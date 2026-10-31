@@ -1,0 +1,1 @@
+- Worker: the too-large NCBI record message now tells an app user to type a smaller range into the From base and To base boxes, and keeps --accession-range as the command-line route (#948).
