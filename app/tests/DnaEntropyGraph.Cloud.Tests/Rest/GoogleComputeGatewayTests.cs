@@ -742,6 +742,33 @@ public class GoogleComputeGatewayTests
     }
 
     [Fact]
+    public async Task MarkEnding_refused_by_an_org_policy_with_a_412_throws_as_org_policy_and_is_not_read_as_a_lost_race()
+    {
+        // Round 4 finding 2: any 412 used to mean "the labels moved", which is also the shape of an org-policy denial.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Operation denied by org policy on 'constraints/compute.requireOsLogin'."));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_names_an_org_policy_throws_as_org_policy()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Constraint constraints/compute.requireOsLogin violated"), http: 400));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Fact]
     public async Task MarkEnding_whose_polled_operation_fails_otherwise_still_throws()
     {
         var rig = new GoogleGatewayHarness();

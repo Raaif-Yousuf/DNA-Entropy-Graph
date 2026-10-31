@@ -130,6 +130,12 @@ public sealed class JobReconciler
     /// time only once that wait's timer exists rather than guessing from the clock's timer count.
     /// </summary>
     internal Action<string>? CancelSettleArmed { get; set; }
+
+    /// <summary>For tests (issue #476 round 4): called with the job id and the budget the end call of a marked VM was given.</summary>
+    internal Action<string, TimeSpan>? EndBudgetChosen { get; set; }
+
+    /// <summary>For tests (issue #476 round 4): how many entries the keep-alive sweep's in-process memory holds (logged skips and confirmed-ended rows).</summary>
+    internal int KeepAliveBookkeepingCount => _keepAliveSkipLogged.Count + _keepAliveDone.Count;
     private readonly IDiagnosticsLog _log;
     private readonly Action<string?>? _onSignInNeeded;
 
@@ -480,11 +486,15 @@ public sealed class JobReconciler
                 }
 
                 var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
+                // Round 4 of #476: a row is settled (and the sweep stops looking it up) only once every VM under its job id is ended, gone, another run's or already stopped;
+                // anything the sweep could not decide or could not do leaves it unsettled so the next tick judges it again.
+                var unsettled = false;
                 foreach (var vm in vms)
                 {
                     var want = WantedByLifecycle(row, vm, options, installation, now);
                     if (want == VmWant.Leave)
                     {
+                        unsettled |= vm.Status == "RUNNING";
                         continue;
                     }
 
@@ -517,49 +527,100 @@ public sealed class JobReconciler
                             // laptop clock far from it, is left for the next sweep), the lifecycle is judged again on the fresh read, and ONLY THEN the VM is marked.
                             if (fresh!.ServerNow is null)
                             {
-                                LogSkippedOnce(row.JobId, "NoServerClock");
+                                // No platform time (a proxy that strips the Date header) is the same for every row and every tick: one line per process. maxRunDuration stays the backstop.
+                                LogNoServerClockOnce(row.JobId);
+                                unsettled = true;
                                 continue;
                             }
 
                             if (!KeepAliveClockAgrees(row, options, fresh))
                             {
                                 LogSkippedOnce(row.JobId, "ClockSkew");
+                                unsettled = true;
                                 continue;
                             }
 
                             want = WantedByLifecycle(row, fresh, options, installation, now);
                             if (want == VmWant.Leave)
                             {
+                                unsettled |= fresh.Status == "RUNNING";
                                 continue;
                             }
 
                             // The mark is written with the label fingerprint just read, so a VM a newer run has claimed since is neither marked nor ended, and a run that tries to reuse it
                             // after the mark is refused. Written right before the end call, never earlier.
-                            var marked = await Lookup(t => _compute.MarkEndingAsync(scope, vm.Name, vm.Zone, row.JobId, t), linked.Token).ConfigureAwait(false);
+                            VmDescriptor? marked;
+                            try
+                            {
+                                marked = await Lookup(t => _compute.MarkEndingAsync(scope, vm.Name, vm.Zone, row.JobId, t), linked.Token).ConfigureAwait(false);
+                            }
+                            catch (CloudOperationException ex)
+                            {
+                                // Round 4 finding 2: a refused fence write (an org policy answers 412 as well) is named by its class, once per job and class. DECISION (agent-made, 2026-10-31,
+                                // reversible): the VM is then NOT ended without the fence; the failure is recorded below and the next sweep tries again (maxRunDuration is the backstop).
+                                LogSkippedOnce(row.JobId, "MarkEndingFailed:" + RunErrorCodes.For(ex.Kind));
+                                throw;
+                            }
+
                             if (marked is null)
                             {
+                                // The VM is gone, another run's now, or the fence write lost a race: nothing to end under this window, said once instead of dropped.
+                                LogSkippedOnce(row.JobId, "MarkEndingNotApplied");
+                                unsettled = true;
                                 continue;
                             }
 
                             wasRunning = fresh.Status == "RUNNING";
                             // Round 3 M3: the end call (with every retry its resilience layer makes and the wait for the operation) is cut off before the mark expires, so a delete that
                             // keeps failing cannot land after a newer run was allowed to reuse the VM. A request Compute already accepted was accepted inside the mark.
-                            endBudget = _markedEndTimeout;
+                            // Round 4 finding 1: a mark already inside its window (an earlier sweep's) leaves only what is left of it, less a margin; with too little left no end call starts
+                            // under it (the mark runs out, and the next sweep writes a fresh one before its own end call).
+                            var budget = _markedEndTimeout;
+                            if (VmEnding.TryMarkedAt(marked.Labels, out var markedAt))
+                            {
+                                var remaining = markedAt + VmEnding.Window - _time.GetUtcNow() - VmEnding.EndSafetyMargin;
+                                if (remaining < VmEnding.MinEndBudget)
+                                {
+                                    LogSkippedOnce(row.JobId, "MarkExpiring");
+                                    unsettled = true;
+                                    continue;
+                                }
+
+                                budget = remaining < budget ? remaining : budget;
+                            }
+
+                            endBudget = budget;
+                            EndBudgetChosen?.Invoke(row.JobId, budget);
                         }
                     }
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
                         Record(outcomes, row.JobId, vm.Name, ex);
+                        unsettled = true;
                         continue;
                     }
 
-                    var ended = await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token, endBudget).ConfigureAwait(false);
+                    var wantedAction = want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped;
+                    var ended = await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, wantedAction, outcomes, linked.Token, endBudget).ConfigureAwait(false);
+                    if (!ended)
+                    {
+                        // ApplyAsync adds the outcome only when the call answered (a 404 is "gone already"); a failed or timed-out end leaves the row for the next tick.
+                        lock (outcomes)
+                        {
+                            unsettled |= !outcomes.Any(o => o.JobId == row.JobId && o.VmName == vm.Name && o.Action == wantedAction);
+                        }
+                    }
 
                     // Only a RUNNING VM the app's own call changed is "still running past its window": a stopped one the app only deleted, or one already gone, is not.
                     if (noteEndedByApp && ended && wasRunning)
                     {
                         await NoteKeepAliveEndedAsync(row.JobId).ConfigureAwait(false);
                     }
+                }
+
+                if (noteEndedByApp && !unsettled)
+                {
+                    _keepAliveDone[row.JobId] = 0;
                 }
             });
             if (driver is not null)
@@ -800,6 +861,19 @@ public sealed class JobReconciler
         }
     }
 
+    /// <summary>Rows whose VM the sweep has confirmed settled (ended, gone, another run's or stopped): later ticks skip them. In-process only, pruned to the rows still in reach.</summary>
+    private readonly ConcurrentDictionary<string, byte> _keepAliveDone = new();
+
+    private int _noServerClockLogged;
+
+    private void LogNoServerClockOnce(string jobId)
+    {
+        if (Interlocked.Exchange(ref _noServerClockLogged, 1) == 0)
+        {
+            _log.Warning("keepalive-sweep-skipped", jobId, "NoServerClock");
+        }
+    }
+
     /// <summary>The longest past a Keep-alive window the worker's own end of the VM (startup.sh keep_hold) gets before the app ends it. THEORY (unverified): five minutes covers the worker's own Compute call and its retries; not measured on a real VM.</summary>
     public static readonly TimeSpan KeepAliveGrace = TimeSpan.FromMinutes(5);
 
@@ -819,7 +893,7 @@ public sealed class JobReconciler
         var installation = InstallationId.GetOrCreate(_settings);
         var now = _time.GetUtcNow();
         var all = await _runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
-        var due = all
+        var inReach = all
             .Select(r => r.JobId)
             .Distinct()
             .Select(id => RunRowStore.LatestRecord(all, id)!)
@@ -829,6 +903,26 @@ public sealed class JobReconciler
                 && !string.IsNullOrWhiteSpace(r.ProjectId)
                 && KeepAliveWindowEndedRecently(r, now))
             .ToList();
+
+        // The in-process memory only holds rows still in reach (a row that leaves it is forgotten), so it never grows without bound.
+        var inReachIds = inReach.Select(r => r.JobId).ToHashSet(StringComparer.Ordinal);
+        foreach (var key in _keepAliveSkipLogged.Keys.Where(k => !inReachIds.Contains(k.JobId)))
+        {
+            _keepAliveSkipLogged.TryRemove(key, out _);
+        }
+
+        foreach (var id in _keepAliveDone.Keys.Where(id => !inReachIds.Contains(id)))
+        {
+            _keepAliveDone.TryRemove(id, out _);
+        }
+
+        // Round 4 finding 9: a finished row with no finish time cannot be dated, and its start is earlier than its real window end, so it is skipped (and said once), never ended early.
+        foreach (var undated in inReach.Where(r => r.FinishedAt is null))
+        {
+            LogSkippedOnce(undated.JobId, "NoFinishTime");
+        }
+
+        var due = inReach.Where(r => r.FinishedAt is not null && !_keepAliveDone.ContainsKey(r.JobId)).ToList();
         foreach (var row in due)
         {
             // The grace is held by the filter above (now >= window end + grace), so the expiry check inside is already met.

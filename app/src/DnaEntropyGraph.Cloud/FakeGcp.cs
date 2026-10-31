@@ -1818,6 +1818,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
     }
 
+    private CloudErrorKind? _markEndingFailure;
+
+    /// <summary>Every keep-alive fence write fails with this kind of error, as a refused <c>setLabels</c> can (issue #476 round 4: an org policy answers 412 too).</summary>
+    public FakeGcp WithMarkEndingFailure(CloudErrorKind kind)
+    {
+        _markEndingFailure = kind;
+        return this;
+    }
+
     /// <summary>
     /// Issue #476: the fence before the app ends a kept VM, as the real gateway does it: the job id is checked and the mark written in one step under the
     /// claim lock, which moves the label fingerprint exactly as a real <c>setLabels</c> does (so a reuse that read the VM before the mark fails its claim with a 412).
@@ -1827,6 +1836,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     {
         ThrowIfScriptedTransient();
         Interlocked.Increment(ref _markEndingAttempts);
+        if (_markEndingFailure is { } failure)
+        {
+            throw Build(failure, "SCRIPTED_MARK_ENDING_FAILURE", failure == CloudErrorKind.OrgPolicy ? 412 : null, failure == CloudErrorKind.OrgPolicy ? "Operation denied by org policy on 'constraints/compute.requireOsLogin'." : "The fence write was scripted to fail.");
+        }
+
         var key = (vmName, zone);
         lock (_claimLock)
         {

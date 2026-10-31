@@ -636,8 +636,29 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     }
 
     /// <summary>The VM is gone (404) or its labels moved under the write (412). Read off the HTTP status of a direct call AND off the code of a failed polled operation, which carries the same facts under its own spelling.</summary>
+    /// <remarks>
+    /// Round 4 of #476: a 412 is "the labels moved" only when it positively reads as a failed precondition (the shared <see cref="CloudErrorClassifier.IsPreconditionConflict"/> rule); an org-policy
+    /// denial is a 412 / CONDITION_NOT_MET too, and treating it as a lost race hid a refused fence write for ever. Anything that names an organization policy is rethrown (it classifies as org_policy).
+    /// </remarks>
     private static bool IsGoneOrMoved(CloudOperationException ex)
-        => ex.Error.HttpStatus is 412 or 404 || ex.Error.Code is "CONDITION_NOT_MET" or "RESOURCE_NOT_FOUND";
+    {
+        if (ex.Error.HttpStatus == 404 || ex.Error.Code == "RESOURCE_NOT_FOUND")
+        {
+            return true;
+        }
+
+        var message = ex.Error.Message ?? string.Empty;
+        if (message.Contains("constraints/", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("org policy", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("organization policy", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return ex.Error.HttpStatus == 412
+            ? CloudErrorClassifier.IsPreconditionConflict(412, ex.Error.Code, message)
+            : ex.Error.Code == "CONDITION_NOT_MET";
+    }
 
     /// <summary>
     /// Issue #91: <c>zoneOperations.list</c> filtered on the operation TYPE only, then matched on the client to this VM's incarnation: by the instance's numeric id

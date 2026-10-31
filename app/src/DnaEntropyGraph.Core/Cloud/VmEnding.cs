@@ -20,6 +20,28 @@ public static class VmEnding
     /// <summary>The longest the app's end call for a marked VM (every retry and the wait for the operation) may run. Shorter than <see cref="Window"/> by design: an end call is cut off while the mark still keeps every other run from reusing the VM.</summary>
     public static readonly TimeSpan EndBudget = TimeSpan.FromMinutes(10);
 
+    /// <summary>Kept clear of the end of the window: an end call is cut off this long before the mark expires, so a request Compute accepts late still lands inside the mark.</summary>
+    public static readonly TimeSpan EndSafetyMargin = TimeSpan.FromMinutes(1);
+
+    /// <summary>Less of the window than this left (after the margin) and no end call is started under that mark; the mark runs out and the next sweep writes a fresh one first. Round 4 of #476.</summary>
+    public static readonly TimeSpan MinEndBudget = TimeSpan.FromMinutes(2);
+
+    /// <summary>The time a mark on <paramref name="labels"/> was made, when it carries a readable one.</summary>
+    public static bool TryMarkedAt(IReadOnlyDictionary<string, string>? labels, out DateTimeOffset markedAt)
+    {
+        markedAt = default;
+        if (labels is not null
+            && labels.TryGetValue(LabelKey, out var value)
+            && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+            && seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds())
+        {
+            markedAt = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>The label value for a mark made at <paramref name="now"/>.</summary>
     public static string Stamp(DateTimeOffset now) => now.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
 

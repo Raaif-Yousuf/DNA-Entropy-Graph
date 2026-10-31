@@ -30,7 +30,18 @@ public sealed class KeepAliveSweeper : IDisposable
     }
 
     /// <summary>The most recent tick (completed when none has run yet), so a test can wait for it. Never faults.</summary>
-    public Task LastTickAsync { get; private set; } = Task.CompletedTask;
+    public Task LastTickAsync
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastTick;
+            }
+        }
+    }
+
+    private Task _lastTick = Task.CompletedTask;
 
     /// <summary>Arms the timer. The first look is one period from now (the launch pass has just enforced every lifecycle). A second call does nothing.</summary>
     public void Start()
@@ -57,7 +68,7 @@ public sealed class KeepAliveSweeper : IDisposable
             }
 
             _sweeping = true;
-            LastTickAsync = SweepOnceAsync();
+            _lastTick = SweepOnceAsync();
         }
     }
 
@@ -70,15 +81,16 @@ public sealed class KeepAliveSweeper : IDisposable
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && _stop.IsCancellationRequested))
         {
             try
             {
                 _log.Warning("keepalive-sweep", null, ex.GetType().Name);
             }
-            catch (Exception)
+            catch (Exception logEx) when (logEx is not OperationCanceledException)
             {
-                // The log is broken: nothing is left to tell.
+                // The log is broken: nothing is left to tell, and a broken log must not take the timer thread down.
+                _ = logEx;
             }
         }
         finally

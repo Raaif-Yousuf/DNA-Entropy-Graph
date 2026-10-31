@@ -296,18 +296,26 @@ public class JobReconcilerKeepAliveSweepTests
     }
 
     [Theory]
-    [InlineData(29, false)]
-    [InlineData(36, true)]
-    public async Task A_row_with_no_finish_time_counts_from_its_start_like_the_launch_pass(int minutes, bool ended)
+    [InlineData(29)]
+    [InlineData(36)]
+    public async Task A_completed_row_with_no_finish_time_is_skipped_and_logged_never_dated_from_its_start(int minutes)
     {
-        // The seeded row was created five minutes before launch: window end = created + 30, then the 5 minute grace.
+        // Round 4 finding 9: a missing FinishedAt used to fall back to CreatedUtc, which would end a VM that is still inside its real window.
         var rig = new Rig();
         await rig.SeedAsync("job-nf", AfterKeepAliveAction.Stop, tweak: r => r with { FinishedAt = null });
         rig.AdvanceMinutes(minutes);
+        var reconciler = rig.Reconciler();
 
-        await rig.Reconciler().EnforceKeepAliveAsync(CancellationToken.None);
+        var outcomes = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
 
-        (await rig.StatusAsync("job-nf")).ShouldBe(ended ? "STOPPED" : "RUNNING");
+        outcomes.ShouldBeEmpty();
+        (await rig.StatusAsync("job-nf")).ShouldBe("RUNNING");
+        rig.Gcp.MarkEndingAttempts.ShouldBe(0);
+        if (minutes == 36)
+        {
+            rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.JobId == "job-nf" && e.ErrorClass == "NoFinishTime").ShouldBe(1, "logged once per row, not per tick");
+        }
     }
 
     [Fact]
@@ -361,7 +369,10 @@ public class JobReconcilerKeepAliveSweepTests
             return found;
         }
 
-        public Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken) => inner.MarkEndingAsync(scope, vmName, zone, jobId, cancellationToken);
+        /// <summary>When set, the fence answers null (the VM is gone, another job's, or the write lost a race) without writing.</summary>
+        public bool MarkReturnsNull { get; set; }
+
+        public Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken) => MarkReturnsNull ? Task.FromResult<VmDescriptor?>(null) : inner.MarkEndingAsync(scope, vmName, zone, jobId, cancellationToken);
 
         public async Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         {
@@ -558,6 +569,159 @@ public class JobReconcilerKeepAliveSweepTests
         VmEnding.EndBudget.ShouldBeGreaterThan(TimeSpan.FromMinutes(5), "it must outlast the reconciler's own mutation deadline, or the cap would be the tighter one for no reason");
     }
 
+    // ---- round 4 of #476 ----
+
+    [Fact]
+    public async Task A_second_sweep_inside_the_mark_window_gives_its_end_call_only_what_is_left_of_the_window()
+    {
+        // Round 4 finding 1: a mark still inside its window was reused with a FRESH end budget, so the end call could outlive the mark and a late-accepted delete hit a reused VM.
+        var rig = new Rig();
+        await StoppedKeptVmAsync(rig, "job-b1");
+        rig.AdvanceMinutes(40);
+        var hanging = new RaceCompute(rig.Gcp) { HangEnd = true };
+        await rig.Reconciler(hanging, mutationTimeout: TimeSpan.FromSeconds(30), markedEndTimeout: TimeSpan.FromMilliseconds(100)).EnforceKeepAliveAsync(CancellationToken.None);
+        var markedAt = DateTimeOffset.FromUnixTimeSeconds(long.Parse((await rig.Gcp.FindByJobIdAsync("job-b1", CancellationToken.None)).Single().Labels![VmEnding.LabelKey], System.Globalization.CultureInfo.InvariantCulture));
+        rig.AdvanceMinutes(11);
+        TimeSpan? chosen = null;
+        var second = rig.Reconciler();
+        second.EndBudgetChosen = (_, budget) => chosen = budget;
+
+        await second.EnforceKeepAliveAsync(CancellationToken.None);
+
+        chosen.ShouldNotBeNull("the second sweep never reached its end call (vacuous)");
+        (rig.Clock.GetUtcNow() + chosen!.Value).ShouldBeLessThan(markedAt + VmEnding.Window, "the end call must end before the mark does");
+        (await rig.StatusAsync("job-b1")).ShouldBeNull("with time left, the delete still goes ahead");
+    }
+
+    [Fact]
+    public async Task A_mark_about_to_expire_is_not_ended_under_and_the_next_sweep_after_it_expired_marks_again()
+    {
+        var rig = new Rig();
+        await StoppedKeptVmAsync(rig, "job-b2");
+        rig.AdvanceMinutes(40);
+        var hanging = new RaceCompute(rig.Gcp) { HangEnd = true };
+        await rig.Reconciler(hanging, mutationTimeout: TimeSpan.FromSeconds(30), markedEndTimeout: TimeSpan.FromMilliseconds(100)).EnforceKeepAliveAsync(CancellationToken.None);
+        rig.AdvanceMinutes(14); // under the safety margin of the 15 minute window
+        var reconciler = rig.Reconciler();
+
+        var late = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        late.ShouldBeEmpty("no end call may start with less of the mark left than the margin");
+        (await rig.StatusAsync("job-b2")).ShouldBe("STOPPED");
+        rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.JobId == "job-b2" && e.ErrorClass == "MarkExpiring").ShouldBe(1);
+        rig.AdvanceMinutes(3);
+
+        var after = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        after.Single().Action.ShouldBe(LifecycleAction.VmDeleted);
+        rig.Gcp.MarkEndingAttempts.ShouldBe(3, "the expired mark was written again right before this end call");
+    }
+
+    [Fact]
+    public async Task A_fence_write_an_org_policy_refuses_is_logged_as_org_policy_never_read_as_a_lost_race_and_the_VM_is_not_ended_unfenced()
+    {
+        // Round 4 finding 2. DECISION (agent-made, 2026-10-31, reversible): without the fence the VM is NOT ended. The fence protects a VM another run is claiming; that claim is
+        // itself a setLabels the same policy would refuse, but nothing proves it, and a delete cannot be undone. maxRunDuration stays the backstop; the log line is the trace.
+        var rig = new Rig(configure: g => g.WithMarkEndingFailure(CloudErrorKind.OrgPolicy));
+        await StoppedKeptVmAsync(rig, "job-op");
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        var first = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        first.Single().Action.ShouldBe(LifecycleAction.Failed);
+        (await rig.StatusAsync("job-op")).ShouldBe("STOPPED", "not ended without the fence");
+        rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.JobId == "job-op" && e.ErrorClass == "MarkEndingFailed:org_policy").ShouldBe(1, "logged with its class, once per job and reason");
+        rig.Gcp.MarkEndingAttempts.ShouldBe(2, "the next sweep tries again");
+    }
+
+    [Fact]
+    public async Task A_fence_that_answers_null_is_logged_not_dropped_silently()
+    {
+        var rig = new Rig();
+        await StoppedKeptVmAsync(rig, "job-nl");
+        rig.AdvanceMinutes(40);
+        var race = new RaceCompute(rig.Gcp) { MarkReturnsNull = true };
+        var reconciler = rig.Reconciler(race);
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        (await rig.StatusAsync("job-nl")).ShouldBe("STOPPED");
+        rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.JobId == "job-nl" && e.ErrorClass == "MarkEndingNotApplied").ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_row_whose_VM_is_confirmed_ended_is_not_looked_up_again_by_later_sweeps()
+    {
+        // Round 4 finding 5: every Completed keep row stayed in the sweep for 24 hours, one FindByJobId per row every tick, even once its VM was settled.
+        var rig = new Rig();
+        await rig.SeedAsync("job-dn", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        (await rig.StatusAsync("job-dn")).ShouldBe("STOPPED");
+        var before = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
+        before.ShouldBeGreaterThan(0, "the call name this test counts is wrong (vacuous)");
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBe(before, "a settled row is skipped");
+    }
+
+    [Fact]
+    public async Task A_row_whose_VM_is_gone_is_settled_but_one_that_could_not_be_fenced_is_looked_at_again()
+    {
+        var rig = new Rig();
+        await rig.SeedAsync("job-gn", AfterKeepAliveAction.Delete);
+        var gone = (await rig.Gcp.FindByJobIdAsync("job-gn", CancellationToken.None)).Single();
+        await rig.Gcp.DeleteVmAsync(gone.Name, gone.Zone, CancellationToken.None);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        var afterFirst = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        afterFirst.ShouldBeGreaterThan(0);
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBe(afterFirst, "a row whose VM is gone is done after one look");
+    }
+
+    [Fact]
+    public async Task No_platform_time_is_logged_once_per_process_not_once_per_row()
+    {
+        // Round 4 finding 6. maxRunDuration stays the backstop for a proxy that strips the Date header for good.
+        var rig = new Rig(configure: g => g.WithoutServerTime());
+        await rig.SeedAsync("job-n1", AfterKeepAliveAction.Stop);
+        await rig.SeedAsync("job-n2", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Env.Log.Entries.Count(e => e.Source == "keepalive-sweep-skipped" && e.ErrorClass == "NoServerClock").ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_sweeps_memory_is_pruned_when_a_row_leaves_the_sweep_set()
+    {
+        // Round 4 finding 7: the skip-log memory only ever grew.
+        var rig = new Rig(laptopAhead: TimeSpan.FromHours(1));
+        await rig.SeedAsync("job-pr", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        reconciler.KeepAliveBookkeepingCount.ShouldBe(1, "the skip was remembered (vacuous otherwise)");
+        rig.AdvanceMinutes(60 * 48);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        reconciler.KeepAliveBookkeepingCount.ShouldBe(0);
+    }
+
     // ---- #970 interplay: a failed reuse is restored, and the restore and the sweep's mark never fight ----
 
     [Fact]
@@ -667,6 +831,25 @@ public class JobReconcilerKeepAliveSweepTests
 
         calls.ShouldBe(2);
         log.Entries.ShouldBe([("keepalive-sweep", null, nameof(TimeoutException)), ("keepalive-sweep", null, nameof(TimeoutException))]);
+    }
+
+    [Fact]
+    public async Task A_sweep_cancelled_by_something_other_than_shutdown_is_logged_by_class_and_the_next_tick_runs()
+    {
+        // Round 4 finding 8: only the sweeper's own stop is swallowed silently; any other cancel (a lookup deadline) is a failed sweep and is logged.
+        var time = new CapturingTimeProvider();
+        var log = new JobReconcilerTests.RecordingLog();
+        var calls = 0;
+        using var sweeper = new KeepAliveSweeper(_ => { calls++; throw new OperationCanceledException(); }, time, log);
+
+        sweeper.Start();
+        time.Timers[0].Callback(null);
+        await sweeper.LastTickAsync;
+        time.Timers[0].Callback(null);
+        await sweeper.LastTickAsync;
+
+        calls.ShouldBe(2);
+        log.Entries.ShouldBe([("keepalive-sweep", null, nameof(OperationCanceledException)), ("keepalive-sweep", null, nameof(OperationCanceledException))]);
     }
 
     [Fact]
