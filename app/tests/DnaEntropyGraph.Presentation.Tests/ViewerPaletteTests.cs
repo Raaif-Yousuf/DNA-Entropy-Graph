@@ -10,7 +10,7 @@ using Xunit;
 
 namespace DnaEntropyGraph.Presentation.Tests;
 
-/// <summary>Issue #195: the viewer's track and seam colours come from the chosen palette, read when the run is drawn and again on a theme change.</summary>
+/// <summary>Issue #195: the viewer's track and seam colours come from the chosen palette, read when the run is drawn (a run opened again picks up a changed choice); a theme change sends only the theme, because the viewer is always given the light colours.</summary>
 public sealed class ViewerPaletteTests : IDisposable
 {
     private const string ReadyMsg = "{\"evt\":\"ready\"}";
@@ -47,6 +47,10 @@ public sealed class ViewerPaletteTests : IDisposable
     private sealed class MutablePalette : ITrackPaletteProvider
     {
         public TrackPalette Current { get; set; } = TrackPalettes.Default;
+
+        public void Invalidate()
+        {
+        }
     }
 
     private ViewerViewModel Make()
@@ -145,7 +149,10 @@ public sealed class ViewerPaletteTests : IDisposable
         await Ready();
         var plan = IgvLoadPlanner.Plan(_dir);
 
-        JsonDocument.Parse(plan.LoadMessageJson!).RootElement.GetProperty("config").GetProperty("tracks").EnumerateArray()
-            .Count(t => t.TryGetProperty("color", out var _c) && _c.ValueKind != JsonValueKind.Undefined).ShouldBe(0);
+        var tracks = JsonDocument.Parse(plan.LoadMessageJson!).RootElement.GetProperty("config").GetProperty("tracks").EnumerateArray().ToList();
+        tracks.Select(t => t.GetProperty("name").GetString()).ShouldContain(IgvLoadPlanner.EntropyTrackName);
+        tracks.Select(t => t.GetProperty("name").GetString()).ShouldContain(IgvLoadPlanner.ForwardTrackName);
+        tracks.Select(t => t.GetProperty("name").GetString()).ShouldContain(IgvLoadPlanner.ReverseTrackName);
+        tracks.Count(t => t.TryGetProperty("color", out _)).ShouldBe(0);
     }
 }

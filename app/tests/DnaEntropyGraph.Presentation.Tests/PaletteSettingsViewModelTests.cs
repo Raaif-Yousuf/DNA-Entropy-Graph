@@ -93,6 +93,35 @@ public class PaletteSettingsViewModelTests
         store.GetString(TrackPalettes.SettingKey).ShouldBeNull();
     }
 
+    [Fact]
+    public void Choosing_a_palette_invalidates_the_provider_so_the_next_draw_uses_it()
+    {
+        var store = new DictionaryStore();
+        var provider = new SettingsTrackPaletteProvider(store);
+        provider.Current.Id.ShouldBe(TrackPalettes.DefaultId); // cached
+        var viewModel = new PaletteSettingsViewModel(store, palettes: provider);
+
+        viewModel.PaletteIndex = 1;
+
+        provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId);
+    }
+
+    [Fact]
+    public void Reset_all_settings_and_a_settings_import_invalidate_the_provider_through_the_attached_listener()
+    {
+        var store = new DictionaryStore();
+        var messenger = new WeakReferenceMessenger();
+        var provider = new SettingsTrackPaletteProvider(store);
+        PaletteCacheInvalidator.Attach(messenger, provider);
+        store.Values[TrackPalettes.SettingKey] = TrackPalettes.HighContrastId;
+        provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId); // cached
+
+        store.Values.Clear(); // what Reset does; an import changes the value the same way
+        messenger.Send(new SettingsResetMessage());
+
+        provider.Current.Id.ShouldBe(TrackPalettes.DefaultId);
+    }
+
     private sealed class DictionaryStore : ISettingsStore
     {
         public Dictionary<string, string> Values { get; } = [];

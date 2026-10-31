@@ -94,27 +94,58 @@ public static class TrackPalettes
     public static TrackPalette Resolve(string? id) => All.FirstOrDefault(p => p.Id == id) ?? Default;
 }
 
-/// <summary>The palette the user chose, read from settings each time it is asked (never cached), so a change shows on the next draw.</summary>
+/// <summary>
+/// The palette the user chose. Drawing code asks for it on every draw (a Runs list asks once per row), so an implementation must make
+/// that cheap; <see cref="Invalidate"/> says the choice may have changed (a save, Reset all settings, a settings import).
+/// </summary>
 public interface ITrackPaletteProvider
 {
     TrackPalette Current { get; }
+
+    /// <summary>Forget what was read; the next <see cref="Current"/> reads again. A provider that reads nothing has nothing to forget.</summary>
+    void Invalidate()
+    {
+    }
 }
 
-/// <summary>Reads <see cref="TrackPalettes.SettingKey"/> on every call. A locked settings file gives the default rather than a crash (#558).</summary>
+/// <summary>
+/// Reads <see cref="TrackPalettes.SettingKey"/> once and keeps the answer until <see cref="Invalidate"/> (the settings store takes a lock and
+/// reads its file on every call, and a Runs list asks once per row). A locked settings file gives the default rather than a crash (#558) and
+/// is not remembered, so the next ask tries the file again. A hand edit of settings.json while the app runs shows after a restart.
+/// </summary>
 public sealed class SettingsTrackPaletteProvider(ISettingsStore settings) : ITrackPaletteProvider
 {
+    private readonly object _gate = new();
+    private TrackPalette? _cached;
+
     public TrackPalette Current
     {
         get
         {
-            try
+            lock (_gate)
             {
-                return TrackPalettes.Resolve(settings.GetString(TrackPalettes.SettingKey));
+                if (_cached is not null)
+                {
+                    return _cached;
+                }
+
+                try
+                {
+                    return _cached = TrackPalettes.Resolve(settings.GetString(TrackPalettes.SettingKey));
+                }
+                catch (SettingsUnavailableException)
+                {
+                    return TrackPalettes.Default;
+                }
             }
-            catch (SettingsUnavailableException)
-            {
-                return TrackPalettes.Default;
-            }
+        }
+    }
+
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _cached = null;
         }
     }
 }

@@ -149,8 +149,14 @@ public static class PaletteValidator
     /// <summary>CIEDE2000 between two colours as a viewer with <paramref name="vision"/> sees them. 0 is identical; about 2.3 is one just-noticeable difference.</summary>
     public static double DeltaE2000(string a, string b, ColorVision vision)
     {
-        var (l1, a1, b1) = ToLab(Simulate(Linear(a), vision));
-        var (l2, a2, b2) = ToLab(Simulate(Linear(b), vision));
+        return DeltaE2000FromLab(ToLab(Simulate(Linear(a), vision)), ToLab(Simulate(Linear(b), vision)));
+    }
+
+    /// <summary>CIEDE2000 between two CIE L*a*b* colours, the formula as published (Sharma, Wu and Dalal 2005); the test data in that paper is given in Lab.</summary>
+    public static double DeltaE2000FromLab((double L, double A, double B) first, (double L, double A, double B) second)
+    {
+        var (l1, a1, b1) = first;
+        var (l2, a2, b2) = second;
 
         var c1 = Math.Sqrt((a1 * a1) + (b1 * b1));
         var c2 = Math.Sqrt((a2 * a2) + (b2 * b2));

@@ -50,18 +50,46 @@ public class TrackPaletteTests
         => TrackPalettes.Default.Light.MarkerRgba(0.6).ShouldBe("rgba(0, 0, 0, 0.6)");
 
     [Fact]
-    public void The_provider_reads_the_setting_each_time_it_is_asked()
+    public void Many_reads_cost_one_settings_read()
+    {
+        var store = Substitute.For<ISettingsStore>();
+        store.GetString(TrackPalettes.SettingKey).Returns("high-contrast");
+        var provider = new SettingsTrackPaletteProvider(store);
+
+        for (var i = 0; i < 200; i++)
+        {
+            provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId);
+        }
+
+        store.Received(1).GetString(TrackPalettes.SettingKey);
+    }
+
+    [Fact]
+    public void After_invalidate_the_next_read_sees_the_new_palette()
     {
         var store = Substitute.For<ISettingsStore>();
         var provider = new SettingsTrackPaletteProvider(store);
-
         store.GetString(TrackPalettes.SettingKey).Returns((string?)null);
         provider.Current.Id.ShouldBe(TrackPalettes.DefaultId);
 
         store.GetString(TrackPalettes.SettingKey).Returns("high-contrast");
+        provider.Current.Id.ShouldBe(TrackPalettes.DefaultId); // still the cached one: nobody said it changed
+        provider.Invalidate();
+
         provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId);
     }
 
+    [Fact]
+    public void A_locked_read_is_not_remembered_so_the_next_read_tries_again()
+    {
+        var store = Substitute.For<ISettingsStore>();
+        var calls = 0;
+        store.GetString(TrackPalettes.SettingKey).Returns(_ => ++calls == 1 ? throw new SettingsUnavailableException("locked") : "high-contrast");
+        var provider = new SettingsTrackPaletteProvider(store);
+
+        provider.Current.Id.ShouldBe(TrackPalettes.DefaultId);
+        provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId);
+    }
     [Fact]
     public void A_locked_settings_file_gives_the_default_palette()
     {

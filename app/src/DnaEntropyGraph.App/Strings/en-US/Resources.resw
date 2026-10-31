@@ -1577,16 +1577,16 @@
     <value>Use system</value>
   </data>
   <data name="PaletteChoices.Header" xml:space="preserve">
-    <value>Colours of the entropy lines</value>
+    <value>Colors of the entropy lines</value>
   </data>
   <data name="PaletteDefaultRadio.Content" xml:space="preserve">
-    <value>Default (easy to tell apart with colour blindness)</value>
+    <value>Default (easy to tell apart with color blindness)</value>
   </data>
   <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
-    <value>High contrast (stronger colours on the background)</value>
+    <value>High contrast (stronger colors on the background)</value>
   </data>
   <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
-    <value>Colours of the entropy lines</value>
+    <value>Colors of the entropy lines</value>
   </data>
   <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
     <value>Diagnostics</value>

@@ -615,7 +615,6 @@ public sealed partial class ViewerViewModel : ObservableObject
                     // A freshly drawn page shows the first record; keep the selector in step with it.
                     SelectWithoutGoto(InitialContig());
                     SendSeamsIfReady();
-
                     if (_targetLocus is not null)
                     {
                         Send(new { cmd = "goto", locus = _targetLocus });

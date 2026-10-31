@@ -399,10 +399,18 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - Consumers: `EntropyPlotBuilder` (overview chart and PNG; `OverviewPngExporter` gets `ITrackPaletteProvider` through DI),
   `EntropySparkline` and the chart span (through `AppPalette.Current`), and the viewer (`ViewerViewModel` hands colours to
   `IgvLoadPlanner`, to the added smoothed track and to the `seams` bridge command; `bridge.js` spells no colour).
-  `Guards.Tests/TrackPaletteSingleSourceGuardTests` fails on a hex colour, `rgb()` or named colour in any consumer.
+  `Guards.Tests/TrackPaletteSingleSourceGuardTests` scans every `.cs`, `.xaml`, `.js` and `.css` under `DnaEntropyGraph.App` and
+  `DnaEntropyGraph.Presentation` (comments stripped first) and fails on a hex colour, `rgb()`, a literal `FromHex`/`FromRGB`/`FromArgb`,
+  `new Color(`, or a named `Colors.X` (fully qualified or not) other than White, Black and Transparent. Allowlisted, each with a
+  reason in the test: `CaptionButtonPalette.cs` (system caption buttons), `viewer.css` and `dark.css` (page background and text, pinned
+  to `PaletteBackgrounds`), and the vendored `igv.min.js`. MEASURED 2026-10-31: the glob flagged those three and nothing else.
 - The choice (Settings > Appearance, `PaletteSettingsViewModel`, key `TrackPalette`) is read through
-  `SettingsTrackPaletteProvider` every time something draws; nothing caches it and nothing is pushed. The Results page and the Runs
-  list pick it up the next time they are shown; the viewer picks it up when a run is opened.
+  `SettingsTrackPaletteProvider`, which reads the file once and caches the answer (the settings store takes a lock and reads its file
+  on each call, and the Runs list asks once per row; tested: 200 reads, 1 file read). The cache is dropped by `Invalidate()`: on a
+  save (`PaletteSettingsViewModel`), and on Reset all settings and a settings import (`PaletteCacheInvalidator`, attached to the
+  singleton at startup, listens for `SettingsResetMessage`). A locked file gives the default and is not cached. A hand edit of
+  settings.json while the app runs shows after a restart. Nothing is pushed: the Results page and the Runs list pick the choice up
+  the next time they are shown; the viewer picks it up when a run is opened.
 - Validation (`Core.Tests/Palettes/PaletteValidatorTests`, `PaletteValidator`): each colour against the light background
   (#FFFFFF) and the dark one (#1F1F1F) for WCAG contrast (3:1 default, 7:1 high contrast), and every pair of roles under normal
   vision, deuteranopia, protanopia and tritanopia (Machado, Oliveira and Fernandes 2009, severity 1.0, linear sRGB), by CIEDE2000
@@ -410,10 +418,13 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 - **The viewer's dark mode inverts track colours.** `dark.css` darkens the page with `filter: invert(0.9) hue-rotate(180deg)` over
   all of `#igv`, which keeps hue and flips lightness, and it applies to colours set on a track too. So the viewer is always given
   `TrackPalette.ForViewer()` (the light colours), and the validator checks them twice: as given on white, and through
-  `ViewerDarkFilter` (the same filter, simulated) on the dark page, at a minimum of 8. A colour that has to be bright and saturated in
+  `ViewerDarkFilter` (the same filter, simulated), at a minimum of 8. The filter sits on `#igv`, whose canvases are white, so the
+  tracks are drawn on the filtered white (`ViewerDarkFilter.Apply("#FFFFFF")`, about #191919), not on the body's #1F1F1F; contrast
+  is checked against that. MEASURED 2026-10-31: both palettes pass that bar (3:1 default, 7:1 high contrast) with no colour or
+  threshold change, so #1F1F1F stays the background only for the app's own dark surfaces (the overview chart). A colour that has to be bright and saturated in
   the dark theme (the dark default's orange) cannot be reached through this filter (MEASURED 2026-10-31: pre-image search, out of
   gamut), which is why the viewer does not use the dark variants. THEORY (unverified): igv.js applies `color` to a wig track as written;
-  it needs a look in a real build (a ToTest row is added when #195 closes).
+  it needs a look in a real build (`docs/ToTest.md`, row #195).
 
 ## 14. The Cloud page (issue #105)
 

@@ -264,8 +264,14 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IGeneTableSource, DnaEntropyGraph.Core.Tracks.GeneTableSource>();
-        // Issue #195: the one place a palette choice is read (from settings, on every call); the chart, sparkline, PNG export and viewer all ask it.
-        services.AddSingleton<DnaEntropyGraph.Core.Palettes.ITrackPaletteProvider>(sp => new DnaEntropyGraph.Core.Palettes.SettingsTrackPaletteProvider(sp.GetRequiredService<ISettingsStore>()));
+        // Issue #195: the one place a palette choice is read (from settings, cached); the chart, sparkline, PNG export and viewer all ask it.
+        // A save in Settings invalidates it (PaletteSettingsViewModel); Reset all settings and a settings import do through the messenger.
+        services.AddSingleton<DnaEntropyGraph.Core.Palettes.ITrackPaletteProvider>(sp =>
+        {
+            var provider = new DnaEntropyGraph.Core.Palettes.SettingsTrackPaletteProvider(sp.GetRequiredService<ISettingsStore>());
+            DnaEntropyGraph.Presentation.Messaging.PaletteCacheInvalidator.Attach(sp.GetRequiredService<IMessenger>(), provider);
+            return provider;
+        });
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
         services.AddSingleton(new DnaEntropyGraph.Presentation.Services.ResultsExportRoot(() => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory), appOwned: root.IsPortable));
         // Issue #111: Find runs from other computers (read-only listing of the project's results bucket).

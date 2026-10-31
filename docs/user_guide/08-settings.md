@@ -10,9 +10,9 @@ including the genome viewer, and the choice is remembered the next time you open
 choice (another copy of the app has the settings file open), it tells you; the theme still
 changes for now. Close the other copies, then choose it again.
 
-Under the theme, **Colours of the entropy lines** has two choices. **Default** uses a set of
-colours picked so they stay easy to tell apart if you are red-green or blue-yellow colour blind.
-**High contrast** uses stronger colours that stand out more against the background, which helps in
+Under the theme, **Colors of the entropy lines** has two choices. **Default** uses a set of
+colors picked so they stay easy to tell apart if you are red-green or blue-yellow color blind.
+**High contrast** uses stronger colors that stand out more against the background, which helps in
 bright rooms and on projectors. The choice is used by the overview chart, the small lines on the
 Runs page, the picture you save, and the genome viewer. The chart and the Runs lines change the next
 time you open their page; the viewer changes the next time you open a run in it.

@@ -44,9 +44,10 @@ public class PaletteValidatorTests
 
         // Light theme: as given, on white.
         PaletteValidator.Validate(viewer, PaletteBackgrounds.Light, contrast, id == TrackPalettes.HighContrastId ? 8.0 : 10.0).ShouldBeEmpty();
-        // Dark theme: dark.css inverts and hue-rotates the whole page, so the colours on screen are the filtered ones, on the dark page.
-        PaletteValidator.Validate(ViewerDarkFilter.Apply(viewer), PaletteBackgrounds.Dark, contrast, 8.0).ShouldBeEmpty();
-    }
+        // Dark theme: dark.css puts the filter on #igv, whose canvases are white, so the tracks sit on the FILTERED white (about #191919),
+        // not on the body's #1F1F1F. The colours on screen are the filtered ones.
+        var onScreenBackground = ViewerDarkFilter.Apply(PaletteBackgrounds.Light);
+        PaletteValidator.Validate(ViewerDarkFilter.Apply(viewer), onScreenBackground, contrast, 8.0).ShouldBeEmpty();    }
 
     [Fact]
     public void The_dark_filter_matches_the_css_filter_spec_on_known_colours()
@@ -54,7 +55,7 @@ public class PaletteValidatorTests
         // invert(0.9) takes white to 25.5 and black to 229.5 (of 255), so the last digit depends on rounding; hue-rotate(180deg) leaves greys unchanged.
         ViewerDarkFilter.Apply("#FFFFFF").ShouldBeOneOf("#191919", "#1A1A1A");
         ViewerDarkFilter.Apply("#000000").ShouldBeOneOf("#E5E5E5", "#E6E6E6");
-        // Okabe-Ito blue, worked by hand: inverted (0.9, 0.5088, 0.2048), then the 180 degree matrix, then clamped.
+        // Okabe-Ito blue, worked by hand: inverted (0.9, 0.5424, 0.3416), then the 180 degree matrix, then clamped.
         ViewerDarkFilter.Apply("#0072B2").ShouldBe("#4FAADD");
     }
 
@@ -95,14 +96,34 @@ public class PaletteValidatorTests
         PaletteValidator.ContrastRatio("#767676", "#FFFFFF").ShouldBe(4.54, 0.01); // the well-known smallest grey with 4.5:1 on white
     }
 
-    [Fact]
-    public void Delta_e_2000_matches_the_published_sharma_test_pairs()
+    // Sharma, Wu and Dalal (2005), "The CIEDE2000 Color-Difference Formula: Implementation Notes", test data given as Lab pairs:
+    // pairs 1 to 3 (hue near 270, the dTheta term), 7 (a near-neutral pair), 14 to 17 (hue near 0, where the mean hue wraps),
+    // 22, 24, 27 and 31 (the lightness and chroma weighting ends of the table).
+    [Theory]
+    [InlineData(50.0000, 2.6772, -79.7751, 50.0000, 0.0000, -82.7485, 2.0425)]
+    [InlineData(50.0000, 3.1571, -77.2803, 50.0000, 0.0000, -82.7485, 2.8615)]
+    [InlineData(50.0000, 2.8361, -74.0200, 50.0000, 0.0000, -82.7485, 3.4412)]
+    [InlineData(50.0000, 0.0000, 0.0000, 50.0000, -1.0000, 2.0000, 2.3669)]
+    [InlineData(50.0000, 2.5000, 0.0000, 73.0000, 25.0000, -18.0000, 27.1492)]
+    [InlineData(50.0000, 2.5000, 0.0000, 61.0000, -5.0000, 29.0000, 22.8977)]
+    [InlineData(50.0000, 2.5000, 0.0000, 56.0000, -27.0000, -3.0000, 31.9030)]
+    [InlineData(50.0000, 2.5000, 0.0000, 58.0000, 24.0000, 15.0000, 19.4535)]
+    [InlineData(60.2574, -34.0099, 36.2677, 60.4626, -34.1751, 39.4387, 1.2644)]
+    [InlineData(61.2901, 3.7196, -5.3901, 61.4292, 2.2480, -4.9620, 1.8731)]
+    [InlineData(36.4612, 47.8580, 18.3852, 36.2715, 50.5065, 21.2231, 1.4146)]
+    [InlineData(2.0776, 0.0795, -1.1350, 0.9033, -0.0636, -0.5514, 0.9082)]
+    public void Delta_e_2000_matches_the_published_sharma_test_pairs_to_four_decimals(double l1, double a1, double b1, double l2, double a2, double b2, double expected)
     {
-        // Sharma, Wu, Dalal (2005) test data, pair 1 and pair 17, given there as Lab; converted here through sRGB so the tolerance is loose.
+        PaletteValidator.DeltaE2000FromLab((l1, a1, b1), (l2, a2, b2)).ShouldBe(expected, 0.00005);
+        PaletteValidator.DeltaE2000FromLab((l2, a2, b2), (l1, a1, b1)).ShouldBe(expected, 0.00005); // the formula is symmetric
+    }
+
+    [Fact]
+    public void Delta_e_2000_through_srgb_agrees_on_black_and_white()
+    {
         PaletteValidator.DeltaE2000("#000000", "#000000", ColorVision.Normal).ShouldBe(0.0, 0.0001);
         PaletteValidator.DeltaE2000("#000000", "#FFFFFF", ColorVision.Normal).ShouldBe(100.0, 0.5);
     }
-
     [Fact]
     public void Simulation_leaves_greys_alone_and_collapses_red_and_green_under_deuteranopia()
     {
