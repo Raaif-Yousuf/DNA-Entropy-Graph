@@ -17,9 +17,12 @@ docs/job_contract.md is the contract this satisfies. The high-level shape:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
+import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -486,6 +489,44 @@ def _run_one_input(
     )
 
 
+_PLAIN_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_UNREADABLE_MESSAGE_MAX = 500
+
+
+def _record_unreadable_manifest(store: Blobstore, manifest_text: str, exc: ManifestError) -> None:
+    """Best-effort terminal ``result.json`` for a manifest the worker cannot parse (issue #1014).
+
+    The destination is the store the worker was STARTED against (command line or
+    ``DEG_JOB_URI``), which does not depend on the manifest, so it is known even when the
+    manifest is not. ``jobId`` is a raw read of the manifest when that is a plain name, else
+    ``"unknown"`` (never invented; the app keys on the file's location, not this field).
+    The message is the parser's own field-naming text, ASCII-escaped and capped. A write that
+    fails is swallowed: the caller re-raises the ManifestError, which stays the exit-2 story.
+    Not used for the store-mismatch refusal (#448): there the destination itself is disputed.
+    """
+    job_id = "unknown"
+    try:
+        raw = json.loads(manifest_text)
+        candidate = raw.get("jobId") if isinstance(raw, dict) else None
+        if isinstance(candidate, str) and _PLAIN_JOB_ID.fullmatch(candidate):
+            job_id = candidate
+    except ValueError:
+        pass
+    message = str(exc).encode("ascii", "backslashreplace").decode("ascii")[:_UNREADABLE_MESSAGE_MAX]
+    now = _utc_now_iso()
+    result = JobResult(
+        schema=1,
+        jobId=job_id,
+        status="failed",
+        inputs=[],
+        timing=ResultTiming(startedAt=now, finishedAt=now),
+        error={"code": ManifestError.code, "message": message, "retriable": False},
+    )
+    # best effort by design; the manifest error is what the caller reports
+    with contextlib.suppress(Exception):
+        write_json(store, RESULT_PATH, result.to_dict())
+
+
 @dataclasses.dataclass(frozen=True)
 class RunOutcome:
     """What :func:`run_job_outcome` returns: the job's :class:`JobResult` (also written to
@@ -542,11 +583,17 @@ def run_job_outcome(
     This is the ``worker-run`` CLI command's real implementation (see
     ``dna_entropy.cli.worker_run``). A manifest schema mismatch or any other manifest
     parse failure is raised BEFORE any ``status.json``/heartbeat exists — there is nothing
-    useful to heartbeat about a manifest the worker cannot even read — and is the caller's
-    responsibility to report (the CLI does this via its normal error path).
+    useful to heartbeat about a manifest the worker cannot even read — but a minimal terminal
+    ``result.json`` (``MANIFEST_INVALID``) is written first when the store is writable
+    (issue #1014); the error is still raised for the caller's exit-2 path.
     """
     manifest_text = store.read_text(MANIFEST_PATH)
-    manifest = JobManifest.parse(manifest_text)  # ManifestSchemaError/ManifestError propagate
+    try:
+        manifest = JobManifest.parse(manifest_text)
+    except ManifestError as exc:
+        # Issue #1014: still raised (exit 2 + ERROR: line), but the app is told why first.
+        _record_unreadable_manifest(store, manifest_text, exc)
+        raise
     _check_store_matches_manifest(store, manifest.store)  # before anything is written (#448)
 
     # Found auditing #304/#306: manifest.limits.heartbeatSeconds was parsed but never
