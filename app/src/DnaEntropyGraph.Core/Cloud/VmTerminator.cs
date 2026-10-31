@@ -342,8 +342,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// <summary>
     /// Round 4 finding 2, round 6 rule (the owner's DECISION, stated exactly): NEVER write labels while our start call may still land, i.e. until it has answered, been refused, completed on our side
     /// (Canceled or a lost answer, then the VM read STOPPED through <see cref="CloudRunSettings.LateCreateGrace"/>), or been seen to land (the VM read RUNNING, which proves the start landed). THEORY
-    /// (unverified, ToTest #970): a server-side start lands within the grace. A start still pending at the window end is this outcome with class <c>StartUnanswered</c>; a deferred watch that
-    /// cannot restore says <c>DeferredNewerAttempt</c>. The VM stays stopped under this job's labels (the #938 by-name guards are the backstop; #1052 tracks restart-safe recovery). The donor is NOT consumed here (a newer attempt may share its key); the watch's end forgets it. Null when no donor was noted for THIS send
+    /// (unverified, ToTest #970): a server-side start lands within the grace. A start still pending at the window end is this outcome with class <c>StartUnanswered</c>; a watch that
+    /// kept deferring to a newer attempt (it writes nothing, round 8) says <c>StartUnanswered</c> while our start is in flight, else <c>DeferredNewerAttempt</c>. The VM stays under this job's labels (the #938 by-name guards are the backstop; #1052 tracks restart-safe recovery). The donor is NOT consumed here (a newer attempt may share its key); the watch's end forgets it, except a deferred give-up's donor, which stays for the age bound or <see cref="ForgetDonors(string)"/>. Null when no donor was noted for THIS send
     /// (round 5 finding 4: matched by the send, like <see cref="ForgetDonor(SentCreate)"/>). Logs the state and the class only.
     /// </summary>
     private DonorRestoreOutcome? NoteNotRestored(SentCreate sent, string errorClass)
@@ -933,11 +933,11 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// (<see cref="SentCreate.DonorKeptForNewerAttempt"/>; the age bound prunes them). A newer attempt that adopts the VM owns it; one that does not leaves it STOPPED or RUNNING under this job's labels,
     /// which the #938 by-name guards, <c>maxRunDuration</c> and the Cloud page's label scan backstop (THEORY, unverified; #1052 tracks restart-safe recovery).
     /// </summary>
-    private Task<LateCreateOutcome> DeferredReuseGaveUpAsync(SentCreate sent)
+    private LateCreateOutcome DeferredReuseGaveUp(SentCreate sent)
     {
         sent.DonorKeptForNewerAttempt = true;
         var errorClass = StartInFlight(sent) ? "StartUnanswered" : "DeferredNewerAttempt";
-        return Task.FromResult(new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, errorClass)));
+        return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, errorClass));
     }
 
     /// <summary>
@@ -953,8 +953,8 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             case DeleteDecision.Superseded:
                 return new LateCreateOutcome(sent.JobId, LateCreateState.Superseded);
             case DeleteDecision.Defer:
-                // Round 6 finding 1 (replaces round 5 finding 2's handover, which no code performed): see DeferredReuseGaveUpAsync.
-                return windowOver ? await DeferredReuseGaveUpAsync(sent).ConfigureAwait(false) : null;
+                // Round 8: a deferred watch writes nothing at the window's end; see DeferredReuseGaveUp.
+                return windowOver ? DeferredReuseGaveUp(sent) : null;
         }
 
         VmDescriptor? vm;

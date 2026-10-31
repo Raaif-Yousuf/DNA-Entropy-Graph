@@ -565,7 +565,32 @@ public partial class LateCreateAfterCancelTests
         gcp.RestoreAttempts.ShouldBe(0);
         (gcp.StopAttempts - stopsBefore).ShouldBe(0);
         (await LabelsOfAsync(gcp, oldVm))["job-id"].ShouldBe("job-n970o");
+        rig.Terminator.ForgetDonor(sent); // what the watch's end does: it must leave a deferred give-up's donor alone
         rig.Terminator.DonorCount.ShouldBe(1, "the donor stays recorded for the age bound");
+    }
+
+    [Fact]
+    public async Task D970r8_a_deferred_watch_whose_start_is_still_in_flight_logs_NotRestored_StartUnanswered_and_writes_nothing()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var logged = new List<DonorRestoreOutcome>();
+        rig.Settings.OnDonorRestore = logged.Add;
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var (sent, oldVm, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970y", "job-n970y", claimLabels: true);
+        sent.Create = new TaskCompletionSource().Task; // a hung start: neither answered nor refused nor completed
+        var stopsBefore = gcp.StopAttempts;
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970y", CancellationToken.None);
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970y", CancellationToken.None);
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
+
+        outcome.Restore.ShouldNotBeNull().ErrorClass.ShouldBe("StartUnanswered");
+        logged.ShouldContain(o => o.LogClass == "NotRestored:StartUnanswered");
+        gcp.RestoreAttempts.ShouldBe(0);
+        (gcp.StopAttempts - stopsBefore).ShouldBe(0);
+        gcp.DeleteAttempts.ShouldBeEmpty();
+        (await LabelsOfAsync(gcp, oldVm))["job-id"].ShouldBe("job-n970y");
     }
 
     [Fact]
