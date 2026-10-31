@@ -3609,4 +3609,49 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_OtherAccount_SignInFailed_Body" xml:space="preserve">
     <value>The Google sign-in did not finish. Choose Sign in again on this page and finish it in the browser window.</value>
   </data>
+  <data name="PriceSource_Catalog" xml:space="preserve">
+    <value>Prices from Google&apos;s price list, as of {0}.</value>
+  </data>
+  <data name="PriceSource_Older" xml:space="preserve">
+    <value>Prices from Google&apos;s price list, as of {0}. These are older prices, not today&apos;s.</value>
+  </data>
+  <data name="PriceSource_OlderNoDate" xml:space="preserve">
+    <value>Prices from Google&apos;s price list, from an earlier day. These are older prices, not today&apos;s.</value>
+  </data>
+  <data name="PriceSource_Shipped" xml:space="preserve">
+    <value>Prices from the list that came with this app, as of {0}.</value>
+  </data>
+  <data name="PriceSource_ShippedNoDate" xml:space="preserve">
+    <value>Prices from the list that came with this app.</value>
+  </data>
+  <data name="PriceSourceReason_SignedOut" xml:space="preserve">
+    <value>You are signed out of Google, so today&apos;s price list could not be read. Sign in again from the Cloud page.</value>
+  </data>
+  <data name="PriceSourceReason_PermissionDenied" xml:space="preserve">
+    <value>Your Google account is not allowed to read Google&apos;s price list in this project. Ask the project owner to allow it.</value>
+  </data>
+  <data name="PriceSourceReason_ApiDisabled" xml:space="preserve">
+    <value>The price list service (the Cloud Billing API) is switched off in your Google project, so Google&apos;s price list could not be read. Ask the project owner to switch it on.</value>
+  </data>
+  <data name="PriceSourceReason_Network" xml:space="preserve">
+    <value>The connection to Google failed, so Google&apos;s price list could not be read. Check your internet connection.</value>
+  </data>
+  <data name="PriceSourceReason_NoMatch" xml:space="preserve">
+    <value>Google&apos;s price list did not cover the computers this app uses. Try again later.</value>
+  </data>
+  <data name="PriceSourceReason_Other" xml:space="preserve">
+    <value>Google&apos;s price list could not be read this time. Try again later.</value>
+  </data>
+  <data name="RunsOpenOutputFolderButton.Content" xml:space="preserve">
+    <value>Open the output folder</value>
+  </data>
+  <data name="ResultsKeptAsideOpenFolderButton.Content" xml:space="preserve">
+    <value>Open the output folder</value>
+  </data>
+  <data name="Runs_KeptAside_One" xml:space="preserve">
+    <value>1 file you had changed was kept next to the new result under a new name that ends with the word changed and the date. Open the output folder to compare them.</value>
+  </data>
+  <data name="Runs_KeptAside_Many" xml:space="preserve">
+    <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
+  </data>
 </root>

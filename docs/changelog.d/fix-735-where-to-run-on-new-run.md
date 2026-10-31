@@ -1,0 +1,2 @@
+- Fix #735: the Where to run box (Cloud, This PC, Auto) is now on the New run page, as one shared control with Settings, and the page looks at this PC each time it opens so This PC is greyed out with its reason on a PC that cannot run the model (before, only the Settings page ever checked).
+- Fix #735 (review round 2): two overlapping looks at this PC (New run and Settings share one picker) no longer let a slow older answer overwrite a newer one; the last look started wins.

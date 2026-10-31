@@ -475,6 +475,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     {
         var local = TimeZoneInfo.ConvertTime(run.CreatedUtc, _time.LocalTimeZone);
         var (status, statusKey) = Classify(run.Phase);
+        var keptAside = RunsCopy.KeptAsideLine(run, _strings);
         return new RunListItem(
             run,
             string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name,
@@ -496,6 +497,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
+            KeptAsideText = keptAside,
+            OpenOutputFolderCommand = keptAside is null ? null : new AsyncRelayCommand(() => OpenOutputFolderAsync(run)),
             CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
             OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
             ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),
@@ -632,6 +635,16 @@ public sealed partial class HistoryViewModel : ObservableObject
             _navigator.NavigateTo(ResultsViewModel.PageKey, run.JobId);
         }
         else
+        {
+            Toast(RunsCopy.OpenMissing);
+        }
+    }
+
+    // Issue #929: the action of the "kept under new names" line. The folder may have gone since the list was built: say so rather than do nothing.
+    private async Task OpenOutputFolderAsync(RunRecord run)
+    {
+        var folder = run.OutputDir;
+        if (string.IsNullOrWhiteSpace(folder) || !await Task.Run(() => _local.OutputFolderExists(run)) || !_launcher.OpenFolder(folder))
         {
             Toast(RunsCopy.OpenMissing);
         }

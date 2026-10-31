@@ -1,12 +1,13 @@
 """Fail if static type errors grow: the pyright ratchet for the Python side.
 
-WHY A RATCHET AND NOT "ZERO ERRORS"
------------------------------------
-The first run (MEASURED 2026-10-28, pyright 1.1.407, typeCheckingMode "basic") found 345
-errors in 238 files. The shipped code (`worker/src`) was cleaned to zero in the commit that
+WHY A RATCHET (AND WHERE IT STANDS TODAY)
+-----------------------------------------
+History: the first run (MEASURED 2026-10-28, pyright 1.1.407, typeCheckingMode "basic") found
+345 errors in 238 files. The shipped code (`worker/src`) was cleaned to zero in the commit that
 added this gate (it found a few real defects, see docs/dev_commands.md); the test suites and
-`scripts/tests` carry the rest as DEBT. Debt is recorded per file in
-`scripts/pyright_baseline.json` and may only go DOWN:
+`scripts/tests` carried the rest as debt, recorded per file in `scripts/pyright_baseline.json`.
+That debt is paid (#877): the baseline's `files` object is empty, so the gate is zero errors
+everywhere. The ratchet machinery stays, and any entry in the baseline may only go DOWN:
 
 - NEW    a file has more errors than its baseline (a file not listed is held to 0). Fix the
          error; do not raise the baseline.

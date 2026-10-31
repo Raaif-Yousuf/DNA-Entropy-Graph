@@ -131,6 +131,135 @@ public sealed class EntropyOverviewViewModelTests : IDisposable
         vm.ActionNoticeText.ShouldBeEmpty();
     }
 
+    // Issue #1006: the folder chosen under "Save results to" (#1037) is where a picture for an imported earlier-version run goes too,
+    // read at each save so a change on Settings needs no restart; blank, a drive root or an unreadable setting means the default parent.
+    private sealed class MemorySettings : ISettingsStore
+    {
+        public Dictionary<string, string> Values { get; } = [];
+
+        public bool Unavailable { get; set; }
+
+        public string? GetString(string key)
+            => Unavailable ? throw new SettingsUnavailableException("locked") : Values.GetValueOrDefault(key);
+
+        public void SetString(string key, string value) => Values[key] = value;
+    }
+
+    private async Task<ResultsViewModel> ImportedRunWith(ResultsExportRoot root, string id)
+    {
+        var own = Path.Combine(_dir, "proto-" + id);
+        Directory.CreateDirectory(own);
+        var run = Row(id, own) with { Imported = true, Target = "local" };
+        var repository = Substitute.For<IRunRepository>();
+        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => new List<RunRecord> { run });
+        _source.Load(own).Returns(Overview("chr1"));
+        var vm = new ResultsViewModel(repository, new RunOutputReader(), _launcher, Substitute.For<INavigator>(), _strings, Substitute.For<IExternalViewerOpener>(), _source, WritingExporter(), exportRoot: root);
+        await vm.LoadAsync(id, TestContext.Current.CancellationToken);
+        return vm;
+    }
+
+    private static int PngCount(string folder) => Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.png", SearchOption.AllDirectories).Count() : 0;
+
+    [Fact]
+    public async Task An_imported_runs_png_follows_the_saved_output_folder_at_each_save_and_falls_back_to_the_default_only_when_blank()
+    {
+        var downloads = Path.Combine(_dir, "downloads");
+        var chosenA = Path.Combine(_dir, "chosenA");
+        var chosenB = Path.Combine(_dir, "chosenB");
+        foreach (var d in new[] { downloads, chosenA, chosenB })
+        {
+            Directory.CreateDirectory(d);
+        }
+
+        var settings = new MemorySettings();
+        var root = ResultsExportRoot.FromSettings(settings, () => downloads);
+        var vm = await ImportedRunWith(root, "imp-a");
+
+        // Nothing saved: the default parent.
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        PngCount(downloads).ShouldBe(1);
+        PngCount(chosenA).ShouldBe(0);
+
+        // Saved after the service was built: the very next save follows it.
+        settings.Values[OutputFolderViewModel.SettingKey] = chosenA;
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        PngCount(chosenA).ShouldBe(1);
+        PngCount(downloads).ShouldBe(1);
+
+        settings.Values[OutputFolderViewModel.SettingKey] = chosenB;
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        PngCount(chosenB).ShouldBe(1);
+        PngCount(chosenA).ShouldBe(1);
+
+        // Back to Downloads (blank).
+        settings.Values[OutputFolderViewModel.SettingKey] = string.Empty;
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+        PngCount(downloads).ShouldBe(2);
+        PngCount(chosenB).ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_drive_root_or_an_unreadable_setting_is_not_honoured_and_a_chosen_folder_is_never_app_owned()
+    {
+        var downloads = Path.Combine(_dir, "dl");
+        var settings = new MemorySettings();
+        var root = ResultsExportRoot.FromSettings(settings, () => downloads, appOwned: true);
+
+        root.Parent().ShouldBe(downloads);
+        root.AppOwned.ShouldBeTrue("the portable outputs folder is the app's own and is made on first use");
+
+        settings.Values[OutputFolderViewModel.SettingKey] = Path.GetPathRoot(Path.GetTempPath())!;
+        root.Parent().ShouldBe(downloads, "a drive root saved by hand is refused exactly as the picker refuses it");
+        root.AppOwned.ShouldBeTrue();
+
+        var mine = Path.Combine(_dir, "mine-missing");
+        settings.Values[OutputFolderViewModel.SettingKey] = mine;
+        root.Parent().ShouldBe(mine);
+        root.AppOwned.ShouldBeFalse("the user's own folder must already be there; a missing one is not recreated");
+
+        settings.Unavailable = true;
+        root.Parent().ShouldBe(downloads);
+    }
+
+    [Fact]
+    public async Task A_chosen_folder_that_is_not_there_is_not_made_by_a_save()
+    {
+        var missing = Path.Combine(_dir, "chosen-gone");
+        var settings = new MemorySettings();
+        settings.Values[OutputFolderViewModel.SettingKey] = missing;
+        var vm = await ImportedRunWith(ResultsExportRoot.FromSettings(settings, () => Path.Combine(_dir, "dl-unused"), appOwned: true), "imp-missing");
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(missing).ShouldBeFalse("the user's own folder is not brought back, even when the default root is the app's own");
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
+    }
+
+    [Fact]
+    public async Task A_setting_that_changes_during_one_save_cannot_mix_one_folders_target_with_anothers_required_root()
+    {
+        // The target and the "must already exist" root of one save come from ONE read: here the first read answers a missing chosen folder and every later read answers none.
+        var missing = Path.Combine(_dir, "chosen-flip");
+        var reads = 0;
+        var root = new ResultsExportRoot(() => Path.Combine(_dir, "dl-flip"), appOwned: true, chosenFolder: () => Interlocked.Increment(ref reads) == 1 ? missing : null);
+        var vm = await ImportedRunWith(root, "imp-flip");
+
+        await vm.ExportOverviewPngCommand.ExecuteAsync(null);
+
+        Directory.Exists(missing).ShouldBeFalse("a later read of the setting must not turn the chosen folder into one the app may create");
+        vm.ActionNoticeText.ShouldBe(ResultsCopy.ExportPngFailedInExports);
+    }
+
+    [Fact]
+    public void A_chosen_folder_is_returned_as_its_full_path()
+    {
+        var settings = new MemorySettings();
+        var mine = Path.Combine(_dir, "mine-full");
+        settings.Values[OutputFolderViewModel.SettingKey] = Path.Combine(mine, "sub", "..");
+
+        ResultsExportRoot.FromSettings(settings, () => "x").Parent().ShouldBe(mine);
+    }
+
     [Fact]
     public async Task A_second_export_never_overwrites_the_first()
     {

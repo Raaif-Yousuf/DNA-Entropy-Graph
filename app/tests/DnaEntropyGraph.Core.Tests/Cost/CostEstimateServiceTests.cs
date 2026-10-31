@@ -208,9 +208,10 @@ public sealed class CostEstimateServiceTests
     }
 
     [Fact]
-    public async Task A_refresh_with_the_same_prices_on_a_new_day_raises_no_prices_changed()
+    public async Task A_refresh_with_the_same_prices_on_a_new_day_raises_prices_changed_because_the_line_under_the_estimate_changes()
     {
-        // Issue #214 review round 4 (L): the fingerprint was the table's whole JSON, which carries asOf and source, so a new day alone looked like a price change.
+        // Issue #214 review round 4 (L): the fingerprint used to be the table's whole JSON, so a new day alone looked like a price change.
+        // Issue #814 review round 2 (M1): the price source line (older prices -> as of today) is made from the status, so a status change IS something the page must redo.
         var clock = new DayClock(new DateTimeOffset(2026, 10, 16, 9, 0, 0, TimeSpan.Zero));
         var shipped = Substitute.For<IPricingSource>();
         shipped.Load().Returns(PricingTable.Parse(PricingTableTests.Good));
@@ -230,8 +231,63 @@ public sealed class CostEstimateServiceTests
         await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
 
         source.Current.AsOf.ShouldBe(new DateOnly(2026, 10, 17), "the catalog was read again on the new day");
+        source.Current.Origin.ShouldBe(PricingOrigin.Catalog);
         await gateway.Received(2).ListComputeSkusAsync(Arg.Any<CancellationToken>());
-        Volatile.Read(ref raised).ShouldBe(0, "the catalog gave the same prices as the cache, only the date moved");
+        Volatile.Read(ref raised).ShouldBe(1, "the prices are the same but the status went from older prices to today's, so the line on screen is out of date");
+    }
+
+    [Fact]
+    public async Task A_refresh_that_fails_with_the_prices_unchanged_raises_prices_changed_so_the_line_can_name_the_reason()
+    {
+        var source = new FailingStatusSource();
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromSeconds(30));
+        var raised = 0;
+        service.PricesChanged += () => Interlocked.Increment(ref raised);
+
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+
+        source.Current.Reason.ShouldBe(PricingFallbackReason.Network);
+        Volatile.Read(ref raised).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_refresh_that_leaves_prices_and_status_alone_raises_nothing_even_for_a_source_with_a_status()
+    {
+        var source = new FailingStatusSource { FailsOnRefresh = false };
+        var service = new CostEstimateService(source, _runs, TimeSpan.FromSeconds(30));
+        var raised = 0;
+        service.PricesChanged += () => Interlocked.Increment(ref raised);
+
+        await service.EstimateAsync(L4, spot: false, bases: 5_000, bootDiskGb: 150, CancellationToken.None);
+
+        source.Refreshes.ShouldBe(1);
+        Volatile.Read(ref raised).ShouldBe(0);
+    }
+
+    /// <summary>Serves the same prices always; its refresh (when it fails) only changes the status.</summary>
+    private sealed class FailingStatusSource : IPricingSource, IPricingRefresh, IPricingStatus
+    {
+        private int _refreshes;
+        private PricingSnapshot _current = new(PricingOrigin.Shipped, new DateOnly(2026, 9, 19), PricingFallbackReason.None);
+
+        public bool FailsOnRefresh { get; init; } = true;
+
+        public int Refreshes => Volatile.Read(ref _refreshes);
+
+        public PricingSnapshot Current => Volatile.Read(ref _current);
+
+        public PricingLoadResult Load() => PricingTable.Parse(PricingTableTests.Good);
+
+        public Task RefreshIfStaleAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _refreshes);
+            if (FailsOnRefresh)
+            {
+                Volatile.Write(ref _current, _current with { Reason = PricingFallbackReason.Network });
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class DayClock(DateTimeOffset start) : TimeProvider
