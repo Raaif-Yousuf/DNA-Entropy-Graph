@@ -235,6 +235,159 @@ internal sealed class GoogleComputeGateway : IComputeGateway
                 CloudErrorKind.Network);
     }
 
+    /// <summary>
+    /// Issue #970. Undoes the claim of <see cref="ReuseVmAsync"/>: READS the instance, and only when its <c>job-id</c> label is still <paramref name="fromJobId"/> writes the donor's labels back with the
+    /// label fingerprint just read (the instance first, then the boot disk best effort and only while it still carries <paramref name="fromJobId"/>, each write under its own fingerprint). A newer run that took the VM since moved the labels (and the
+    /// fingerprint), so the check or the 412 leaves its labels alone. THEORY (unverified, ToTest #970, no live project): <c>instances.setLabels</c> is the call the claim already makes on a stopped VM, so it is accepted
+    /// on a stopped one, and on one that is still STOPPING.
+    /// </summary>
+    public async Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(vmName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fromJobId);
+        ArgumentNullException.ThrowIfNull(donorLabels);
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
+        var target = donorLabels.ToDictionary(p => p.Key, p => p.Value);
+
+        ComputeData.Instance instance;
+        try
+        {
+            instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return LabelRestoreState.Gone;
+        }
+
+        if (!OwnedBy(instance.Labels, fromJobId))
+        {
+            // Round 2 finding 4: a replay after a lost answer meets the VM already carrying the donor's labels: that is the restore done, not a newer run's VM.
+            return LabelsEqual(instance.Labels, target) ? LabelRestoreState.Restored : LabelRestoreState.NewerOwner;
+        }
+
+        // Round 4 finding 1. The INSTANCE is the ownership authority: a claim writes the instance first, and every job-id lookup (adoption, sweeps, the donor's keep-alive sweep) reads the instance. So ownership
+        // comes only from the instance read above and the fingerprint/412 rules below; a boot disk carrying a dead job's id (disk writes are best effort) must not keep the instance under the borrowing
+        // job's labels. The disk is written afterwards, best effort, and only while it still carries this job's id.
+        var bootDisk = ParseBootDisk(instance);
+        var body = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
+        try
+        {
+            var write = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(body, project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            await AwaitOperationAsync(project, zone, write, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return LabelRestoreState.Gone;
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
+        {
+            // The fingerprint moved: either our own write landed and its answer was lost (the labels now equal the donor's), or someone else wrote since the read (a newer run's claim).
+            ComputeData.Instance current;
+            try
+            {
+                current = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException gone) when (gone.Error.HttpStatus == 404)
+            {
+                return LabelRestoreState.Gone; // round 5 finding 8: deleted between the refused write and the re-read
+            }
+
+            if (LabelsEqual(current.Labels, target))
+            {
+                return LabelRestoreState.Restored;
+            }
+
+            if (!OwnedBy(current.Labels, fromJobId))
+            {
+                return LabelRestoreState.NewerOwner;
+            }
+
+            throw;
+        }
+
+        if (bootDisk is { } disk)
+        {
+            try
+            {
+                var plan = await ReadDiskForRestoreAsync(project, disk, fromJobId, cancellationToken).ConfigureAwait(false);
+                if (plan.Write)
+                {
+                    await WriteBootDiskLabelsAsync(project, disk, target, plan.Fingerprint, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            {
+                // The instance is restored; a disk that keeps the dead job's label is invisible to every job-id lookup (round 3 finding 4), so any failure here (a cloud error or not) is cosmetic.
+                // Only caller cancellation propagates. The class only is traced, never a message.
+                System.Diagnostics.Trace.TraceWarning($"compute.restore.disk-labels-skipped: {ex.GetType().Name}");
+            }
+        }
+
+        return LabelRestoreState.Restored;
+    }
+
+    private static bool OwnedBy(IDictionary<string, string>? labels, string jobId)
+        => labels is not null && labels.TryGetValue("job-id", out var owner) && string.Equals(owner, jobId, StringComparison.Ordinal);
+
+    private readonly record struct DiskPlan(bool Write, string? Fingerprint);
+
+    private async Task<(IDictionary<string, string>? Labels, string? Fingerprint, bool Gone)> ReadDiskLabelsAsync(string project, BootDisk disk, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (disk.Regional)
+            {
+                var current = await CallAsync("compute.regionDisks.get", token => _service.RegionDisks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+                return (current.Labels, current.LabelFingerprint, false);
+            }
+
+            var zonal = await CallAsync("compute.disks.get", token => _service.Disks.Get(project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            return (zonal.Labels, zonal.LabelFingerprint, false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
+        {
+            return (null, null, true);
+        }
+    }
+
+    /// <summary>
+    /// The boot disk's half of <see cref="RestoreVmLabelsAsync"/>, READ only: the disk is to be rewritten (under the fingerprint just read) only while it still carries the borrowing job's id. A disk that is gone,
+    /// has no job-id, or carries any other job's id (the donor's own, or a third job's) is left alone: never overwritten under another job (round 4 finding 1).
+    /// </summary>
+    private async Task<DiskPlan> ReadDiskForRestoreAsync(string project, BootDisk disk, string fromJobId, CancellationToken cancellationToken)
+    {
+        var (labels, fingerprint, gone) = await ReadDiskLabelsAsync(project, disk, cancellationToken).ConfigureAwait(false);
+        return !gone && labels is not null && labels.TryGetValue("job-id", out var owner) && string.Equals(owner, fromJobId, StringComparison.Ordinal)
+            ? new DiskPlan(true, fingerprint)
+            : new DiskPlan(false, null);
+    }
+
+    /// <summary>Writes the donor's labels to the boot disk under the fingerprint read. A 404 (gone) and a 412 (the labels moved since the read: never overwrite on a stale read) leave it as it is; any other failure reaches the caller, which treats it as cosmetic.</summary>
+    private async Task WriteBootDiskLabelsAsync(string project, BootDisk disk, Dictionary<string, string> target, string? fingerprint, CancellationToken cancellationToken)
+    {
+        try
+        {
+            ComputeData.Operation write;
+            if (disk.Regional)
+            {
+                var body = new ComputeData.RegionSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                write = await CallAsync("compute.regionDisks.setLabels", token => _service.RegionDisks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var body = new ComputeData.ZoneSetLabelsRequest { Labels = target, LabelFingerprint = fingerprint };
+                write = await CallAsync("compute.disks.setLabels", token => _service.Disks.SetLabels(body, project, disk.Location, disk.Name).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+
+            await AwaitOperationAsync(project, disk.Location, write, goneIsDone: false, cancellationToken, regional: disk.Regional).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (ex.Error.HttpStatus is 404 or 412)
+        {
+            // Gone, or the labels moved since the read: left as it is.
+        }
+    }
+
     private readonly record struct BootDisk(string Name, string Location, bool Regional);
 
     /// <summary>

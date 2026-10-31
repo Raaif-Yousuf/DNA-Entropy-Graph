@@ -32,8 +32,12 @@ public enum LateCreateState
 }
 
 /// <summary>What happened to a create that was still in flight when a cancel stopped waiting. Ids and classes only: never a name, a zone or a message.</summary>
-public sealed record LateCreateOutcome(string JobId, LateCreateState State, string? ErrorClass = null)
+/// <param name="JobId">The job whose create this was.</param>
+/// <param name="State">How the clean-up of the create ended.</param>
+/// <param name="ErrorClass">The error class when the clean-up failed.</param>
+/// <param name="Restore">Issue #970: for a reuse that was stopped again, what became of the donor VM's labels; null for every other outcome and for a VM no donor was noted for.</param>
+public sealed record LateCreateOutcome(string JobId, LateCreateState State, string? ErrorClass = null, DonorRestoreOutcome? Restore = null)
 {
-    /// <summary>The one token the diagnostics log records for this outcome: the state, and the error class after a colon when there is one. Never a name, a zone or a message.</summary>
-    public string LogClass => ErrorClass is null ? State.ToString() : $"{State}:{ErrorClass}";
+    /// <summary>The one token the diagnostics log records for this outcome: the state, and the error class after a colon when there is one, then the restore's own token. Never a name, a zone or a message.</summary>
+    public string LogClass => (ErrorClass is null ? State.ToString() : $"{State}:{ErrorClass}") + (Restore is null ? string.Empty : $" restore={Restore.LogClass}");
 }
