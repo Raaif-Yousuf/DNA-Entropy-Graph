@@ -125,6 +125,28 @@ public static class RunOutputFolders
         }
     }
 
+    /// <summary>
+    /// Makes <paramref name="folder"/> (and any missing parents) and writes the run's marker into it (issue #1047): the same guarantee <see cref="CreateUnique"/> gives a new folder,
+    /// for a folder whose name is already recorded on the run (History "Delete files on this PC" removed it; "Download again" brings it back). The caller has already checked the folder
+    /// is inside the output folder; <paramref name="requiredRoot"/> must already exist (a drive that was re-lettered, or a root the user removed, is not brought back: <see cref="DirectoryNotFoundException"/>). When the marker cannot be written, every folder this call made is removed again (only while empty) and the write error is thrown.
+    /// </summary>
+    public static void CreateMarked(string folder, string jobId, string requiredRoot) => CreateMarked(folder, jobId, requiredRoot, RunFolderMarker.Write);
+
+    /// <summary>The same with the marker writer supplied, so a test can fail it after the folder was made.</summary>
+    internal static void CreateMarked(string folder, string jobId, string requiredRoot, Action<string, string> writeMarker)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+        var made = CreateFolderChain(folder, requiredRoot);
+        try
+        {
+            WriteMarkerOrRemove(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), jobId, writeMarker);
+        }
+        catch
+        {
+            RemoveCreated(made);
+            throw;
+        }
+    }
     private static void WriteMarkerOrRemove(string folder, string jobId, Action<string, string> writeMarker)
     {
         try

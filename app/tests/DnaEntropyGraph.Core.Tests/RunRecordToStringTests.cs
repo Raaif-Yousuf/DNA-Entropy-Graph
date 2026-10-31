@@ -27,6 +27,26 @@ public sealed class RunRecordToStringTests
     }
 
     [Fact]
+    public void ToString_prints_neither_the_run_name_nor_the_output_folder_nor_the_options_nor_the_manifest()
+    {
+        // Issue #1046: Name now carries the input file's stem, and the options, manifest and output folder name the file too (never log the file name).
+        var text = (Run with
+        {
+            Name = "patient_42_evo2_7b",
+            OutputDir = @"C:\Users\someone\Downloads\patient_42_evo2_7b",
+            OptionsJson = "{\"InputPath\":\"C:\\\\data\\\\patient_42.gb\"}",
+            ManifestJson = "{\"inputs\":[{\"name\":\"patient_42.gb\"}]}",
+        }).ToString();
+
+        text.ShouldNotContain("patient_42");
+        text.ShouldNotContain("someone");
+        text.ShouldContain("<name withheld>");
+        text.ShouldContain("<output folder withheld>");
+        text.ShouldContain("<options withheld>");
+        text.ShouldContain("<manifest withheld>");
+    }
+
+    [Fact]
     public void ToString_still_prints_the_other_members_and_a_run_without_notes_shows_null()
     {
         var text = (Run with { Notes = null, TagsJson = null }).ToString();

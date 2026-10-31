@@ -5,7 +5,9 @@
 Every run you have ever started, whether it finished, failed, or was cancelled, appears
 on the **Runs** page, grouped by day. Each entry shows its name, what was in it, which
 model and computer type were used, how long it took, roughly what it cost, and whether
-its results are still available in the cloud or only on your own computer.
+its results are still available in the cloud or only on your own computer. A new run's name
+is the name its results folder gets (from the run name box on the New run page, for example
+`SetTnpB_evo2_7b`); a run that failed before it began has no name yet and shows its run code.
 
 Next to its time, a run that used a rented computer shows its estimated cost (the same figure as the top of its Results page, worked out from the computer's running time and list price, not your Google bill). A run on your own PC says there was no cloud cost, and a run that never got a rented computer shows no cost.
 
@@ -22,7 +24,7 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
   files back into the run's folder. They are only what was finished before the stop. It is
   not offered when the run never saved anything online.
 - **Download again**: if you deleted the local copy of a run's results but they are still in
-  your cloud storage, this fetches them again without re-running the analysis. Cloud
+  your cloud storage, this fetches them again without re-running the analysis, into the same folder name as before (made again if it is gone, so Delete files on this PC can remove it later without asking). Cloud
   copies are kept for a while after a run finishes (90 days by default, adjustable in
   Settings) and then automatically deleted; once that happens, Download again is no longer
   possible (the button is greyed out) and only Run again will get you a fresh result.

@@ -64,8 +64,17 @@ class Finding:
         return f"{self.path}:{self.line}:{self.column}: control byte 0x{self.byte:02x}{suffix}"
 
 
-class NotAGitRepo(Exception):
-    pass
+class GitCommandFailed(Exception):
+    """A git call exited non-zero. The message names the subcommand, the exit code and git's own words."""
+
+    def __init__(self, args_: tuple[str, ...], returncode: int, detail: str) -> None:
+        self.returncode = returncode
+        shown = " ".join(args_[:3])
+        super().__init__(f"git {shown} failed ({returncode}): {detail}")
+
+
+class NotAGitRepo(GitCommandFailed):
+    """The failed git call said the directory is not a repository (a subset of GitCommandFailed)."""
 
 
 def is_binary(data: bytes) -> bool:
@@ -101,7 +110,9 @@ def scan_files(files: dict[str, bytes], allowlist: frozenset[str] | set[str] = A
 def _git(root: Path, *args: str, stdin: bytes | None = None) -> bytes:
     proc = subprocess.run(["git", *args], cwd=root, input=stdin, capture_output=True, check=False)
     if proc.returncode != 0:
-        raise NotAGitRepo(proc.stderr.decode("utf-8", errors="replace").strip() or f"git {args[0]} failed")
+        detail = proc.stderr.decode("utf-8", errors="replace").strip() or f"git {args[0]} failed"
+        failure = NotAGitRepo if "not a git repository" in detail.lower() else GitCommandFailed
+        raise failure(args, proc.returncode, detail)
     return proc.stdout
 
 
@@ -184,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
         findings = check_repo(args.root.resolve())
     except NotAGitRepo as exc:
         print(f"ERROR: {args.root} is not a git repository: {exc}", file=sys.stderr)
+        return 2
+    except GitCommandFailed as exc:
+        print(f"ERROR: {exc}. Update git (2.40 or later) or run it from a healthy checkout", file=sys.stderr)
         return 2
     for finding in findings:
         print(f"ERROR: {finding}", file=sys.stderr)
