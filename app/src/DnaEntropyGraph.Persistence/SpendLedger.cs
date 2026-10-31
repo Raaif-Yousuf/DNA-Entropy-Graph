@@ -229,6 +229,9 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
     public Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken) => inner.GetAsync(jobId, cancellationToken);
 
+    /// <summary>Declared here on purpose (the interface default is a no-op). A one-column write touches no cost, so nothing is re-quoted or booked.</summary>
+    public Task<bool> SetVmEndConfirmedAtAsync(string jobId, JobPhase expectedPhase, DateTimeOffset? confirmedAt, CancellationToken cancellationToken) => inner.SetVmEndConfirmedAtAsync(jobId, expectedPhase, confirmedAt, cancellationToken);
+
     /// <summary>Declared here on purpose (the interface default is a no-op that would silently drop the #830 backfill).</summary>
     public Task<int> AssignAccountToUnassignedRunsAsync(string accountSub, CancellationToken cancellationToken) => inner.AssignAccountToUnassignedRunsAsync(accountSub, cancellationToken);
 

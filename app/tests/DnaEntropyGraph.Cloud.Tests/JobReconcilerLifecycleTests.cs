@@ -170,17 +170,124 @@ public class JobReconcilerLifecycleTests
     }
 
     [Fact]
-    public async Task A_finished_run_whose_VM_the_reconciler_finds_already_stopped_or_gone_is_recorded_as_confirmed_ended()
+    public async Task A_finished_run_whose_VM_the_reconciler_finds_already_stopped_or_gone_by_name_is_recorded_as_confirmed_ended()
     {
         var rig = new Rig();
         await rig.SeedFinishedAsync("job-stopped", AfterTaskAction.Stop);
         await rig.StopAsync("job-stopped");
-        await rig.Env.SeedAsync("job-gone", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10) });
+        await rig.Env.SeedAsync("job-gone", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = "deg-job-gone", Zone = Zone });
 
         await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
 
         Row(rig, "job-stopped").VmEndConfirmedAt.ShouldBe(Launch);
-        Row(rig, "job-gone").VmEndConfirmedAt.ShouldBe(Launch, "the account was reachable and the label listing shows no computer");
+        Row(rig, "job-gone").VmEndConfirmedAt.ShouldBe(Launch, "the by-name read of the run's own computer answered 404 while the account was reachable");
+    }
+
+    [Fact]
+    public async Task An_empty_label_listing_alone_never_confirms_an_end()
+    {
+        // Round 5 H1: a run that recorded no computer name has nothing to read by name; "the listing shows nothing" lags a create and proves nothing.
+        var rig = new Rig();
+        await rig.Env.SeedAsync("job-noname", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), VmName = null });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        Row(rig, "job-noname").VmEndConfirmedAt.ShouldBeNull();
+    }
+
+    /// <summary>The fake behind the compute interface, except that the label listing by job id can be made to show nothing (it lags a create) or to fail as a signed-out account that names no sub.</summary>
+    private sealed class ScriptedCompute(FakeGcp inner) : IComputeGateway
+    {
+        public bool HideListing { get; set; }
+
+        public Exception? FindThrows { get; set; }
+
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
+            => FindThrows is not null ? throw FindThrows : HideListing ? Task.FromResult<IReadOnlyList<VmDescriptor>>([]) : inner.FindByJobIdAsync(scope, jobId, cancellationToken);
+
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(scope, spec, zone, cancellationToken);
+
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
+
+        public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(scope, vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
+
+        public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken);
+
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(scope, vmName, zone, cancellationToken);
+
+        public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(scope, vmName, zone, cancellationToken);
+
+        public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(scope, vmName, zone, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
+
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
+    }
+
+    private static async Task<RunRecord> SeedUnconfirmedLateCreateAsync(Rig rig, string jobId)
+    {
+        await rig.Env.SeedAsync(jobId, JobPhase.Cancelled, vm: true, after: AfterTaskAction.Stop, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ErrorCode = RunErrorCodes.LateCreateUnconfirmed, VmName = VmTerminator.OwnVmName(jobId), Zone = Zone });
+        return Row(rig, jobId);
+    }
+
+    [Fact]
+    public async Task A_late_create_unconfirmed_row_whose_VM_the_label_listing_does_not_show_yet_is_not_confirmed_ended_while_the_VM_exists_by_name()
+    {
+        // Round 5 H1: HideListing models the lag of a label listing right after a create. The computer is there by name, so nothing may be confirmed.
+        var rig = new Rig();
+        await SeedUnconfirmedLateCreateAsync(rig, "job-late");
+        var compute = new ScriptedCompute(rig.Gcp) { HideListing = true };
+
+        await rig.Reconciler(compute: compute).EnforceLifecycleAsync(CancellationToken.None);
+
+        Row(rig, "job-late").VmEndConfirmedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_late_create_unconfirmed_row_is_confirmed_ended_by_a_by_name_404_but_not_by_a_stopped_VM()
+    {
+        var gone = new Rig();
+        await gone.Env.SeedAsync("job-404", JobPhase.Cancelled, vm: false, after: AfterTaskAction.Stop, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ErrorCode = RunErrorCodes.LateCreateUnconfirmed, VmName = VmTerminator.OwnVmName("job-404"), Zone = Zone });
+        await gone.Reconciler(compute: new ScriptedCompute(gone.Gcp) { HideListing = true }).EnforceLifecycleAsync(CancellationToken.None);
+        Row(gone, "job-404").VmEndConfirmedAt.ShouldBe(Launch, "a by-name 404 is the positive evidence a row with an unconfirmed-end code needs");
+
+        var stopped = new Rig();
+        await SeedUnconfirmedLateCreateAsync(stopped, "job-stp");
+        await stopped.StopAsync("job-stp");
+        await stopped.Reconciler(compute: new ScriptedCompute(stopped.Gcp) { HideListing = true }).EnforceLifecycleAsync(CancellationToken.None);
+        Row(stopped, "job-stp").VmEndConfirmedAt.ShouldBeNull("a stopped computer can be started again by a late create: weaker than a 404 for such a row");
+    }
+
+    [Fact]
+    public async Task A_confirmed_end_is_cleared_again_when_a_later_pass_sees_the_computer_running()
+    {
+        // Round 5 M1: the computer was restarted under the job label after the confirmation.
+        var rig = new Rig();
+        await rig.SeedFinishedAsync("job-back", AfterTaskAction.KeepAlive, keepAliveMinutes: 600, afterKeepAlive: AfterKeepAliveAction.Delete, tweak: row => row with { VmEndConfirmedAt = Launch.AddMinutes(-5) });
+
+        await rig.Reconciler().EnforceLifecycleAsync(CancellationToken.None);
+
+        (await rig.VmsAsync("job-back")).Single().Status.ShouldBe("RUNNING");
+        Row(rig, "job-back").VmEndConfirmedAt.ShouldBeNull("a running computer contradicts the earlier confirmation");
+        RunObligations.HasObligation(Row(rig, "job-back"), Launch.AddHours(1)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_signed_out_outcome_that_names_no_account_is_resolved_to_the_active_account_for_the_shell_bar_rule()
+    {
+        // Round 5 L2: the failure names no account; the row of the active account (sub-a) with an unexpired-by-evidence keep-alive still obliges the sign-in bar.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "my-project"));
+        await rig.Env.SeedAsync("job-a", JobPhase.Completed, vm: true, after: AfterTaskAction.KeepAlive, keepAliveMinutes: 600, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), AccountSub = "sub-a" });
+        var compute = new ScriptedCompute(rig.Gcp) { FindThrows = new AccountAuthException(AuthErrorCodes.SigninExpired) };
+        var signInFor = new List<string?>();
+
+        await rig.Reconciler(compute: compute, additionalSweepScopes: () => [new CloudScope("my-project", "sub-a")], onSignInNeeded: sub => signInFor.Add(sub)).EnforceLifecycleAsync(CancellationToken.None);
+
+        signInFor.Count.ShouldBe(1, "the named row of the active account matches once the null account is resolved to it");
     }
 
     [Fact]

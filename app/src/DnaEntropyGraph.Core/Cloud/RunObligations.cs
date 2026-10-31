@@ -62,9 +62,10 @@ public static class RunObligations
             return false;
         }
 
-        // Round 4 M-B: the app read this run's computer as ended (stopped, deleted or gone) while the account was reachable, so there is nothing left to look after. A confirmation OLDER than the run's finish
-        // belongs to an earlier attempt of the same job (a resume that finished again) and does not count.
-        if (row.VmEndConfirmedAt is { } confirmed && confirmed >= (row.FinishedAt ?? row.CreatedUtc))
+        // Round 4 M-B, round 5: the reconciler read this run's computer as ended while the account was reachable, so there is nothing left to look after. The writer is the gate: it records a confirmation only from a
+        // POSITIVE observation of the run's own computer (never from an empty label listing, which lags a create), and for a row with an unconfirmed-end code only from a delete or a by-name 404; it clears the
+        // field again whenever a later pass sees the computer running or booting. So a value here is either current or has not been contradicted yet.
+        if (row.VmEndConfirmedAt is not null)
         {
             return false;
         }

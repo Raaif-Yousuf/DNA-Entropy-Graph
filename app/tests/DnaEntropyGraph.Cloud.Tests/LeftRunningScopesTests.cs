@@ -585,13 +585,6 @@ public sealed class LeftRunningScopesTests
     }
 
     [Fact]
-    public void A_confirmed_end_older_than_the_runs_finish_belongs_to_an_earlier_attempt_and_does_not_count()
-    {
-        // The run was resumed and finished again after the earlier confirmation.
-        RunObligations.HasObligation(KeepAliveRow(Start.AddMinutes(-5)), Start.AddHours(2)).ShouldBeTrue();
-    }
-
-    [Fact]
     public void A_confirmed_end_clears_an_earlier_unconfirmed_end_code_and_never_clears_an_unfinished_run()
     {
         var unconfirmed = new RunRecord("job-u", JobPhase.Failed, Start, ProjectId: "project-a", AccountSub: "sub-a", FinishedAt: Start, ErrorCode: RunErrorCodes.VmEndUnconfirmed);

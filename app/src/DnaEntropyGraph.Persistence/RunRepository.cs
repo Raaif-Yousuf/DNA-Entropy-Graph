@@ -109,6 +109,17 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 
+    /// <summary>Round 5 M2: the one-column write (see <see cref="IRunRepository.SetVmEndConfirmedAtAsync"/>); guarded by the phase in the same statement, so there is no read-then-write gap.</summary>
+    public async Task<bool> SetVmEndConfirmedAtAsync(string jobId, JobPhase expectedPhase, DateTimeOffset? confirmedAt, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(
+            "UPDATE Runs SET VmEndConfirmedAt = @At WHERE Id = @Id AND Phase = @Phase;",
+            new { At = Iso.Format(confirmedAt), Id = jobId, Phase = expectedPhase.ToString() },
+            cancellationToken: cancellationToken);
+        return await connection.ExecuteAsync(command).ConfigureAwait(false) > 0;
+    }
+
     /// <summary>Test seam: runs inside <see cref="TryUpsertIfPhaseAsync"/> between its read of the stored phase and its write, so a test can force another writer into that gap. Null in production.</summary>
     internal Func<Task>? BetweenPhaseReadAndWrite { get; set; }
 

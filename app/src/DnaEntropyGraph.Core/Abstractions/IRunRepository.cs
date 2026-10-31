@@ -64,6 +64,12 @@ public interface IRunRepository
     /// accounts were recorded); returns how many changed. The default changes nothing, for a test double with no rows to give.
     /// </summary>
     Task<int> AssignAccountToUnassignedRunsAsync(string accountSub, CancellationToken cancellationToken) => Task.FromResult(0);
+
+    /// <summary>
+    /// Issue #830 review round 5 M2: sets (or, with null, clears) ONLY <see cref="RunRecord.VmEndConfirmedAt"/> of the row whose phase is still <paramref name="expectedPhase"/>: one column, so a stale copy of the
+    /// row can never overwrite what a runner stored since (VmReadyAt, the cost) and a cost decorator has nothing to re-quote. Returns whether a row changed. The default changes nothing, for a test double with no rows.
+    /// </summary>
+    Task<bool> SetVmEndConfirmedAtAsync(string jobId, JobPhase expectedPhase, DateTimeOffset? confirmedAt, CancellationToken cancellationToken) => Task.FromResult(false);
 }
 
 /// <summary>

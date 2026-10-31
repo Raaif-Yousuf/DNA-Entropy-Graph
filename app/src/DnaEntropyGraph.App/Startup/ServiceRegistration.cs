@@ -419,7 +419,7 @@ public static class ServiceRegistration
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
                 log: sp.GetRequiredService<IDiagnosticsLog>(),
-                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().SelectedScope() is { } selected ? [selected] : [],
+                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().ActiveSnapshot() is { ProjectId.Length: > 0 } active ? [new CloudScope(active.ProjectId, active.AccountSub)] : [],
                 onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)));
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real

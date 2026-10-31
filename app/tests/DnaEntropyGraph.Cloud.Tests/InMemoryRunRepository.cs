@@ -119,6 +119,23 @@ internal sealed class InMemoryRunRepository : IRunRepository
 
     private readonly object _conditionalGate = new();
 
+    /// <summary>Like the SQLite one: changes only the one column of the LATEST stored row, when its phase still matches (appended as a new copy of that row, as every write here is).</summary>
+    public Task<bool> SetVmEndConfirmedAtAsync(string jobId, JobPhase expectedPhase, DateTimeOffset? confirmedAt, CancellationToken cancellationToken)
+    {
+        lock (_conditionalGate)
+        {
+            var latest = DnaEntropyGraph.Core.Cloud.RunRowStore.LatestRecord(_runs.ToList(), jobId);
+            if (latest is null || latest.Phase != expectedPhase)
+            {
+                return Task.FromResult(false);
+            }
+
+            _runs.Enqueue(latest with { VmEndConfirmedAt = confirmedAt });
+        }
+
+        return Task.FromResult(true);
+    }
+
     /// <summary>Atomic like the SQLite one: the check and the append happen under one lock. <see cref="BeforeUpsert"/> runs BEFORE it, in the gap between a writer's read and its write.</summary>
     public async Task<bool> TryUpsertIfPhaseAsync(RunRecord run, JobPhase? expectedPhase, CancellationToken cancellationToken)
     {
