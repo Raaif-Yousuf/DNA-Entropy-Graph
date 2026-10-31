@@ -952,10 +952,17 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             }
 
             // The claim may already have been made: whatever carries this job's label is ended before anything else is tried.
-            var note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
-            if (SentCreate.ReuseNeverSent(ex))
+            string? note;
+            try
             {
-                terminator.ForgetDonor(sentReuse); // round 6 finding 5: after the failure funnel had its chance to restore it; nothing will ask for this donor or send again
+                note = await terminator.EndVmAfterFailureAsync(request, null, forceDelete: true).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (SentCreate.ReuseNeverSent(ex))
+                {
+                    terminator.ForgetDonor(sentReuse); // round 6 finding 5, round 7 finding 3: after the failure funnel had its chance to restore it, even when it threw; nothing will ask for this donor or send again
+                }
             }
 
             // Round 2 finding 1: a start whose answer was lost may still land after the stop above, and the donor's labels were NOT put back for it. The watch a cancel uses stops the VM if it lands and

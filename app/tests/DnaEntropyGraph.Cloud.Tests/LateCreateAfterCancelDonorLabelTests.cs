@@ -603,6 +603,53 @@ public partial class LateCreateAfterCancelTests
     }
 
     [Fact]
+    public async Task D970r7_a_deferred_watch_whose_start_ended_Canceled_unanswered_does_not_restore_and_logs_NotRestored_StartUnanswered()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var logged = new List<DonorRestoreOutcome>();
+        rig.Settings.OnDonorRestore = logged.Add;
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var (sent, oldVm, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970v", "job-n970v", claimLabels: true); // stopped under this job's labels
+        sent.Create = Task.FromCanceled(new CancellationToken(true)); // completed on our side without an answer: it may still land, and this path never tracked a grace
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970v", CancellationToken.None);
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970v", CancellationToken.None);
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
+
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.NotRestored);
+        outcome.Restore.ErrorClass.ShouldBe("StartUnanswered");
+        logged.ShouldContain(o => o.LogClass == "NotRestored:StartUnanswered");
+        gcp.RestoreAttempts.ShouldBe(0);
+        (await LabelsOfAsync(gcp, oldVm))["job-id"].ShouldBe("job-n970v");
+    }
+
+    [Fact]
+    public async Task D970r7_a_deferred_watch_that_finds_the_VM_running_under_this_jobs_labels_stops_it_never_deletes_and_writes_no_label()
+    {
+        var gcp = new FakeGcp();
+        var rig = new Rig(gcp);
+        var logged = new List<DonorRestoreOutcome>();
+        rig.Settings.OnDonorRestore = logged.Add;
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(50);
+        var (sent, oldVm, _) = await NoteAReuseSendAsync(gcp, rig, "job-old970w", "job-n970w", claimLabels: false);
+        _ = await gcp.ReuseVmAsync(Spec("job-n970w"), oldVm, ZoneA, CancellationToken.None); // the claim and the start landed during the deferral: RUNNING
+        sent.Create = Task.CompletedTask;
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970w", CancellationToken.None);
+        _ = await rig.Terminator.Ledger.BeginAttemptAsync("job-n970w", CancellationToken.None);
+        (await gcp.GetVmAsync(oldVm, ZoneA, CancellationToken.None))!.Status.ShouldBe("RUNNING");
+
+        var outcome = (await rig.Terminator.ReapLateCreatesAsync([sent])).ShouldHaveSingleItem();
+
+        (await gcp.GetVmAsync(oldVm, ZoneA, CancellationToken.None))!.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        gcp.DeleteAttempts.ShouldBeEmpty("a borrowed VM is never deleted");
+        gcp.RestoreAttempts.ShouldBe(0, "its start just landed: the rule needs a grace this pass cannot give");
+        outcome.Restore.ShouldNotBeNull().State.ShouldBe(DonorRestoreState.NotRestored);
+        outcome.Restore.ErrorClass.ShouldBe("DeferredStartLandedStopped");
+        logged.ShouldContain(o => o.LogClass == "NotRestored:DeferredStartLandedStopped");
+    }
+
+    [Fact]
     public async Task D970r6_a_stale_watch_does_not_consume_or_write_for_a_later_attempts_donor()
     {
         var gcp = new FakeGcp();

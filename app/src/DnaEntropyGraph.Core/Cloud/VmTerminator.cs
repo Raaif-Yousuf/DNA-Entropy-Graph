@@ -948,9 +948,23 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             // Not looked at: the restore is not attempted below, and the outcome says so.
         }
 
-        return vm is not null && CarriesJob(vm, sent) && VmFacts.IsStopped(vm)
-            ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent).ConfigureAwait(false))
-            : new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "DeferredNewerAttempt"));
+        if (vm is not null && CarriesJob(vm, sent) && !VmFacts.IsStopped(vm) && vm.Status != "STOPPING")
+        {
+            // Round 7 finding 2: a deferred watch never looked before the window's end, so a start that landed during the deferral was never stopped. Stopped here (never deleted: the VM is borrowed);
+            // no label is written in this pass (the start just landed and the rule needs the VM stopped through a grace this pass cannot give).
+            var (stopped, _) = await StopByNameAsync(sent.Scope, sent.Name, sent.Zone).ConfigureAwait(false);
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, stopped ? "DeferredStartLandedStopped" : "DeferredStartLandedStopFailed"));
+        }
+
+        if (vm is not null && CarriesJob(vm, sent) && VmFacts.IsStopped(vm))
+        {
+            // Round 7 finding 1: a start that completed WITHOUT answering, being refused or being seen to land (Canceled, a lost answer) tracked no grace on this path: it may still land, so no write.
+            return sent.Answered || sent.Refused || sent.Landed
+                ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent).ConfigureAwait(false))
+                : new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "StartUnanswered"));
+        }
+
+        return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "DeferredNewerAttempt"));
     }
 
     /// <summary>
