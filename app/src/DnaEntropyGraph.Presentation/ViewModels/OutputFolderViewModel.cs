@@ -24,10 +24,6 @@ public sealed partial class OutputFolderViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(DisplayText))]
-    private string? _folderPath;
-
-    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasMessage))]
     private string _message = string.Empty;
 
@@ -36,9 +32,12 @@ public sealed partial class OutputFolderViewModel : ObservableObject
         _store = store;
         _picker = picker;
         _strings = strings;
-        _folderPath = Read();
+        FolderPath = Read();
         messenger?.Register<OutputFolderViewModel, SettingsResetMessage>(this, static (vm, _) => vm.Reload());
     }
+
+    /// <summary>The chosen folder, or null for the default. Not bound itself (the page shows <see cref="DisplayText"/>); the next run reads it.</summary>
+    public string? FolderPath { get; private set; }
 
     /// <summary>What the page shows: the chosen folder, or the plain words for the default.</summary>
     public string DisplayText => FolderPath ?? _strings.GetString("OutputFolder_Default_Text");
@@ -85,13 +84,20 @@ public sealed partial class OutputFolderViewModel : ObservableObject
             return;
         }
 
-        FolderPath = value.Length == 0 ? null : value;
+        SetFolder(value.Length == 0 ? null : value);
     }
 
     private void Reload()
     {
-        FolderPath = Read();
+        SetFolder(Read());
         Message = string.Empty;
+    }
+
+    private void SetFolder(string? value)
+    {
+        FolderPath = value;
+        OnPropertyChanged(nameof(FolderPath));
+        OnPropertyChanged(nameof(DisplayText));
     }
 
     private string? Read()
