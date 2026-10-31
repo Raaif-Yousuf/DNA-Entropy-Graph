@@ -961,44 +961,110 @@ _NODE_DOWN_OUTPUT = (
 )
 
 
+def _header_line(text: str) -> str:
+    return next(line for line in text.splitlines() if line.startswith("--- "))
+
+
 def test_node_down_hint_names_the_timeout_and_the_test():
-    hint = pm.node_down_hint(_NODE_DOWN_OUTPUT)
+    hint = pm.node_down_hint(_NODE_DOWN_OUTPUT, timeout_armed=True)
     assert "per-test timeout" in hint
     assert "--timeout" in hint
     assert "scripts/tests/test_x.py::test_slow_one" in hint
 
 
+def test_node_down_hint_without_a_timeout_flag_does_not_blame_the_timeout():
+    hint = pm.node_down_hint(_NODE_DOWN_OUTPUT, timeout_armed=False)
+    assert "--timeout" not in hint
+    assert "per-test timeout kill" not in hint
+    assert "OOM" in hint
+    assert "scripts/tests/test_x.py::test_slow_one" in hint
+
+
 def test_node_down_hint_without_a_crash_line_still_explains():
-    hint = pm.node_down_hint("[gw1] node down: Not properly terminated\n")
+    hint = pm.node_down_hint("[gw1] node down: Not properly terminated\n", timeout_armed=True)
     assert "per-test timeout" in hint
     assert "crashed while running" not in hint
 
 
 @pytest.mark.parametrize("output", ["", "1 failed, 9 passed in 0.5s", "worker 'gw1' crashed while running 'a::b'"])
-def test_node_down_hint_is_empty_without_the_marker(output):
-    assert pm.node_down_hint(output) == ""
+@pytest.mark.parametrize("armed", [True, False])
+def test_node_down_hint_is_empty_without_the_marker(output, armed):
+    assert pm.node_down_hint(output, timeout_armed=armed) == ""
+
+
+def test_node_down_hint_names_every_crashed_test_once():
+    output = (
+        "[gw1] node down: Not properly terminated\n"
+        "worker 'gw1' crashed while running 'a.py::test_one'\n"
+        "[gw2] node down: Not properly terminated\n"
+        "worker 'gw2' crashed while running 'b.py::test_two'\n"
+        "worker 'gw3' crashed while running 'a.py::test_one'\n"
+    )
+    hint = pm.node_down_hint(output, timeout_armed=True)
+    assert "a.py::test_one" in hint
+    assert "b.py::test_two" in hint
+    assert hint.count("a.py::test_one") == 1
+
+
+def test_node_down_hint_accepts_a_double_quoted_node_id():
+    output = "[gw1] node down: Not properly terminated\nworker 'gw1' crashed while running \"a.py::test_it[it's]\"\n"
+    assert "a.py::test_it[it's]" in pm.node_down_hint(output, timeout_armed=True)
+
+
+def test_node_down_hint_reads_the_short_summary_form():
+    output = "[gw1] node down: Not properly terminated\nFAILED a.py::test_x - worker 'gw1' crashed while running 'a.py::test_x'\n"
+    hint = pm.node_down_hint(output, timeout_armed=True)
+    assert "a.py::test_x" in hint
 
 
 def test_classify_pytest_appends_the_hint_to_a_failure():
-    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT)
+    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT, timeout_armed=True)
     assert status == pm.FAIL
     assert detail.startswith("1 failed")
+    assert "test_slow_one" in detail
+    assert "per-test timeout" in detail
+
+
+def test_classify_pytest_without_a_timeout_flag_does_not_blame_the_timeout():
+    _status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT)
+    assert "per-test timeout kill" not in detail
     assert "test_slow_one" in detail
 
 
 def test_classify_pytest_appends_the_hint_to_an_error():
-    status, detail = pm.classify_pytest(1, "..........  [100%]\n[gw2] node down: Not properly terminated\n")
+    status, detail = pm.classify_pytest(1, "..........  [100%]\n[gw2] node down: Not properly terminated\n", timeout_armed=True)
     assert status == pm.ERROR
     assert "per-test timeout" in detail
 
 
 def test_classify_pytest_clean_pass_has_no_hint():
-    assert pm.classify_pytest(0, "5 passed in 1s") == (pm.PASS, "")
+    assert pm.classify_pytest(0, "5 passed in 1s", timeout_armed=True) == (pm.PASS, "")
 
 
 def test_render_summary_shows_the_hint_in_the_failure_header():
     gate = pm.Gate("scripts-tests", ["x"], Path("."), pytest=True)
-    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT)
+    status, detail = pm.classify_pytest(1, _NODE_DOWN_OUTPUT, timeout_armed=True)
     text, rc = pm.render_summary([pm.Result(gate, status, 1.0, _NODE_DOWN_OUTPUT, detail)])
     assert rc == 1
-    assert "test_slow_one" in text.splitlines()[1]
+    assert "test_slow_one" in _header_line(text)
+
+
+def test_premerge_own_timeout_detail_does_not_carry_the_node_down_hint():
+    gate = pm.Gate("scripts-tests", ["x", "--timeout=300"], Path("."), timeout=1800.0, pytest=True)
+    for lost in (False, True):
+        captured = pm.Captured(None, b"", output_lost=lost)
+        detail = pm._timeout_detail(gate, _NODE_DOWN_OUTPUT, captured)
+        assert detail.startswith("timed out after 1800s")
+        assert "node down" not in detail
+        assert "per-test timeout" not in detail
+
+
+def _gate_named(name: str) -> pm.Gate:
+    return next(g for g in pm.build_gates(Path(), python="py") if g.name == name)
+
+
+def test_scripts_tests_gate_argv_carries_the_per_test_timeout_and_worker_pytest_does_not():
+    assert any(a.startswith("--timeout=") for a in _gate_named("scripts-tests").argv)
+    assert not any(a.startswith("--timeout") for a in _gate_named("worker-pytest").argv)
+    assert pm.gate_has_test_timeout(_gate_named("scripts-tests"))
+    assert not pm.gate_has_test_timeout(_gate_named("worker-pytest"))
