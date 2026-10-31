@@ -1,0 +1,1 @@
+- Fix #1046: a new run is recorded under its run name (the same name template result that names its output folder) instead of its job id, so History shows e.g. `SetTnpB_evo2_7b`; `JobEngine` and `LocalRunDriver` now take their timestamps from the injected `TimeProvider`.
