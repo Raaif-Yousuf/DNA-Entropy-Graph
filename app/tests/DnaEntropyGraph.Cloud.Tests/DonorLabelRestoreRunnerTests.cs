@@ -184,6 +184,6 @@ public class DonorLabelRestoreRunnerTests
         var donor = (await gcp.GetVmAsync("deg-job-old970r3y", Zone, CancellationToken.None))!;
         donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
         Flat(donor.Labels).ShouldBe(Flat(donorLabels));
-        gcp.DeleteAttempts.ShouldNotContain(d => d.Name == "deg-job-old970r3y","a borrowed VM is never deleted");
+        gcp.DeleteAttempts.ShouldNotContain(d => d.Name == "deg-job-old970r3y", "a borrowed VM is never deleted");
     }
 }
