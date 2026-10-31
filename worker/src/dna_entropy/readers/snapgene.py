@@ -23,6 +23,7 @@ DOCTYPE or ENTITY declaration itself rather than relying on it.
 from __future__ import annotations
 
 import io
+import os
 import re
 import struct
 from pathlib import Path
@@ -86,7 +87,7 @@ def _check_packets(raw: bytes) -> None:
         raise _refuse("it has no DNA sequence packet")
 
 
-def read_snapgene(path: str) -> tuple[list[GenBankRecord], list[str]]:
+def read_snapgene(path: str | os.PathLike[str]) -> tuple[list[GenBankRecord], list[str]]:
     """Return ``(records, notices)`` for a SnapGene file (always exactly one record or an error)."""
     from Bio import SeqIO
 
