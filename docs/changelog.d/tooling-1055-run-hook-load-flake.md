@@ -1,0 +1,1 @@
+- `run_hook.py` self-test and its pytest file no longer fail under machine load (#1055): checks of forwarding, passthrough, crash and garbage behaviour use a 120 s backstop instead of a 3 s deadline, only the hang check keeps a short timeout and now asserts the dispatcher's timeout deny specifically, and every failed check prints what it captured.

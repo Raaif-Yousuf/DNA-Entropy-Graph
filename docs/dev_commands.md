@@ -518,6 +518,12 @@ worker\.venv\Scripts\python.exe scripts\hooks\block_primary_checkout_git.py --se
 worker\.venv\Scripts\python.exe scripts\hooks\gcloud_read_only.py --self-test
 ```
 
+The `run_hook.py` self-test gives its fake guards (which end on their own) a 120 s backstop
+instead of a tight deadline, so machine load cannot make a forwarding or passthrough check
+fail; only the "hangs" check uses a short timeout, and it asserts the dispatcher's own
+timeout deny. A failed check prints what it captured and says so when the cause was that
+timeout deny (#1055).
+
 That is the fastest way to tell "the hook is broken" from "the hook is correctly refusing
 what I asked for", which is the question you actually have when a command is denied.
 

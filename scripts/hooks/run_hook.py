@@ -88,6 +88,31 @@ from pathlib import Path
 HOOKS_DIR = Path(__file__).resolve().parent
 DEFAULT_GUARD_TIMEOUT_SECONDS = 8.0
 
+# #1055: checks of forwarding / passthrough / crash / garbage behaviour use fake
+# guards that terminate on their own, so their result must not depend on how
+# fast a cold interpreter starts. MEASURED 2026-10-31: under heavy machine load
+# a 3.0 s deadline made the dispatcher fail closed with its own timeout deny,
+# which the checks misread as a forwarding bug. This backstop exists only so a
+# genuinely broken test cannot hang forever; never use a tight value with it.
+SELF_TEST_BACKSTOP_SECONDS = 120.0
+# Only the "hangs" check uses a short deadline: its expected result (the
+# dispatcher's timeout deny) is the same however slow the machine is.
+SELF_TEST_HANG_TIMEOUT_SECONDS = 0.5
+
+# The phrase the dispatcher's timeout deny contains (see run()).
+TIMEOUT_DENY_MARKER = "did not finish within"
+
+
+def is_timeout_deny(out: str) -> bool:
+    """True when `out` is this dispatcher's OWN timeout deny, as opposed to a
+    guard's decision or any other fail-closed deny."""
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return False
+    hso = data.get("hookSpecificOutput", {})
+    return hso.get("permissionDecision") == "deny" and TIMEOUT_DENY_MARKER in hso.get("permissionDecisionReason", "")
+
 
 def _deny(reason: str, system_message: str) -> None:
     json.dump(
@@ -140,7 +165,7 @@ def run(
         )
     except subprocess.TimeoutExpired:
         _deny(
-            f"The '{guard_name}' guard did not finish within {timeout:g}s and was killed. "
+            f"The '{guard_name}' guard {TIMEOUT_DENY_MARKER} {timeout:g}s and was killed. "
             "A hung guard cannot have an opinion, so this tool call is refused rather than "
             "silently allowed through an unenforced guard.",
             f"Blocked: guard '{guard_name}' timed out.",
@@ -223,15 +248,19 @@ def self_test() -> bool:
 
     ok = True
 
-    def check(label: str, condition: bool) -> None:
+    def check(label: str, condition: bool, captured: str | None = None, expect_timeout: bool = False) -> None:
         nonlocal ok
         if condition:
             print(f"ok    {label}")
         else:
             print(f"FAIL  {label}")
+            if captured is not None:
+                if not expect_timeout and is_timeout_deny(captured):
+                    print("      cause: the dispatcher's own timeout deny (machine load?), not a behaviour bug")
+                print(f"      captured: {captured!r}")
             ok = False
 
-    def capture(guard_name: str, hooks_dir: Path, timeout: float = 3.0, stdin_payload: str = "{}") -> str:
+    def capture(guard_name: str, hooks_dir: Path, timeout: float = SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> str:
         buf = io.StringIO()
         old_stdout = sys.stdout
         sys.stdout = buf
@@ -246,27 +275,32 @@ def self_test() -> bool:
         hooks_dir = Path(tmp)
 
         out = capture("does-not-exist", hooks_dir)
-        check("a missing guard file denies", _is_deny(out) and "does-not-exist" in out)
+        check("a missing guard file denies", _is_deny(out) and "does-not-exist" in out, out)
 
         _write_guard(hooks_dir, "crashes", _FAKE_GUARD_CRASHES)
         out = capture("crashes", hooks_dir)
-        check("a guard that exits non-zero denies, with its stderr in the reason", _is_deny(out) and "boom" in out)
+        check("a guard that exits non-zero denies, with its stderr in the reason", _is_deny(out) and "boom" in out, out)
 
         _write_guard(hooks_dir, "denies", _FAKE_GUARD_DENIES)
         out = capture("denies", hooks_dir)
-        check("a guard's own deny decision passes through unchanged", _is_deny(out) and "self-test guard says no" in out)
+        check("a guard's own deny decision passes through unchanged", _is_deny(out) and "self-test guard says no" in out, out)
 
         _write_guard(hooks_dir, "silent", _FAKE_GUARD_SILENT)
         out = capture("silent", hooks_dir)
-        check("a guard with no opinion stays silent (no output at all)", out == "")
+        check("a guard with no opinion stays silent (no output at all)", out == "", out)
 
         _write_guard(hooks_dir, "hangs", _FAKE_GUARD_HANGS)
-        out = capture("hangs", hooks_dir, timeout=0.5)
-        check("a guard that does not finish in time denies", _is_deny(out) and "hangs" in out)
+        out = capture("hangs", hooks_dir, timeout=SELF_TEST_HANG_TIMEOUT_SECONDS)
+        check(
+            "a guard that does not finish in time gets the dispatcher's timeout deny",
+            is_timeout_deny(out) and "hangs" in out,
+            out,
+            expect_timeout=True,
+        )
 
         _write_guard(hooks_dir, "garbage", _FAKE_GUARD_GARBAGE)
         out = capture("garbage", hooks_dir)
-        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)", _is_deny(out))
+        check("a guard that exits 0 but prints non-JSON denies (its decision cannot be trusted)", _is_deny(out), out)
 
     # A crashing guard's own stderr is folded into the deny reason, which is
     # also the cheapest way to prove stdin genuinely reaches the guard: make
@@ -280,7 +314,7 @@ def self_test() -> bool:
             "import sys\nsys.stderr.write('got:' + sys.stdin.read())\nsys.exit(1)\n",
         )
         out = capture("echo_and_fail", hooks_dir, stdin_payload='{"marker": "xyz123"}')
-        check("stdin is genuinely forwarded to the guard, not just present", _is_deny(out) and "xyz123" in out)
+        check("stdin is genuinely forwarded to the guard, not just present", _is_deny(out) and "xyz123" in out, out)
 
     print(f"\n{'PASS' if ok else 'FAIL'}: run_hook self-test")
     return ok

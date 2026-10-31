@@ -36,7 +36,9 @@ def _is_deny(out: str) -> bool:
     return data.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
-def _capture(guard_name: str, hooks_dir: Path, timeout: float = 3.0, stdin_payload: str = "{}") -> str:
+def _capture(guard_name: str, hooks_dir: Path, timeout: float = rh.SELF_TEST_BACKSTOP_SECONDS, stdin_payload: str = "{}") -> str:
+    # The default is the backstop, never a tight deadline: see #1055. Only the
+    # hang test passes a short timeout.
     import io
 
     buf = io.StringIO()
@@ -60,7 +62,7 @@ def test_self_test_passes():
         [sys.executable, str(HOOKS_DIR / "run_hook.py"), "--self-test"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=rh.SELF_TEST_BACKSTOP_SECONDS * 2,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "PASS" in proc.stdout
@@ -108,8 +110,8 @@ def test_guard_deny_passes_through_unchanged(tmp_path):
     )
     out = _capture("denies", tmp_path)
     data = json.loads(out)
-    assert data["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert data["hookSpecificOutput"]["permissionDecisionReason"] == "no"
+    assert data["hookSpecificOutput"]["permissionDecision"] == "deny", f"captured: {out!r}"
+    assert data["hookSpecificOutput"]["permissionDecisionReason"] == "no", f"captured: {out!r}"
 
 
 def test_guard_silent_produces_no_output_and_no_deny(tmp_path):
@@ -120,10 +122,35 @@ def test_guard_silent_produces_no_output_and_no_deny(tmp_path):
 
 def test_guard_timeout_denies(tmp_path):
     _write_guard(tmp_path, "hangs", "import time\ntime.sleep(30)\n")
-    out = _capture("hangs", tmp_path, timeout=0.5)
-    assert _is_deny(out)
+    out = _capture("hangs", tmp_path, timeout=rh.SELF_TEST_HANG_TIMEOUT_SECONDS)
+    # The timeout deny specifically: a crash deny must not satisfy this test.
+    assert rh.is_timeout_deny(out), f"captured: {out!r}"
     assert "hangs" in out
-    assert "timed out" in out.lower() or "did not finish" in out.lower()
+
+
+def test_is_timeout_deny_distinguishes_timeout_from_crash_and_pass_through(tmp_path):
+    _write_guard(tmp_path, "crashes", "import sys\nsys.exit(3)\n")
+    assert not rh.is_timeout_deny(_capture("crashes", tmp_path))
+    assert not rh.is_timeout_deny(_capture("missing-guard", tmp_path))
+    assert not rh.is_timeout_deny("")
+    assert not rh.is_timeout_deny("not json")
+
+
+def test_slow_starting_guard_is_not_misread_as_a_timeout(tmp_path):
+    """#1055: a guard that terminates on its own must never fail a check by being
+    slow to start (a cold interpreter under machine load). This guard takes ~4 s,
+    longer than the old 3.0 s default, then denies with its own reason. The
+    default `_capture` timeout must be the backstop, not a tight deadline."""
+    _write_guard(
+        tmp_path,
+        "slow",
+        "import json, sys, time\n"
+        "time.sleep(4)\n"
+        "json.dump({'hookSpecificOutput': {'hookEventName': 'PreToolUse', "
+        "'permissionDecision': 'deny', 'permissionDecisionReason': 'slow but mine'}}, sys.stdout)\n",
+    )
+    out = _capture("slow", tmp_path)
+    assert "slow but mine" in out, f"captured: {out!r}"
 
 
 def test_guard_nonjson_output_denies(tmp_path):
@@ -139,8 +166,8 @@ def test_stdin_payload_genuinely_reaches_the_guard(tmp_path):
         "import sys\nsys.stderr.write('saw:' + sys.stdin.read())\nsys.exit(1)\n",
     )
     out = _capture("echo_and_fail", tmp_path, stdin_payload='{"marker": "unique-12345"}')
-    assert _is_deny(out)
-    assert "unique-12345" in out
+    assert _is_deny(out), f"captured: {out!r}"
+    assert "unique-12345" in out, f"captured: {out!r}"
 
 
 def test_guard_name_accepts_a_py_suffix(tmp_path):
