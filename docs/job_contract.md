@@ -521,6 +521,40 @@ numbers, not a generic "too large" - see `science_and_formats.md`'s cross-refere
 dollar estimate for the refused batch (no verified nt/second throughput figure exists
 anywhere in this repository to make that honest).
 
+**A manifest the worker cannot read (issue #1014).** Invalid JSON, an unsupported `schema`, a
+missing or wrong-typed field: the worker has no `status.json` to write (nothing to heartbeat about) but
+writes a minimal terminal `result.json` first, then exits 2 with the `ERROR:` line as before:
+
+```json
+{"schema": 1, "jobId": "20260918-142233-k7q2vx", "status": "failed", "inputs": [],
+ "timing": {"startedAt": "...", "finishedAt": "..."}, "gpu": {"name": null, "zone": null, "spot": false},
+ "error": {"code": "MANIFEST_INVALID", "message": "manifest.json limits.maxRunSeconds must be a whole number", "retriable": false}}
+```
+
+`error.code` is the exception's own: `MANIFEST_INVALID` for a parse or field problem,
+`WORKER_VERSION_MISMATCH` for an unsupported `schema` (the app has dedicated copy for it).
+`error.message` is the field path and what was expected, never the offending value (it can be
+a file name; the stderr `ERROR:` line still carries the full text).
+
+- The destination is the store the worker was *started* against (command line or `DEG_JOB_URI`),
+  which does not depend on the manifest, so it is known even when the manifest is not. `jobId` is
+  a raw read of the manifest when it is a plain name, else `"unknown"` (the app keys on where the
+  file is, not on this field). The message is ASCII-escaped and capped at 500 characters
+  (never cutting an escape). The write is best effort: if the store is not writable the
+  worker still exits 2 and nothing is written.
+- Not written for the bucket/prefix cross-check refusal (#448): there the destination itself is
+  what the manifest disputes, so the worker does not trust it with a result.
+- What the app sees: `WorkerResultReader` accepts the file (status `failed`, no inputs), and
+  `RunOutcomeRecorder` maps `error.code` through `RunErrorCodes.ForWorkerStatusCode` to
+  `manifest_invalid` (`RunError_manifest_invalid`, action: save diagnostics) with the message in the
+  run detail. THEORY (unverified, read from code, not run against `FakeGcp`): before this change
+  rc 2 with no `result.json` ran `startup.sh`'s `cleanup "$LIFECYCLE"` (stop or delete the VM;
+  `keep_hold` applies the after-window at once for a non-zero rc), `status.json` stayed at the
+  last startup-script stage with `error: null`, and the app's `ResultWaiter.VmLostAsync` found no
+  worker code there and reported `vm_unhealthy` ("the VM is no longer running"). MEASURED
+  2026-10-30: the worker half, by running `python -m dna_entropy.worker` on a local store (see the
+  tests in `worker/tests/test_worker_manifest_invalid_result.py`).
+
 ---
 
 ## 8. Versioning rule

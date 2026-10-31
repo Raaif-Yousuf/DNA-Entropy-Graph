@@ -594,6 +594,72 @@ exercise.
  every signed-in account/project on this PC - the single most important money guard in
  the app, and the direct successor to the prototype keeper's `main()` exit-time reminder
  ("the GPU VM is still RUNNING and billing... delete it when done").
+- **Spend ledger and monthly cap (issue #109)**: `LedgerRecordingRunRepository` wraps the run
+ repository, so every writer of a run row (runner, reconciler, cleanup) feeds the ledger the first
+ time a row reaches an ended phase. `SpendLedger` appends one `vm_runtime` `CostLedger` row per run
+ (idempotent: migration 0003's unique index on (RunId, Kind) plus INSERT OR IGNORE, so two writers
+ book it once; 0003 first deletes any duplicate rows of a (RunId, Kind), keeping the lowest Id, so
+ a file that already holds duplicates still opens). COUNTED: VM time only, from
+ `RunRecord.VmReadyAt` to the run's end. The span is ONE rule in ONE helper (`VmSpan`), used by every path that looks
+ at a VM (the runner's create, reuse and adoption, its resume, the canceller's delete-by-label, the reconciler) and stored
+ by one writer (`RunRowStore.StampVmSpanAsync`; each column keeps a value already set). START is the VM's own platform
+ start (`VmDescriptor.RunClockStart`, the instance's last start, else its creation) from ANY observation of the VM:
+ a create's answer (also one that answered late and was then deleted), a reuse, an adoption, a VM the cancel's delete found
+ (settled or not, also in a fresh process). The app's own clock is never a start; a VM the app never observed has no span,
+ and there is deliberately no fallback to `StartedAt` or to the planned VM name. END is the VM's stop time when it was
+ observed stopped (a stopped VM that reports none ends at its own start); when the VM is gone by the time the app looks (it
+ deleted itself after the worker finished) the last time the app knew it alive, the later of the row's `LastHeartbeatAt`,
+ the result's `finishedAt` and the status file's `updatedAt` (worker clock; THEORY (unverified): within seconds of the
+ platform's); a VM still running ends when the run does. A gone VM with no evidence at all books its start plus the run's own
+ limit (its maxRunDuration, the run limit plus the 15 minute grace: the one limit the ledger clamps to; Compute cannot have run it longer),
+ and never past now (a VM that died 5 min in and is found 10 min after it started books about 10 min). The cloud runner writes the worker's own
+ heartbeat time (`updatedAt`) to `LastHeartbeatAt` when it sees a new worker heartbeat (at most once a minute, from one row read, with the run's
+ cancellation token, and only when newer than the one recorded, so a stale status.json found on a resume does not move it), so a run killed with
+ the app has a sign of life to book to. The time recorded is the earlier of the worker's `updatedAt` and the app's own now (a VM clock ahead of the app's would
+ otherwise store a future time, refuse every later heartbeat and book the future); a heartbeat that advanced with no readable `updatedAt` while the app was
+ watching records the app's now (the first look at a status.json records nothing). A gone VM's end is never after now, even when its start is (the app clock is behind the platform's): the span then books zero and the ledger traces `vm-span-inverted` (no id: a job id can come from a bucket prefix, so it is not proven opaque); and a ledger entry whose row ends before it starts books a zero span at $0. END is first-wins
+ for a run: a stopped VM the run adopted and restarted keeps the stop first observed; a cancel that finds several VMs books the earliest
+ start to the latest end. A VM that self-deleted at +20 min and is resumed 10 h later books about 20 min, not 10 h.
+ A create answered `AlreadyExists` adopts the VM and books its start. A cancel books the VMs its label lookup found.
+ A create that lands only after the run ended books nothing (the row never learned a start); the VM carries the
+ standard labels, so the label-based left-running scan and the Cloud page surface it.
+ Local-engine runs (`Target` is not `cloud`) rent no VM and book nothing. An in-progress row
+ accrues at most to its `MaxRunDurationMinutes` plus the 15 minute grace (the VM cannot outlive
+ its maxRunDuration), so an orphaned row cannot grow forever. Every read of the month first books
+ any ended run with a VM and no ledger row (a ledger append that failed after its run row was
+ stored), idempotently. Migrations apply in order 0001, 0002 (Spot preemption count), 0003,
+ and a test upgrades a 0001 file through all of them. The rate is the machine's hourly rate
+ (Spot rate for a Spot run) plus the hourly share of the run's boot disk, from `pricing.json`;
+ a run with no VM books nothing. The New run card prices the same `RunOptions` the run starts
+ with (one builder: tier, Spot flag and boot disk). Runs still going are counted apart as
+ `InProgressUsd` (VM time so far, from the later of VM start and the start of the month, to now),
+ so the gate and the card see work in flight, and both say "includes runs in progress". NOT
+ COUNTED: a VM kept alive or left stopped after its run ended (the run's row stops at its end;
+ the Cloud page lists those), time before the VM existed (upload, preflight, stockout retries),
+ bucket storage, and anything Google bills that this app did not start. Every figure is an
+ ESTIMATE; a machine the price list lacks writes no row. The ledger reads the price table at each use (the registered source serves the latest one, so a catalog refresh prices the next booking; a booked row keeps its figure). The run row is stored first, then the
+ ledger row (a failed store books nothing; the retry books it once). Issue #557 will replace the
+ estimate with the instance-timestamp figure. `MonthlySpend` is not stored: the
+ month-to-date is summed from the ledger over the local calendar month (the PC's time zone, by
+ when a row ended). Settings `spend_cap_usd` (empty or unusable is no cap) and
+ `spend_cap_hard_stop` drive `SpendLedger.CheckAsync`: month-to-date plus the run's estimate at or
+ above the cap is a warning (the New run page shows the card, Run stays allowed), or with the hard
+ stop on is blocked (the card also disables Run). The card and the engine share one path
+ (`RunSpendCheck.CheckAsync`: the run's estimate, its `MaxUsd`, plus month-to-date against the cap),
+ so they cannot disagree; the engine asks it after the input is validated (bases known) and before
+ any bucket object or VM, and refuses with `spend_cap` (action: Open Settings). The card re-asks
+ whenever the page is shown and with no file chosen. The
+ stopped-VM idle sweep (the third checkbox of the issue) is the reconciler's (#530).
+ `LedgerRecordingRunRepository` declares `TryUpsertIfPhaseAsync` itself (the interface default is a plain upsert, so a decorator
+ that left it out silently dropped the #113 phase guard; a reflection test and a test through the real container pin it),
+ booking only when the inner repository accepted the write. The cap card and the Run button ignore the cap for a This PC run
+ (the engine never applies it to one; Auto is left as asked). A flex-start ("wait for a graphics card") request that is still
+ queued has no `VmReadyAt` (recorded only when the create is answered), so it adds nothing to the in-progress figure; a granted
+ flex VM that is still booting does count. THEORY (unverified, no live project; ToTest #92): the flex create operation completes
+ at the grant, not at queueing; if it completes at queueing, queued time would be booked from `VmReadyAt` at the run's end
+ (the estimate display stays conservative). The Settings cap box commits on LostFocus (stated in the XAML), so typing 1 on the
+ way to 10 never saves cap 1. Limit: a run that failed after the VM stopped but before its stop time was read is booked to the
+ failure time. No log line records the unknown-stop-time fallback (the Core cloud collaborators have no logger).
 
 ## 11. The job runner and operation polling (issues #58, #256)
 
@@ -745,7 +811,9 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   never writes `result.json`; the container's own failures do write it. Whenever the VM is found not
   running with no `result.json`, the runner reads `status.json` and records `gpu_not_visible`,
   `image_pull_failed`, `manifest_invalid` or `worker_crashed` (each with its own copy and one action);
-  any other or missing code stays `vm_unhealthy`. (An earlier version of this document said
+  any other or missing code stays `vm_unhealthy`. (Still true for `startup.sh`'s manifest download
+  failure; but a worker-side manifest PARSE failure now does write a terminal `result.json`, see
+  `job_contract.md` section 7, issue #1014.) (An earlier version of this document said
   `result.json` is always written first. It is written first only by a worker that got as far as a
   result.)
 - **Resume.** A run resumed from Provisioning onward (a create can have been accepted before the app died)

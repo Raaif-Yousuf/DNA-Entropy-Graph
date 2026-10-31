@@ -85,6 +85,7 @@ public static class RunErrorActions
         [RunErrorCodes.PermissionActAs] = RunErrorAction.CopyOwnerRequest,
         [RunErrorCodes.WorkerDefaultAccountMissing] = RunErrorAction.AskAdministrator,
         [RunErrorCodes.WorkerIdentityNotApplied] = RunErrorAction.StartAgain,
+        [RunErrorCodes.SpendCap] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalEngineNotReady] = RunErrorAction.OpenSettings,
         [RunErrorCodes.LocalGpuNotUsable] = RunErrorAction.ChooseCloud,
         [RunErrorCodes.LocalWorkerCrashed] = RunErrorAction.OpenSettings,

@@ -9,6 +9,13 @@ public interface ICostEstimateService
     Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken);
 
     /// <summary>
+    /// What the monthly spending cap says about a run estimated at <paramref name="estimatedUsd"/> (issue #109). The default says
+    /// "no cap", so a service with no ledger behind it shows no card.
+    /// </summary>
+    Task<SpendCapStatus?> CheckSpendCapAsync(double? estimatedUsd, CancellationToken cancellationToken)
+        => Task.FromResult<SpendCapStatus?>(null);
+
+    /// <summary>
     /// Raised (on whatever thread the price read finished on) when a background price read changed the prices an estimate uses, so an estimate already
     /// on screen was made from older ones and the page should ask again. Never raised for a read that changed nothing.
     /// </summary>
@@ -39,12 +46,39 @@ public sealed class CostEstimateService : ICostEstimateService, IDisposable
     /// <summary>How long an estimate waits for a price refresh that is still running before it answers from what is known now.</summary>
     public static readonly TimeSpan DefaultRefreshWait = TimeSpan.FromSeconds(3);
 
-    public CostEstimateService(IPricingSource pricing, IRunRepository runs, TimeSpan? refreshWait = null)
+    private readonly ISpendCapGate? _gate;
+
+    /// <summary>The estimate service with no spend cap behind it and a chosen refresh wait.</summary>
+    public CostEstimateService(IPricingSource pricing, IRunRepository runs, TimeSpan refreshWait)
+        : this(pricing, runs, null, refreshWait)
+    {
+    }
+
+    public CostEstimateService(IPricingSource pricing, IRunRepository runs, ISpendCapGate? gate = null, TimeSpan? refreshWait = null)
     {
         _refreshWait = refreshWait ?? DefaultRefreshWait;
         _pricing = new Lazy<PricingLoadResult>(pricing.Load);
         _source = pricing;
         _runs = runs;
+        _gate = gate;
+    }
+
+    public async Task<SpendCapStatus?> CheckSpendCapAsync(double? estimatedUsd, CancellationToken cancellationToken)
+    {
+        if (_gate is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _gate.CheckAsync(estimatedUsd, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The card is advice; a ledger that cannot be read must not take the page down. The engine's own check still runs at Run.
+            return null;
+        }
     }
 
     public async Task<CostEstimateResult> EstimateAsync(string machineType, bool spot, long? bases, int bootDiskGb, CancellationToken cancellationToken)
