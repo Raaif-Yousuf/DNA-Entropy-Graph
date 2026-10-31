@@ -20,7 +20,7 @@ public interface IDiagnosticsExporter
 /// The glue between the real folder, the run history and <see cref="DiagnosticsBundleBuilder"/>. The zip is written to a
 /// sibling temp file and moved into place, so a half-written file is never mistaken for a finished bundle.
 /// </summary>
-public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepository runs, Func<DiagnosticsInfo> infoFactory) : IDiagnosticsExporter
+public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepository runs, Func<DiagnosticsInfo> infoFactory, IRunCostSource? costs = null) : IDiagnosticsExporter
 {
     public async Task ExportAsync(string destinationPath, CancellationToken cancellationToken, bool includeNotesAndTags = false)
     {
@@ -30,7 +30,8 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
             // Inside the try, so a token cancelled before the first await still reaches the cleanup below.
             cancellationToken.ThrowIfCancellationRequested();
             var history = await runs.GetAllAsync(cancellationToken).ConfigureAwait(false);
-            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), includeNotesAndTags);
+            var booked = await ReadBookedAsync(cancellationToken).ConfigureAwait(false);
+            var zip = DiagnosticsBundleBuilder.Build(source, history, infoFactory(), booked, includeNotesAndTags);
             await File.WriteAllBytesAsync(temp, zip, cancellationToken).ConfigureAwait(false);
             File.Move(temp, destinationPath, overwrite: true);
         }
@@ -45,6 +46,24 @@ public sealed class DiagnosticsExporter(IDiagnosticsSource source, IRunRepositor
             {
                 File.Delete(temp);
             }
+        }
+    }
+
+    // Issue #100: the run row carries no cost; the figure a run was booked is its spend-ledger entry. A ledger that cannot be read leaves the figures null: a support zip is never worth failing for them.
+    private async Task<IReadOnlyDictionary<string, BookedRun>?> ReadBookedAsync(CancellationToken cancellationToken)
+    {
+        if (costs is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await costs.GetBookedRunsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
         }
     }
 

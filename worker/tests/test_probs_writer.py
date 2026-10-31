@@ -21,7 +21,7 @@ from dna_entropy import pipeline
 from dna_entropy.analysis.direction import analyze_direction
 from dna_entropy.analysis.entropy import shannon_entropy
 from dna_entropy.config import Direction, RunConfig, Topology
-from dna_entropy.predictors.base import check_probability_matrix
+from dna_entropy.predictors.base import Predictor, check_probability_matrix
 from dna_entropy.predictors.mock import MockPredictor
 from dna_entropy.worker.manifest import JobManifest
 from dna_entropy.writers.probs import PROBS_COLUMNS, ProbsWriter
@@ -50,8 +50,8 @@ class _Ramp:
     """Row i of every window: P(A) = (i + 1) / (len + 1), the rest split evenly. Asymmetric in
     both position and base, so a missed row flip or a missed complement cannot cancel."""
 
-    def predict(self, window: str) -> np.ndarray:
-        n = len(window)
+    def predict(self, seq: str) -> np.ndarray:
+        n = len(seq)
         probs = np.empty((n, 4), dtype=np.float32)
         a = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)
         probs[:, 0] = a
@@ -148,7 +148,14 @@ def test_npy_is_the_concatenated_float32_matrix(tmp_path: Path) -> None:
 # --- the matrix out of the direction analysis -----------------------------------------------------------
 
 
-def _analyze(direction: Direction, seq: str, predictor=None, *, keep: bool = True, circular: bool = False):
+def _analyze(
+    direction: Direction,
+    seq: str,
+    predictor: Predictor | None = None,
+    *,
+    keep: bool = True,
+    circular: bool = False,
+):
     return analyze_direction(
         predictor or MockPredictor(seed=3),
         seq,
@@ -169,6 +176,7 @@ def test_probs_are_not_kept_unless_asked() -> None:
 def test_the_kept_matrix_passes_the_contract_and_reproduces_the_entropy_track(direction, circular) -> None:
     seq = _seq(700, 4)
     dr = _analyze(direction, seq, circular=circular)
+    assert dr.probs is not None
     check_probability_matrix(dr.probs, len(seq))
     if direction is Direction.BOTH_AVERAGED:
         # entropy of a mean is >= the mean of the entropies (concavity): exact equality is
@@ -181,6 +189,7 @@ def test_the_kept_matrix_passes_the_contract_and_reproduces_the_entropy_track(di
 def test_forward_only_matrix_is_the_predictors_own_output() -> None:
     seq = _seq(100, 5)  # one window
     dr = _analyze(Direction.FORWARD_ONLY, seq, _Ramp())
+    assert dr.probs is not None
     assert np.array_equal(dr.probs, _Ramp().predict(seq))
 
 
@@ -192,6 +201,7 @@ def test_reverse_only_matrix_is_flipped_and_complemented_back_to_the_original_st
     # original base j is rc position n-1-j; its distribution over {A,C,G,T} is the rc base's
     # distribution over {T,G,C,A}
     expected = ramp[::-1][:, ::-1]
+    assert dr.probs is not None
     assert np.array_equal(dr.probs, expected)
     assert dr.probs[0, 3] == pytest.approx(n / (n + 1), abs=1e-6)  # the ramp's largest P(A) is P(T) here
 
@@ -204,6 +214,7 @@ def test_surprisal_recomputed_from_the_exported_matrix_and_the_sequence_matches(
     probability the matrix gives the ACTUAL base is exactly what the surprisal track used."""
     seq = _seq(700, 7)
     dr = _analyze(direction, seq)
+    assert dr.probs is not None
     cols = np.array(["ACGT".index(b) for b in seq])
     p_actual = dr.probs[np.arange(len(seq)), cols].astype(np.float64)
     recomputed = -np.log2(np.clip(p_actual, 1e-30, None))
@@ -216,6 +227,7 @@ def test_both_averaged_matrix_is_the_mean_of_the_two_passes_where_both_have_full
     rev = _analyze(Direction.REVERSE_ONLY, seq)
     avg = _analyze(Direction.BOTH_AVERAGED, seq)
     middle = slice(K, len(seq) - K)  # both directions have >= K context here
+    assert avg.probs is not None and fwd.probs is not None and rev.probs is not None
     assert np.allclose(avg.probs[middle], (fwd.probs[middle] + rev.probs[middle]) / 2, atol=1e-6)
     assert any("averaged" in n and "probabilit" in n for n in avg.notices)
 
@@ -224,12 +236,14 @@ def test_both_separate_matrix_is_the_combined_track_not_either_pass() -> None:
     seq = _seq(700, 9)
     sep = _analyze(Direction.BOTH_SEPARATE, seq)
     comb = _analyze(Direction.BOTH_COMBINED, seq)
+    assert sep.probs is not None and comb.probs is not None
     assert np.array_equal(sep.probs, comb.probs)
 
 
 def test_circular_matrix_is_trimmed_to_the_molecule_not_the_padded_window() -> None:
     seq = _seq(300, 10)
     dr = _analyze(Direction.BOTH_COMBINED, seq, circular=True)
+    assert dr.probs is not None
     assert dr.probs.shape == (300, 4)
 
 

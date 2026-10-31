@@ -102,6 +102,14 @@ public static class ResultsCopy
     public const string SizeMegabytes = "Results_Size_Megabytes";
     public const string SizeUnknown = "Results_Size_Unknown";
 
+    // Issues #100 and #557: the per-run cost line on the Results header (long) and on the Runs row (short).
+    public const string CostEstimate = "Results_CostEstimate";
+    public const string CostEstimateSpot = "Results_CostEstimateSpot";
+    public const string CostNoCloud = "Results_CostNoCloud";
+    public const string CostShort = "Results_CostShort";
+    public const string CostShortSpot = "Results_CostShortSpot";
+    public const string CostShortNoCloud = "Results_CostShortNoCloud";
+
     /// <summary>
     /// The copy key for a direction token as <c>writers/summary.py</c> writes it (<c>Direction</c> values in <c>worker/.../config.py</c>),
     /// or <see cref="DirectionUnknown"/> for a token this app does not know.
@@ -125,10 +133,11 @@ public static class ResultsCopy
         DirectionBothCombined, DirectionBothAveraged, DirectionBothSeparate, DirectionForwardOnly, DirectionReverseOnly, DirectionUnknown,
         Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, SizeUnknown,
         ExportPngTitle, ExportPngXAxis, ExportPngYAxis, GenesTruncated, GenesUnreadable, GenesRowsSkipped, GenesOrderFile, GenesOrderSorted, GenesSortedAscending, GenesSortedDescending,
+        CostEstimate, CostEstimateSpot, CostNoCloud, CostShort, CostShortSpot, CostShortNoCloud,
         .. GeneColumnKeys.Select(GeneColumnKey),
     ];
 
     /// <summary>The keys whose text is a format string and must carry its placeholders.</summary>
-    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, NotesShortened];
+    public static IReadOnlyList<string> FormatKeys { get; } = [ExportPngTitle, GenesTruncated, GenesRowsSkipped, GenesOrderSorted, GenesUnreadable, GenesSortedAscending, GenesSortedDescending, StatsUnreadable, DirectionUnknown, Headline, Bits, Length, SizeBytes, SizeKilobytes, SizeMegabytes, NotesShortened, CostEstimate, CostEstimateSpot, CostShort, CostShortSpot];
 }
 

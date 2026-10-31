@@ -60,6 +60,55 @@ public class DiagnosticsExporterTests : IDisposable
     }
 
     [Fact]
+    public async Task The_exported_history_carries_the_figure_the_ledger_booked_for_a_completed_cloud_run()
+    {
+        var path = Path.Combine(_folder, "cost.zip");
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud");
+        var costs = Substitute.For<IRunCostSource>();
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, BookedRun> { [run.JobId] = new(2.5, 60) });
+
+        await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(path);
+        using var reader = new StreamReader(archive.GetEntry("run-history.json")!.Open());
+        System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0].GetProperty("estimatedCostUsd").GetDouble().ShouldBe(2.5);
+    }
+
+    [Fact]
+    public async Task The_exported_VM_seconds_are_the_span_the_ledger_booked_not_the_rows_later_span()
+    {
+        var path = Path.Combine(_folder, "span.zip");
+        var start = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        // The row's FinishedAt moved after the booking (3 h); the ledger entry froze 30 minutes.
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud", VmReadyAt: start, FinishedAt: start.AddHours(3));
+        var costs = Substitute.For<IRunCostSource>();
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns(new Dictionary<string, BookedRun> { [run.JobId] = new(0.5, 1800) });
+
+        await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(path);
+        using var reader = new StreamReader(archive.GetEntry("run-history.json")!.Open());
+        System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0].GetProperty("vmSeconds").GetInt64().ShouldBe(1800);
+    }
+
+    [Fact]
+    public async Task A_cost_source_that_fails_never_fails_the_export()
+    {
+        var path = Path.Combine(_folder, "nocost.zip");
+        var run = new RunRecord("20261001-080000-abc234", JobPhase.Completed, DateTimeOffset.UnixEpoch, Target: "cloud");
+        var costs = Substitute.For<IRunCostSource>();
+        costs.GetBookedRunsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyDictionary<string, BookedRun>>>(_ => throw new InvalidOperationException("ledger unreadable"));
+
+        await new DiagnosticsExporter(new EmptySource(), History(run), () => Info, costs).ExportAsync(path, CancellationToken.None);
+
+        using var archive = ZipFile.OpenRead(path);
+        using var reader = new StreamReader(archive.GetEntry("run-history.json")!.Open());
+        var row = System.Text.Json.JsonDocument.Parse(reader.ReadToEnd()).RootElement[0];
+        row.GetProperty("estimatedCostUsd").ValueKind.ShouldBe(System.Text.Json.JsonValueKind.Null);
+        row.GetProperty("vmSeconds").ValueKind.ShouldBe(System.Text.Json.JsonValueKind.Null, "one read failed: neither figure is half present");
+    }
+
+    [Fact]
     public async Task A_refused_bundle_writes_nothing_at_all()
     {
         var path = Path.Combine(_folder, "out.zip");

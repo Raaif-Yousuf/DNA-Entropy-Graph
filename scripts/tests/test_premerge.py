@@ -455,7 +455,40 @@ def test_a_timeout_kills_the_grandchild_too_and_returns_promptly(tmp_path):
     assert _wait_until(lambda: not pm._pid_alive(pid), seconds=5.0), f"grandchild {pid} survived the timeout"
 
 
+def _kill_pid_quietly(pid: int) -> None:
+    """Test cleanup only: stop exactly this PID (never by image name)."""
+    cmd = ["taskkill", "/F", "/PID", str(pid)] if pm.os.name == "nt" else ["kill", "-9", str(pid)]
+    subprocess.run(cmd, capture_output=True, check=False, timeout=30)
+
+
+def test_a_timeout_kills_a_detached_grandchild_whose_parent_already_exited(tmp_path):
+    """#930. The direct child exits 0 at once; its DETACHED grandchild keeps the output pipe open. taskkill /T cannot
+    find it (its parent is gone), so only a job object (Windows) or the process group (POSIX) can end it.
+    Limit: a job does not cover a process started with CREATE_BREAKAWAY_FROM_JOB (when the job allows breakaway)."""
+    ready, marker = tmp_path / "ready", tmp_path / "grandchild.pid"
+    code = (
+        "import subprocess, sys\n"
+        "kw = {'creationflags': 0x8 | 0x200} if sys.platform == 'win32' else {}\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdout=sys.stdout, stderr=sys.stderr, **kw)\n"
+        f"open({str(marker)!r}, 'w').write(str(p.pid))\n"
+        f"open({str(ready)!r}, 'w').write('ready')\n"
+        "sys.exit(0)\n"
+    )
+    gate = pm.Gate("g", [sys.executable, "-c", code], Path.cwd(), timeout=SLOW_START_TIMEOUT)
+    result = pm.run_gate(gate)
+    assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
+    pid = int(marker.read_text())
+    try:
+        assert result.status == pm.ERROR
+        assert _wait_until(lambda: not pm._pid_alive(pid), seconds=5.0), f"detached grandchild {pid} survived the timeout"
+    finally:
+        _kill_pid_quietly(pid)
+
+
 def test_a_child_that_exited_but_left_its_pipe_open_reports_its_exit_code(tmp_path, monkeypatch):
+    # The job would kill the sleeper and close the pipe, so the output_lost / tree_may_survive path is only reachable when the job
+    # kill does nothing (a breakaway process, a refused TerminateJobObject): stub it, and the job-close at the end cleans up.
+    monkeypatch.setattr(pm.wt_venv.KillJob, "terminate", lambda self: False)
     monkeypatch.setattr(pm, "KILL_GRACE", 1.0)
     ready, marker = tmp_path / "ready", tmp_path / "sleeper.pid"
     code = (
@@ -470,6 +503,49 @@ def test_a_child_that_exited_but_left_its_pipe_open_reports_its_exit_code(tmp_pa
     assert ready.exists(), "the stub did not start inside the timeout; raise SLOW_START_TIMEOUT"
     assert result.status == pm.ERROR
     assert "child exited 0 but its pipe stayed open" in result.detail
+    if pm.os.name == "nt":  # POSIX has no job: killpg really kills the sleeper there
+        assert "output after the kill was lost" in result.detail
+        assert "may have survived" in result.detail
+
+
+@pytest.mark.skipif(pm.os.name != "nt", reason="the job object is Windows only")
+def test_kill_tree_reports_failure_when_neither_the_job_nor_taskkill_worked(monkeypatch):
+    class Done:
+        returncode = 1
+
+    class Job:
+        def terminate(self):
+            return False
+
+    class Dummy:
+        pid = 2**22 - 7
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(pm.subprocess, "run", lambda *_a, **_k: Done())
+    monkeypatch.setitem(pm._GATE_JOBS, Dummy.pid, Job())
+    assert pm._kill_tree(Dummy()) is False  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(pm.os.name != "nt", reason="the job object is Windows only")
+def test_kill_tree_counts_a_terminated_job_as_success_even_when_taskkill_finds_nothing(monkeypatch):
+    class Done:
+        returncode = 128  # taskkill: no such process
+
+    class Job:
+        def terminate(self):
+            return True
+
+    class Dummy:
+        pid = 2**22 - 9
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(pm.subprocess, "run", lambda *_a, **_k: Done())
+    monkeypatch.setitem(pm._GATE_JOBS, Dummy.pid, Job())
+    assert pm._kill_tree(Dummy()) is True  # type: ignore[arg-type]
 
 
 def test_the_real_scripts_tests_gate_gets_the_long_timeout_not_the_default():
@@ -820,3 +896,56 @@ def test_a_hung_test_under_the_gates_flags_fails_fast_and_names_the_test(tmp_pat
     assert proc.returncode != 0
     assert elapsed < 100, f"did not fail fast: {elapsed:.0f}s"
     assert "Timeout" in out and "test_it_hangs_forever" in out and "time.sleep" in out, out[-1500:]
+
+
+# --- review round (#930): terminate() reports the API result; the failure path closes pipes ------
+
+
+def test_kill_job_terminate_returns_the_api_result():
+    class K32:
+        def __init__(self, result):
+            self.result = result
+
+        def TerminateJobObject(self, _handle, _code):  # noqa: N802
+            return self.result
+
+    assert pm.wt_venv.KillJob(1, K32(1)).terminate() is True
+    assert pm.wt_venv.KillJob(1, K32(0)).terminate() is False
+    closed = pm.wt_venv.KillJob(1, K32(1))
+    closed._handle = None
+    assert closed.terminate() is False  # nothing to terminate
+
+
+def test_needs_taskkill_fallback_is_only_for_an_unassigned_windows_child():
+    assert pm.wt_venv.needs_taskkill_fallback(False) is (pm.os.name == "nt")
+    assert pm.wt_venv.needs_taskkill_fallback(True) is False
+
+
+@pytest.mark.skipif(pm.os.name != "nt", reason="the suspended-spawn failure path is Windows only")
+def test_spawn_in_job_closes_the_pipes_of_a_child_it_kills_on_failure(monkeypatch):
+    made: list[subprocess.Popen] = []
+    real = subprocess.Popen
+
+    def recording(*a, **k):
+        proc = real(*a, **k)
+        made.append(proc)
+        return proc
+
+    class BrokenJob:
+        def assign(self, _proc):
+            raise RuntimeError("assign failed")
+
+    monkeypatch.setattr(pm.wt_venv.subprocess, "Popen", recording)
+    with pytest.raises(RuntimeError):
+        pm.wt_venv.spawn_in_job(
+            [sys.executable, "-c", "pass"],
+            dict(pm.os.environ),
+            Path.cwd(),
+            BrokenJob(),  # type: ignore[arg-type]
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    (proc,) = made
+    assert proc.stdout is not None and proc.stderr is not None
+    assert proc.stdout.closed and proc.stderr.closed
+    proc.wait(timeout=10)

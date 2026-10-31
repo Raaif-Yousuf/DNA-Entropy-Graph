@@ -12,7 +12,7 @@ import signal
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 VENV_REL = Path("worker") / ".venv"
 
@@ -134,9 +134,17 @@ class KillJob:
             return False
         return bool(self._k32.AssignProcessToJobObject(self._handle, int(child)))
 
-    def terminate(self) -> None:
-        if self._handle is not None:
-            self._k32.TerminateJobObject(self._handle, 1)
+    def assign_self(self) -> bool:
+        """Put THIS process in the job (heavy.py's wrapper: a hard-killed wrapper then takes its children with it)."""
+        if self._handle is None:
+            return False
+        return bool(self._k32.AssignProcessToJobObject(self._handle, self._k32.GetCurrentProcess()))
+
+    def terminate(self) -> bool:
+        """End every process in the job. True only when Windows accepted the call (a False means nothing is known to be dead)."""
+        if self._handle is None:
+            return False
+        return bool(self._k32.TerminateJobObject(self._handle, 1))
 
     def close(self) -> None:
         if self._handle is not None:
@@ -197,25 +205,55 @@ def resume_process_threads(pid: int) -> int:
     return resumed
 
 
-def spawn_in_job(argv: Sequence[str], env: dict[str, str], cwd: Path, job: KillJob | None) -> tuple[subprocess.Popen[bytes], bool]:
-    """Start `argv` with inherited stdio and put it in `job` BEFORE it runs (Windows: CREATE_SUSPENDED, assign, resume), so
+def spawn_in_job(
+    argv: Sequence[str],
+    env: dict[str, str],
+    cwd: Path,
+    job: KillJob | None,
+    **popen_kwargs: Any,  # noqa: ANN401  (stdout=, stderr=, ...)
+) -> tuple[subprocess.Popen[bytes], bool]:
+    """Start `argv` (stdio inherited unless `popen_kwargs` redirect it) and put it in `job` BEFORE it runs
+    (Windows: CREATE_SUSPENDED, assign, resume), so
     nothing it starts can be outside the job. Returns (process, assigned). An assignment that fails still resumes the child
-    (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job."""
+    (assigned=False, the caller falls back to taskkill). POSIX: its own process group, no job. `popen_kwargs` (stdout=, stderr=)
+    go to Popen; `creationflags` is not accepted (it is how the child is suspended)."""
     if os.name != "nt":
-        return subprocess.Popen(list(argv), env=env, cwd=cwd, start_new_session=True), False
-    proc = subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4)  # CREATE_SUSPENDED
+        started = subprocess.Popen(list(argv), env=env, cwd=cwd, start_new_session=True, **popen_kwargs)
+        return cast("subprocess.Popen[bytes]", started), False
+    proc = cast("subprocess.Popen[bytes]", subprocess.Popen(list(argv), env=env, cwd=cwd, creationflags=0x4, **popen_kwargs))  # CREATE_SUSPENDED
     try:
         assigned = job.assign(proc) if job is not None else False
         if resume_process_threads(proc.pid) == 0:
             raise OSError(f"could not resume the suspended process {proc.pid}")  # it would sit suspended forever
     except BaseException:
         proc.kill()  # any failure, Ctrl-C included, leaves no suspended or orphaned child
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):  # the caller never sees `proc`, so nobody else would close these
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
         raise
     return proc, assigned
 
 
+def needs_taskkill_fallback(assigned: bool) -> bool:
+    """True when a child started with `spawn_in_job` is NOT covered by a job (Windows only: POSIX uses the process group), so the
+    caller must warn and rely on `taskkill /T`. The one place that decides this."""
+    return os.name == "nt" and not assigned
+
+
+_LAST_JOB_ERROR: int | None = None
+
+
+def last_job_error() -> int | None:
+    """The Windows error number of the most recent `create_kill_job` failure (None when it succeeded or never ran), for the caller's note."""
+    return _LAST_JOB_ERROR
+
+
 def create_kill_job() -> KillJob | None:
-    """A kill-on-close job object, or None (not Windows, or the API refused: the caller falls back to taskkill /T)."""
+    """A kill-on-close job object, or None (not Windows, or the API refused: the caller falls back to taskkill /T).
+    On a refusal `last_job_error()` holds the Windows error number."""
+    global _LAST_JOB_ERROR
+    _LAST_JOB_ERROR = None
     if os.name != "nt":
         return None
     try:
@@ -257,14 +295,18 @@ def create_kill_job() -> KillJob | None:
         k32.AssignProcessToJobObject.restype = wintypes.BOOL
         k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
         k32.TerminateJobObject.restype = wintypes.BOOL
+        k32.GetCurrentProcess.argtypes = []
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
         k32.CloseHandle.argtypes = [wintypes.HANDLE]
         k32.CloseHandle.restype = wintypes.BOOL
         handle = k32.CreateJobObjectW(None, None)
         if not handle:
+            _LAST_JOB_ERROR = ctypes.get_last_error()
             return None
         info = ExtendedLimits()
         info.BasicLimitInformation.LimitFlags = KillJob.KILL_ON_JOB_CLOSE
         if not k32.SetInformationJobObject(handle, KillJob.EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)):
+            _LAST_JOB_ERROR = ctypes.get_last_error()
             k32.CloseHandle(handle)
             return None
         return KillJob(int(handle), k32)

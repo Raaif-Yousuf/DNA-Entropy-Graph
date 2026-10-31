@@ -168,6 +168,12 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   kills the gate's whole process tree (`taskkill /T /F` on Windows, the process group elsewhere), because `uv run ... pytest` is
   uv -> python and a surviving grandchild kept the output pipe open: MEASURED 2026-10-29, the old `subprocess.run` timeout
   returned only after the grandchild (a 120 s sleeper in the test) exited.
+  Each gate also runs in a kill-on-close Windows Job Object (`wt_venv.create_kill_job` / `spawn_in_job`, #930), terminated before the
+  `taskkill /T`: MEASURED 2026-10-30, a detached grandchild whose parent had already exited survived `taskkill /T` (nothing to walk
+  from) and is now gone after the timeout (`test_a_timeout_kills_a_detached_grandchild_whose_parent_already_exited`). The job also
+  ends anything a finished gate left behind. Limit: a process started with `CREATE_BREAKAWAY_FROM_JOB` escapes a job that allows
+  breakaway, and the job cannot be created on a host whose parent job forbids nesting; then a WARNING line goes to stderr and the
+  `taskkill /T` fallback is all there is. `land_wt.py`'s premerge run (`run_bounded(job=True)`) and `heavy.py`'s Ctrl-C use the same helper.
   `premerge.py` turns SIGTERM and SIGHUP into the same interrupt path (each gate runs in its own session on POSIX), so an
   aborted run kills every gate's tree. A gate's stdout and stderr stay separate pipes, joined stdout then stderr.
 - **A gate cannot be silently left out.** Every `scripts/check_*.py` and every
@@ -291,9 +297,16 @@ worker\.venv\Scripts\python.exe scripts\land_pr.py --branch fix/412-x --hunks wo
 
 Route every `dotnet build|test`, every full or multi-file `pytest`, and anything else that takes
 gigabytes or minutes through it. It takes one of N machine-wide slots before running the command,
-prints one `heavy: waiting` line while all are busy (naming each holder's pid and lane, and how to free a
-stuck one: stop that PID), passes the child's exit code through, and on Ctrl-C kills the child and exits
-130 (the Ctrl-C path has no automated test). Slots are OS-held file locks under `%TEMP%\deg-heavy\`
+prints one `heavy: waiting` line to **stderr** while all are busy (naming each holder's lane, pid and how long it has held the slot, and how
+to free a stuck one: stop that PID) and a `heavy: still queued after <t>` line every 60 s, flushed, so a caller with piped stdout can tell
+queued from hung (#996). It passes the child's exit code through, and on Ctrl-C kills the command's whole tree
+(its own job object, then `taskkill /T`; #930) and exits 130 (tested in-process with the wait stubbed to raise `KeyboardInterrupt`).
+`heavy.py --status` lists every slot and exits 0: for a held slot its lane, pid, start, age, whether the pid is alive and the cumulative
+CPU of its process tree (ctypes Toolhelp32 on Windows, `/proc` elsewhere, no psutil; exited descendants are not counted, so CPU is a
+lower bound); a free slot prints `slot N: free`. All `heavy:` diagnostics (waiting, still queued, note, warning) go to stderr; stdout is the
+command's own. `--status` and the waiting line probe a slot by briefly taking its lock, so a launch racing a probe can print one spurious
+waiting line, and a slot's `.info` can be stale between a holder taking the lock and writing it: the output is a snapshot, not a
+transaction (no redesign planned). Slots are OS-held file locks under `%TEMP%\deg-heavy\`
 (`--lock-dir` or `$HEAVY_LOCK_DIR` to move them), so a killed agent frees its slot; each holder also writes
 `slot-N.info` (pid, lane, start, first 80 characters of the command), and a leftover info file next to a free
 slot is ignored. The lock is **per user**: it lives in that user's `%TEMP%`, so two Windows accounts on one
