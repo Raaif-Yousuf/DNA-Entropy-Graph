@@ -443,6 +443,12 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             _sent.TryRemove(unclaimed, out _);
         }
 
+        // Issue #970: the donors a run noted are needed only until its VM end ran (and by a cancel's watch, which holds claimed creates): once nothing of the job is held, they are forgotten.
+        if (!_sent.Keys.Any(e => e.JobId == jobId))
+        {
+            terminator.ForgetDonors(jobId);
+        }
+
         PruneIfIdle(jobId);
     }
 
@@ -849,6 +855,10 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
         }
 
         progress.VmMayExist = true;
+
+        // Issue #970: the reuse replaces the VM's whole label set (its job-id and lifecycle with it). Recorded BEFORE the gateway is called, with the run's own scope, so every way this run ends
+        // without keeping the VM (a failed start, a failure later in the run, a cancel, a late landing) can put the donor's labels back.
+        terminator.NoteDonor(request.ResolvedScope, request.JobId, chosen.Name, chosen.Zone, chosen.Labels!);
         await ClaimAsync(progress, chosen.Zone, cancellationToken).ConfigureAwait(false); // before the start: a stale claim must not make this VM delete itself
         // Round 4 M3: recorded BEFORE the gateway is called, like a create: a cancel that gives up on this start claims it and the late watch stops the VM if the start lands afterwards.
         var sentReuse = NoteSent(request.ResolvedScope, request.JobId, chosen.Name, chosen.Zone, spec.InstallationId, generation, reuse: true);

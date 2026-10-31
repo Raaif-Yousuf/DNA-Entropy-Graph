@@ -134,6 +134,9 @@ public sealed class CloudJobRunner
     /// <summary>Issue #938: told how the clean-up of a create that landed after a cancel ended. Called on a background task: a UI must marshal. A handler that throws is ignored.</summary>
     public Action<LateCreateOutcome>? OnLateCreate { get => _settings.OnLateCreate; init => _settings.OnLateCreate = value; }
 
+    /// <summary>Issue #970: told how the restore of a borrowed VM's earlier labels ended after a failed or cancelled reuse (ids and classes only).</summary>
+    public Action<DonorRestoreOutcome>? OnDonorRestore { get => _settings.OnDonorRestore; init => _settings.OnDonorRestore = value; }
+
     /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires, instead of the VM being ended at once; see <see cref="StallDecision"/>. Null keeps the old behaviour.</summary>
     public StallDecision? OnStall { get => _settings.OnStall; init => _settings.OnStall = value; }
 
@@ -286,6 +289,7 @@ public sealed class CloudJobRunner
             if (JobStateMachine.IsTerminal(done.FinalPhase))
             {
                 _provisioner.ForgetPendingRequests(request.JobId);
+                _terminator.ForgetRestoreOutcomes(request.JobId); // a failed reuse that a fallback create then made good has nothing to say on the row
             }
 
             return done;
@@ -315,9 +319,12 @@ public sealed class CloudJobRunner
                 OperationCanceledException => (CloudErrorKind.Network, RunErrorCodes.For(CloudErrorKind.Network)),
                 _ => (CloudErrorKind.Other, RunErrorCodes.For(CloudErrorKind.Other)),
             };
+            // Issue #970: what became of the labels of a VM this run borrowed, when its VM end ran before this exception reached here.
+            var restoreNote = _terminator.TakeDonorRestoreSentence(request.JobId);
+            var detail = restoreNote is null ? ex.Message : $"{ex.Message} {restoreNote}";
             try
             {
-                await _rows.SetPhaseAsync(request.JobId, JobPhase.Failed, CancellationToken.None, code, ex.Message).ConfigureAwait(false);
+                await _rows.SetPhaseAsync(request.JobId, JobPhase.Failed, CancellationToken.None, code, detail).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -331,7 +338,7 @@ public sealed class CloudJobRunner
             }
 
             await _transfer.RemoveEmptyRunFolderAsync(request.JobId).ConfigureAwait(false);
-            return new CloudJobResult(JobPhase.Failed, kind, ex.Message, code);
+            return new CloudJobResult(JobPhase.Failed, kind, detail, code);
         }
     }
 

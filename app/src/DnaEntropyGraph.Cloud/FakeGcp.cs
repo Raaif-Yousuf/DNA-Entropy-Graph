@@ -1736,6 +1736,58 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         return vm;
     }
+    private CloudErrorKind? _restoreFailure;
+    private int _restoreAttempts;
+
+    /// <summary>How many times <see cref="RestoreVmLabelsAsync(string, string, string, IReadOnlyDictionary{string, string}, CancellationToken)"/> was called (issue #970).</summary>
+    public int RestoreAttempts => Volatile.Read(ref _restoreAttempts);
+
+    /// <summary>Every restore of a borrowed VM's labels fails with this kind of error (a 403 for permission), as the real label write can. Issue #970.</summary>
+    public FakeGcp WithRestoreFailure(CloudErrorKind kind)
+    {
+        _restoreFailure = kind;
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #970: the label restore of the real gateway: only a VM that still carries <paramref name="fromJobId"/> as its <c>job-id</c> is rewritten (to <paramref name="donorLabels"/>, and its labelFingerprint
+    /// moves like any labels write); one a newer run took is left as it is; one that is gone is <see cref="LabelRestoreState.Gone"/>. The read and the write happen under the claim lock, so a restore
+    /// never overwrites a claim that landed between them.
+    /// </summary>
+    public Task<LabelRestoreState> RestoreVmLabelsAsync(string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        Interlocked.Increment(ref _restoreAttempts);
+        if (_restoreFailure is { } kind)
+        {
+            throw Build(kind, "SCRIPTED_RESTORE_FAILURE", kind == CloudErrorKind.Permission ? 403 : null, "The label restore was scripted to fail.");
+        }
+
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out var vm))
+            {
+                return Task.FromResult(LabelRestoreState.Gone);
+            }
+
+            if (vm.Labels is null || !vm.Labels.TryGetValue("job-id", out var owner) || owner != fromJobId)
+            {
+                return Task.FromResult(LabelRestoreState.NewerOwner);
+            }
+
+            var read = vm;
+            var restored = UpdateVm(key, v => v.InstanceId == read.InstanceId ? v with { Labels = new Dictionary<string, string>(donorLabels) } : v);
+            if (restored is null || restored.InstanceId != read.InstanceId)
+            {
+                return Task.FromResult(LabelRestoreState.Gone);
+            }
+
+            _labelFingerprints[IncarnationOf(restored)] = NextFingerprint();
+            return Task.FromResult(LabelRestoreState.Restored);
+        }
+    }
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         if (ConsumeHang())

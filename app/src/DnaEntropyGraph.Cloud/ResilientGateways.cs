@@ -32,6 +32,11 @@ public sealed class ResilientComputeGateway : IComputeGateway
         // started. replayable: false gives it the breaker but neither retries nor a 401 replay; the provisioner looks by label on a Network failure.
         => _pipeline.ExecuteAsync("Compute.ReuseVm", token => _inner.ReuseVmAsync(scope, spec, existingVmName, zone, token), cancellationToken, replayable: false, accountSub: scope.AccountSub);
 
+    // Issue #970: undoing a reuse's claim is cleanup for a VM that is already stopped (it protects a keep-alive's expiry, never starts anything), so it bypasses the breaker. It is a read-then-write
+    // with a fingerprint and treats "labels already equal the donor's" as done, so a replay after a lost answer is safe.
+    public Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.RestoreVmLabels", token => _inner.RestoreVmLabelsAsync(scope, vmName, zone, fromJobId, donorLabels, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+
     // Issue #105. A start is idempotent (starting a running VM is accepted) and is new work, so it keeps the breaker; listing and deleting our
     // disks is cleanup that stops the meter, so it bypasses it like stop and delete of a VM.
     public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)

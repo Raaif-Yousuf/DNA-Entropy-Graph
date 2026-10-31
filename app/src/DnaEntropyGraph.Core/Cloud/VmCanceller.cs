@@ -111,11 +111,31 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         try
         {
             await RecordCancelOutcomeAsync(jobId, failure).ConfigureAwait(false);
+            await AnnotateDonorRestoreAsync(jobId).ConfigureAwait(false);
         }
         finally
         {
             // Whatever happened above, the creates this cancel claimed are either finished with or put under watch: never dropped.
             StartWatch(jobId, sent);
+        }
+    }
+
+    /// <summary>
+    /// Issue #970: when this cancel stopped a VM the run had borrowed and put its donor's labels back (or could not), the row says so, in states and classes only. A courtesy: a row that cannot be
+    /// annotated leaves the clean-up exactly as it was.
+    /// </summary>
+    private async Task AnnotateDonorRestoreAsync(string jobId)
+    {
+        try
+        {
+            if (terminator.TakeDonorRestoreSentence(jobId) is { } sentence)
+            {
+                await rows.UpdateRowAsync(jobId, row => row with { ErrorDetail = $"{row.ErrorDetail} {sentence}".Trim() }, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+            // The row is a courtesy.
         }
     }
 
@@ -152,6 +172,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         if (watched.Count == 0)
         {
+            terminator.ForgetDonors(jobId); // issue #970: nothing is left that could still land, so no donor is needed again
             return;
         }
 
@@ -165,6 +186,8 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                 {
                     provisioner.ReleaseSent(create);
                 }
+
+                terminator.ForgetDonors(jobId); // issue #970: the watch has restored what it could
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
@@ -283,7 +306,9 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         if (Any(LateCreateState.ReuseStopped))
         {
-            return "A request to start an earlier VM landed after the cancel, and the VM was stopped again." + (failedRow ? StillFailed : string.Empty);
+            // Issue #970: and what became of the labels the reuse had moved onto this job (states only; a failed restore names the Cloud page).
+            var restored = DonorRestoreOutcome.SentenceFor([.. outcomes.Where(o => o.Restore is not null).Select(o => o.Restore!)]);
+            return "A request to start an earlier VM landed after the cancel, and the VM was stopped again." + (restored is null ? string.Empty : " " + restored) + (failedRow ? StillFailed : string.Empty);
         }
 
         if (failedRow && Any(LateCreateState.CreateFailed))

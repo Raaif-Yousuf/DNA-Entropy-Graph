@@ -14,10 +14,14 @@ public partial class LateCreateAfterCancelTests
 {
     private const string ZoneC = "us-central1-c";
 
-    /// <summary>A stopped donor of another run is claimed for <paramref name="jobId"/> by a reuse whose start then fails (stockout), and the ladder wins in zone B.</summary>
+    /// <summary>
+    /// A stopped donor of another run is claimed for <paramref name="jobId"/> by a reuse whose start then fails (stockout), and the ladder wins in zone B.
+    /// Issue #970: the failed reuse now puts the donor's own labels back, so these tests (which guard the BACKSTOP: a VM not named deg-job is never deleted even when it carries this job's label)
+    /// script the restore to FAIL, which leaves exactly the state they were written for. The restored case is DonorLabelRestoreRunnerTests.
+    /// </summary>
     private static async Task<(Rig Rig, FakeGcp Gcp, VmSpec Donor, CloudJobRequest Request)> FailedReuseThenLadderWinsInZoneBAsync(string jobId)
     {
-        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Stockout);
+        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Stockout).WithRestoreFailure(CloudErrorKind.Permission);
         var rig = new Rig(gcp);
         var donor = await SeedStoppedDonorAsync(gcp, rig, "job-old-" + jobId);
         await rig.SeedRowAsync(jobId);

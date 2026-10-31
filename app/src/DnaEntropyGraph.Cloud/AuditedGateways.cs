@@ -32,6 +32,10 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
     public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.ReuseVm", () => (Vm(zone, existingVmName), spec.JobId), () => inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken), started: true, cancellationToken: cancellationToken);
 
+    // Issue #970: the label write that undoes a reuse's claim. A short mutation: the finished line only (it is not a start of a VM and spans no polling the audit must bracket).
+    public Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.RestoreVmLabels", () => (Vm(zone, vmName), fromJobId), () => inner.RestoreVmLabelsAsync(scope, vmName, zone, fromJobId, donorLabels, cancellationToken), cancellationToken: cancellationToken);
+
     public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StopVmAsync(scope, vmName, zone, cancellationToken), cancellationToken: cancellationToken);
 
