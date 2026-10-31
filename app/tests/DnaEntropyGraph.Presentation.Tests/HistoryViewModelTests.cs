@@ -934,6 +934,8 @@ public sealed class HistoryViewModelTests
     [InlineData(CloudResultsStatus.NoCloudCopy, "Runs_Redownload_NoCloudCopy", ToastSeverity.Info)]
     [InlineData(CloudResultsStatus.ResultNotFound, "Runs_Redownload_ResultNotFound", ToastSeverity.Error)]
     [InlineData(CloudResultsStatus.Refused, "Runs_Redownload_Refused", ToastSeverity.Error)]
+    [InlineData(CloudResultsStatus.OutputFolderGone, "Runs_Redownload_FolderGone", ToastSeverity.Error)]
+    [InlineData(CloudResultsStatus.OtherRunsFolderRefused, "Runs_Redownload_OtherRun", ToastSeverity.Error)]
     [InlineData(CloudResultsStatus.Failed, "Runs_Redownload_Failed", ToastSeverity.Error)]
     [InlineData(CloudResultsStatus.Partial, "Runs_Redownload_Partial", ToastSeverity.Warning)]
     public async Task Each_redownload_failure_has_its_own_copy(CloudResultsStatus status, string keyPrefix, ToastSeverity severity)

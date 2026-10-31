@@ -172,6 +172,14 @@ public sealed partial class FakeGcp
             : ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
     }
 
+    public Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+    {
+        using var _ = EnterCall(scope, "RestoreVmLabels");
+        return ElsewhereVm(scope, vmName, zone)
+            ? Task.FromResult(LabelRestoreState.Gone)
+            : RestoreVmLabelsAsync(vmName, zone, fromJobId, donorLabels, cancellationToken);
+    }
+
     public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken)
     {
         using var _ = EnterCall(scope, "ListAcceleratorZones");

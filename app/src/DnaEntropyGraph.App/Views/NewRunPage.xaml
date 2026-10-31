@@ -168,6 +168,20 @@
                 TextWrapping="Wrap"
                 Style="{StaticResource CaptionTextBlockStyle}"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <StackPanel Spacing="4" Visibility="{x:Bind ViewModel.HasOutputFolder}">
+                <TextBlock x:Uid="OutputFolderHeader" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Text="{x:Bind ViewModel.OutputFolder.DisplayText, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Uid="OutputFolderChange" Command="{x:Bind ViewModel.OutputFolder.ChangeCommand}" />
+                    <Button x:Uid="OutputFolderUseDownloads" Command="{x:Bind ViewModel.OutputFolder.UseDownloadsCommand}" />
+                </StackPanel>
+                <TextBlock
+                    Text="{x:Bind ViewModel.OutputFolder.Message, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.OutputFolder.HasMessage, Mode=OneWay}"
+                    TextWrapping="Wrap"
+                    AutomationProperties.LiveSetting="Polite"
+                    Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+            </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind ViewModel.HasRunNamePreview, Mode=OneWay}">
                 <TextBlock x:Uid="NewRunNamePreviewLabel" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <TextBlock Text="{x:Bind ViewModel.RunNamePreview, Mode=OneWay}" FontWeight="SemiBold" IsTextSelectionEnabled="True" />
