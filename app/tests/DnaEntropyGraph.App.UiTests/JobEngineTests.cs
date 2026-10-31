@@ -296,6 +296,20 @@ public class JobEngineTests
     }
 
     [Fact]
+    public async Task The_run_row_records_the_account_the_run_was_made_as_and_every_call_is_made_in_that_scope()
+    {
+        // Issue #830 stage 3: the observable that differs if the account is wired to nothing is the row (what a later stop reads) and the account on the calls.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        await h.TerminalAsync();
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.AccountSub.ShouldBe(FakeGcp.DefaultAccountSub);
+        h.Gcp.CallsTo("CreateVm").ShouldAllBe(c => c.AccountSub == row.AccountSub && c.ProjectId == Project);
+    }
+
+    [Fact]
     public async Task A_run_with_no_selected_project_fails_with_a_recorded_reason_and_creates_nothing()
     {
         var h = new Harness(new FakeGcp().WithSignedOut());
@@ -735,13 +749,110 @@ public class JobEngineTests
     }
 
     [Fact]
-    public async Task Cancelling_an_unknown_job_id_publishes_nothing_and_does_not_throw()
+    public async Task Cancelling_an_unknown_job_id_publishes_nothing_and_says_the_run_is_not_in_the_history()
+    {
+        // Issue #830 review M5: the run's own project and account come from its row, so with no row there is nothing to act in. That is a named error the run page shows, never a silent return.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+
+        await Should.ThrowAsync<RunNotFoundException>(() => h.Engine.CancelRunAsync("no-such-job", CancellationToken.None));
+
+        h.Messages.ShouldBeEmpty();
+        h.Gcp.Calls.ShouldBeEmpty("nothing may be guessed from the selected project");
+    }
+
+    // ---- Issue #830 review M5: Stop, Delete and Cancel act in the run's own project and account whatever is selected ----
+
+    private const string OtherProject = "project-a";
+    private const string OtherSub = "sub-a";
+
+    /// <summary>A run row in project A made as account A (a computer for it exists there) while the SELECTED project is B.</summary>
+    private static async Task<(Harness H, string JobId)> RunInAWhileBIsSelectedAsync(JobPhase phase)
+    {
+        var gcp = new FakeGcp().WithSelectedProject(Project).WithAccount(OtherSub, "a@example.org", OtherProject);
+        var h = new Harness(gcp);
+        const string jobId = "job-in-a";
+        var spec = new VmSpec(OtherProject, InstallationId.GetOrCreate(h.Settings), jobId, "evo2_7b", "0.1.0", "stop", "g2-standard-8", TimeSpan.FromMinutes(90), "DELETE");
+        await gcp.CreateVmAsync(new CloudScope(OtherProject, OtherSub), spec, "us-central1-a", CancellationToken.None);
+        await h.Runs.UpsertAsync(new RunRecord(jobId, phase, DateTimeOffset.UtcNow, Target: "cloud", ProjectId: OtherProject, AccountSub: OtherSub, VmName: "deg-" + jobId), CancellationToken.None);
+        return (h, jobId);
+    }
+
+    [Fact]
+    public async Task Stopping_the_VM_of_a_run_in_another_project_acts_in_that_project_as_that_account()
+    {
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Completed);
+        var before = h.Gcp.Calls.Count;
+
+        await h.Engine.StopVmAsync(jobId, CancellationToken.None);
+
+        var calls = h.Gcp.Calls.Skip(before).ToList();
+        calls.Select(c => c.Method).ShouldContain("StopVm");
+        calls.ShouldAllBe(c => c.ProjectId == OtherProject && c.AccountSub == OtherSub);
+    }
+
+    [Fact]
+    public async Task Deleting_the_VM_of_a_run_in_another_project_acts_in_that_project_as_that_account()
+    {
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Completed);
+        var before = h.Gcp.Calls.Count;
+
+        await h.Engine.DeleteVmAsync(jobId, CancellationToken.None);
+
+        var calls = h.Gcp.Calls.Skip(before).ToList();
+        calls.Select(c => c.Method).ShouldContain("DeleteVm");
+        calls.ShouldAllBe(c => c.ProjectId == OtherProject && c.AccountSub == OtherSub);
+    }
+
+    [Fact]
+    public async Task Cancelling_a_run_whose_account_is_signed_out_raises_the_same_sign_in_needed_signal_as_the_reconciler()
+    {
+        // Issue #830 review F1: the cancel does not throw (it records Failed/account_signed_out), so nothing told the shell or the run page to offer Sign in.
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);
+        h.Gcp.WithAccountSignedOut(OtherSub);
+        var told = new ConcurrentQueue<string?>();
+        h.Messenger.Register<Harness, AccountSignInNeededMessage>(h, (_, m) => told.Enqueue(m.AccountSub));
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Last(r => r.JobId == jobId);
+        row.ErrorCode.ShouldBe(RunErrorCodes.AccountSignedOut);
+        told.ToArray().ShouldBe([OtherSub]);
+    }
+
+    [Fact]
+    public async Task A_cancel_that_ends_cancelled_raises_no_sign_in_signal()
+    {
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);
+        var told = new ConcurrentQueue<string?>();
+        h.Messenger.Register<Harness, AccountSignInNeededMessage>(h, (_, m) => told.Enqueue(m.AccountSub));
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        told.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancelling_a_run_in_another_project_acts_in_that_project_as_that_account()
+    {
+        var (h, jobId) = await RunInAWhileBIsSelectedAsync(JobPhase.Running);
+        var before = h.Gcp.Calls.Count;
+
+        await h.Engine.CancelRunAsync(jobId, CancellationToken.None);
+
+        var calls = h.Gcp.Calls.Skip(before).ToList();
+        calls.ShouldNotBeEmpty("the cancel must have looked for the run's computer");
+        calls.ShouldAllBe(c => c.ProjectId == OtherProject && c.AccountSub == OtherSub);
+    }
+
+    [Fact]
+    public async Task Stop_and_delete_of_a_run_with_no_row_say_so_instead_of_returning_silently()
     {
         var h = new Harness(new FakeGcp().WithSelectedProject(Project));
 
-        await Should.NotThrowAsync(() => h.Engine.CancelRunAsync("no-such-job", CancellationToken.None));
+        await Should.ThrowAsync<RunNotFoundException>(() => h.Engine.StopVmAsync("no-such-job", CancellationToken.None));
+        await Should.ThrowAsync<RunNotFoundException>(() => h.Engine.DeleteVmAsync("no-such-job", CancellationToken.None));
 
-        h.Messages.ShouldBeEmpty();
+        h.Gcp.Calls.ShouldBeEmpty("no call may go to the selected project in its place");
     }
 
     [Fact]

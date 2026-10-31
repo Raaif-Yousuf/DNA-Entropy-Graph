@@ -351,6 +351,7 @@ public static class ServiceRegistration
         services.AddSingleton<CloudJobRunner>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
+            var diagnostics = sp.GetRequiredService<IDiagnosticsLog>();
             return new CloudJobRunner(
                 sp.GetRequiredService<IComputeGateway>(),
                 sp.GetRequiredService<IStorageGateway>(),
@@ -360,6 +361,9 @@ public static class ServiceRegistration
                 sp.GetRequiredService<IRunRepository>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
             {
+                // Issue #938: how the clean-up of a create that landed after a cancel ended goes to the diagnostics log (the run id, the state and an error class, never a name, a file or an email);
+                // what the user must act on is also on the Cancelled row as an error code (VmCanceller.CodeFor). The reap window keeps its default (15 minutes).
+                OnLateCreate = outcome => diagnostics.Warning("late-create", outcome.JobId, outcome.LogClass),
                 // Issue #675: the stall question is a Stop / Delete / Keep waiting dialog and the slow-run notice is a line on the run page (RunStallCoordinator; the notice is also
                 // logged by id and kind, never a sequence, a file name or an email). A dialog that cannot be shown answers Keep waiting; StallDecisions.EndAsRunChose stays the
                 // default for a runner built without a UI (tests, the reconciler's own runner).
@@ -372,7 +376,7 @@ public static class ServiceRegistration
         // The one registry of "the task driving this job": the engine's runs and the reconciler's reattached runs both go through it, so Cancel finds either.
         services.AddSingleton<ActiveRuns>();
         // Issue #99: the wizard's GPU step asks Google for the L4 and project-wide GPU quota through this (the app lane binds it).
-        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>()));
+        services.AddSingleton<GpuQuotaRequester>(sp => new GpuQuotaRequester(sp.GetRequiredService<IQuotaGateway>(), sp.GetRequiredService<IGcpAccount>()));
         // Issue #105: what this installation has in the project, and "delete everything": for the Cloud page (the app lane binds it).
         services.AddSingleton<InstallationCleanup>(sp =>
         {
@@ -400,7 +404,10 @@ public static class ServiceRegistration
             sp.GetRequiredService<IToastService>(),
             sp.GetRequiredService<IStringResourceProvider>(),
             sp.GetRequiredService<IDiagnosticsLog>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IGcpAccount>()));
+        services.AddSingleton<RunAccountBackfill>(sp => new RunAccountBackfill(
+            sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<ISettingsStore>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
@@ -415,7 +422,9 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ISettingsStore>(),
                 (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
-                log: sp.GetRequiredService<IDiagnosticsLog>());
+                log: sp.GetRequiredService<IDiagnosticsLog>(),
+                additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().ActiveSnapshot() is { ProjectId.Length: > 0 } active ? [new CloudScope(active.ProjectId, active.AccountSub)] : [],
+                onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)));
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
@@ -475,6 +484,7 @@ public static class ServiceRegistration
         // Issue #143: one tour state shared by the window's tips and the Settings replay button.
         services.AddSingleton<TourSettings>();
         services.AddSingleton<TourViewModel>();
+        services.AddSingleton<SignInNeededViewModel>();
         // Issue #179: one update state for the shell's bar and the Settings About group; the source is the only thing that touches Velopack.
         services.AddSingleton<IAppUpdateSource, Services.VelopackUpdateSource>();
         services.AddSingleton<IActiveRunProbe, Services.ActiveRunProbe>();

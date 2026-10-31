@@ -75,7 +75,7 @@ public static class FakeCloudMode
     /// <summary>The access token of the developer fake: any string, no network (the fake gateways never send it anywhere).</summary>
     public sealed class FakeTokenSource : IGcpAccessTokenSource
     {
-        public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) => Task.FromResult("fake-token");
+        public Task<string> GetAccessTokenAsync(string? accountSub, CancellationToken cancellationToken) => Task.FromResult("fake-token");
     }
 
     /// <summary>The worker image of a developer-fake run: a pinned-looking reference the fake cloud accepts (no VM ever pulls it).</summary>

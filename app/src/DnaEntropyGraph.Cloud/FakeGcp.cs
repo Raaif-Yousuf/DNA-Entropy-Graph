@@ -155,9 +155,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         _timeProvider = timeProvider;
     }
 
-    public bool IsSignedIn => _signedIn;
+    public bool IsSignedIn => ActiveIsDefault ? _signedIn : _modeled[_activeSub].SignedIn;
 
-    public string? SelectedProjectId => _selectedProjectId;
+    public string? SelectedProjectId => ActiveIsDefault ? _selectedProjectId : _modeled[_activeSub].SelectedProject;
 
     /// <summary>
     /// Issue #424's other half: WizardViewModel.SignInAsync reads
@@ -170,6 +170,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// </summary>
     public Task SignInAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _signInAttempts);
         if (_signInErrorCode is not null)
         {
             throw new AccountAuthException(_signInErrorCode);
@@ -181,13 +182,18 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return Task.CompletedTask;
     }
 
+    private int _signInAttempts;
+
+    /// <summary>How many times <see cref="SignInAsync"/> was called (a test proves a Sign in button reached the account service).</summary>
+    public int SignInAttempts => Volatile.Read(ref _signInAttempts);
+
     private static readonly AccountInfo FakeAccount = new("fake-sub", "fake-user@example.test");
 
     private string? _signInErrorCode;
 
-    public AccountInfo? CurrentAccount => _signedIn ? FakeAccount : null;
+    public AccountInfo? CurrentAccount => ActiveIsDefault ? (_signedIn ? FakeAccount : null) : _modeled[_activeSub].Listed;
 
-    public IReadOnlyList<AccountInfo> Accounts => _signedIn ? [FakeAccount] : [];
+    public IReadOnlyList<AccountInfo> Accounts => [.. (_signedIn ? new[] { FakeAccount } : []), .. _modeled.Values.Select(m => m.Listed)];
 
     public event EventHandler? AccountChanged;
 
@@ -220,19 +226,35 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw new AccountAuthException(AuthErrorCodes.ProjectInvalid);
         }
 
-        if (!_signedIn)
+        if (!IsSignedIn)
         {
             throw new AccountAuthException(AuthErrorCodes.SigninExpired);
         }
 
-        _selectedProjectId = projectId;
+        if (ActiveIsDefault)
+        {
+            _selectedProjectId = projectId;
+        }
+        else
+        {
+            _modeled[_activeSub].SelectedProject = projectId;
+        }
+
         AccountChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
     public Task SwitchAccountAsync(string sub, CancellationToken cancellationToken)
     {
-        if (!_signedIn || sub != FakeAccount.Sub)
+        if (_modeled.ContainsKey(sub))
+        {
+            _activeSub = sub;
+        }
+        else if (_signedIn && sub == FakeAccount.Sub)
+        {
+            _activeSub = DefaultAccountSub;
+        }
+        else
         {
             throw new AccountAuthException(AuthErrorCodes.AccountNotFound);
         }
@@ -564,8 +586,10 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
 
     /// <summary>
-    /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404), as real Compute
-    /// Engine does. Off by default, where it is a silent no-op.
+    /// <see cref="DeleteVmAsync"/> of a VM that does not exist throws a not-found (HTTP 404): the shape of RAW Compute Engine,
+    /// which the real <c>GoogleComputeGateway.EndVmAsync</c> does NOT pass on (it swallows the 404 and returns normally, so production never shows
+    /// the terminator an "already gone"). Off by default, where the delete is a silent no-op, which IS what the real gateway does (Code read 2026-10-30, not a measurement:
+    /// read of <c>GoogleComputeGateway.EndVmAsync</c>, round 4 H1). A test that turns this on exercises a branch production cannot reach.
     /// </summary>
     public FakeGcp WithDeleteOfMissingVmNotFound()
     {
@@ -784,6 +808,73 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private volatile bool _labelListingBlind;
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(string Name, string Zone)> _deleteAttempts = new();
+
+    /// <summary>Issue #938: while true <see cref="FindByJobIdAsync"/> lists nothing, as a label index that has not caught up with a create that already answered. <see cref="GetVmAsync"/> still sees the VM.</summary>
+    public bool LabelListingBlind
+    {
+        get => _labelListingBlind;
+        set => _labelListingBlind = value;
+    }
+
+    /// <summary>Every <see cref="DeleteVmAsync"/> request made so far, in order, whether or not the VM existed or the call was scripted to fail.</summary>
+    public IReadOnlyList<(string Name, string Zone)> DeleteAttempts => _deleteAttempts.ToArray();
+
+    /// <summary>
+    /// Issue #938: the gateway shape production has. <see cref="CreateVmAsync"/> blocks until <see cref="ReleaseCreate"/> and HONOURS its token (the caller's cancel ends the task at once,
+    /// as the real gateway's insert POST does), but Compute had already accepted the insert: the VM comes to exist anyway, either at the moment of the cancel
+    /// (<paramref name="landAtCancel"/>) or when a test calls <see cref="LandAcceptedCreatesAsync"/>. <see cref="GetVmAsync"/> sees it; set <see cref="LabelListingBlind"/> for a listing that does not.
+    /// </summary>
+    public FakeGcp WithServerAcceptedCreateThatTheClientCancels(bool landAtCancel)
+    {
+        _createGate = new CreateGate(false) { AcceptOnCancel = true, LandAtCancel = landAtCancel };
+        return this;
+    }
+
+    /// <summary>Makes every create the client cancelled after the server accepted it (<see cref="WithServerAcceptedCreateThatTheClientCancels"/>) come to exist now.</summary>
+    public async Task LandAcceptedCreatesAsync()
+    {
+        while (_createGate is { } gate && gate.Accepted.TryDequeue(out var accepted))
+        {
+            await CreateVmCore(accepted.Spec, accepted.Zone, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private readonly object _gateEntryLock = new();
+    private int _gateEntries;
+    private readonly List<(int Count, TaskCompletionSource Signal)> _gateEntryWaiters = [];
+
+    /// <summary>Completes once <paramref name="count"/> creates have entered the blocked gate (a signal that a later attempt reached its create, so a test needs no sleep).</summary>
+    public Task WhenCreatesEnteredAsync(int count)
+    {
+        lock (_gateEntryLock)
+        {
+            if (_gateEntries >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _gateEntryWaiters.Add((count, signal));
+            return signal.Task;
+        }
+    }
+
+    private void NoteGateEntry()
+    {
+        lock (_gateEntryLock)
+        {
+            _gateEntries++;
+            foreach (var waiter in _gateEntryWaiters.Where(w => w.Count <= _gateEntries).ToList())
+            {
+                waiter.Signal.TrySetResult();
+                _gateEntryWaiters.Remove(waiter);
+            }
+        }
+    }
+
     /// <summary>Completes when a blocked <see cref="CreateVmAsync"/> has started waiting.</summary>
     public Task CreateVmEntered => _createGate?.Entered.Task ?? Task.CompletedTask;
 
@@ -795,18 +886,43 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         public bool IgnoreCancellation { get; }
 
+        public bool AcceptOnCancel { get; init; }
+
+        public bool LandAtCancel { get; init; }
+
+        public System.Collections.Concurrent.ConcurrentQueue<(VmSpec Spec, string Zone)> Accepted { get; } = new();
+
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private readonly List<string?> _refreshedAccounts = [];
+
+    /// <summary>Issue #830: the account sub of each token refresh the pipeline asked for (null: the current account), in order.</summary>
+    public IReadOnlyList<string?> RefreshedAccounts
+    {
+        get
+        {
+            lock (_callLock)
+            {
+                return [.. _refreshedAccounts];
+            }
+        }
     }
 
     /// <summary>How many times the resilience pipeline asked this fake to refresh the token.</summary>
     public int TokenRefreshCount { get; private set; }
 
     /// <summary>A real implementation refreshes the OAuth access token; the fake only counts the request.</summary>
-    public Task RefreshAsync(CancellationToken cancellationToken)
+    public Task RefreshAsync(string? accountSub, CancellationToken cancellationToken)
     {
         TokenRefreshCount++;
+        lock (_callLock)
+        {
+            _refreshedAccounts.Add(accountSub);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -1033,10 +1149,29 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private async Task<VmDescriptor> CreateAfterGateAsync(CreateGate gate, VmSpec spec, string zone, CancellationToken cancellationToken)
     {
         gate.Entered.TrySetResult();
+        NoteGateEntry();
         OnCallParked?.Invoke(gate.IgnoreCancellation ? ParkedCall.CreateThatNeverLands : ParkedCall.Hang, Timeout.InfiniteTimeSpan);
         if (gate.IgnoreCancellation)
         {
             await gate.Release.Task.ConfigureAwait(false);
+        }
+        else if (gate.AcceptOnCancel)
+        {
+            try
+            {
+                await gate.Release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The client gave up; the server had accepted the insert, so the VM comes to exist regardless.
+                gate.Accepted.Enqueue((spec, zone));
+                if (gate.LandAtCancel)
+                {
+                    await LandAcceptedCreatesAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
         else
         {
@@ -1190,7 +1325,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         // The pending request is on the server from now on: a caller that gives up (cancels its wait) does not remove it, only a delete or an expiry does.
         var now = _timeProvider.GetUtcNow();
         // Check and insert are ONE step (#918): a request of the same VM that landed since the exists check wins, and this one is its replay.
-        var request = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        var request = new VmDescriptor(spec.VmName, zone, "PROVISIONING", null, now, spec.ToLabels(), null, spec.MachineType, now, InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId), Scope: new CloudScope(spec.ProjectId, CallScope.Value?.AccountSub ?? DefaultAccountSub));
         if (!TryInsertVm(key, request))
         {
             return _vms.TryGetValue(key, out var winner) ? winner : throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{spec.VmName}' is gone.");
@@ -1235,7 +1370,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// <summary>Grants a create. <paramref name="queued"/> is the pending request's row when this is a queued grant: it is replaced by the granted row in ONE step (#910), so a poll never sees the VM missing and a delete that lands first wins.</summary>
     private VmDescriptor GrantCreate(VmSpec spec, string zone, (string, string) key, VmDescriptor? queued = null)
     {
-        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId));
+        var vm = new VmDescriptor(spec.VmName, zone, _bootPolls > 0 ? "PROVISIONING" : "RUNNING", null, _timeProvider.GetUtcNow(), spec.ToLabels(), null, spec.MachineType, _timeProvider.GetUtcNow(), InstanceId: (ulong)Interlocked.Increment(ref _nextInstanceId), Scope: new CloudScope(spec.ProjectId, CallScope.Value?.AccountSub ?? DefaultAccountSub));
         // The simulated worker's files first, then the VM becomes visible (#784): a fast poll must never see RUNNING with no files yet.
         // A VM the simulation is about to preempt or lose (#91) never gets a worker.
         var willBeLost = spec.Spot ? _spotPreemptionsLeft > 0 : _onDemandLossesLeft > 0;
@@ -1343,6 +1478,83 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     {
         _reuseStartFailure = kind;
         return this;
+    }
+
+    private TaskCompletionSource? _reuseParkGate;
+    private readonly TaskCompletionSource _reuseParked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// <see cref="ReuseVmAsync"/> parks AFTER the claim (the VM carries the new job's labels, still stopped) and BEFORE the start, ignoring cancellation, until <see cref="ReleaseParkedReuse"/>:
+    /// the middle state of the real gateway's reuse (setLabels, disk, scheduling and metadata done, <c>instances.start</c> not yet answered). Issue #938 round 5 H1.
+    /// </summary>
+    public FakeGcp WithReuseParkedAfterClaim()
+    {
+        _reuseParkGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return this;
+    }
+
+    /// <summary>Completes once a reuse has parked after its claim (<see cref="WithReuseParkedAfterClaim"/>).</summary>
+    public Task ReuseParkedAfterClaim => _reuseParked.Task;
+
+    /// <summary>Lets a parked reuse go on to its start.</summary>
+    public void ReleaseParkedReuse() => _reuseParkGate?.TrySetResult();
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(VmSpec Reuse, string Name, string Zone, VmDescriptor Claimed)> _acceptedReuseStarts = new();
+    private bool _reuseParkHonoursCancel;
+
+    /// <summary>
+    /// Issue #938 round 6 H1: the production shape of <see cref="WithReuseParkedAfterClaim"/>. The reuse parks after its claim (labels moved, VM still stopped) and HONOURS its token: the caller's cancel
+    /// ends the task Canceled at once, as the real gateway's calls do, while Compute has already accepted <c>instances.start</c>: the VM runs when a test calls <see cref="LandAcceptedReuseStartsAsync"/>.
+    /// </summary>
+    public FakeGcp WithReuseStartThatTheClientCancels()
+    {
+        _reuseParkHonoursCancel = true;
+        return WithReuseParkedAfterClaim();
+    }
+
+    /// <summary>Makes every reuse start the client cancelled after the server accepted it (<see cref="WithReuseStartThatTheClientCancels"/>) run now: the VM reads RUNNING, with its worker.</summary>
+    public Task LandAcceptedReuseStartsAsync()
+    {
+        while (_acceptedReuseStarts.TryDequeue(out var accepted))
+        {
+            try
+            {
+                StartClaimedVm(accepted.Reuse, (accepted.Name, accepted.Zone), accepted.Name, accepted.Zone, accepted.Claimed);
+            }
+            catch (CloudOperationException)
+            {
+                // A VM deleted since the claim: the start is a 404, as on real Compute.
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The start itself: the worker's files first, then the VM reads RUNNING (#784), bound to the claimed incarnation. Throws VM_NOT_FOUND when the VM is gone (#875).</summary>
+    private VmDescriptor StartClaimedVm(VmSpec reuse, (string Name, string Zone) key, string existingVmName, string zone, VmDescriptor vm)
+    {
+        var undoWorker = RunWorkerUndoably(reuse, zone, vm.InstanceId);
+        VmDescriptor? started;
+        try
+        {
+            BeforeStartWrite?.Invoke();
+            // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
+            started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
+        }
+        catch
+        {
+            // A hook or a swap that threw between the worker's return and the start landing (#918): the start never happened, so the worker's files and deferred end go back.
+            undoWorker();
+            throw;
+        }
+
+        if (started is null || started.InstanceId != vm.InstanceId)
+        {
+            undoWorker(); // the start never happened: its worker never existed
+            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
+        }
+
+        return started;
     }
 
     private bool _reuseResponseLost;
@@ -1491,29 +1703,30 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             };
         }
 
+        if (_reuseParkGate is { } park)
+        {
+            _reuseParked.TrySetResult();
+            if (_reuseParkHonoursCancel)
+            {
+                try
+                {
+                    await park.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The client gave up while instances.start was on the wire; Compute had accepted it, so the start lands later (LandAcceptedReuseStartsAsync).
+                    _acceptedReuseStarts.Enqueue((reuse, existingVmName, zone, vm));
+                    throw;
+                }
+            }
+            else
+            {
+                await park.Task.ConfigureAwait(false);
+            }
+        }
+
         ThrowIfProjectWide(spec.ProjectId);
-        // The worker's files first, then the VM reads RUNNING (#784); bound to this incarnation. A worker that fails leaves the VM stopped (RunWorkerUndoably).
-        var undoWorker = RunWorkerUndoably(reuse, zone, vm.InstanceId);
-        VmDescriptor? started;
-        try
-        {
-            BeforeStartWrite?.Invoke();
-            // A delete that landed since the claim wins, as on real Compute (a start of a deleted instance is a 404); it is never resurrected as RUNNING (#875).
-            started = UpdateVm(key, v => v.InstanceId == vm.InstanceId ? v with { Status = "RUNNING", StatusReason = null, StartedAt = _timeProvider.GetUtcNow(), StoppedAt = null } : v);
-        }
-        catch
-        {
-            // A hook or a swap that threw between the worker's return and the start landing (#918): the start never happened, so the worker's files and deferred end go back.
-            undoWorker();
-            throw;
-        }
-
-        if (started is null || started.InstanceId != vm.InstanceId)
-        {
-            undoWorker(); // the start never happened: its worker never existed
-            throw Build(CloudErrorKind.Other, "VM_NOT_FOUND", 404, $"The VM '{existingVmName}' is gone.");
-        }
-
+        var started = StartClaimedVm(reuse, key, existingVmName, zone, vm);
         vm = started;
         if (_reuseResponseLost)
         {
@@ -1751,6 +1964,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public async Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        _deleteAttempts.Enqueue((vmName, zone));
         ThrowIfScriptedTransient();
         var delay = TimeSpan.FromTicks(Interlocked.Exchange(ref _firstDeleteDelayTicks, 0));
         if (delay > TimeSpan.Zero)
@@ -1825,6 +2039,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         }
 
         ExpireOverdueVms();
+        if (_labelListingBlind)
+        {
+            return Task.FromResult<IReadOnlyList<VmDescriptor>>([]);
+        }
+
         var name = $"deg-{jobId}";
         // By the job-id label, as the real gateway does (a reused VM keeps its old name, #94); a VM seeded without labels, such as WithAlreadyExists's, by name.
         IReadOnlyList<VmDescriptor> matches = _vms.Values

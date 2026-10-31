@@ -30,18 +30,20 @@ public class WizardGpuAskTests
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(new CloudScope(Project, "sub-1"));
+        _account.ActiveSnapshot().Returns(new ActiveAccountSnapshot("sub-1", Project, false));
         _account.CurrentAccount.Returns(new AccountInfo("sub-1", "lab@example.org"));
         _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Billing, SetupStatus.Ok));
         _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.Ok));
         _service.EnsureStorageAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Storage, SetupStatus.Ok));
         _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(ZeroQuota());
-        _quota.ReadQuotaAsync(Project, Arg.Any<CancellationToken>()).Returns(new QuotaReadResult(
+        _quota.ReadQuotaAsync(new CloudScope(Project, "sub-1"), Arg.Any<CancellationToken>()).Returns(new QuotaReadResult(
             new Dictionary<string, IReadOnlyList<QuotaMetric>> { ["us-central1"] = new List<QuotaMetric> { new(L4, 0, 0) } },
             new QuotaMetric(All, 0, 0),
             []));
-        _quota.GetQuotaIncreaseEligibilityAsync(Project, Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _quota.GetQuotaIncreaseEligibilityAsync(new CloudScope(Project, "sub-1"), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => new QuotaEligibility(call.ArgAt<string>(1), true));
-        _quota.RequestQuotaIncreaseAsync(Project, Arg.Any<QuotaIncreaseRequest>(), Arg.Any<CancellationToken>())
+        _quota.RequestQuotaIncreaseAsync(new CloudScope(Project, "sub-1"), Arg.Any<QuotaIncreaseRequest>(), Arg.Any<CancellationToken>())
             .Returns(new QuotaIncreaseResult("prefs/x", 1, null, true, "Pending review"));
     }
 
@@ -54,7 +56,7 @@ public class WizardGpuAskTests
     };
 
     private SetupStepsViewModel NewViewModel(bool withRequester = true)
-        => new(_service, _account, _shell, _strings, withRequester ? new GpuQuotaRequester(_quota) : null);
+        => new(_service, _account, _shell, _strings, withRequester ? new GpuQuotaRequester(_quota, _account) : null);
 
     private async Task<(SetupStepsViewModel Steps, SetupStepRow Row)> ZeroQuotaRowAsync(bool withRequester = true)
     {
@@ -84,8 +86,8 @@ public class WizardGpuAskTests
 
         await row.AskCommand!.ExecuteAsync(null);
 
-        await _quota.Received(1).RequestQuotaIncreaseAsync(Project, Arg.Is<QuotaIncreaseRequest>(r => r.Metric == L4 && r.Region == CloudJobRequestFactory.DefaultRegion && r.ContactEmail == "lab@example.org"), Arg.Any<CancellationToken>());
-        await _quota.Received(1).RequestQuotaIncreaseAsync(Project, Arg.Is<QuotaIncreaseRequest>(r => r.Metric == All), Arg.Any<CancellationToken>());
+        await _quota.Received(1).RequestQuotaIncreaseAsync(new CloudScope(Project, "sub-1"), Arg.Is<QuotaIncreaseRequest>(r => r.Metric == L4 && r.Region == CloudJobRequestFactory.DefaultRegion && r.ContactEmail == "lab@example.org"), Arg.Any<CancellationToken>());
+        await _quota.Received(1).RequestQuotaIncreaseAsync(new CloudScope(Project, "sub-1"), Arg.Is<QuotaIncreaseRequest>(r => r.Metric == All), Arg.Any<CancellationToken>());
         row.AskResultText.ShouldBe("WizardGpuAsk_Requested");
         row.HasAskResult.ShouldBeTrue();
         row.AskActionText.ShouldBe("WizardGpuAsk_CheckAgain");
@@ -96,7 +98,7 @@ public class WizardGpuAskTests
     [Fact]
     public async Task A_grant_at_once_rechecks_the_step_so_the_row_turns_green()
     {
-        _quota.RequestQuotaIncreaseAsync(Project, Arg.Any<QuotaIncreaseRequest>(), Arg.Any<CancellationToken>())
+        _quota.RequestQuotaIncreaseAsync(new CloudScope(Project, "sub-1"), Arg.Any<QuotaIncreaseRequest>(), Arg.Any<CancellationToken>())
             .Returns(new QuotaIncreaseResult("prefs/x", 1, 1, false, "Granted"));
         _service.CheckQuotaAsync(Project, Arg.Any<CancellationToken>())
             .Returns(ZeroQuota(), new SetupStepResult(SetupStep.Quota, SetupStatus.Ok));
@@ -114,7 +116,7 @@ public class WizardGpuAskTests
     [Fact]
     public async Task A_project_with_no_billing_account_is_told_to_fix_billing_and_the_action_rechecks_billing()
     {
-        _quota.GetQuotaIncreaseEligibilityAsync(Project, Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _quota.GetQuotaIncreaseEligibilityAsync(new CloudScope(Project, "sub-1"), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => new QuotaEligibility(call.ArgAt<string>(1), false, QuotaIneligibilityReason.NoValidBillingAccount));
         var (_, row) = await ZeroQuotaRowAsync();
 
@@ -133,7 +135,7 @@ public class WizardGpuAskTests
     [InlineData(QuotaIneligibilityReason.Other, "WizardGpuAsk_NotEligible")]
     public async Task Another_ineligible_reason_sends_the_user_to_googles_quota_page_by_hand(QuotaIneligibilityReason reason, string expectedKey)
     {
-        _quota.GetQuotaIncreaseEligibilityAsync(Project, Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _quota.GetQuotaIncreaseEligibilityAsync(new CloudScope(Project, "sub-1"), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(call => new QuotaEligibility(call.ArgAt<string>(1), false, reason));
         var (_, row) = await ZeroQuotaRowAsync();
 
@@ -149,14 +151,14 @@ public class WizardGpuAskTests
     [Fact]
     public async Task A_refused_permission_names_the_quota_page_and_a_transient_failure_offers_try_again_which_asks_again()
     {
-        _quota.GetQuotaIncreaseEligibilityAsync(Project, Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(Failure(CloudErrorKind.Permission));
+        _quota.GetQuotaIncreaseEligibilityAsync(new CloudScope(Project, "sub-1"), Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(Failure(CloudErrorKind.Permission));
         var (_, row) = await ZeroQuotaRowAsync();
 
         await row.AskCommand!.ExecuteAsync(null);
         row.AskResultText.ShouldBe("WizardGpuAsk_Permission");
         row.HasAskLink.ShouldBeTrue();
 
-        _quota.GetQuotaIncreaseEligibilityAsync(Project, Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(Failure(CloudErrorKind.Network));
+        _quota.GetQuotaIncreaseEligibilityAsync(new CloudScope(Project, "sub-1"), Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(Failure(CloudErrorKind.Network));
         await row.AskCommand!.ExecuteAsync(null);
         row.AskResultText.ShouldBe("WizardGpuAsk_Failed");
         row.AskActionText.ShouldBe("WizardGpuAsk_TryAgain");

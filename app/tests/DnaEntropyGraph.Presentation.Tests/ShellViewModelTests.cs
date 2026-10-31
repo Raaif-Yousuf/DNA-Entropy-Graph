@@ -99,6 +99,7 @@ public class ShellViewModelTests
         var gcpAccount = Substitute.For<IGcpAccount>();
         gcpAccount.IsSignedIn.Returns(true);
         gcpAccount.SelectedProjectId.Returns("deg-123-abc");
+        gcpAccount.SelectedScope().Returns(TestScopes.Of("deg-123-abc"));
         var strings = Substitute.For<IStringResourceProvider>();
         strings.GetString("StatusPillSignedIn").Returns("Signed in - {0}");
         var viewModel = new ShellViewModel(navigator, gcpAccount, new WeakReferenceMessenger(), strings, TestMessages.Center(), TestMessages.Completion());

@@ -47,7 +47,7 @@ internal static class GoogleRestClient
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var token = await tokens.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            var token = await tokens.GetAccessTokenAsync(CallAccount.Current, cancellationToken).ConfigureAwait(false);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
@@ -60,7 +60,7 @@ internal static class GoogleRestClient
 
         public async Task InterceptAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var token = await tokens.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            var token = await tokens.GetAccessTokenAsync(CallAccount.Current, cancellationToken).ConfigureAwait(false);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
     }

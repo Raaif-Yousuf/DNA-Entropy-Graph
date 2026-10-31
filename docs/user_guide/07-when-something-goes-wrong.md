@@ -88,6 +88,18 @@ company policy blocked it. Allow DNA Entropy Graph in your security program, the
 separately on this computer, so you can switch between them without signing in again.
 Signing out removes the sign-in from this computer and also tells Google to cancel it.
 
+### "Sign in as ... to stop or delete this run's computer"
+
+You can be signed in to more than one Google account. A run always uses the account it was started under, even after you switch to another one. If that account has been signed out since, the app cannot look at the run's rented computer, and says so in three places, each with a **Sign in** button:
+
+- A bar at the bottom of the window when the app starts: "Sign in as (the account)". It names every account that needs it and goes away once that account is signed in again. Signing in as a different account leaves the bar, because the account it names is still signed out. If you close the bar it stays closed until another account needs it.
+- The run page, when you press **Stop** or **Delete**: "Sign in as (the account) to stop or delete this run's computer". Press the button, sign in with that same Google account, then press **Stop** or **Delete** again. Cancel (which also shows the bar above), Download again and Delete cloud copy say the same thing in their own words.
+- The window asking what to do with computers still running when you close the app. If it could not check some account that still has something that could be running (a run that has not finished, or a computer you asked to keep for a while), it first says so, names every such account, and offers **Sign in** or **Close anyway**. An account you signed out of on purpose, whose runs all ended with their computer confirmed gone, is not asked about. Choosing **Sign in** keeps the window open, so closing it again checks once more.
+
+Until you sign in, a computer still ends by itself at its time limit, and you are not charged for longer than that. When the app cannot reach Google at all (no internet), it does not ask you to sign in: it tries again when the connection returns, and the closing window tells you to open the Cloud page to see what is running.
+
+If a run is no longer in your history, the app cannot tell which account and project its computer is in, and says so on the run page: open the **Cloud page** and stop or delete any computer left running there.
+
 ## The app can't finish setting up your project
 
 **"You can use this project but not set it up"**, you are a member of this Google Cloud
@@ -173,6 +185,15 @@ naming the computer, and only that second **Delete it** removes anything. When y
 **Keep waiting** the yellow "a window is asking" note on the run page goes away. If it
 recovers by itself while the window is open, the window closes and the run carries on. If nobody answers for ten minutes,
 the app ends the run the way you set it to end.
+
+**A cancelled run says "a request for a rented computer was still on its way".** You
+pressed **Cancel run** just as the app was asking Google for a computer. The app keeps
+watching for that request for up to 15 minutes and deletes the computer if it appears
+(or stops it, if it was an earlier computer the app was restarting for you). This message
+appears only when the app could not confirm that. Open the **Cloud** page, find any
+computer labelled with this run and delete or stop it, so it stops billing. If you close
+the app first, the next time it starts it deletes a computer left over from a cancelled run.
+*(`late_create_unconfirmed`)*
 
 **"The computer was shut down before finishing"**, either a hardware issue on Google's
 side, or (if you chose the cheaper "Spot" option) the computer was reclaimed, since Spot

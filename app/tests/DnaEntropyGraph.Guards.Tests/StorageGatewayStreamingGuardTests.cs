@@ -23,7 +23,7 @@ public class StorageGatewayStreamingGuardTests
         implementers.Count.ShouldBeGreaterThanOrEqualTo(3, "the scan must see FakeGcp, ResilientStorageGateway and GoogleStorageGateway");
 
         var inherited = implementers
-            .Where(t => t.GetMethod(nameof(IStorageGateway.TryDownloadToFileAsync), BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly) is null)
+            .Where(t => !t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly).Any(m => m.Name == nameof(IStorageGateway.TryDownloadToFileAsync) && m.GetParameters().Length > 0 && m.GetParameters()[0].ParameterType == typeof(CloudScope))) // the scoped overload (#830): FakeGcp also keeps an unscoped one
             .Select(t => t.Name)
             .ToList();
 

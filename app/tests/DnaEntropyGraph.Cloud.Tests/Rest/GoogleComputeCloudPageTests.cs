@@ -94,9 +94,9 @@ public class GoogleComputeCloudPageTests
     [Fact]
     public async Task Start_with_no_project_selected_refuses_instead_of_guessing()
     {
-        var rig = new GoogleGatewayHarness(selectedProjectId: null);
+        var rig = new GoogleGatewayHarness();
 
-        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.StartVmAsync("deg-job1", Zone, CancellationToken.None));
+        await Should.ThrowAsync<InvalidOperationException>(() => rig.Gateways.Compute.StartVmAsync(new CloudScope(string.Empty), "deg-job1", Zone, CancellationToken.None));
 
         rig.Handler.Requests.ShouldBeEmpty();
     }

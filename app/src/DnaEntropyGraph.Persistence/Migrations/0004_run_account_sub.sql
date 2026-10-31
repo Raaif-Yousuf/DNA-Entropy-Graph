@@ -1,0 +1,2 @@
+-- Issue #830: the Google account (Accounts.Sub) a run was made as. NULL means the current account. No SQL backfill: nothing records which account made an old row (Projects.AccountSub is the project's last chooser, not the run's), so at the first launch after the upgrade with an account signed in, RunAccountBackfill sets every NULL cloud row to that account once.
+ALTER TABLE Runs ADD COLUMN AccountSub TEXT;

@@ -28,3 +28,9 @@ public sealed record RunProgressChangedMessage(string JobId, ProgressEvent Progr
 /// (naming one action), or empty to clear it. <c>RunProgressViewModel</c> shows it on the run page.
 /// </summary>
 public sealed record RunNoticeMessage(string JobId, string Text);
+
+/// <summary>
+/// Issue #830 review M3: sent by the app when the reconciler could not look at a run or a computer because the Google account it was made under is
+/// signed out. <paramref name="AccountSub"/> is that account's stable id (null when not known), never its email. <c>SignInNeededViewModel</c> turns it into the shell's "Sign in as ..." bar.
+/// </summary>
+public sealed record AccountSignInNeededMessage(string? AccountSub);

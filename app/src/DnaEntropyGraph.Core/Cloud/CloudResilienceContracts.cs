@@ -8,7 +8,8 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public interface ICloudTokenRefresher
 {
-    Task RefreshAsync(CancellationToken cancellationToken);
+    /// <param name="accountSub">Issue #830: the account whose call got the 401 (null: the current account).</param>
+    Task RefreshAsync(string? accountSub, CancellationToken cancellationToken);
 }
 
 /// <summary>One retry the resilience pipeline performed: which call, which attempt, why, and how long it waited first.</summary>

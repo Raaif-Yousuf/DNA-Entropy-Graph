@@ -104,7 +104,7 @@ public class AccountsFileConcurrencyEdgeTests
             await copyB.SignInAsync(CancellationToken.None); // lands after A's stamp, before A's update
         };
 
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => copyA.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => copyA.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.SigninExpired);
         File.Exists(Path.Combine(harness.AuthDirectory, "1001.tok")).ShouldBeTrue("the fresh token is not deleted");
@@ -256,7 +256,7 @@ public class AccountsFileConcurrencyEdgeTests
 
         using (new FileStream(tokenPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
             failure.Code.ShouldBe(AuthErrorCodes.SigninExpired, "the user's next step is to sign in again, not to fix a folder");
         }

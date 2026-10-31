@@ -65,9 +65,9 @@ public sealed class StreamedDownloadConsumerTests : IDisposable
     private IStorageGateway Storage(Func<string, CancellationToken, Task<bool>> download)
     {
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadAsync(Bucket, Prefix + "result.json", Arg.Any<CancellationToken>()).Returns(ci => _gcp.TryDownloadAsync(Bucket, Prefix + "result.json", ci.Arg<CancellationToken>()));
-        storage.TryDownloadToFileAsync(Bucket, Prefix + "output/sample.bedgraph", Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(ci => download(ci.ArgAt<string>(2), ci.ArgAt<CancellationToken>(3)));
+        storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "result.json", Arg.Any<CancellationToken>()).Returns(ci => _gcp.TryDownloadAsync(Bucket, Prefix + "result.json", ci.Arg<CancellationToken>()));
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Bucket, Prefix + "output/sample.bedgraph", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => download(ci.ArgAt<string>(3), ci.ArgAt<CancellationToken>(4)));
         return storage;
     }
 
@@ -228,11 +228,11 @@ public sealed class StreamedDownloadConsumerTests : IDisposable
         var (_, request, folder) = MakeTransfer(jobId);
         var settings = new CloudRunSettings { DownloadStallTimeout = TimeSpan.FromMilliseconds(300) };
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(async ci =>
             {
-                await File.WriteAllBytesAsync(ci.ArgAt<string>(2), new byte[5], CancellationToken.None);
-                await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(3));
+                await File.WriteAllBytesAsync(ci.ArgAt<string>(3), new byte[5], CancellationToken.None);
+                await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(4));
                 return true;
             });
         var transfer = new RunTransfer(storage, new GatewayCalls(settings, storage), settings, new RunRowStore(_runs, null));

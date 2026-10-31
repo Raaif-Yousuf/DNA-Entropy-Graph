@@ -41,31 +41,31 @@ public class VmReuseReviewTests
 
         public Func<string, string, CancellationToken, Task<VmDescriptor?>>? OnGet { get; set; }
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
-            => OnReuse is null ? inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken) : OnReuse(spec, existingVmName, zone, cancellationToken);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken)
+            => OnReuse is null ? inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken) : OnReuse(spec, existingVmName, zone, cancellationToken);
 
-        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-            => OnGet is null ? inner.GetVmAsync(vmName, zone, cancellationToken) : OnGet(vmName, zone, cancellationToken);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+            => OnGet is null ? inner.GetVmAsync(scope, vmName, zone, cancellationToken) : OnGet(vmName, zone, cancellationToken);
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(spec, zone, cancellationToken);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken) => inner.CreateVmAsync(scope, spec, zone, cancellationToken);
 
-        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+        public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(vmName, zone, cancellationToken);
+        public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.DeleteVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(jobId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken) => inner.FindByJobIdAsync(scope, jobId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
 
-        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+        public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+        public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
     }
 
     private static CloudJobRunner Runner(IComputeGateway compute, FakeGcp gcp, InMemoryRunRepository repo, TimeProvider? time = null, TimeSpan? resultTimeout = null) => new(compute, gcp, gcp, gcp, gcp, repo)
@@ -210,8 +210,10 @@ public class VmReuseReviewTests
         await cancel.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
+        // #938 round 3 H1 (replaces "owned.ShouldBeEmpty"): the reused VM is another run's keep-alive VM that the reuse only relabelled. A cancel STOPS it (it must not bill) and never deletes it.
         var owned = await gcp.FindByJobIdAsync("job-new", CancellationToken.None);
-        owned.ShouldBeEmpty("the reuse landed after the cancel looked: a VM of the cancelled job was left (billing, or a disk)");
+        owned.ShouldAllBe(v => VmFacts.IsStopped(v), "the reuse landed after the cancel looked: a VM of the cancelled job was left running (billing)");
+        gcp.DeleteAttempts.ShouldBeEmpty("the cancel deleted a VM another run created");
         var last = repo.AllRecordedInOrder.Last(r => r.JobId == "job-new");
         last.Phase.ShouldBe(JobPhase.Cancelled, "the cancel won the race with the run's next phase step (#687): Cancelled, not an illegal-transition Failed");
     }
@@ -246,7 +248,9 @@ public class VmReuseReviewTests
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
         await cancel!.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
-        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldBeEmpty("the cancel looked before the reuse was tracked: a VM of the cancelled job was left billing");
+        // #938 round 3 H1 (replaces "ShouldBeEmpty"): the reused VM is another run's; a cancel stops it and never deletes it.
+        (await gcp.FindByJobIdAsync("job-new", CancellationToken.None)).ShouldAllBe(v => VmFacts.IsStopped(v), "the cancel looked before the reuse was tracked: a VM of the cancelled job was left billing");
+        gcp.DeleteAttempts.ShouldBeEmpty("the cancel deleted a VM another run created");
         repo.AllRecordedInOrder.Last(r => r.JobId == "job-new").Phase.ShouldBe(JobPhase.Cancelled);
     }
 

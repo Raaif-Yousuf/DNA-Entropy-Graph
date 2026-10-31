@@ -72,8 +72,10 @@ internal sealed class GoogleIamGateway : IWorkerIdentityGateway
         _options = options;
     }
 
-    public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken)
+    public async Task<WorkerIdentity> EnsureWorkerIdentityAsync(CloudScope scope, string bucket, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var projectNumber = await _projects.GetProjectNumberAsync(projectId, cancellationToken).ConfigureAwait(false);
 
         var ownEmail = WorkerIdentityNames.ServiceAccountEmail(projectId);

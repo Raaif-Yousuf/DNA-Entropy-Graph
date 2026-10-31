@@ -83,7 +83,7 @@ public class AccountsFileRecoveryTests
 
         using (new FileStream(Path.Combine(harness.AuthDirectory, "accounts.json"), FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            var failure = await Should.ThrowAsync<AccountAuthException>(() => restarted.GetAccessTokenAsync(CancellationToken.None));
+            var failure = await Should.ThrowAsync<AccountAuthException>(() => restarted.GetAccessTokenAsync(null, CancellationToken.None));
 
             failure.Code.ShouldBe(AuthErrorCodes.AccountsFileLocked);
         }

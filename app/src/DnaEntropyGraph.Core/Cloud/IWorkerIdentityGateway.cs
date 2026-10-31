@@ -15,7 +15,7 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public interface IWorkerIdentityGateway
 {
-    Task<WorkerIdentity> EnsureWorkerIdentityAsync(string projectId, string bucket, CancellationToken cancellationToken);
+    Task<WorkerIdentity> EnsureWorkerIdentityAsync(CloudScope scope, string bucket, CancellationToken cancellationToken);
 }
 
 /// <summary>
