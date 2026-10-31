@@ -131,6 +131,25 @@ public class JobReconcilerLifecycleTests
         outcomes.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task With_project_B_selected_a_keep_alive_row_in_project_A_expires_and_its_VM_is_deleted_in_A_with_As_account()
+    {
+        // Issue #830, the wired-to-nothing observable: the pass enforces the row's own project and account, whatever is selected at launch.
+        var rig = new Rig(g => g.WithAccount("sub-a", "a@example.org", "project-a").WithSelectedProject("project-b"));
+        var request = await rig.Env.SeedAsync("job-ka", JobPhase.Completed, vm: false, after: AfterTaskAction.KeepAlive, afterKeepAlive: AfterKeepAliveAction.Delete, keepAliveMinutes: 30, tweak: row => row with { FinishedAt = Launch.AddMinutes(-10), ProjectId = "project-a", AccountSub = "sub-a" });
+        await rig.Gcp.CreateVmAsync(new CloudScope("project-a", "sub-a"), request.Spec with { ProjectId = "project-a" }, Zone, CancellationToken.None); // the computer really is in project-a
+        rig.Clock.Advance(TimeSpan.FromMinutes(21));
+
+        var outcomes = await rig.Reconciler(additionalSweepScopes: () => [rig.Gcp.SelectedScope()!]).EnforceLifecycleAsync(CancellationToken.None);
+
+        outcomes.Single(o => o.JobId == "job-ka").Action.ShouldBe(LifecycleAction.VmDeleted);
+        (await rig.VmsAsync("job-ka")).ShouldBeEmpty();
+        var deletes = rig.Gcp.CallsTo("DeleteVm");
+        deletes.ShouldNotBeEmpty();
+        deletes.ShouldAllBe(c => c.ProjectId == "project-a" && c.AccountSub == "sub-a", "the delete must go to the row's project as the row's account, never to project-b");
+        rig.Gcp.CallsTo("FindByJobId").Where(c => c.ProjectId == "project-b").ShouldBeEmpty("project-b was selected, but the run is not in it");
+    }
+
     [Theory]
     [InlineData(AfterKeepAliveAction.Delete, null)]
     [InlineData(AfterKeepAliveAction.Stop, "STOPPED")]

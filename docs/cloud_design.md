@@ -1759,6 +1759,28 @@ implementation, and the card (#219, not built) binds the same view model (`Budge
   that `projects/{number}` is the filter form, and that `x-goog-user-project` is honoured with a user token. `docs/ToTest.md`
   carries the real-account row.
 
+## 24. The run's scope: project and account on every call (issue #830)
+
+A run belongs to the Google project and the Google account it was created under. Nothing that acts on it later asks "what is selected now?".
+
+- **`CloudScope(ProjectId, AccountSub)`** (Core/Cloud) is passed as the first argument of every method of `IComputeGateway`, `IStorageGateway`, `IWorkerIdentityGateway`, `IQuotaGateway` and `IProjectSetupGateway`
+  (`GatewayScopeSignatureTests` fails on a method without one). `AccountSub` is the stable Google account id, never the email. The gateways no longer read a "selected project": there is no `RequireProject()`.
+- **Where a scope comes from.** `JobEngine` captures `IGcpAccount.SelectedScope()` ONCE when a run is created (one read of one account snapshot, so project and account always belong together) and stores it in the
+  row (`Runs.ProjectId`, `Runs.AccountSub`, migration `0003_run_account_sub.sql`). Every later action takes it from the row with `RunScope.Of(row)`: the runner and its collaborators (per method), Stop, Delete, Cancel, the
+  reconciler's reattach and lifecycle enforcement, a re-download. `CloudJobRequestFactory.Create` requires a scope and `CloudJobRequest.ResolvedScope` throws without one (`CloudJobRequestScopeGuardTests`).
+  `SelectionReadGuardTests` lists the only files that may read the selection (wizard and setup, shell pill, budget path, Cloud page listing, import, the new-run capture, the left-running scan's selection, the reconciler wiring).
+- **Legacy rows.** A row written before accounts were recorded has a null `AccountSub`. The migration backfills it from the project's own saved account (`Projects.AccountSub`) once, and the upsert keeps an existing value
+  (`COALESCE`). A scope that still has none acts as the current account and, in a sweep, counts as the selected account (`CloudScopes.Dedupe`); it is never re-resolved per call.
+- **Per-call account.** `CloudCallPipeline` (one pipeline, one breaker, one offline signal) sets the scope's account around the call (`CallAccount`); the bearer handlers read it, so a request carries ITS account's token. A 401
+  refreshes that account (`ICloudTokenRefresher.RefreshAsync(accountSub)`; `FakeGcp.RefreshedAccounts` records it). An account that is signed out throws `AccountAuthException` naming it.
+- **Signed-out account.** The reconciler maps it to a named outcome, never `RecordUnexpected`: `ReattachAction.NeedsSignIn` and `LifecycleAction.NeedsSignIn` (both carry `AccountSub`). The row is untouched, the rest of the pass goes
+  on with the other accounts' rows, and nothing in another account's project is touched. On the run page a stop or delete that hits it shows "Sign in as (email) to stop this run's computer" with a Sign in button
+  (`RunProgressViewModel.SignInPromptText`, `SignInCommand`); the email is looked up from the account list for the prompt and never logged.
+- **Installation-wide sweeps.** The idle sweep and the left-running scan list in `CloudScopes.ForSweep`: the scope of the latest row of every cloud run of this installation inside `CloudScopes.LifecycleLookback`
+  (14 days, terminal rows included, because a keep-alive computer belongs to a finished run) plus the selected scope. Scopes are deduplicated by project and effective account, so one project under one account is listed once.
+  `LeftRunningScanner.ScanAllAsync` merges the reports, keys "has a live run" by (scope, job id), and reports a scope it could not read in `UnreadScopes` without hiding the others (all unreadable: it throws, so the caller degrades as before).
+  `LeftRunningGuard` and `InstallationCleanup` stop or delete each computer in the scope it was found in. The Cloud page's rows keep the scope they were listed in.
+- **`FakeGcp`** keys VMs and buckets by project, models several accounts (`WithAccount`, `WithAccountSignedOut`), answers 403 for a project an account cannot reach, and records every call's (method, project, account) in `Calls`.
 ## Related
 
 [`job_contract.md`](job_contract.md) (the files the worker on this VM reads/writes),

@@ -88,6 +88,10 @@ company policy blocked it. Allow DNA Entropy Graph in your security program, the
 separately on this computer, so you can switch between them without signing in again.
 Signing out removes the sign-in from this computer and also tells Google to cancel it.
 
+### "Sign in as ... to stop this run's computer"
+
+You can be signed in to more than one Google account. A run always uses the account it was started under, even after you switch to another one. If that account has been signed out since, the run page cannot stop or delete the run's rented computer, and says "Sign in as (the account) to stop this run's computer" with a **Sign in** button. Press it and sign in with that same Google account, then press **Stop** or **Delete** again. Until you do, the computer still ends by itself at its time limit, and you are not charged for longer than that.
+
 ## The app can't finish setting up your project
 
 **"You can use this project but not set it up"**, you are a member of this Google Cloud

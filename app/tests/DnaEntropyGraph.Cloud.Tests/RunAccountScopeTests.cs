@@ -58,4 +58,37 @@ public sealed class RunAccountScopeTests
 
         gcp.RefreshedAccounts.ShouldBe(["sub-a"]);
     }
+
+    [Fact]
+    public async Task Selecting_another_project_mid_run_leaves_the_run_and_its_cancel_in_the_project_it_started_in()
+    {
+        var gcp = new FakeGcp().WithAccount("sub-a", "a@example.org", "project-a").WithSelectedProject("project-a").WithWorker(FakeWorkerMode.Never);
+        var repo = new InMemoryRunRepository();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, repo, null)
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(30),
+            CallTimeout = TimeSpan.FromMilliseconds(200),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+        };
+        var scopeA = new CloudScope("project-a", "sub-a");
+        var spec = new VmSpec("project-a", "install-1", "job-pj", "evo2_7b", "0.1.0", "stop", "g2-standard-8", TimeSpan.FromHours(4), "DELETE");
+        var request = TestInputs.Request("job-pj", spec) with { Scope = scopeA };
+        var run = Task.Run(() => runner.RunAsync(request, CancellationToken.None), TestContext.Current.CancellationToken);
+        var until = DateTime.UtcNow.AddSeconds(15);
+        while (!repo.AllRecordedInOrder.Any(r => r.JobId == "job-pj" && r.Phase == JobPhase.Running))
+        {
+            (DateTime.UtcNow < until).ShouldBeTrue("the run never reached Running");
+            await Task.Delay(2, TestContext.Current.CancellationToken);
+        }
+
+        gcp.WithSelectedProject("project-b"); // the person picks another project while the run goes on
+        await runner.CancelAsync(scopeA, "job-pj", CancellationToken.None);
+        await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        gcp.Calls.Count.ShouldBeGreaterThan(5);
+        gcp.Calls.ShouldAllBe(c => c.ProjectId == "project-a" && c.AccountSub == "sub-a");
+        gcp.CallsTo("DeleteVm").ShouldNotBeEmpty();
+        (await gcp.FindByJobIdAsync(scopeA, "job-pj", CancellationToken.None)).ShouldBeEmpty();
+    }
 }
