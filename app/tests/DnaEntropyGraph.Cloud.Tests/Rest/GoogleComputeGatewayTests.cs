@@ -795,7 +795,7 @@ public class GoogleComputeGatewayTests
     private static string DiskClaimedByJob1() => OldDiskBody().Replace("\"job-id\":\"job-old\"", "\"job-id\":\"job1\"");
 
     [Fact]
-    public async Task Restore_writes_the_donors_labels_to_the_boot_disk_then_the_instance_each_under_the_fingerprint_it_just_read()
+    public async Task Restore_writes_the_donors_labels_to_the_instance_then_the_boot_disk_each_under_the_fingerprint_it_just_read()
     {
         var rig = new GoogleGatewayHarness();
         rig.Handler
@@ -808,7 +808,7 @@ public class GoogleComputeGatewayTests
 
         state.ShouldBe(LabelRestoreState.Restored);
         rig.Handler.Requests.Where(r => r.Method == Post).Select(r => r.Uri.AbsolutePath[r.Uri.AbsolutePath.IndexOf("/zones/", StringComparison.Ordinal)..])
-            .ShouldBe([$"/zones/{Zone}/disks/deg-job-old/setLabels", $"/zones/{Zone}/instances/deg-job-old/setLabels"], "the disk first, so a failed instance write can be retried");
+            .ShouldBe([$"/zones/{Zone}/instances/deg-job-old/setLabels", $"/zones/{Zone}/disks/deg-job-old/setLabels"], "round 3 finding 4: the instance first, because every job-id lookup reads the instance's labels; a failed disk write then costs nothing a lookup sees");
         foreach (var (path, fingerprint) in new[] { (OldDisk + "/setLabels", "df1"), (OldInstance + "/setLabels", "lf1") })
         {
             using var body = JsonDocument.Parse(rig.Handler.To(Post, path).Single().Body);
@@ -816,6 +816,22 @@ public class GoogleComputeGatewayTests
             var sent = body.RootElement.GetProperty("labels").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
             sent.ShouldBe(DonorLabels.ToDictionary(p => p.Key, p => (string?)p.Value));
         }
+    }
+
+    [Fact]
+    public async Task D970r3_a_boot_disk_write_that_fails_after_the_instance_was_restored_is_still_restored()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldDisk + "/setLabels", 403, RpcError(403, "PERMISSION_DENIED", "no"));
+
+        var state = await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None);
+
+        state.ShouldBe(LabelRestoreState.Restored, "the instance's labels are what every job-id lookup reads, and they are back: a disk that kept the dead job's label costs nothing a lookup sees");
+        rig.Handler.To(Post, OldInstance + "/setLabels").Count.ShouldBe(1);
     }
 
     [Fact]
@@ -831,8 +847,9 @@ public class GoogleComputeGatewayTests
     }
 
     [Fact]
-    public async Task Restore_leaves_a_boot_disk_that_a_newer_run_already_relabelled_and_still_restores_the_instance()
+    public async Task Restore_of_a_VM_whose_boot_disk_a_newer_run_already_relabelled_is_a_newer_owner_and_writes_neither()
     {
+        // Round 3 finding 3 (replaces the round 2 test that expected the instance to be overwritten): a disk another job owns means a newer claim is under way on this VM, so nothing of ours is written to it.
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, ClaimedByJob1())
@@ -841,8 +858,24 @@ public class GoogleComputeGatewayTests
 
         var state = await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None);
 
-        state.ShouldBe(LabelRestoreState.Restored);
+        state.ShouldBe(LabelRestoreState.NewerOwner);
         rig.Handler.To(Post, OldDisk + "/setLabels").ShouldBeEmpty("the disk belongs to the newer run now");
+        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("a newer claim that relabelled the disk is not overwritten on the instance");
+    }
+
+    [Fact]
+    public async Task D970r3_a_boot_disk_already_under_the_donors_own_job_still_lets_the_instance_be_restored()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Get, OldDisk, 200, OldDiskBody()) // the disk never took the new job's labels, or got the donor's back
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"));
+
+        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
+
+        rig.Handler.To(Post, OldDisk + "/setLabels").ShouldBeEmpty("nothing to write to a disk that is already the donor's");
+        rig.Handler.To(Post, OldInstance + "/setLabels").Count.ShouldBe(1);
     }
 
     [Fact]
@@ -897,50 +930,19 @@ public class GoogleComputeGatewayTests
     private static string DiskWith(string jobId) => OldDiskBody().Replace("\"job-id\":\"job-old\"", "\"job-id\":\"" + jobId + "\"");
 
     [Fact]
-    public async Task D970r2_a_disk_write_refused_with_412_whose_re_read_shows_the_donors_labels_is_done_and_the_instance_is_restored()
+    public async Task D970r3_a_disk_write_refused_with_412_after_the_instance_was_restored_is_still_restored()
     {
+        // The instance is written first now: whatever the disk's write says (the donor's labels already there, another owner, or still the failed job's), the instance every lookup reads is back.
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, ClaimedByJob1())
             .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
-            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
-            .Returns(Get, OldDisk, 200, DiskWith("job-old"))
-            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"));
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"));
 
         (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
 
         rig.Handler.To(Post, OldInstance + "/setLabels").Count.ShouldBe(1);
-    }
-
-    [Fact]
-    public async Task D970r2_a_disk_write_refused_with_412_whose_re_read_shows_another_owner_is_a_newer_owner_and_the_instance_is_not_written()
-    {
-        var rig = new GoogleGatewayHarness();
-        rig.Handler
-            .Returns(Get, OldInstance, 200, ClaimedByJob1())
-            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
-            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
-            .Returns(Get, OldDisk, 200, DiskWith("job-newer"));
-
-        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.NewerOwner);
-
-        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("the newer run owns the VM: nothing of ours is written to it");
-    }
-
-    [Fact]
-    public async Task D970r2_a_disk_write_refused_with_412_while_the_disk_still_carries_the_borrowing_jobs_labels_is_an_error_never_restored()
-    {
-        var rig = new GoogleGatewayHarness();
-        rig.Handler
-            .Returns(Get, OldInstance, 200, ClaimedByJob1())
-            .Returns(Get, OldDisk, 200, DiskClaimedByJob1())
-            .Returns(Post, OldDisk + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
-            .Returns(Get, OldDisk, 200, DiskClaimedByJob1());
-
-        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None));
-
-        thrown.Error.HttpStatus.ShouldBe(412);
-        rig.Handler.To(Post, OldInstance + "/setLabels").ShouldBeEmpty("a disk still under the failed job's labels is not reported restored by writing the instance");
     }
 
     [Fact]

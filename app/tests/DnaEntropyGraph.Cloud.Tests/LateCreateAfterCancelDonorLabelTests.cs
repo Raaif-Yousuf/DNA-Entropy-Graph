@@ -322,4 +322,102 @@ public partial class LateCreateAfterCancelTests
             }
         }
     }
+
+    // ---- round 3 ----
+
+    private static SentCreate UnansweredReuse(string jobId, string vmName) => new(TestScopedGateways.Default, jobId, vmName, ZoneA, 1, "install-1", isReuse: true);
+
+    [Fact]
+    public void D970r3_ending_the_watch_of_one_VM_keeps_the_donor_and_the_unanswered_reuse_of_another_VM_of_the_same_job()
+    {
+        var rig = new Rig(new FakeGcp());
+        var labels = new Dictionary<string, string> { ["job-id"] = "job-donor" };
+        var scope = TestScopedGateways.Default;
+        rig.Terminator.NoteDonor(scope, "job-r3", "deg-job-vma", ZoneA, labels);
+        rig.Terminator.NoteDonor(scope, "job-r3", "deg-job-vmb", ZoneA, labels);
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-r3", "deg-job-vma"));
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-r3", "deg-job-vmb"));
+
+        rig.Terminator.ForgetDonor("job-r3", "deg-job-vma", ZoneA);
+
+        rig.Terminator.DonorCount.ShouldBe(1, "only the VM whose watch ended is forgotten");
+        rig.Terminator.ReuseUnanswered("job-r3", "deg-job-vma", ZoneA).ShouldBeFalse();
+        rig.Terminator.ReuseUnanswered("job-r3", "deg-job-vmb", ZoneA).ShouldBeTrue("a later attempt's reuse of another VM is still unanswered: its donor must not be restored under it");
+    }
+
+    [Fact]
+    public async Task D970r3_the_end_of_a_failed_reuses_watch_does_not_drop_another_VMs_donor_of_the_same_job()
+    {
+        var gcp = new FakeGcp().WithReuseStartLostThatLandsLater();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateGrace = TimeSpan.FromSeconds(30);
+        _ = await FailARunWhoseReuseAnswerWasLostAsync(gcp, rig, "job-old970g3", "job-n970g3");
+        rig.Terminator.NoteDonor(TestScopedGateways.Default, "job-n970g3", "deg-job-other", ZoneA, new Dictionary<string, string> { ["job-id"] = "job-donor" });
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-n970g3", "deg-job-other"));
+
+        await gcp.LandAcceptedReuseStartsAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        rig.Terminator.DonorCount.ShouldBe(1, "the other VM's donor outlives this VM's watch");
+        rig.Terminator.ReuseUnanswered("job-n970g3", "deg-job-other", ZoneA).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task D970r3_the_end_of_a_cancels_watch_does_not_drop_another_VMs_donor_of_the_same_job()
+    {
+        var gcp = new FakeGcp().WithReuseStartThatTheClientCancels();
+        var rig = new Rig(gcp);
+        rig.Settings.LateCreateGrace = TimeSpan.FromSeconds(30);
+        _ = await CancelAParkedReuseAsync(gcp, rig, "job-old970h3", "job-n970h3");
+        rig.Terminator.NoteDonor(TestScopedGateways.Default, "job-n970h3", "deg-job-other", ZoneA, new Dictionary<string, string> { ["job-id"] = "job-donor" });
+        rig.Terminator.NoteReuseSend(UnansweredReuse("job-n970h3", "deg-job-other"));
+
+        await gcp.LandAcceptedReuseStartsAsync();
+        await rig.Canceller.WhenReapsEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        rig.Terminator.DonorCount.ShouldBe(1, "the other VM's donor outlives this cancel's watch");
+        rig.Terminator.ReuseUnanswered("job-n970h3", "deg-job-other", ZoneA).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task D970r3_a_hung_reuse_start_that_outlasts_the_reap_window_restores_the_donor_when_it_reads_stopped()
+    {
+        // The start call never answers and never fails (the gateway parks it): the CreateTimeout returns the call, the watch waits the window out, and the VM reads STOPPED under the dead job's labels.
+        var gcp = new FakeGcp().WithReuseParkedAfterClaim();
+        var rig = new Rig(gcp);
+        rig.Settings.CreateTimeout = TimeSpan.FromMilliseconds(100);
+        rig.Settings.LateCreateReapWindow = TimeSpan.FromMilliseconds(400);
+        var oldSpec = await SeedStoppedDonorAsync(gcp, rig, "job-old970i");
+        var donorLabels = await LabelsOfAsync(gcp, oldSpec.VmName);
+        await rig.SeedRowAsync("job-n970i");
+        var spec = Spec("job-n970i");
+
+        _ = await rig.Provisioner.ProvisionAsync(TestInputs.Request("job-n970i", spec), spec, new RunProgress(), CancellationToken.None);
+        var outcome = await rig.NextOutcomeAsync();
+        await rig.Provisioner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        outcome.State.ShouldBe(LateCreateState.GaveUp);
+        outcome.Restore.ShouldNotBeNull("round 3 finding 6: a watch that gave up on a stopped donor still hands it back (the log carries a donor-restore line)").State.ShouldBe(DonorRestoreState.Restored);
+        SameLabels(await LabelsOfAsync(gcp, oldSpec.VmName), donorLabels, "stopped, and the window the start could land in is over");
+        gcp.ReleaseParkedReuse();
+    }
+
+    [Fact]
+    public async Task D970r3_restore_outcomes_nobody_took_are_dropped_with_the_donors_that_expired()
+    {
+        // A Cancelled row's outcomes are kept for the cancel to annotate; a cancel that threw first never takes them.
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse("2026-10-31T08:00:00Z"), timestampFollowsClock: true);
+        var rig = new Rig(new FakeGcp());
+        rig.Settings.TimeProvider = clock;
+        var labels = new Dictionary<string, string> { ["job-id"] = "job-donor" };
+        var scope = new CloudScope("my-project");
+        rig.Terminator.NoteDonor(scope, "job-leaked", "deg-job-gone", ZoneA, labels);
+        await rig.Terminator.RestoreAndNoteAsync("job-leaked", "deg-job-gone", ZoneA); // the VM is not there: a Gone outcome is noted
+        rig.Terminator.DonorStateCount.ShouldBe(1, "the outcome is remembered");
+
+        clock.Advance(TimeSpan.FromHours(2));
+        rig.Terminator.NoteDonor(scope, "job-new", "deg-job-gone", ZoneA, labels);
+
+        rig.Terminator.DonorStateCount.ShouldBe(1, "the expired outcome is dropped; only the new donor remains");
+    }
 }

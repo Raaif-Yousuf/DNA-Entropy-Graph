@@ -112,7 +112,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             {
                 _reuseWatches.TryRemove(finished, out _);
                 ReleaseSent(sent);
-                terminator.ForgetDonors(sent.JobId);
+                terminator.ForgetDonor(sent.JobId, sent.Name, sent.Zone); // round 3 finding 1: this watch's VM only; a later attempt of the job may hold another VM's donor
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,

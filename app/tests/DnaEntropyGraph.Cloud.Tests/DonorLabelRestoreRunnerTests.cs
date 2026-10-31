@@ -26,7 +26,7 @@ public class DonorLabelRestoreRunnerTests
         MaxRunDuration: TimeSpan.FromHours(4),
         TerminationAction: "DELETE");
 
-    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<DonorRestoreOutcome>? onRestore = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
+    private static CloudJobRunner Runner(FakeGcp gcp, InMemoryRunRepository repo, Action<DonorRestoreOutcome>? onRestore = null, TimeSpan? grace = null) => new(gcp, gcp, gcp, gcp, gcp, repo)
     {
         OnDonorRestore = onRestore,
         ResultPollInterval = TimeSpan.FromMilliseconds(1),
@@ -38,7 +38,7 @@ public class DonorLabelRestoreRunnerTests
         BootTimeout = TimeSpan.FromSeconds(10),
         LifecycleTimeout = TimeSpan.FromMilliseconds(500),
         LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
-        LateCreateGrace = TimeSpan.FromMilliseconds(20),
+        LateCreateGrace = grace ?? TimeSpan.FromMilliseconds(20),
     };
 
     private static async Task<IReadOnlyDictionary<string, string>> SeedDonorAsync(FakeGcp gcp, InMemoryRunRepository repo, string oldJob)
@@ -143,5 +143,47 @@ public class DonorLabelRestoreRunnerTests
         var detail = repo.AllRecordedInOrder.Last(r => r.JobId == "job-n970r5").ErrorDetail;
         detail.ShouldNotBeNull().ShouldContain("could not be restored (permission)");
         detail.ShouldContain("Cloud page");
+    }
+
+    [Fact]
+    public async Task D970r3_a_reuse_that_fails_with_a_poll_timeout_class_falls_back_to_a_create_and_the_donor_ends_stopped_under_its_own_labels()
+    {
+        // Kind Other is neither project-wide nor Network: the ladder goes on with a create, and the donor (stopped, the start unanswered) is handed back by the watch once the grace has run.
+        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Other);
+        var repo = new InMemoryRunRepository();
+        var donorLabels = await SeedDonorAsync(gcp, repo, "job-old970r3x");
+        var restores = new List<DonorRestoreOutcome>();
+        var runner = Runner(gcp, repo, restores.Add, grace: TimeSpan.FromSeconds(2));
+
+        var result = await runner.RunAsync(TestInputs.Request("job-n970r3x", Spec("job-n970r3x")), CancellationToken.None);
+
+        // The run is over (terminal) while the watch still holds the donor: the restore is not the run's to do, and the watch must survive the run's own terminal clean-up.
+        result.FinalPhase.ShouldBe(JobPhase.Completed, result.FailureMessage);
+        (await gcp.GetVmAsync("deg-job-old970r3x", Zone, CancellationToken.None))!.Labels!["job-id"].ShouldBe("job-n970r3x", "the start is unanswered and the grace has not run: the donor is not handed back yet");
+        await runner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        var donor = (await gcp.GetVmAsync("deg-job-old970r3x", Zone, CancellationToken.None))!;
+        donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        Flat(donor.Labels).ShouldBe(Flat(donorLabels), "the run went on a VM of its own; the donor is under its own labels again");
+        (await gcp.FindByJobIdAsync("job-n970r3x", CancellationToken.None)).ShouldNotContain(v => v.Name == "deg-job-old970r3x");
+        restores.ShouldHaveSingleItem().State.ShouldBe(DonorRestoreState.Restored);
+    }
+
+    [Fact]
+    public async Task D970r3_a_run_that_fails_on_its_fallback_VM_after_an_unanswered_reuse_still_gets_the_donor_back_from_the_watch()
+    {
+        var gcp = new FakeGcp().WithReuseStartFailure(CloudErrorKind.Other).WithWorker(FakeWorkerMode.WholeJobFailed);
+        var repo = new InMemoryRunRepository();
+        var donorLabels = await SeedDonorAsync(gcp, repo, "job-old970r3y");
+        var runner = Runner(gcp, repo, grace: TimeSpan.FromSeconds(2));
+
+        var result = await runner.RunAsync(TestInputs.Request("job-n970r3y", Spec("job-n970r3y")), CancellationToken.None);
+        await runner.WhenReuseWatchesEndedAsync().WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        var donor = (await gcp.GetVmAsync("deg-job-old970r3y", Zone, CancellationToken.None))!;
+        donor.Status.ShouldBeOneOf("STOPPED", "TERMINATED");
+        Flat(donor.Labels).ShouldBe(Flat(donorLabels));
+        gcp.DeleteAttempts.ShouldNotContain(d => d.Name == "deg-job-old970r3y","a borrowed VM is never deleted");
     }
 }

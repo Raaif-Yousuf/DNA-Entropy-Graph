@@ -172,7 +172,7 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
 
         if (watched.Count == 0)
         {
-            terminator.ForgetDonors(jobId); // issue #970: nothing is left that could still land, so no donor is needed again
+            ForgetReuseDonors(sent); // issue #970: nothing is left that could still land, so no donor of THESE creates is needed again
             return;
         }
 
@@ -187,11 +187,20 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
                     provisioner.ReleaseSent(create);
                 }
 
-                terminator.ForgetDonors(jobId); // issue #970: the watch has restored what it could
+                ForgetReuseDonors(watched); // issue #970: the watch has restored what it could
             },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+    }
+
+    /// <summary>Round 3 finding 1: forgets the donor and the reuse record of each REUSE among <paramref name="creates"/>, by its own VM: another VM's donor of the same job (a later attempt's) is not this watch's to drop.</summary>
+    private void ForgetReuseDonors(IEnumerable<SentCreate> creates)
+    {
+        foreach (var create in creates.Where(c => c.IsReuse))
+        {
+            terminator.ForgetDonor(create.JobId, create.Name, create.Zone);
+        }
     }
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Task, byte> _reaps = new();

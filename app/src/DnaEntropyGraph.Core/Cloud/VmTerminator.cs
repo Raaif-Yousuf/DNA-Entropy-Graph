@@ -242,7 +242,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string JobId, string Name, string Zone), SentCreate> _reuseSends = new();
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string JobId, string Name, string Zone), Donor> _donors = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentQueue<DonorRestoreOutcome>> _restoreOutcomes = new(StringComparer.Ordinal);
+    private sealed record RestoreOutcomes(long NotedAt)
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<DonorRestoreOutcome> Queue { get; } = new();
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RestoreOutcomes> _restoreOutcomes = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Issue #970: records, BEFORE the reuse is sent, the labels the donor VM carries now, so a failed or cancelled reuse can put them back (the reuse replaces the whole label set, the VM's
@@ -268,6 +273,15 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             {
                 _donors.TryRemove(key, out _);
                 _reuseSends.TryRemove(key, out _);
+            }
+        }
+
+        // Round 3 finding 7: a Cancelled row's restore outcomes are kept for the cancel to annotate; one whose cancel never got there would live for the whole process, so the same bound drops it.
+        foreach (var (jobId, outcomes) in _restoreOutcomes.ToList())
+        {
+            if (settings.ElapsedSince(outcomes.NotedAt) >= bound)
+            {
+                _restoreOutcomes.TryRemove(jobId, out _);
             }
         }
     }
@@ -296,9 +310,19 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
+    /// <summary>
+    /// Round 3 finding 1: drops the donor and the reuse record of ONE VM of a job. The watch that owned that VM has ended; a later attempt of the same job may hold a donor (and an unanswered reuse)
+    /// of a DIFFERENT VM, which a job-wide forget would lose.
+    /// </summary>
+    public void ForgetDonor(string jobId, string name, string zone)
+    {
+        _donors.TryRemove((jobId, name, zone), out _);
+        _reuseSends.TryRemove((jobId, name, zone), out _);
+    }
+
     /// <summary>The sentence the row of a failed run gets about the VM it borrowed, taken once; null when nothing was restored, left or failed for the job.</summary>
     public string? TakeDonorRestoreSentence(string jobId)
-        => _restoreOutcomes.TryRemove(jobId, out var queue) ? DonorRestoreOutcome.SentenceFor([.. queue]) : null;
+        => _restoreOutcomes.TryRemove(jobId, out var noted) ? DonorRestoreOutcome.SentenceFor([.. noted.Queue]) : null;
 
     /// <summary>Forgets the outcomes noted for a job whose run ended without needing them (never reaches a row).</summary>
     public void ForgetRestoreOutcomes(string jobId) => _restoreOutcomes.TryRemove(jobId, out _);
@@ -311,7 +335,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     {
         if (await RestoreDonorLabelsAsync(jobId, name, zone).ConfigureAwait(false) is { } outcome)
         {
-            _restoreOutcomes.GetOrAdd(jobId, _ => new()).Enqueue(outcome);
+            _restoreOutcomes.GetOrAdd(jobId, _ => new RestoreOutcomes(settings.StartClock())).Queue.Enqueue(outcome);
         }
     }
 
@@ -907,7 +931,15 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 return settings.ElapsedSince(watch.EndedAt.Value) >= settings.LateCreateGrace || windowOver ? await ReuseStoppedAsync(sent).ConfigureAwait(false) : null;
             }
 
-            return windowOver ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp) : null;
+            if (!windowOver)
+            {
+                return null;
+            }
+
+            // Round 3 finding 6: a start call that never answered (a hang the CreateTimeout cut off) leaves a STOPPED donor under the dead job's labels for the whole window. The window is the bound
+            // on how long a start is waited for, so the donor goes back now (the same restore, which logs `donor-restore` with its state, NotStopped included). A start that lands after this runs the
+            // VM under the donor's own labels and its own keep-alive (the reconciler's lifecycle pass at the next launch, and maxRunDuration, are the backstops; see cloud_design.md #970).
+            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent.JobId, sent.Name, sent.Zone).ConfigureAwait(false));
         }
 
         sent.Landed = true; // seen running: the start landed
