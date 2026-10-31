@@ -35,6 +35,8 @@ public class SelectionReadGuardTests
         ["JobEngine.cs"] = ("the ONE capture of the selected scope when a new run is created; the run keeps it from then on", 1),
         ["CloudResourcesViewModel.cs"] = ("the Cloud page lists the selected project; each row keeps the scope it was listed in", 6),
         ["HistoryViewModel.cs"] = ("importing an existing run adopts the selected project and account; the Runs list reads the active account ONCE per load (issue #112) to choose whose runs to list", 3),
+        ["ProjectSwitcher.cs"] = ("the project switcher (issue #260) IS the selection path: it lists the current account's projects, checks the target as the current account and points the account at the new project; a run is never touched (calls on a run use its own scope)", 5),
+        ["ProjectSwitchSettingsViewModel.cs"] = ("the Settings switcher card shows the project in use (issue #260): one read per refresh", 1),
         ["LeftRunningGuard.cs"] = ("the left-running scan adds the selected scope to the scopes of recent runs", 1),
         ["ServiceRegistration.cs"] = ("hands the selected project to the budget gateway and the selected scope to the reconciler's sweeps", 2),
     };

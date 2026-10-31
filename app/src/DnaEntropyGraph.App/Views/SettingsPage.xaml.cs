@@ -30,6 +30,8 @@ public sealed partial class SettingsPage : Page
     public BudgetSettingsViewModel Budget { get; }
     public CloudActivityLogSettingsViewModel CloudActivity { get; }
 
+    public ProjectSwitchSettingsViewModel ProjectSwitch { get; }
+
     public ProxySettingsViewModel Proxy { get; }
 
     public SettingsTransferViewModel Transfer { get; }
@@ -51,6 +53,7 @@ public sealed partial class SettingsPage : Page
         SpendCap = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SpendCapSettingsViewModel>();
         ThisPc = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ThisPcSettingsViewModel>();
         ExternalViewers = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ExternalViewersSettingsViewModel>();
+        ProjectSwitch = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ProjectSwitchSettingsViewModel>();
         Updates = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<UpdateViewModel>();
         Proxy = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<ProxySettingsViewModel>();
         Transfer = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<SettingsTransferViewModel>();
@@ -64,5 +67,6 @@ public sealed partial class SettingsPage : Page
     {
         _ = ThisPc.RefreshCommand.ExecuteAsync(null);
         _ = Budget.RefreshCommand.ExecuteAsync(null);
+        _ = ProjectSwitch.RefreshCommand.ExecuteAsync(null);
     }
 }

@@ -130,6 +130,9 @@ public sealed class JobReconciler
     /// </summary>
     internal Action<string>? CancelSettleArmed { get; set; }
     private readonly IDiagnosticsLog _log;
+
+    /// <summary>Issue #260: where a resumed run's results bucket is remembered under the run's own project; null in a test that does not care.</summary>
+    private readonly IProjectSettingsStore? _projectSettings;
     private readonly Action<string?>? _onSignInNeeded;
 
     /// <summary>Tells the app an account needs to sign in (review M3); the handler is the app's and must not be able to break a reconcile pass.</summary>
@@ -268,8 +271,10 @@ public sealed class JobReconciler
         IDiagnosticsLog? log = null,
         TimeSpan? cancelSettleTimeout = null,
         Func<IEnumerable<CloudScope>>? additionalSweepScopes = null,
-        Action<string?>? onSignInNeeded = null)
+        Action<string?>? onSignInNeeded = null,
+        IProjectSettingsStore? projectSettings = null)
     {
+        _projectSettings = projectSettings;
         _onSignInNeeded = onSignInNeeded;
         _additionalSweepScopes = additionalSweepScopes ?? (() => []);
         _log = log ?? NullDiagnosticsLog.Instance;
@@ -984,6 +989,12 @@ public sealed class JobReconciler
         underway.Action = ReattachAction.Resumed;
         underway.Judged();
         var result = await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        if (_projectSettings is not null)
+        {
+            // A run the engine started remembers its bucket when it ends (JobEngine); one resumed after a restart never went through there.
+            await ProjectBucketMemory.RememberAsync(_runs, _projectSettings, row.JobId, row.ProjectId).ConfigureAwait(false);
+        }
+
         return new ReattachOutcome(row.JobId, ReattachAction.Resumed, result.FinalPhase, result.FailureCode);
     }
 

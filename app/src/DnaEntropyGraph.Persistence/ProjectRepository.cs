@@ -31,6 +31,28 @@ public sealed class ProjectRepository : IProjectRepository
 
     private const string EnsureSql = "INSERT INTO Projects (ProjectId) VALUES (@ProjectId) ON CONFLICT(ProjectId) DO NOTHING;";
 
+    // Issue #260: the account row first (Projects.AccountSub and AccountProjects reference it; only its Sub, no email). The project's own AccountSub is set
+    // only while it is empty (the first account to choose it), never rewritten; the account's own list is the AccountProjects row, one per account.
+    private const string ClaimSql = """
+        INSERT INTO Accounts (Sub) VALUES (@AccountSub) ON CONFLICT(Sub) DO NOTHING;
+        INSERT INTO Projects (ProjectId, AccountSub) VALUES (@ProjectId, @AccountSub)
+        ON CONFLICT(ProjectId) DO UPDATE SET AccountSub = COALESCE(Projects.AccountSub, excluded.AccountSub);
+        INSERT INTO AccountProjects (AccountSub, ProjectId) VALUES (@AccountSub, @ProjectId) ON CONFLICT(AccountSub, ProjectId) DO NOTHING;
+        """;
+
+    private const string SetBucketSql = """
+        INSERT INTO Projects (ProjectId, Bucket) VALUES (@ProjectId, @Bucket)
+        ON CONFLICT(ProjectId) DO UPDATE SET Bucket = excluded.Bucket;
+        """;
+
+    private const string SelectOfAccountSql = """
+        SELECT p.ProjectId, p.ProjectNumber, p.DisplayName, p.AccountSub, p.HomeRegionGroup, p.Bucket, p.WorkerSaEmail,
+               p.BillingEnabled, p.ApisEnabledJson, p.QuotaJson, p.QuotaCheckedAt, p.LastGoodZone,
+               p.SetupCompletedAt, p.SmokeTestPassedAt, p.IsActive
+        FROM Projects p JOIN AccountProjects ap ON ap.ProjectId = p.ProjectId
+        WHERE ap.AccountSub = @AccountSub;
+        """;
+
     private readonly SqliteDatabase _database;
 
     public ProjectRepository(SqliteDatabase database) => _database = database;
@@ -55,6 +77,33 @@ public sealed class ProjectRepository : IProjectRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(EnsureSql, new { ProjectId = projectId }, cancellationToken: cancellationToken);
+        await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
+    public async Task ClaimAsync(string projectId, string accountSub, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountSub);
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(ClaimSql, new { ProjectId = projectId, AccountSub = accountSub }, cancellationToken: cancellationToken);
+        await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<ProjectRecord>> GetOfAccountAsync(string accountSub, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountSub);
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(SelectOfAccountSql, new { AccountSub = accountSub }, cancellationToken: cancellationToken);
+        var rows = await connection.QueryAsync<Row>(command).ConfigureAwait(false);
+        return rows.Select(ToRecord).ToList();
+    }
+
+    public async Task SetBucketAsync(string projectId, string bucket, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bucket);
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(SetBucketSql, new { ProjectId = projectId, Bucket = bucket }, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command).ConfigureAwait(false);
     }
 

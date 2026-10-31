@@ -68,7 +68,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
             AppVersion = excluded.AppVersion, WorkerVersion = excluded.WorkerVersion, WorkerImageDigest = excluded.WorkerImageDigest,
             ContractVersion = excluded.ContractVersion, InstallationId = excluded.InstallationId, Imported = excluded.Imported,
             PreemptionCount = excluded.PreemptionCount,
-            AccountSub = COALESCE(excluded.AccountSub, Runs.AccountSub);
+            AccountSub = COALESCE(Runs.AccountSub, excluded.AccountSub);
         """;
 
     private readonly SqliteDatabase _database;

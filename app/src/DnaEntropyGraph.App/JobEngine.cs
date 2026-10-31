@@ -34,7 +34,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IGcpAccount _account;
     private readonly ISettingsStore _settings;
     private readonly IRunRepository _runs;
-    private readonly IProjectRepository _projects;
+    private readonly IProjectSettingsStore _projects;
     private readonly IRunInputStore _inputs;
     private readonly IWorkerImageProvider _images;
     private readonly IAccessionLookup _accessionLookup;
@@ -49,7 +49,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IGcpAccount account,
         ISettingsStore settings,
         IRunRepository runs,
-        IProjectRepository projects,
+        IProjectSettingsStore projects,
         IRunInputStore inputs,
         IWorkerImageProvider images,
         IAccessionLookup accessionLookup,
@@ -235,7 +235,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // keep these columns. Runs.ProjectId references Projects with foreign keys on (issue #532),
         // and every path that starts a run comes through here, so the project row is ensured here
         // (idempotent, never overwrites a richer row) rather than at each place a project is selected.
-        await _projects.EnsureAsync(projectId, cancellationToken).ConfigureAwait(false);
+        await _projects.EnsureAsync(projectId, scope.AccountSub, cancellationToken).ConfigureAwait(false);
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,
@@ -255,9 +255,25 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
 
         // Registered before the body runs (see ActiveRuns), so a cancel can never find a run that is not there yet. The runner
         // records every phase itself and never throws for a failure; a cancel the caller asked for ends the task quietly.
-        _ = _activeRuns.TryStart(jobId, token => _runner.RunAsync(request, token));
+        _ = _activeRuns.TryStart(jobId, token => RunAndRememberAsync(request, jobId, projectId, token));
 
         return jobId;
+    }
+
+    /// <summary>
+    /// Runs the job, then remembers the results bucket it used under the run's OWN project (issue #260): the project selected by now may be a different one,
+    /// and the bucket belongs to the project the run started in.
+    /// </summary>
+    private async Task RunAndRememberAsync(CloudJobRequest request, string jobId, string projectId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _runner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await ProjectBucketMemory.RememberAsync(_runs, _projects, jobId, projectId).ConfigureAwait(false);
+        }
     }
 
     public async Task CancelRunAsync(string jobId, CancellationToken cancellationToken)

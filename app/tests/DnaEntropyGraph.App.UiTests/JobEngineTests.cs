@@ -170,16 +170,6 @@ public class JobEngineTests
             gpu ? new LocalCapability(true, [], new GpuInfo("NVIDIA GeForce RTX 4090", 24564, "551.61"), 100L << 30) : new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30),
             new LocalEngineHealth(LocalEngineState.Healthy, "0.0.1", gpu, gpu, string.Empty));
 
-    private sealed class MemoryProjects : IProjectRepository
-    {
-        public Task<IReadOnlyList<ProjectRecord>> GetAllAsync(CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<ProjectRecord>>([]);
-
-        public Task UpsertAsync(ProjectRecord project, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task EnsureAsync(string projectId, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
     private sealed class Harness
     {
         public Harness(FakeGcp gcp, WorkerImageResolution? image = null, Func<string?>? downloads = null, LocalReadiness? readiness = null, IProcessLauncher? launcher = null)
@@ -220,10 +210,14 @@ public class JobEngineTests
             Ready = ready;
             var local = new LocalRunDriver(Messenger, localRunner, ready, Settings, Runs, inputs, activeRuns, downloads);
             Local = local;
-            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, new MemoryProjects(), inputs, ImageProvider, Lookup, activeRuns, new RunTargetResolver(ready), local, downloads);
+            Engine = new JobEngine(Messenger, runner, gcp, Settings, Runs, Projects, inputs, ImageProvider, Lookup, activeRuns, new RunTargetResolver(ready), local, downloads);
         }
 
         public ScriptedAccessionLookup Lookup { get; } = new();
+
+        public MemoryProjectSettings Projects { get; } = new();
+
+        public ProjectSwitcher Switcher => new(Gcp, Projects, Runs, Gcp);
 
         public StaticImageProvider ImageProvider { get; }
 
@@ -247,7 +241,7 @@ public class JobEngineTests
 
         public ConcurrentQueue<RunPhaseChangedMessage> Messages { get; } = new();
 
-        public TaskCompletionSource<JobPhase> Terminal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<JobPhase> Terminal { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<JobPhase> TerminalAsync() => await Terminal.Task.WaitAsync(TimeSpan.FromSeconds(10));
     }
@@ -276,6 +270,48 @@ public class JobEngineTests
         var vms = await h.Gcp.FindByJobIdAsync(jobId, CancellationToken.None);
         vms.Count.ShouldBe(1, "the observable: FakeGcp recorded a CreateVmAsync for this job id");
         vms[0].Status.ShouldBe("STOPPED", "Hard Rule 11 default after a run is Stop");
+    }
+
+    [Fact]
+    public async Task A_project_switch_while_a_run_is_provisioning_never_moves_the_run_it_ends_in_the_project_it_started_in()
+    {
+        // Issue #260 on top of #830: the switch is allowed mid-run, and the run still creates, finds and stops its VM in the project it started in, as the account it started as.
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project).WithBlockedCreate());
+        var jobId = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        await h.Gcp.CreateVmEntered.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+
+        await h.Switcher.SwitchAsync("other-project", CancellationToken.None);
+        h.Gcp.SelectedProjectId.ShouldBe("other-project");
+        h.Gcp.ReleaseCreate();
+
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+        var row = (await h.Runs.GetAllAsync(CancellationToken.None)).Single(r => r.JobId == jobId);
+        row.ProjectId.ShouldBe(Project);
+        (await h.Gcp.FindByJobIdAsync(new CloudScope(Project, FakeGcp.DefaultAccountSub), jobId, CancellationToken.None)).Single().Status.ShouldBe("STOPPED", "the VM was ended in its own project");
+        var runCalls = h.Gcp.Calls.Where(c => c.Method is "CreateVm" or "StopVm" or "DeleteVm" or "GetVm" or "FindByJobId").ToList();
+        runCalls.ShouldNotBeEmpty();
+        runCalls.ShouldAllBe(c => c.ProjectId == Project, "no call of the run went to the project selected meanwhile");
+        h.Projects.Row(Project)!.Bucket.ShouldBe(FakeGcp.BucketName(Project), "the bucket is remembered for the run's project");
+        h.Projects.Row("other-project")!.Bucket.ShouldBeNull("not for the project selected meanwhile");
+    }
+
+    [Fact]
+    public async Task After_a_switch_the_next_run_starts_in_the_new_project_and_the_old_one_keeps_its_own()
+    {
+        var h = new Harness(new FakeGcp().WithSelectedProject(Project));
+        var first = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        await h.Switcher.SwitchAsync("other-project", CancellationToken.None);
+        h.Terminal = new TaskCompletionSource<JobPhase>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = await h.Engine.StartRunAsync(Options(), CancellationToken.None);
+        (await h.TerminalAsync()).ShouldBe(JobPhase.Completed);
+
+        var rows = await h.Runs.GetAllAsync(CancellationToken.None);
+        rows.Single(r => r.JobId == first).ProjectId.ShouldBe(Project);
+        rows.Single(r => r.JobId == second).ProjectId.ShouldBe("other-project");
+        h.Projects.Row(Project)!.Bucket.ShouldBe(FakeGcp.BucketName(Project));
+        h.Projects.Row("other-project")!.Bucket.ShouldBe(FakeGcp.BucketName("other-project"), "each project remembers its own bucket");
     }
 
     [Fact]

@@ -96,6 +96,20 @@
                 </Border>
             </StackPanel>
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="SettingsProjectHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
+                <Border Style="{StaticResource SettingsGroupCardStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Uid="SettingsProjectExplainer" TextWrapping="Wrap" />
+                        <TextBlock x:Uid="ProjectCurrentLabel" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock Text="{x:Bind ProjectSwitch.CurrentProjectId, Mode=OneWay}" />
+                        <ComboBox x:Uid="ProjectSwitchBox" ItemsSource="{x:Bind ProjectSwitch.ProjectIds}" SelectedItem="{x:Bind ProjectSwitch.ChosenProjectId, Mode=TwoWay}" />
+                        <Button x:Uid="ProjectSwitchButton" Command="{x:Bind ProjectSwitch.SwitchCommand}" />
+                        <TextBlock Text="{x:Bind ProjectSwitch.BucketText, Mode=OneWay}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ProjectSwitch.Status, Mode=OneWay}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="SettingsCloudResultsHeader" Style="{StaticResource SubtitleTextBlockStyle}" />
                 <Border Style="{StaticResource SettingsGroupCardStyle}">
                     <StackPanel Spacing="8">

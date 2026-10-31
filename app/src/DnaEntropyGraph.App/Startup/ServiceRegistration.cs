@@ -424,7 +424,8 @@ public static class ServiceRegistration
                 root.DefaultOutputSource(Services.KnownFolders.Downloads),
                 log: sp.GetRequiredService<IDiagnosticsLog>(),
                 additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().ActiveSnapshot() is { ProjectId.Length: > 0 } active ? [new CloudScope(active.ProjectId, active.AccountSub)] : [],
-                onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)));
+                onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)),
+                projectSettings: sp.GetRequiredService<IProjectSettingsStore>());
         });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
@@ -480,6 +481,10 @@ public static class ServiceRegistration
         services.AddSingleton<RunTargetPickerViewModel>();
         services.AddTransient<ThisPcSettingsViewModel>();
         services.AddTransient<CloudResultsSettingsViewModel>();
+        // Issue #260: the project switcher card. The switcher holds no state of its own; the store reads the Projects and AccountProjects tables.
+        services.AddSingleton<IProjectSettingsStore>(sp => new ProjectSettingsStore(sp.GetRequiredService<IProjectRepository>()));
+        services.AddSingleton<ProjectSwitcher>();
+        services.AddTransient<ProjectSwitchSettingsViewModel>();
         services.AddSingleton<NotificationSettings>();
         // Issue #143: one tour state shared by the window's tips and the Settings replay button.
         services.AddSingleton<TourSettings>();

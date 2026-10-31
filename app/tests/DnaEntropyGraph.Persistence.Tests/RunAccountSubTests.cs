@@ -37,4 +37,31 @@ public sealed class RunAccountSubTests
         row.Phase.ShouldBe(JobPhase.Completed);
         row.AccountSub.ShouldBe("sub-b");
     }
+
+    [Fact]
+    public async Task A_later_write_naming_another_account_never_rewrites_the_one_already_set()
+    {
+        // Issue #260 review: the account a run was made as is fixed for the run's whole life; a stop, delete or reconcile acts as that account.
+        using var paths = new TempPaths();
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        await repository.UpsertAsync(new RunRecord("job-c", JobPhase.Running, DateTimeOffset.UtcNow, AccountSub: "sub-c"), CancellationToken.None);
+
+        await repository.UpsertAsync(new RunRecord("job-c", JobPhase.Completed, DateTimeOffset.UtcNow, AccountSub: "sub-other"), CancellationToken.None);
+
+        var row = (await repository.GetAllAsync(CancellationToken.None)).Single();
+        row.Phase.ShouldBe(JobPhase.Completed);
+        row.AccountSub.ShouldBe("sub-c");
+    }
+
+    [Fact]
+    public async Task A_row_with_no_account_takes_the_first_one_a_write_names()
+    {
+        using var paths = new TempPaths();
+        var repository = new RunRepository(new SqliteDatabase(paths.DatabasePath));
+        await repository.UpsertAsync(new RunRecord("job-d", JobPhase.Running, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        await repository.UpsertAsync(new RunRecord("job-d", JobPhase.Running, DateTimeOffset.UtcNow, AccountSub: "sub-d"), CancellationToken.None);
+
+        (await repository.GetAllAsync(CancellationToken.None)).Single().AccountSub.ShouldBe("sub-d");
+    }
 }

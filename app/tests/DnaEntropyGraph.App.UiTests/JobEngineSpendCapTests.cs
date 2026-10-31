@@ -67,16 +67,6 @@ public class JobEngineSpendCapTests
         }
     }
 
-    private sealed class MemoryProjects : IProjectRepository
-    {
-        public Task<IReadOnlyList<ProjectRecord>> GetAllAsync(CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<ProjectRecord>>([]);
-
-        public Task UpsertAsync(ProjectRecord project, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task EnsureAsync(string projectId, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
     private sealed class MemoryLedger : ICostLedgerRepository
     {
         private readonly List<CostLedgerEntry> _rows = [];
@@ -165,7 +155,7 @@ public class JobEngineSpendCapTests
                 (id, phase) => messenger.Send(new RunPhaseChangedMessage(id, phase)));
             var local = new LocalRunDriver(messenger, localRunner, ready, Settings, Runs, inputs, activeRuns);
             Engine = new JobEngine(
-                messenger, runner, gcp, Settings, Runs, new MemoryProjects(), inputs,
+                messenger, runner, gcp, Settings, Runs, new MemoryProjectSettings(), inputs,
                 new Image(), new ScriptedAccessionLookup(), activeRuns, new RunTargetResolver(ready), local,
                 estimates: new CostEstimateService(pricing, Inner, Gate));
         }

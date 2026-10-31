@@ -121,7 +121,7 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null, IProjectSettingsStore? projectSettings = null) => new(
             Runner,
             compute ?? Gcp,
             Gcp,
@@ -137,7 +137,8 @@ public class JobReconcilerTests
             mutationTimeout,
             log ?? Log,
             additionalSweepScopes: additionalSweepScopes ?? (() => [new CloudScope(Project)]),
-            onSignInNeeded: onSignInNeeded);
+            onSignInNeeded: onSignInNeeded,
+            projectSettings: projectSettings);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
@@ -297,6 +298,21 @@ public class JobReconcilerTests
         outcome.Action.ShouldBe(ReattachAction.Resumed);
         var projects = env.Gcp.Calls.Select(c => c.ProjectId).Distinct().ToList();
         projects.ShouldBe([Project], "the row names " + Project + "; the selection must not leak into a resumed run");
+    }
+
+    [Fact]
+    public async Task A_resumed_run_remembers_its_bucket_under_the_project_its_row_names_not_the_one_selected_now()
+    {
+        // Issue #260: a run the engine started remembers its bucket when it ends; one resumed after a restart never went through there, so the reconciler does it.
+        var env = new Env(new FakeGcp().WithSelectedProject("selected-later"));
+        var store = new MemoryProjectStore();
+        await env.SeedAsync("job-bucket", JobPhase.Running, vm: true);
+
+        var outcome = await OneAsync(env.Reconciler(projectSettings: store), "job-bucket");
+
+        outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
+        store.Rows[Project].Bucket.ShouldBe(FakeGcp.BucketName(Project));
+        store.Rows.ContainsKey("selected-later").ShouldBeFalse();
     }
 
     [Fact]

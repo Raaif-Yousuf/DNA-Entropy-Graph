@@ -325,6 +325,10 @@ panel and keeps this one. The run-error strings say "Choose Save diagnostics in 
 pins the button label to that wording. Success and failure are shown both as a toast and inline under the button, because
 `ToastService` is still a debug-output placeholder.
 
+### Settings: Google Cloud project (issue #260)
+
+`ProjectSwitchSettingsViewModel` drives the card (header `SettingsProjectHeader`, between Files and Cloud results): the project in use, a `ComboBox` of the projects this account chose or ran in, **Switch to this project**, the bucket remembered for the chosen project and a polite live status line. `ProjectSwitcher.SwitchAsync` checks that Google can open the target, remembers it under the signed-in account and only then calls `IGcpAccount.SelectProjectAsync` (the project is stored on the account, so no browser). It never refuses because of a run (every call on a run uses the run's own project, cloud_design.md 24.2). Every failure is one `AuthError_*` message plus its one action (`PROJECT_UNREACHABLE` Choose another project; `SIGNIN_NETWORK` and `PROJECT_SAVE_FAILED` Try again; an expired sign-in keeps its own Sign in again), and an unexpected exception is `ProjectSwitchFailed` plus Try again, never an exception out of the button. The page fills the list in `OnNavigatedTo` (a combo nobody fills shows nothing); `Guards.Tests/ProjectSwitchWiringTests` pins the bindings, that call, the DI registrations and the strings. The Cloud page follows a switch without a browser: its next listing reads `SelectedScope()` (`ProjectSwitchSettingsViewModelTests.After_a_switch_the_Cloud_page_lists_the_other_projects_bucket...`). Per project today: only the results bucket; zone memory, budget and region choice are not per project yet. No switcher on the status pill, and no project filter on the Runs page (cloud_design.md 24.2 has the reasons).
+
 ### Share settings (issue #242)
 
 The last group on the page. **Export settings** and **Import settings** drive `SettingsTransferViewModel`; the import shows a

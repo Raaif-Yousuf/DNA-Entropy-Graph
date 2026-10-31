@@ -3501,4 +3501,40 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
   </data>
+  <data name="SettingsProjectHeader.Text" xml:space="preserve">
+    <value>Google Cloud project</value>
+  </data>
+  <data name="SettingsProjectExplainer.Text" xml:space="preserve">
+    <value>Pick the Google Cloud project the next run uses. You do not sign in again. A run that is already going keeps the project it started in.</value>
+  </data>
+  <data name="ProjectSwitchBox.Header" xml:space="preserve">
+    <value>Project</value>
+  </data>
+  <data name="ProjectSwitchButton.Content" xml:space="preserve">
+    <value>Switch to this project</value>
+  </data>
+  <data name="ProjectCurrentLabel.Text" xml:space="preserve">
+    <value>Project in use</value>
+  </data>
+  <data name="ProjectSwitched" xml:space="preserve">
+    <value>Now using the project {0}. Your next run starts there.</value>
+  </data>
+  <data name="ProjectBucketKnown" xml:space="preserve">
+    <value>Place your results are kept (a bucket): {0}</value>
+  </data>
+  <data name="ProjectBucketNone" xml:space="preserve">
+    <value>No place for your results (a bucket) yet. The first run in this project creates one.</value>
+  </data>
+  <data name="AuthError_PROJECT_UNREACHABLE" xml:space="preserve">
+    <value>Google could not open that project. It may not exist, or the signed-in account may not be allowed to use it. Nothing was changed. Choose another project.</value>
+  </data>
+  <data name="AuthAction_ChooseAnotherProject" xml:space="preserve">
+    <value>Choose another project</value>
+  </data>
+  <data name="ProjectListFailed" xml:space="preserve">
+    <value>The app could not read its list of projects. Close Settings and open it again to try again.</value>
+  </data>
+  <data name="ProjectSwitchFailed" xml:space="preserve">
+    <value>The project could not be switched, and nothing was changed.</value>
+  </data>
 </root>

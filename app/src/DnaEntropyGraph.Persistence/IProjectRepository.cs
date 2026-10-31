@@ -22,6 +22,19 @@ public interface IProjectRepository
     /// a run can only be written for a project that has a row.
     /// </summary>
     Task EnsureAsync(string projectId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Makes sure a row exists for <paramref name="projectId"/> and that <paramref name="accountSub"/> has it in its own list (issue #260). Several accounts may
+    /// choose one project. The row's own <c>AccountSub</c> is filled only while empty and never rewritten. The account's row is inserted first with only its
+    /// <c>Sub</c> (no email is stored here).
+    /// </summary>
+    Task ClaimAsync(string projectId, string accountSub, CancellationToken cancellationToken);
+
+    /// <summary>The projects <paramref name="accountSub"/> has chosen (see <see cref="ClaimAsync"/>).</summary>
+    Task<IReadOnlyList<ProjectRecord>> GetOfAccountAsync(string accountSub, CancellationToken cancellationToken);
+
+    /// <summary>Sets the <c>Bucket</c> column of <paramref name="projectId"/> (inserting a bare row when none exists) and no other column, so it cannot overwrite a concurrent change to another one.</summary>
+    Task SetBucketAsync(string projectId, string bucket, CancellationToken cancellationToken);
 }
 
 /// <summary>One row of the <c>Projects</c> table.</summary>
