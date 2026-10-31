@@ -24,7 +24,7 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
   files back into the run's folder. They are only what was finished before the stop. It is
   not offered when the run never saved anything online.
 - **Download again**: if you deleted the local copy of a run's results but they are still in
-  your cloud storage, this fetches them again without re-running the analysis. Cloud
+  your cloud storage, this fetches them again without re-running the analysis, into the same folder name as before (made again if it is gone, so Delete files on this PC can remove it later without asking). Cloud
   copies are kept for a while after a run finishes (90 days by default, adjustable in
   Settings) and then automatically deleted; once that happens, Download again is no longer
   possible (the button is greyed out) and only Run again will get you a fresh result.
@@ -46,6 +46,8 @@ appears. A run with no entropy track, or whose folder was moved or deleted, has 
 A run that failed shows, under its status, a short plain explanation of why and the one thing
 to do about it. A run that finished but needs your attention (for example, your results are
 saved but we could not confirm the rented computer shut down) shows the same kind of note.
+
+A run whose download found a result file you had already changed shows one more line, whatever else it says: how many of your changed files were kept next to the new results under a new name (their old name followed by "(changed" and the date), with an **Open the output folder** button. The same line and button are at the top of that run's Results page. Your changed file is never overwritten; compare the two files and delete the one you do not need.
 
 Use the search box to find a run by its name, its input file name, its id, its note or its tags (capitals do not matter), and the status
 box to show only running, completed, failed or cancelled runs.

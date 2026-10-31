@@ -24,6 +24,17 @@
                 </InfoBar.ActionButton>
             </InfoBar>
 
+            <!-- Issue #929: a download renamed changed files aside (Hard Rule 14); the button is the action the line names. -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsKeptAsideVisible, Mode=OneWay}"
+                Severity="Informational"
+                IsClosable="False"
+                Message="{x:Bind ViewModel.KeptAsideText, Mode=OneWay}">
+                <InfoBar.ActionButton>
+                    <Button x:Uid="ResultsKeptAsideOpenFolderButton" Command="{x:Bind ViewModel.OpenFolderCommand}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+
             <InfoBar
                 IsOpen="{x:Bind ViewModel.IsActionNoticeVisible, Mode=OneWay}"
                 Severity="Warning"

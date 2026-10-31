@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -102,6 +103,22 @@ public static class RunsCopy
         ? Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body_One", ToastSeverity.Info)
         : Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body", ToastSeverity.Info);
 
+    // Issue #929: a finished run's own line when a download renamed changed files aside (Runs row and run page); the many form takes the count as {0}.
+    public const string KeptAsideOne = "Runs_KeptAside_One";
+    public const string KeptAsideMany = "Runs_KeptAside_Many";
+
+    /// <summary>The kept-aside line for a finished run (the count is read from its <see cref="DnaEntropyGraph.Core.Cloud.KeptAsideDetail"/> mark), or null when no file was renamed aside.</summary>
+    public static string? KeptAsideLine(RunRecord run, IStringResourceProvider strings)
+    {
+        var count = HistoryViewModel.IsFinished(run.Phase) ? KeptAsideDetail.TryRead(run.ErrorDetail) : 0;
+        return count switch
+        {
+            0 => null,
+            1 => strings.GetString(RunsCopy.KeptAsideOne),
+            _ => string.Format(System.Globalization.CultureInfo.CurrentCulture, strings.GetString(RunsCopy.KeptAsideMany), count),
+        };
+    }
+
     public const string RedownloadAgainLabel = "Runs_RedownloadAgain_Label";
     public const string RedownloadPartialLabel = "Runs_RedownloadPartial_Label";
     public static readonly RunsMessage RedownloadCancelledPartial = Pair("Runs_Redownload_CancelledPartial_Title", "Runs_Redownload_CancelledPartial_Body", ToastSeverity.Info);
@@ -115,6 +132,8 @@ public static class RunsCopy
         CloudResultsStatus.ResultNotFound => Pair("Runs_Redownload_ResultNotFound_Title", "Runs_Redownload_ResultNotFound_Body", ToastSeverity.Error),
         CloudResultsStatus.Refused => Pair("Runs_Redownload_Refused_Title", "Runs_Redownload_Refused_Body", ToastSeverity.Error),
         CloudResultsStatus.DriveRootRefused => Pair("Runs_Redownload_DriveRoot_Title", "Runs_Redownload_DriveRoot_Body", ToastSeverity.Error),
+        CloudResultsStatus.OutputFolderGone => Pair("Runs_Redownload_FolderGone_Title", "Runs_Redownload_FolderGone_Body", ToastSeverity.Error),
+        CloudResultsStatus.OtherRunsFolderRefused => Pair("Runs_Redownload_OtherRun_Title", "Runs_Redownload_OtherRun_Body", ToastSeverity.Error),
         CloudResultsStatus.SignInNeeded => Pair("Runs_Redownload_SignIn_Title", "Runs_Redownload_SignIn_Body", ToastSeverity.Warning),
         _ => Pair("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error),
     };
@@ -233,7 +252,7 @@ public static class RunsCopy
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn, HiddenOne, HiddenMany, SwitchLabel, HintSwitch, HintSignIn, HintSignInUnknown, .. Flatten(SwitchFailed), .. Flatten(SignInFailed),
-        RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
+        KeptAsideOne, KeptAsideMany, RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
         DeleteLocalUnmarkedConfirmTitle, DeleteLocalUnmarkedConfirmBody, OpenFolderLabel, CloseLabel, DeleteLocalHintDriveRoot, RedownloadHintDriveRoot,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),

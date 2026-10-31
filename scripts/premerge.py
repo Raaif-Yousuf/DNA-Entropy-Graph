@@ -276,10 +276,10 @@ def build_gates(root: Path, python: str | None = None, base: str = DEFAULT_BASE)
         Gate(
             "triage-schema", [py, "scripts/triage_diagnostics.py", "--check-schema"], root, why="triage SCHEMA_FIELDS match the generated schema"
         ),
-        Gate("ruff-worker-check", ["uvx", "ruff", "check", "worker"], root, why="worker lint"),
-        Gate("ruff-worker-format", ["uvx", "ruff", "format", "--check", "worker"], root, why="worker format"),
-        Gate("ruff-scripts-check", ["uvx", "ruff", "check", "scripts"], root, why="scripts lint"),
-        Gate("ruff-scripts-format", ["uvx", "ruff", "format", "--check", "scripts"], root, why="scripts format"),
+        Gate("ruff-worker-check", ["uvx", "ruff@0.17.3", "check", "worker"], root, why="worker lint"),
+        Gate("ruff-worker-format", ["uvx", "ruff@0.17.3", "format", "--check", "worker"], root, why="worker format"),
+        Gate("ruff-scripts-check", ["uvx", "ruff@0.17.3", "check", "scripts"], root, why="scripts lint"),
+        Gate("ruff-scripts-format", ["uvx", "ruff@0.17.3", "format", "--check", "scripts"], root, why="scripts format"),
         Gate(
             "lychee-links",
             [

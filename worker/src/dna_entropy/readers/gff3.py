@@ -20,6 +20,7 @@ Notices never carry a feature id or sequence name (issue #253: free text a user 
 
 from __future__ import annotations
 
+import os
 from urllib.parse import unquote
 
 from ..annotators.base import GeneFeature
@@ -45,7 +46,7 @@ def _attributes(col9: str) -> dict[str, str]:
     return out
 
 
-def read_gff3(path: str) -> tuple[dict[str, list[GeneFeature]], list[str], set[str]]:
+def read_gff3(path: str | os.PathLike[str]) -> tuple[dict[str, list[GeneFeature]], list[str], set[str]]:
     """Return ``({seqid: [GeneFeature, ...]}, notices, circular_seqids)``.
 
     ``circular_seqids`` are the sequence names with an ``Is_circular=true`` attribute on any row
