@@ -1,0 +1,1 @@
+- Runs page review fixes (#112): leaving the page now ends its account-change subscription at once (Deactivate), a failed Switch to reloads so the Sign in again button its message names is shown, and the hint line covers hidden runs of signed-in and signed-out accounts together.

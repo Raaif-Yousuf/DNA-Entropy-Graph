@@ -34,7 +34,7 @@ public class SelectionReadGuardTests
         ["QuotaRequest.cs"] = ("a quota increase is asked for the project being set up, as the active account (one ActiveSnapshot read, review F6)", 1),
         ["JobEngine.cs"] = ("the ONE capture of the selected scope when a new run is created; the run keeps it from then on", 1),
         ["CloudResourcesViewModel.cs"] = ("the Cloud page lists the selected project; each row keeps the scope it was listed in", 6),
-        ["HistoryViewModel.cs"] = ("importing an existing run adopts the selected project and account", 2),
+        ["HistoryViewModel.cs"] = ("importing an existing run adopts the selected project and account; the Runs list reads the active account ONCE per load (issue #112) to choose whose runs to list", 3),
         ["LeftRunningGuard.cs"] = ("the left-running scan adds the selected scope to the scopes of recent runs", 1),
         ["ServiceRegistration.cs"] = ("hands the selected project to the budget gateway and the selected scope to the reconciler's sweeps", 2),
     };
