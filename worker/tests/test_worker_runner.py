@@ -5,11 +5,13 @@ result.json, in a temp directory, mock predictor + LocalBlobstore, no GPU, no ne
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
+from dna_entropy.worker.blobstore import Blobstore, BlobstoreError, LocalBlobstore
 from dna_entropy.worker.cancel import CANCEL_PATH
 from dna_entropy.worker.manifest import ManifestSchemaError
 from dna_entropy.worker.runner import MANIFEST_PATH, RESULT_PATH, run_job, run_job_outcome
@@ -42,7 +44,13 @@ class _FlakyStore:
         return _flaky
 
 
-def _write_manifest(store: LocalBlobstore, **overrides) -> dict:
+def _error_of(item) -> dict:
+    """The ``error`` dict of a failed input/job result; a None here is a test failure, not a type error."""
+    assert item.error is not None
+    return item.error
+
+
+def _write_manifest(store: Blobstore, **overrides) -> dict:
     manifest = {
         "schema": 1,
         "jobId": "20260918-142233-k7q2vx",
@@ -62,7 +70,7 @@ def _write_manifest(store: LocalBlobstore, **overrides) -> dict:
     return manifest
 
 
-def _seed_fasta_input(store: LocalBlobstore, path: str = "input/locus.fasta") -> None:
+def _seed_fasta_input(store: Blobstore, path: str = "input/locus.fasta") -> None:
     store.write_text(path, ">seq\n" + "ACGT" * 40 + "\n")  # 160 nt
 
 
@@ -272,8 +280,9 @@ def test_batch_exceeding_max_total_nt_is_refused_before_any_processing(tmp_path:
     result = run_job(store)
 
     assert result.status == "failed"
-    assert result.error["code"] == "BATCH_LIMIT_EXCEEDED"
-    assert "160" in result.error["message"]  # the real measured total, not a bare "too large"
+    error = _error_of(result)
+    assert error["code"] == "BATCH_LIMIT_EXCEEDED"
+    assert "160" in error["message"]  # the real measured total, not a bare "too large"
     assert result.inputs == []
     assert not store.list_prefix("output/")
 
@@ -442,7 +451,7 @@ def test_a_transient_status_write_blip_during_processing_does_not_fail_a_good_in
     # already happened above, against the real store).
     flaky = _FlakyStore(real_store, fail_method="write_text", fail_times=2)
 
-    result = run_job(flaky)
+    result = run_job(cast(Blobstore, flaky))
 
     assert result.status == "done"
     assert result.inputs[0].status == "done"  # NOT "failed" -- the blip must not count
@@ -652,8 +661,9 @@ def test_model_needs_hopper_reports_its_own_code_not_input_invalid(
 
     assert result.status == "done"  # job level: one bad input, still "done" per §7
     assert result.inputs[0].status == "failed"
-    assert result.inputs[0].error["code"] == "MODEL_NEEDS_HOPPER"
-    assert result.inputs[0].error["retriable"] is False
+    error = _error_of(result.inputs[0])
+    assert error["code"] == "MODEL_NEEDS_HOPPER"
+    assert error["retriable"] is False
 
 
 def test_second_oom_reports_model_oom_not_input_invalid(
@@ -674,8 +684,9 @@ def test_second_oom_reports_model_oom_not_input_invalid(
 
     result = run_job(store)
 
-    assert result.inputs[0].error["code"] == "MODEL_OOM"
-    assert result.inputs[0].error["retriable"] is True  # per the errors.py registry
+    error = _error_of(result.inputs[0])
+    assert error["code"] == "MODEL_OOM"
+    assert error["retriable"] is True  # per the errors.py registry
 
 
 def test_plain_validation_error_still_reports_input_invalid(
@@ -697,8 +708,9 @@ def test_plain_validation_error_still_reports_input_invalid(
 
     result = run_job(store)
 
-    assert result.inputs[0].error["code"] == "INPUT_INVALID"
-    assert result.inputs[0].error["retriable"] is False
+    error = _error_of(result.inputs[0])
+    assert error["code"] == "INPUT_INVALID"
+    assert error["retriable"] is False
 
 
 def test_unrecognized_exception_falls_back_to_worker_crash(
@@ -718,8 +730,9 @@ def test_unrecognized_exception_falls_back_to_worker_crash(
 
     result = run_job(store)
 
-    assert result.inputs[0].error["code"] == "WORKER_CRASH"
-    assert "detail" in result.inputs[0].error  # traceback attached for WORKER_CRASH only
+    error = _error_of(result.inputs[0])
+    assert error["code"] == "WORKER_CRASH"
+    assert "detail" in error  # traceback attached for WORKER_CRASH only
 
 
 @pytest.mark.parametrize("free_text_code", ["my-patient-42", "", 404, "input_invalid"])
@@ -747,7 +760,7 @@ def test_a_foreign_exceptions_free_text_code_never_reaches_result_json(
 
     result = run_job(store)
 
-    assert result.inputs[0].error["code"] == "WORKER_CRASH"
+    assert _error_of(result.inputs[0])["code"] == "WORKER_CRASH"
     on_disk = (tmp_path / "result.json").read_text(encoding="utf-8")
     # The raw value may sit in error.detail (developer-only; the bundle drops it), never in code or message.
     err = json.loads(on_disk)["inputs"][0]["error"]
@@ -776,7 +789,7 @@ def test_a_foreign_exception_with_a_registered_code_name_is_still_classified_by_
     _write_manifest(store)
     _seed_fasta_input(store)
 
-    assert run_job(store).inputs[0].error["code"] == "INPUT_INVALID"
+    assert _error_of(run_job(store).inputs[0])["code"] == "INPUT_INVALID"
 
 
 # --- lifecycle.afterTask == "keep" must never be an unbounded no-op (Hard Rule 11) -----
@@ -1246,12 +1259,9 @@ def test_windowing_refusal_messages_name_an_action() -> None:
     """Hard Rule 13: every error names one action the user can take."""
     from dna_entropy.analysis.windowing import WindowingError, validate_context
 
-    for kwargs in (
-        {"context_length": 64, "ceiling": 8192, "seq_len": 1000},
-        {"context_length": 128, "ceiling": 8192, "seq_len": 5},
-    ):
+    for context_length, seq_len in ((64, 1000), (128, 5)):
         with pytest.raises(WindowingError) as exc:
-            validate_context(**kwargs)
+            validate_context(context_length=context_length, ceiling=8192, seq_len=seq_len)
         assert any(verb in str(exc.value) for verb in ("Choose", "Use ", "Provide")), str(exc.value)
 
 
@@ -1403,7 +1413,9 @@ def test_first_job_downloads_then_mirrors_and_second_job_restores(tmp_path: Path
 
 def test_mirror_failure_is_a_notice_and_never_fails_the_job(tmp_path: Path) -> None:
     class _BrokenCache(LocalBlobstore):
-        def upload_file(self, local_src, path):
+        def upload_file(
+            self, local_src: Path, path: str, *, should_stop: Callable[[], bool] | None = None
+        ) -> None:
             raise BlobstoreError("bucket unreachable")
 
     cache = _BrokenCache(tmp_path / "bucket-root")
@@ -1662,10 +1674,12 @@ class _ClockAdvancingStore(LocalBlobstore):
         self._clock = clock
         self._seconds = seconds
 
-    def upload_file(self, local_src: Path, path: str) -> None:
+    def upload_file(
+        self, local_src: Path, path: str, *, should_stop: Callable[[], bool] | None = None
+    ) -> None:
         if path.startswith("output/"):
             self._clock.now += self._seconds
-        super().upload_file(local_src, path)
+        super().upload_file(local_src, path, should_stop=should_stop)
 
 
 def test_an_upload_that_crosses_the_cap_after_the_last_window_is_not_a_failed_run(tmp_path: Path) -> None:
@@ -1822,7 +1836,7 @@ def test_a_foreign_code_is_kept_in_error_detail_not_in_error_code(
     _write_manifest(store)
     _seed_fasta_input(store)
 
-    error = run_job(store).inputs[0].error
+    error = _error_of(run_job(store).inputs[0])
     assert error["code"] == "WORKER_CRASH"
     assert "404" not in error["message"] and "my-patient-42" not in error["message"]
     assert expected in error["detail"]
@@ -1845,7 +1859,9 @@ def test_the_kept_original_code_is_ascii_escaped_and_cut_at_80(
     _seed_fasta_input(store)
 
     line = next(
-        ln for ln in run_job(store).inputs[0].error["detail"].splitlines() if ln.startswith("original code:")
+        ln
+        for ln in _error_of(run_job(store).inputs[0])["detail"].splitlines()
+        if ln.startswith("original code:")
     )
     assert line.isascii()
     assert len(line) <= len("original code: ") + 80

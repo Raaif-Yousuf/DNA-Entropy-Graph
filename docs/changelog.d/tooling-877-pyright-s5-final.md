@@ -1,0 +1,1 @@
+- Pay the last pyright debt down to zero (#877 slice 5): `test_worker_runner.py` (23), `test_worker_manifest_fields.py` (2) and `test_heavy.py` (4) now narrow `None` before use, give the stub stores the protocol's `upload_file` signature and type the helpers as `Blobstore`; `scripts/pyright_baseline.json` is now an empty map and still fails on any new error.
