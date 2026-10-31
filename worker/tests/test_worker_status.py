@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import dna_entropy.worker.status as status_module
-from dna_entropy.worker.blobstore import BlobstoreError, LocalBlobstore
+from dna_entropy.worker.blobstore import Blobstore, BlobstoreError, LocalBlobstore
 from dna_entropy.worker.status import GpuInfo, StatusWriter, WorkerInfo
 
 
-def _status(store: LocalBlobstore) -> dict:
+def _status(store: Blobstore) -> dict:
     return json.loads(store.read_text("status.json"))
 
 
@@ -253,7 +254,7 @@ def test_background_heartbeat_survives_a_transient_write_failure(tmp_path: Path)
     180-second death-detection rule then gives up on a job that is running fine."""
     real_store = LocalBlobstore(tmp_path)
     flaky = _FlakyStore(real_store, fail_method="write_text", fail_times=3)
-    w = StatusWriter(flaky, "job1", interval_seconds=0.02)
+    w = StatusWriter(cast(Blobstore, flaky), "job1", interval_seconds=0.02)
     w.start()
     try:
         # Enough ticks to run past the 3 injected failures and land on real, successful
@@ -279,7 +280,7 @@ def test_update_never_raises_on_a_transient_write_failure(tmp_path: Path) -> Non
     didn't work."""
     real_store = LocalBlobstore(tmp_path)
     flaky = _FlakyStore(real_store, fail_method="write_text", fail_times=1)
-    w = StatusWriter(flaky, "job1", interval_seconds=999)
+    w = StatusWriter(cast(Blobstore, flaky), "job1", interval_seconds=999)
     w.start()
     try:
         w.update(stage="running", percent=10.0)  # must not raise, despite the injected failure
@@ -306,7 +307,7 @@ def test_persistent_outage_crosses_threshold_and_writes_a_local_fallback(tmp_pat
 
     real_store = LocalBlobstore(tmp_path / "store")
     always_failing = _FlakyStore(real_store, fail_method="write_text", fail_times=999)
-    w = status_module.StatusWriter(always_failing, "outage-job", interval_seconds=999)
+    w = status_module.StatusWriter(cast(Blobstore, always_failing), "outage-job", interval_seconds=999)
 
     for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD + 2):
         w.update(percent=1.0)
@@ -325,7 +326,7 @@ def test_persistent_outage_prints_an_escalated_line_distinguishable_from_a_blip(
     monkeypatch.setattr(status_module, "LOCAL_FALLBACK_DIR", tmp_path / "fallback")
     real_store = LocalBlobstore(tmp_path / "store")
     always_failing = _FlakyStore(real_store, fail_method="write_text", fail_times=999)
-    w = status_module.StatusWriter(always_failing, "outage-job2", interval_seconds=999)
+    w = status_module.StatusWriter(cast(Blobstore, always_failing), "outage-job2", interval_seconds=999)
 
     for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD):
         w.update(percent=1.0)
@@ -347,7 +348,7 @@ def test_a_blip_under_the_threshold_never_escalates(tmp_path: Path, monkeypatch)
         fail_method="write_text",
         fail_times=status_module.PERSISTENT_OUTAGE_THRESHOLD - 1,
     )
-    w = status_module.StatusWriter(flaky, "blip-job", interval_seconds=999)
+    w = status_module.StatusWriter(cast(Blobstore, flaky), "blip-job", interval_seconds=999)
 
     for _ in range(status_module.PERSISTENT_OUTAGE_THRESHOLD + 2):
         w.update(percent=1.0)
