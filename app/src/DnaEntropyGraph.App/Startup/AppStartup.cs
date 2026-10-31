@@ -1,5 +1,7 @@
+using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.LocalEngine;
+using DnaEntropyGraph.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DnaEntropyGraph.App.Startup;
@@ -12,6 +14,34 @@ namespace DnaEntropyGraph.App.Startup;
 public static class AppStartup
 {
     /// <summary>
+    /// Books every ended run that has no cost-ledger entry yet (<see cref="SpendLedger.BookUnbookedRunsAsync"/>; idempotent). Reads of a run's cost never do this, so it happens once
+    /// per launch, here. Never faults: a failure is logged by error class only (never a message, which could carry a path) and the next launch tries again.
+    /// </summary>
+    private static async Task RepairRunCostsAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Resolved inside the try: a service that cannot be built is a failure to log, not a faulted launch.
+            await services.GetRequiredService<IRunCostRepair>().BookUnbookedRunsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // A requested stop, not a failure: nothing is logged, and the next launch repairs whatever is left.
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                services.GetRequiredService<IDiagnosticsLog>().Warning("run-cost-repair", null, ex.GetType().Name);
+            }
+            catch (Exception)
+            {
+                // The log itself failed: nothing more can be recorded, and a launch must not fail for it.
+            }
+        }
+    }
+
+    /// <summary>
     /// First judges every This PC run a killed or closed app left non-terminal (<see cref="LocalJobRunner.ReconcileInterruptedAsync"/>), then
     /// reattaches every cloud run a killed or closed app left in a non-terminal phase and enforces the lifecycle of every finished run's VM
     /// (<see cref="JobReconciler.ReconcileAsync"/>); the same pass runs again when the connection returns (<see cref="ReconcileOnReconnect"/>).
@@ -20,8 +50,32 @@ public static class AppStartup
     /// </summary>
     public static async Task BeginAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
+        // Issues #100 and #557: the one place a ledger append that failed after its run row was stored is booked again. App.OnLaunched calls this on the UI thread and Sqlite/Dapper
+        // "async" calls complete synchronously, so BOTH halves are started on the thread pool: nothing here (resolving the services, the pricing load, the ledger reads and appends,
+        // the reconcile) runs before this method returns. They run beside each other; this task, which the app does not await either, ends only after both have, so the repair is
+        // never left unobserved and a test can count it. The token is not given to Task.Run: a cancelled launch still reaches both bodies, which end on it themselves.
+        var repair = Task.Run(() => RepairRunCostsAsync(services, cancellationToken), CancellationToken.None);
+        try
+        {
+            await Task.Run(() => ReconcileLaunchAsync(services, cancellationToken), CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            await repair.ConfigureAwait(false);
+        }
+    }
+
+    private static async Task ReconcileLaunchAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
         // Issue #113: the nothing-left-running scan starts first and is not awaited (it scans once now, then every 5 minutes); it never faults.
-        _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
+        try
+        {
+            _ = services.GetRequiredService<Presentation.Services.LeftRunningGuard>().StartAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A guard that cannot start must not stop the reconcile below.
+        }
 
         // This PC runs first and on their own: a run a killed app left non-terminal has no cloud side, and its row must not wait on the network (issue #734).
         try

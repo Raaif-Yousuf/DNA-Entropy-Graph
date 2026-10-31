@@ -2,9 +2,11 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
@@ -51,6 +53,13 @@ public sealed partial class HistoryViewModel : ObservableObject
     [ObservableProperty]
     private string _emptyText = string.Empty;
 
+    private readonly Func<string?, bool>? _hasSpotPrice;
+
+    private readonly IRunCostSource? _costs;
+    private readonly IDiagnosticsLog? _log;
+
+    private readonly IMessenger? _messenger;
+
     public HistoryViewModel(
         IRunRepository runRepository,
         IRunHistoryRemover remover,
@@ -66,8 +75,30 @@ public sealed partial class HistoryViewModel : ObservableObject
         TimeProvider time,
         IEntropyOverviewSource? overview = null,
         IRunImporter? importer = null,
-        ImportedRunDismissals? dismissals = null)
+        ImportedRunDismissals? dismissals = null,
+        IPricingSource? pricing = null,
+        IRunCostSource? costs = null,
+        IMessenger? messenger = null,
+        IDispatcher? dispatcher = null,
+        IDiagnosticsLog? log = null)
     {
+        _log = log;
+        _hasSpotPrice = RunCostText.SpotPriceLookup(pricing);
+        _costs = costs;
+        _messenger = messenger;
+        if (messenger is not null && dispatcher is not null)
+        {
+            // A run that ends while this page is open gets its booked cost (and final phase) on its row: the row is built once per load, so the load is
+            // taken again when a run ends. Only an end changes what a row shows; the work happens on the UI thread the list belongs to.
+            messenger.Register<HistoryViewModel, Messaging.RunPhaseChangedMessage>(this, (recipient, message) =>
+            {
+                if (IsFinished(message.Phase))
+                {
+                    dispatcher.Enqueue(() => _ = recipient.RefreshCommand.ExecuteAsync(null));
+                }
+            });
+        }
+
         _dismissals = dismissals;
         _overview = overview;
         _importer = importer;
@@ -93,6 +124,12 @@ public sealed partial class HistoryViewModel : ObservableObject
         ];
         _selectedStatusFilter = StatusFilters[0];
     }
+
+    /// <summary>
+    /// Issue #100 round 3: the page was left. This ViewModel is transient and the messenger holds it weakly, so without this every instance that has not been collected yet
+    /// would go on reloading the whole table on each run end. The page calls it from OnNavigatedFrom (one unconditional call); a new visit makes a new instance.
+    /// </summary>
+    public void Deactivate() => _messenger?.UnregisterAll(this);
 
     [ObservableProperty]
     private bool _isImporting;
@@ -179,7 +216,13 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return;
             }
 
-            _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder))];
+            var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
+            if (generation != Volatile.Read(ref _loadGeneration))
+            {
+                return;
+            }
+
+            _items = [.. rows.Select(r => BuildItem(r.Run, r.HasFolder, booked.TryGetValue(r.Run.JobId, out var usd) ? usd : null))];
             ApplyFilter();
             SparklineWork = LoadSparklinesAsync(_items, generation, cancellationToken);
         }
@@ -286,7 +329,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             : day == today.AddDays(-1) ? _strings.GetString(RunsCopy.GroupYesterday)
             : day.ToString("D", CultureInfo.CurrentCulture);
 
-    private RunListItem BuildItem(RunRecord run, bool hasFolder)
+    private RunListItem BuildItem(RunRecord run, bool hasFolder, double? bookedUsd)
     {
         var local = TimeZoneInfo.ConvertTime(run.CreatedUtc, _time.LocalTimeZone);
         var (status, statusKey) = Classify(run.Phase);
@@ -311,6 +354,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             WaitForGpuFor(run))
         {
             PresetText = PresetLine(run),
+            CostText = RunCostText.Short(run, bookedUsd, _strings, _hasSpotPrice),
             OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
             ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),
             Tags = RunTags.Parse(run.TagsJson),
