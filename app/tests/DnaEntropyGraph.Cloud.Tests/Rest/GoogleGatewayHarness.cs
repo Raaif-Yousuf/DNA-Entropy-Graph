@@ -16,13 +16,13 @@ internal sealed class StubTokenSource : IGcpAccessTokenSource, ICloudTokenRefres
 
     public string CurrentToken => $"ya29.test-token-{_generation}";
 
-    public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
+    public Task<string> GetAccessTokenAsync(string? accountSub, CancellationToken cancellationToken)
     {
         TokenReads++;
         return FailWith is { } failure ? Task.FromException<string>(failure) : Task.FromResult(CurrentToken);
     }
 
-    public Task RefreshAsync(CancellationToken cancellationToken)
+    public Task RefreshAsync(string? accountSub, CancellationToken cancellationToken)
     {
         Refreshes++;
         _generation++;

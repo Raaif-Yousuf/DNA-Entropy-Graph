@@ -27,6 +27,9 @@ internal sealed class RunProgress
     /// <summary>The project the bucket lives in (set with <see cref="Bucket"/>).</summary>
     public string? ProjectId { get; set; }
 
+    /// <summary>Issue #830: the run's project and account (set with <see cref="Bucket"/>), for the calls that have a progress but no request.</summary>
+    public CloudScope? Scope { get; set; }
+
     /// <summary>The job id (set with <see cref="Bucket"/>): the zone claim of a parallel ladder is written under its prefix (#670).</summary>
     public string? JobId { get; set; }
 

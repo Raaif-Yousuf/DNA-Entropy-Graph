@@ -58,6 +58,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The update check state (issue #179): the shell's Update available bar binds to it, and Settings > About shows the same instance. Null only in tests that do not exercise updates.</summary>
     public UpdateViewModel? Updates { get; }
 
+    /// <summary>Issue #830 review M3: the "Sign in as (the account)" bar for a run whose Google account is signed out. Null only in tests that do not exercise it.</summary>
+    public SignInNeededViewModel? SignInNeeded { get; }
+
     /// <summary>The first-launch tour (issue #143): the window's TeachingTips bind to it. Null only in tests that do not exercise it.</summary>
     public TourViewModel? Tour { get; }
 
@@ -97,8 +100,9 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>The user guide page for the page the user is on (issue #143); the Help button in the title bar binds its link to this.</summary>
     public Uri HelpUri => UserGuideLinks.UriFor(_helpPageKey, _build);
 
-    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, PrototypeImportViewModel? prototypeImport = null, TourViewModel? tour = null)
+    public ShellViewModel(INavigator navigator, IGcpAccount gcpAccount, IMessenger messenger, IStringResourceProvider strings, InAppMessageCenter messages, RunCompletionActions completion, IDispatcher? dispatcher = null, AppDataRoot? dataRoot = null, SimulatedCloudMode? simulatedCloud = null, UpdateViewModel? updates = null, BuildIdentity? build = null, SessionRestorer? session = null, PrototypeImportViewModel? prototypeImport = null, TourViewModel? tour = null, SignInNeededViewModel? signInNeeded = null)
     {
+        SignInNeeded = signInNeeded;
         _prototypeImport = prototypeImport;
         _session = session;
         Updates = updates;

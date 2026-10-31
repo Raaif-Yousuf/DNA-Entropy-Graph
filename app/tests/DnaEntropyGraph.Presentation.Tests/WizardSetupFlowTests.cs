@@ -25,6 +25,7 @@ public class WizardSetupFlowTests
     {
         _strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         _account.IsSignedIn.Returns(true);
         _account.SignInAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         _service.CheckBillingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Billing, SetupStatus.Ok));
@@ -35,6 +36,7 @@ public class WizardSetupFlowTests
         _account.SelectProjectAsync(Project, Arg.Any<CancellationToken>()).Returns(_ =>
         {
             _account.SelectedProjectId.Returns(Project);
+            _account.SelectedScope().Returns(TestScopes.Of(Project));
             return Task.CompletedTask;
         });
     }
@@ -55,6 +57,7 @@ public class WizardSetupFlowTests
     public async Task Signing_in_with_a_project_already_chosen_checks_it_and_runs_the_remaining_steps()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         var viewModel = NewViewModel();
 
         await viewModel.SignInCommand.ExecuteAsync(null);
@@ -167,6 +170,7 @@ public class WizardSetupFlowTests
     public async Task A_project_the_account_cannot_use_goes_back_to_the_list()
     {
         _account.SelectedProjectId.Returns("gone-project");
+        _account.SelectedScope().Returns(TestScopes.Of("gone-project"));
         _service.CheckProjectAsync("gone-project", Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.NeedsAction)
         {
             Code = AuthErrorCodes.ProjectInvalid,
@@ -187,6 +191,7 @@ public class WizardSetupFlowTests
     public async Task Finish_goes_to_the_new_run_page_only_when_the_checks_allow_it()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         var viewModel = NewViewModel();
         viewModel.FinishCommand.CanExecute(null).ShouldBeFalse();
 
@@ -215,6 +220,7 @@ public class WizardSetupFlowTests
     public async Task The_pick_another_project_button_shows_the_list_and_does_not_check_the_same_invalid_project_again()
     {
         _account.SelectedProjectId.Returns("gone-project");
+        _account.SelectedScope().Returns(TestScopes.Of("gone-project"));
         _service.CheckProjectAsync("gone-project", Arg.Any<CancellationToken>()).Returns(Gone());
         _service.ListProjectsAsync(Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Project, SetupStatus.Ok) { Projects = Listed });
         var viewModel = NewViewModel();
@@ -232,6 +238,7 @@ public class WizardSetupFlowTests
     public async Task A_create_project_action_on_a_step_row_makes_a_project()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.NeedsAction)
         {
             Code = SetupErrorCodes.NotProjectOwner,
@@ -251,6 +258,7 @@ public class WizardSetupFlowTests
     public async Task A_pick_project_action_on_a_step_row_shows_the_project_list()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         _service.EnableServicesAsync(Project, Arg.Any<CancellationToken>()).Returns(new SetupStepResult(SetupStep.Services, SetupStatus.NeedsAction)
         {
             Code = SetupErrorCodes.ProjectQuota,
@@ -293,6 +301,7 @@ public class WizardSetupFlowTests
     public async Task Finish_is_off_while_everything_is_checked_again()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         var viewModel = NewViewModel();
         await viewModel.SignInCommand.ExecuteAsync(null);
         viewModel.FinishCommand.CanExecute(null).ShouldBeTrue();
@@ -311,6 +320,7 @@ public class WizardSetupFlowTests
     public async Task A_failure_that_is_not_a_google_error_after_sign_in_is_shown_on_the_project_row_and_not_left_unobserved()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         _service.CheckProjectAsync(Project, Arg.Any<CancellationToken>()).Returns<Task<SetupStepResult>>(_ => throw new InvalidOperationException("boom"));
         var viewModel = NewViewModel();
 
@@ -326,6 +336,7 @@ public class WizardSetupFlowTests
     public async Task An_account_change_cancels_the_checks_that_are_running_and_leaves_no_row_running()
     {
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         var seen = CancellationToken.None;
         var gate = new TaskCompletionSource<SetupStepResult>();
         _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(call =>

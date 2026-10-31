@@ -59,7 +59,8 @@ internal static class TestInputs
             Inputs: names.Select(n => Stage(jobId, n)).ToList(),
             OutputFolder: OutputParent(jobId),
             AfterTask: afterTask,
-            WorkerImage: workerImage);
+            WorkerImage: workerImage,
+            Scope: new CloudScope(spec.ProjectId));
     }
 
     private static string CreateRoot()

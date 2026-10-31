@@ -62,7 +62,7 @@ public class ReattachCancelTests : IDisposable
         var copy = await provider.GetRequiredService<IRunInputStore>().StageAsync(jobId, original, TestContext.Current.CancellationToken);
         var output = Path.Combine(_root, "out");
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", InputPath = original, OutputFolder = output };
-        var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", null, [copy], output);
+        var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", null, [copy], output);
         await provider.GetRequiredService<CloudJobRunner>().UploadInputsAsync(request, TestContext.Current.CancellationToken);
         await gcp.CreateVmAsync(request.Spec, Zone, TestContext.Current.CancellationToken);
         await provider.GetRequiredService<IRunRepository>().UpsertAsync(

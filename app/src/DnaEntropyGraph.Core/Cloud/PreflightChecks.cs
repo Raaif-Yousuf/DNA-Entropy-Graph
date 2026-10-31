@@ -12,18 +12,18 @@ internal sealed class PreflightChecks(IProjectSetupGateway projectSetup, IQuotaG
     {
         var projectId = request.Spec.ProjectId;
 
-        var state = await calls.CallAsync(token => projectSetup.GetProjectStateAsync(projectId, token), cancellationToken).ConfigureAwait(false);
+        var state = await calls.CallAsync(token => projectSetup.GetProjectStateAsync(request.ResolvedScope, token), cancellationToken).ConfigureAwait(false);
         if (state != ProjectLifecycleState.Active)
         {
             return (CloudErrorKind.Permission, $"Project '{projectId}' is not ACTIVE (state: {state}).");
         }
 
-        if (!await calls.CallAsync(token => projectSetup.IsBillingEnabledAsync(projectId, token), cancellationToken).ConfigureAwait(false))
+        if (!await calls.CallAsync(token => projectSetup.IsBillingEnabledAsync(request.ResolvedScope, token), cancellationToken).ConfigureAwait(false))
         {
             return (CloudErrorKind.Billing, $"Billing is not enabled on project '{projectId}'.");
         }
 
-        if (!await calls.CallAsync(token => projectSetup.IsComputeApiEnabledAsync(projectId, token), cancellationToken).ConfigureAwait(false))
+        if (!await calls.CallAsync(token => projectSetup.IsComputeApiEnabledAsync(request.ResolvedScope, token), cancellationToken).ConfigureAwait(false))
         {
             return (CloudErrorKind.ApiDisabled, $"The Compute Engine API is not enabled on project '{projectId}'.");
         }
@@ -42,7 +42,7 @@ internal sealed class PreflightChecks(IProjectSetupGateway projectSetup, IQuotaG
         int gpuQuota;
         try
         {
-            gpuQuota = await calls.CallAsync(token => quota.GetGpuQuotaAsync(projectId, RegionOf(request.Zones[0]), PlaceholderAcceleratorType, token), cancellationToken, settings.QuotaReadTimeout).ConfigureAwait(false);
+            gpuQuota = await calls.CallAsync(token => quota.GetGpuQuotaAsync(request.ResolvedScope, RegionOf(request.Zones[0]), PlaceholderAcceleratorType, token), cancellationToken, settings.QuotaReadTimeout).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (VmFacts.IsProjectWide(ex.Kind))
         {

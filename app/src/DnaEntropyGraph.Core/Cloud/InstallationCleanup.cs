@@ -95,25 +95,25 @@ public sealed class InstallationCleanup
     }
 
     /// <summary>What this installation has now. A failed listing throws (<see cref="CloudOperationException"/>).</summary>
-    public async Task<InstallationInventory> InventoryAsync(string projectId, string installationId, CancellationToken cancellationToken)
+    public async Task<InstallationInventory> InventoryAsync(CloudScope scope, string installationId, CancellationToken cancellationToken)
     {
         RequireInstallation(installationId);
-        var vms = (await _compute.ListByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false)).Where(v => BelongsTo(v, installationId)).ToList();
-        var disks = (await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false)).Where(d => d.BelongsTo(installationId)).ToList();
-        var buckets = await _storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var vms = (await _compute.ListByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false)).Where(v => BelongsTo(v, installationId)).ToList();
+        var disks = (await _compute.ListDisksByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false)).Where(d => d.BelongsTo(installationId)).ToList();
+        var buckets = await _storage.ListBucketsAsync(scope, cancellationToken).ConfigureAwait(false);
 
         InstallationBucketUsage? usage = null;
         var folders = new List<JobFolderRef>();
         var cache = new PrefixUsage(0, 0);
         foreach (var bucket in buckets)
         {
-            var jobs = await OwnJobPrefixesAsync(bucket.Name, installationId, cancellationToken).ConfigureAwait(false);
+            var jobs = await OwnJobPrefixesAsync(scope, bucket.Name, installationId, cancellationToken).ConfigureAwait(false);
             folders.AddRange(jobs.Select(j => new JobFolderRef(bucket.Name, j)));
             var objects = 0;
             long bytes = 0;
             foreach (var job in jobs)
             {
-                var jobUsage = await _storage.GetPrefixUsageAsync(bucket.Name, job, cancellationToken).ConfigureAwait(false);
+                var jobUsage = await _storage.GetPrefixUsageAsync(scope, bucket.Name, job, cancellationToken).ConfigureAwait(false);
                 objects += jobUsage.ObjectCount;
                 bytes += jobUsage.TotalBytes;
             }
@@ -122,7 +122,7 @@ public sealed class InstallationCleanup
                 ? new InstallationBucketUsage(bucket.Name, jobs.Count, objects, bytes)
                 : usage with { JobCount = usage.JobCount + jobs.Count, ObjectCount = usage.ObjectCount + objects, TotalBytes = usage.TotalBytes + bytes };
 
-            var bucketCache = await _storage.GetPrefixUsageAsync(bucket.Name, ResultsBucket.CachePrefix, cancellationToken).ConfigureAwait(false);
+            var bucketCache = await _storage.GetPrefixUsageAsync(scope, bucket.Name, ResultsBucket.CachePrefix, cancellationToken).ConfigureAwait(false);
             cache = new PrefixUsage(cache.ObjectCount + bucketCache.ObjectCount, cache.TotalBytes + bucketCache.TotalBytes);
         }
 
@@ -134,19 +134,19 @@ public sealed class InstallationCleanup
     /// When <paramref name="confirmed"/> is given (what a confirm dialog showed, from <see cref="InventoryAsync"/>), only those items are deleted: anything that
     /// appeared since is reported as <see cref="CleanupOutcome.Skipped"/> with <see cref="NotConfirmedCode"/> and left alone (#740).
     /// </summary>
-    public async Task<CleanupReport> DeleteAllAsync(string projectId, string installationId, CancellationToken cancellationToken, InstallationInventory? confirmed = null)
+    public async Task<CleanupReport> DeleteAllAsync(CloudScope scope, string installationId, CancellationToken cancellationToken, InstallationInventory? confirmed = null)
     {
         RequireInstallation(installationId);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Every listing comes first: if any of them fails, nothing has been deleted yet.
-        var vmListing = await _compute.ListByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
-        await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
-        var buckets = await _storage.ListBucketsAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var vmListing = await _compute.ListByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false);
+        await _compute.ListDisksByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false);
+        var buckets = await _storage.ListBucketsAsync(scope, cancellationToken).ConfigureAwait(false);
         var jobsByBucket = new List<(BucketDescriptor Bucket, IReadOnlyList<string> Prefixes)>();
         foreach (var bucket in buckets)
         {
-            jobsByBucket.Add((bucket, await OwnJobPrefixesAsync(bucket.Name, installationId, cancellationToken).ConfigureAwait(false)));
+            jobsByBucket.Add((bucket, await OwnJobPrefixesAsync(scope, bucket.Name, installationId, cancellationToken).ConfigureAwait(false)));
         }
 
         // From here on nothing aborts the sweep except the caller's cancellation: every step is contained and reported as its own item.
@@ -170,7 +170,7 @@ public sealed class InstallationCleanup
 
             try
             {
-                await DeleteVmAndEndItsRunAsync(vm, items, cancellationToken).ConfigureAwait(false);
+                await DeleteVmAndEndItsRunAsync(scope, vm, items, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -187,7 +187,7 @@ public sealed class InstallationCleanup
         IReadOnlyList<DiskDescriptor>? diskListing = null;
         try
         {
-            diskListing = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+            diskListing = await _compute.ListDisksByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -216,7 +216,7 @@ public sealed class InstallationCleanup
                 continue;
             }
 
-            if (await TryAsync(() => _compute.DeleteDiskAsync(disk.Name, disk.Zone, cancellationToken), CleanupKind.Disk, disk.Name, disk.Zone, items).ConfigureAwait(false))
+            if (await TryAsync(() => _compute.DeleteDiskAsync(scope, disk.Name, disk.Zone, cancellationToken), CleanupKind.Disk, disk.Name, disk.Zone, items).ConfigureAwait(false))
             {
                 deletedDisks.Add(disk);
             }
@@ -228,7 +228,7 @@ public sealed class InstallationCleanup
             Exception? readBackFailure = null;
             try
             {
-                remaining = await _compute.ListDisksByInstallationAsync(installationId, cancellationToken).ConfigureAwait(false);
+                remaining = await _compute.ListDisksByInstallationAsync(scope, installationId, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -271,7 +271,7 @@ public sealed class InstallationCleanup
                     continue;
                 }
 
-                if (!await TryAsync(() => _storage.DeletePrefixAsync(bucket.Name, prefix, cancellationToken), CleanupKind.JobData, prefix, bucket.Name, items).ConfigureAwait(false))
+                if (!await TryAsync(() => _storage.DeletePrefixAsync(scope, bucket.Name, prefix, cancellationToken), CleanupKind.JobData, prefix, bucket.Name, items).ConfigureAwait(false))
                 {
                     continue;
                 }
@@ -279,7 +279,7 @@ public sealed class InstallationCleanup
                 var recoverable = bucket.SoftDeleteRetentionDays is > 0 ? bucket.SoftDeleteRetentionDays : null;
                 try
                 {
-                    var left = await _storage.GetPrefixUsageAsync(bucket.Name, prefix, cancellationToken).ConfigureAwait(false);
+                    var left = await _storage.GetPrefixUsageAsync(scope, bucket.Name, prefix, cancellationToken).ConfigureAwait(false);
                     items.Add(left.ObjectCount == 0
                         ? new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.Deleted, RecoverableForDays: recoverable)
                         : new CleanupItem(CleanupKind.JobData, prefix, bucket.Name, CleanupOutcome.NotVerified, StillThereCode));
@@ -327,7 +327,7 @@ public sealed class InstallationCleanup
     /// code owns (the runner's, "Delete everything") is <see cref="VmEndResult.AlreadyEnding"/>. A failure of the operation AFTER it was accepted is <see cref="VmEndResult.Failed"/>
     /// (the row already says the run ended). Never throws for a cloud failure.
     /// </summary>
-    public async Task<VmEndResult> EndVmAsync(string installationId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
+    public async Task<VmEndResult> EndVmAsync(CloudScope cloud, string installationId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
     {
         RequireInstallation(installationId);
         if (!BelongsTo(vm, installationId))
@@ -367,7 +367,7 @@ public sealed class InstallationCleanup
 
             if (first is null)
             {
-                return await EndOwnedAsync(scope, mine, jobId, vm, delete, requestAccepted, cancellationToken).ConfigureAwait(false);
+                return await EndOwnedAsync(cloud, scope, mine, jobId, vm, delete, requestAccepted, cancellationToken).ConfigureAwait(false);
             }
 
             // An end of ours for this job is in flight: its outcome is known (and awaited, bounded).
@@ -400,7 +400,7 @@ public sealed class InstallationCleanup
                 return VmEndResult.Done;
             }
 
-            return await DeleteBehindAcceptedStopAsync(jobId!, first, vm, requestAccepted, cancellationToken).ConfigureAwait(false);
+            return await DeleteBehindAcceptedStopAsync(cloud, jobId!, first, vm, requestAccepted, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -445,13 +445,13 @@ public sealed class InstallationCleanup
     /// Sends the Compute request and returns two tasks: whether Google ACCEPTED it (true as soon as the gateway says so, or when it finished without saying; false when it
     /// failed first), and the whole call (which ends when the operation is done and carries what it ended with).
     /// </summary>
-    private (Task<bool> Accepted, Task Operation) Send(VmDescriptor vm, bool delete, Action onAccepted, CancellationToken cancellationToken)
+    private (Task<bool> Accepted, Task Operation) Send(CloudScope cloud, VmDescriptor vm, bool delete, Action onAccepted, CancellationToken cancellationToken)
     {
         var accepted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         Task operation;
         try
         {
-            operation = _compute.EndVmAsync(vm.Name, vm.Zone, delete, () =>
+            operation = _compute.EndVmAsync(cloud, vm.Name, vm.Zone, delete, () =>
             {
                 onAccepted();
                 accepted.TrySetResult(true);
@@ -475,7 +475,7 @@ public sealed class InstallationCleanup
     /// leaves the run, its driver and its row exactly as they were), the run's row ended (the driver wait is bounded, and neither the wait nor the write takes the caller's token:
     /// once the request is accepted the run's end is recorded, Hard Rule 11), and the operation awaited to its end.
     /// </summary>
-    private async Task<VmEndResult> EndOwnedAsync(ActiveRuns.CancelScope? scope, InFlightEnd? entry, string? jobId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
+    private async Task<VmEndResult> EndOwnedAsync(CloudScope cloud, ActiveRuns.CancelScope? scope, InFlightEnd? entry, string? jobId, VmDescriptor vm, bool delete, Action? requestAccepted, CancellationToken cancellationToken)
     {
         // The job (the cancel scope) is let go of as soon as the run's row is ended: a runner cancel, "Delete everything" or the reconciler must not be told "already ending" or wait
         // out the operation, which for a GPU stop is minutes. The entry stays published until the operation is done, so a second end for this job still joins this one.
@@ -494,7 +494,7 @@ public sealed class InstallationCleanup
 
         try
         {
-            var (acceptedTask, operation) = Send(vm, delete, () =>
+            var (acceptedTask, operation) = Send(cloud, vm, delete, () =>
             {
                 Notify(requestAccepted);
                 entry?.Accepted.TrySetResult(true);
@@ -572,12 +572,12 @@ public sealed class InstallationCleanup
     /// A Stop of this job is accepted and still finishing while the user now wants a Delete: the Delete is sent, and once the first end has written the run's row the row's
     /// error code is changed from the stop's to the delete's, so the history says what became of the computer.
     /// </summary>
-    private async Task<VmEndResult> DeleteBehindAcceptedStopAsync(string jobId, InFlightEnd first, VmDescriptor vm, Action? requestAccepted, CancellationToken cancellationToken)
+    private async Task<VmEndResult> DeleteBehindAcceptedStopAsync(CloudScope cloud, string jobId, InFlightEnd first, VmDescriptor vm, Action? requestAccepted, CancellationToken cancellationToken)
     {
         var outcome = new TaskCompletionSource<VmEndResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
-            var result = await DeleteBehindCoreAsync(jobId, first, vm, outcome, requestAccepted, cancellationToken).ConfigureAwait(false);
+            var result = await DeleteBehindCoreAsync(cloud, jobId, first, vm, outcome, requestAccepted, cancellationToken).ConfigureAwait(false);
             outcome.TrySetResult(result);
             return result;
         }
@@ -587,10 +587,10 @@ public sealed class InstallationCleanup
         }
     }
 
-    private async Task<VmEndResult> DeleteBehindCoreAsync(string jobId, InFlightEnd first, VmDescriptor vm, TaskCompletionSource<VmEndResult> outcome, Action? requestAccepted, CancellationToken cancellationToken)
+    private async Task<VmEndResult> DeleteBehindCoreAsync(CloudScope cloud, string jobId, InFlightEnd first, VmDescriptor vm, TaskCompletionSource<VmEndResult> outcome, Action? requestAccepted, CancellationToken cancellationToken)
     {
         // The moment the Delete is accepted the Stop it supersedes is told: from then on that Stop's own error is not the computer's outcome, this Delete's is.
-        var (acceptedTask, operation) = Send(vm, true, () =>
+        var (acceptedTask, operation) = Send(cloud, vm, true, () =>
         {
             first.Superseder = outcome.Task;
             Notify(requestAccepted);
@@ -660,7 +660,7 @@ public sealed class InstallationCleanup
     /// work runs under <see cref="ActiveRuns.CancelAsync"/>, so the run's driver is stopped first and one writer owns the row; a VM verified gone then
     /// ends the run's row (Hard Rule 11: a run whose VM is gone is never left Running).
     /// </summary>
-    private async Task DeleteVmAndEndItsRunAsync(VmDescriptor vm, List<CleanupItem> items, CancellationToken cancellationToken)
+    private async Task DeleteVmAndEndItsRunAsync(CloudScope scope, VmDescriptor vm, List<CleanupItem> items, CancellationToken cancellationToken)
     {
         var jobId = vm.Labels is { } labels && labels.TryGetValue("job-id", out var id) ? id : null;
         var ran = false;
@@ -668,7 +668,7 @@ public sealed class InstallationCleanup
         async Task BodyAsync()
         {
             ran = true;
-            if (!await TryAsync(() => _compute.DeleteVmAsync(vm.Name, vm.Zone, cancellationToken), CleanupKind.Vm, vm.Name, vm.Zone, items).ConfigureAwait(false))
+            if (!await TryAsync(() => _compute.DeleteVmAsync(scope, vm.Name, vm.Zone, cancellationToken), CleanupKind.Vm, vm.Name, vm.Zone, items).ConfigureAwait(false))
             {
                 return;
             }
@@ -676,7 +676,7 @@ public sealed class InstallationCleanup
             VmDescriptor? still;
             try
             {
-                still = await _compute.GetVmAsync(vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
+                still = await _compute.GetVmAsync(scope, vm.Name, vm.Zone, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -788,13 +788,13 @@ public sealed class InstallationCleanup
     }
 
     /// <summary>The <c>jobs/&lt;id&gt;/</c> folders in <paramref name="bucket"/> whose manifest names <paramref name="installationId"/>.</summary>
-    private async Task<IReadOnlyList<string>> OwnJobPrefixesAsync(string bucket, string installationId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> OwnJobPrefixesAsync(CloudScope scope, string bucket, string installationId, CancellationToken cancellationToken)
     {
         var own = new List<string>();
-        foreach (var prefix in await _storage.ListChildPrefixesAsync(bucket, ResultsBucket.JobsPrefix, cancellationToken).ConfigureAwait(false))
+        foreach (var prefix in await _storage.ListChildPrefixesAsync(scope, bucket, ResultsBucket.JobsPrefix, cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var stream = await _storage.TryDownloadAsync(bucket, prefix + ManifestName, cancellationToken).ConfigureAwait(false);
+            var stream = await _storage.TryDownloadAsync(scope, bucket, prefix + ManifestName, cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 continue;

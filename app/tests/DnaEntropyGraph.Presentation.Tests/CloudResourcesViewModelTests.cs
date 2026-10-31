@@ -46,19 +46,20 @@ public class CloudResourcesViewModelTests
         _strings.GetString("CloudDeleteAll_Body").Returns("CloudDeleteAll_Body {0} {1} {2} {3}");
         _strings.GetString("CloudReport_DeletedRecoverable").Returns("CloudReport_DeletedRecoverable {0} {1}");
         _account.SelectedProjectId.Returns(Project);
+        _account.SelectedScope().Returns(TestScopes.Of(Project));
         _settings.GetString(InstallationId.SettingsKey).Returns(Mine);
         _pricing.Load().Returns(PricingTable.Parse(PricingJson));
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Do<string>(m => _confirmMessage = m), Arg.Any<CancellationToken>()).Returns(true);
         Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"));
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all));
-        _compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<DiskDescriptor>>(
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all));
+        _compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<DiskDescriptor>>(
             [new DiskDescriptor("deg-job-2", "us-central1-a", 150, "READY", Labels(Mine), AttachedTo: _detached ? null : ["https://x/zones/us-central1-a/instances/deg-job-2"])]));
-        _compute.When(c => c.DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())).Do(_ => _detached = true);
-        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([new BucketDescriptor(Bucket, "US", Labels(Mine), null, 7)]));
-        _storage.ListChildPrefixesAsync(Bucket, "jobs/", Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["jobs/job-1/"]));
-        _storage.TryDownloadAsync(Bucket, "jobs/job-1/manifest.json", Arg.Any<CancellationToken>())
+        _compute.When(c => c.DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())).Do(_ => _detached = true);
+        _storage.ListBucketsAsync(new CloudScope(Project), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([new BucketDescriptor(Bucket, "US", Labels(Mine), null, 7)]));
+        _storage.ListChildPrefixesAsync(Arg.Any<CloudScope>(), Bucket, "jobs/", Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["jobs/job-1/"]));
+        _storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, "jobs/job-1/manifest.json", Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes("{\"createdBy\":{\"installationId\":\"" + Mine + "\"}}"))));
-        _storage.GetPrefixUsageAsync(Bucket, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new PrefixUsage(3, 2_000_000));
+        _storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new PrefixUsage(3, 2_000_000));
     }
 
     private IReadOnlyList<VmDescriptor> _all = [];
@@ -67,7 +68,7 @@ public class CloudResourcesViewModelTests
     private void Vms(params VmDescriptor[] vms)
     {
         _all = vms;
-        _compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all.Where(v => v.Labels!["installation-id"] == Mine).ToList()));
+        _compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all.Where(v => v.Labels!["installation-id"] == Mine).ToList()));
     }
 
     private static Dictionary<string, string> Labels(string installation, string? job = null)
@@ -140,8 +141,27 @@ public class CloudResourcesViewModelTests
         await running.StopCommand.ExecuteAsync(null);
         await stopped.StartCommand.ExecuteAsync(null);
 
-        await _compute.Received(1).StopVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).StartVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).StopVmAsync(new CloudScope(Project), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).StartVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_row_acts_in_the_scope_it_was_listed_in_whatever_is_selected_when_it_is_clicked()
+    {
+        var listedIn = new CloudScope(Project, "sub-listed");
+        _account.SelectedScope().Returns(listedIn);
+        var viewModel = await LoadedAsync();
+        _account.SelectedScope().Returns(new CloudScope(Project, "sub-other")); // the account moved on (the project check cannot see it) without the page being told
+
+        var stopRow = viewModel.Vms[0]; // both rows are taken before acting: an action refreshes the page, and the refresh lists in the scope selected then
+        var deleteRow = viewModel.Vms[1];
+
+        await stopRow.StopCommand!.ExecuteAsync(null);
+        await deleteRow.DeleteCommand!.ExecuteAsync(null);
+
+        await _compute.Received(1).StopVmAsync(listedIn, "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(listedIn, "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().StopVmAsync(Arg.Is<CloudScope>(s => s.AccountSub == "sub-other"), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -155,14 +175,14 @@ public class CloudResourcesViewModelTests
 
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
         await viewModel.Vms[1].DeleteCommand!.ExecuteAsync(null);
-        await _compute.Received(1).DeleteVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task A_refused_stop_says_which_computer_and_names_the_action()
     {
         var viewModel = await LoadedAsync();
-        _compute.StopVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("403", 403, "no"), CloudErrorKind.Permission));
+        _compute.StopVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("403", 403, "no"), CloudErrorKind.Permission));
 
         await viewModel.Vms[0].StopCommand!.ExecuteAsync(null);
 
@@ -191,16 +211,16 @@ public class CloudResourcesViewModelTests
     {
         Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"), Vm("deg-theirs", "RUNNING", Other, "job-9"));
         var viewModel = await LoadedAsync();
-        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
-        _compute.DeleteDiskAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("403", 403, "no"), CloudErrorKind.Permission));
-        _storage.GetPrefixUsageAsync(Bucket, "jobs/job-1/", Arg.Any<CancellationToken>()).Returns(new PrefixUsage(0, 0));
+        _compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.DeleteDiskAsync(Arg.Any<CloudScope>(), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("403", 403, "no"), CloudErrorKind.Permission));
+        _storage.GetPrefixUsageAsync(Arg.Any<CloudScope>(), Bucket, "jobs/job-1/", Arg.Any<CancellationToken>()).Returns(new PrefixUsage(0, 0));
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
-        await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).DeleteVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.DidNotReceive().DeleteVmAsync("deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await _storage.Received(1).DeletePrefixAsync(Bucket, "jobs/job-1/", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), "deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _storage.Received(1).DeletePrefixAsync(Arg.Any<CloudScope>(), Bucket, "jobs/job-1/", Arg.Any<CancellationToken>());
         viewModel.HasReport.ShouldBeTrue();
         viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");
         viewModel.ReportLines.Count.ShouldBe(4);
@@ -214,14 +234,14 @@ public class CloudResourcesViewModelTests
     {
         var stray = Vm("deg-theirs", "RUNNING", Other, "job-9");
         Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), stray);
-        _compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all));
-        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<IReadOnlyList<VmDescriptor>>(_all));
+        _compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
         var viewModel = await LoadedAsync();
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
-        await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.DidNotReceive().DeleteVmAsync("deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), "deg-theirs", Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -229,7 +249,7 @@ public class CloudResourcesViewModelTests
     {
         // #740 finding 4: the dialog named two computers; a third appeared before the delete ran and must not go unnamed.
         var viewModel = await LoadedAsync();
-        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             Vms(Vm("deg-job-1", "RUNNING", Mine, "job-1"), Vm("deg-job-2", "TERMINATED", Mine, "job-2"), Vm("deg-late", "RUNNING", Mine, "job-3"));
@@ -238,9 +258,9 @@ public class CloudResourcesViewModelTests
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
-        await _compute.Received(1).DeleteVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.Received(1).DeleteVmAsync("deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
-        await _compute.DidNotReceive().DeleteVmAsync("deg-late", Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.Received(1).DeleteVmAsync(new CloudScope(Project), "deg-job-2", "us-central1-a", Arg.Any<CancellationToken>());
+        await _compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), "deg-late", Arg.Any<string>(), Arg.Any<CancellationToken>());
         viewModel.ReportLines.ShouldContain(l => l.Contains("CloudReport_Skipped") && l.Contains("deg-late"));
         viewModel.ReportHeadline.ShouldContain("CloudReport_Incomplete");
     }
@@ -248,7 +268,7 @@ public class CloudResourcesViewModelTests
     [Fact]
     public async Task A_listing_that_fails_with_any_exception_shows_one_message_and_never_escapes_a_fire_and_forget_refresh()
     {
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
         var viewModel = NewViewModel();
 
         await viewModel.RefreshCommand.ExecuteAsync(null);
@@ -262,7 +282,7 @@ public class CloudResourcesViewModelTests
     public async Task Delete_everything_survives_any_exception_in_the_listing_and_in_the_sweep_and_each_says_one_thing()
     {
         var viewModel = await LoadedAsync();
-        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
+        _storage.ListBucketsAsync(new CloudScope(Project), Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("parse"));
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
@@ -272,7 +292,7 @@ public class CloudResourcesViewModelTests
 
         // Past the dialog: the sweep's own re-listing fails with something that is not a cloud error.
         var listing = Task.FromResult<IReadOnlyList<BucketDescriptor>>([new BucketDescriptor(Bucket, "US", Labels(Mine), null, 7)]);
-        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns(_ => listing, _ => throw new InvalidOperationException("parse"));
+        _storage.ListBucketsAsync(new CloudScope(Project), Arg.Any<CancellationToken>()).Returns(_ => listing, _ => throw new InvalidOperationException("parse"));
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
@@ -286,8 +306,8 @@ public class CloudResourcesViewModelTests
     {
         // #740 round 2 (M1): the first computer is gone when the second one fails with something that is not a cloud error.
         var viewModel = await LoadedAsync();
-        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
-        _compute.DeleteVmAsync("deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
+        _compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new InvalidOperationException("boom"));
 
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
 
@@ -303,7 +323,7 @@ public class CloudResourcesViewModelTests
     {
         // #740 round 2 (M2): stale ReportLines and ReportHeadline must not sit under a new error.
         var viewModel = await LoadedAsync();
-        _compute.GetVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
+        _compute.GetVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<VmDescriptor?>(null));
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
         viewModel.HasReport.ShouldBeTrue();
 
@@ -312,7 +332,7 @@ public class CloudResourcesViewModelTests
         viewModel.HasReport.ShouldBeFalse("the old report belongs to the old delete");
         viewModel.ReportLines.ShouldBeEmpty();
 
-        _compute.ListByInstallationAsync(Mine, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
+        _compute.ListByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
         await viewModel.DeleteEverythingCommand.ExecuteAsync(null);
         viewModel.HasReport.ShouldBeFalse();
         viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
@@ -323,7 +343,7 @@ public class CloudResourcesViewModelTests
     {
         var viewModel = await LoadedAsync();
         var listsBefore = _compute.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IComputeGateway.ListAppVmsAsync));
-        _compute.DeleteVmAsync("deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new OperationCanceledException());
+        _compute.DeleteVmAsync(Arg.Any<CloudScope>(), "deg-job-2", Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<Task>(_ => throw new OperationCanceledException());
 
         try
         {
@@ -342,7 +362,7 @@ public class CloudResourcesViewModelTests
     public async Task A_refused_stop_that_is_not_a_cloud_error_still_names_the_computer()
     {
         var viewModel = await LoadedAsync();
-        _compute.StopVmAsync("deg-job-1", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
+        _compute.StopVmAsync(Arg.Any<CloudScope>(), "deg-job-1", "us-central1-a", Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("x"));
 
         await viewModel.Vms[0].StopCommand!.ExecuteAsync(null);
 
@@ -363,6 +383,7 @@ public class CloudResourcesViewModelTests
     public async Task Without_a_chosen_project_nothing_is_called_and_the_page_says_to_set_up()
     {
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         var viewModel = NewViewModel();
 
         await viewModel.RefreshCommand.ExecuteAsync(null);
@@ -375,7 +396,7 @@ public class CloudResourcesViewModelTests
     [Fact]
     public async Task A_listing_that_fails_names_the_action_instead_of_showing_an_empty_page()
     {
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("503", 503, "down"), CloudErrorKind.Network));
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).ThrowsAsync(new CloudOperationException(new CloudError("503", 503, "down"), CloudErrorKind.Network));
         var viewModel = NewViewModel();
 
         await viewModel.RefreshCommand.ExecuteAsync(null);
@@ -401,12 +422,13 @@ public class CloudResourcesViewModelTests
     {
         var viewModel = await LoadedAsync();
         _account.SelectedProjectId.Returns(NewProject);
-        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
+        _storage.ListBucketsAsync(new CloudScope(NewProject), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
 
         await viewModel.RefreshCommand.ExecuteAsync(null);
 
-        await _storage.Received(1).ListBucketsAsync(NewProject, Arg.Any<CancellationToken>());
-        await _storage.Received().ListBucketsAsync(Project, Arg.Any<CancellationToken>());
+        await _storage.Received(1).ListBucketsAsync(new CloudScope(NewProject), Arg.Any<CancellationToken>());
+        await _storage.Received().ListBucketsAsync(new CloudScope(Project), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -415,7 +437,8 @@ public class CloudResourcesViewModelTests
         var viewModel = await LoadedAsync();
         viewModel.Vms.Count.ShouldBe(2);
         _account.SelectedProjectId.Returns(NewProject);
-        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
+        _storage.ListBucketsAsync(new CloudScope(NewProject), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
         Vms();
 
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
@@ -423,7 +446,7 @@ public class CloudResourcesViewModelTests
         viewModel.Vms.ShouldBeEmpty();
         viewModel.Disks.ShouldBeEmpty();
         viewModel.ErrorText.ShouldContain("CloudPage_ProjectChanged");
-        await _storage.DidNotReceive().ListBucketsAsync(NewProject, Arg.Any<CancellationToken>());
+        await _storage.DidNotReceive().ListBucketsAsync(new CloudScope(NewProject), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -433,6 +456,7 @@ public class CloudResourcesViewModelTests
         var running = viewModel.Vms[0];
         var stopped = viewModel.Vms[1];
         _account.SelectedProjectId.Returns(NewProject);
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
 
         await running.StopCommand!.ExecuteAsync(null);
         await stopped.DeleteCommand!.ExecuteAsync(null);
@@ -450,6 +474,7 @@ public class CloudResourcesViewModelTests
         _dialogs.ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             return Task.FromResult(true);
         });
 
@@ -464,9 +489,10 @@ public class CloudResourcesViewModelTests
     public async Task A_listing_that_straddles_a_project_switch_is_discarded_not_shown()
     {
         var viewModel = NewViewModel();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
         });
 
@@ -485,9 +511,10 @@ public class CloudResourcesViewModelTests
         var viewModel = await LoadedAsync();
         viewModel.BannerText.ShouldContain("CloudPage_RunningBanner", customMessage: "vacuity: the first listing set a banner");
         viewModel.SummaryText.ShouldContain("CloudPage_Summary", customMessage: "vacuity: the first listing set a summary");
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
         });
 
@@ -503,13 +530,14 @@ public class CloudResourcesViewModelTests
     public async Task A_straddling_listing_also_forgets_the_old_empty_state()
     {
         Vms();
-        _compute.ListDisksByInstallationAsync(Mine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
-        _storage.ListBucketsAsync(Project, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _compute.ListDisksByInstallationAsync(Arg.Any<CloudScope>(), Mine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
+        _storage.ListBucketsAsync(new CloudScope(Project), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
         var viewModel = await LoadedAsync();
         viewModel.IsEmpty.ShouldBeTrue("vacuity: an empty project was listed");
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
         });
 
@@ -522,12 +550,14 @@ public class CloudResourcesViewModelTests
     public async Task A_switch_away_and_back_during_one_listing_still_discards_it()
     {
         var viewModel = NewViewModel();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             // B and then A again while Google is answering: the id at the end equals the id at the start, but the answer may be for B.
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
             _account.SelectedProjectId.Returns(Project);
+            _account.SelectedScope().Returns(TestScopes.Of(Project));
             _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
         });
@@ -564,11 +594,13 @@ public class CloudResourcesViewModelTests
     {
         var dispatcher = new DeferredDispatcher();
         var viewModel = NewDeferredViewModel(dispatcher);
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             _account.SelectedProjectId.Returns(NewProject);
+            _account.SelectedScope().Returns(TestScopes.Of(NewProject));
             _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
             _account.SelectedProjectId.Returns(Project);
+            _account.SelectedScope().Returns(TestScopes.Of(Project));
             _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
             dispatcher.Pending.ShouldBe(2, "vacuity: neither handler has run yet");
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
@@ -587,10 +619,11 @@ public class CloudResourcesViewModelTests
         var dispatcher = new DeferredDispatcher();
         var viewModel = NewDeferredViewModel(dispatcher);
         _account.SelectedProjectId.Returns(NewProject);
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
         dispatcher.Pending.ShouldBe(1, "vacuity: the handler is queued, not run");
-        _storage.ListBucketsAsync(NewProject, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _storage.ListBucketsAsync(new CloudScope(NewProject), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             dispatcher.Drain();
             return Task.FromResult<IReadOnlyList<VmDescriptor>>(_all);
@@ -609,7 +642,7 @@ public class CloudResourcesViewModelTests
         var gated = CancellationToken.None;
         var started = new TaskCompletionSource();
         var calls = 0;
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             if (Interlocked.Increment(ref calls) > 1)
             {
@@ -627,6 +660,8 @@ public class CloudResourcesViewModelTests
         await viewModel.Vms[0].StopCommand!.ExecuteAsync(null);
 
         _account.SelectedProjectId.Returns(NewProject);
+
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
 
         gated.IsCancellationRequested.ShouldBeTrue("the still-running listing is for the old project, though another refresh finished meanwhile");
@@ -639,6 +674,7 @@ public class CloudResourcesViewModelTests
         var viewModel = await LoadedAsync();
         viewModel.Detach();
         _account.SelectedProjectId.Returns(NewProject);
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
 
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
 
@@ -673,7 +709,7 @@ public class CloudResourcesViewModelTests
     {
         var viewModel = NewViewModel();
         var gate = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
         var load = viewModel.RefreshCommand.ExecuteAsync(null);
 
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
@@ -689,7 +725,7 @@ public class CloudResourcesViewModelTests
     public async Task An_account_change_after_a_failed_first_listing_says_nothing()
     {
         var viewModel = NewViewModel();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new InvalidOperationException("boom"));
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ => throw new InvalidOperationException("boom"));
         await viewModel.RefreshCommand.ExecuteAsync(null);
         viewModel.ErrorText.ShouldContain("CloudPage_ListFailed");
 
@@ -705,7 +741,7 @@ public class CloudResourcesViewModelTests
         var viewModel = NewViewModel();
         var seen = CancellationToken.None;
         var started = new TaskCompletionSource();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             seen = call.Arg<CancellationToken>();
             var pending = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
@@ -717,6 +753,8 @@ public class CloudResourcesViewModelTests
         await started.Task;
 
         _account.SelectedProjectId.Returns(NewProject);
+
+        _account.SelectedScope().Returns(TestScopes.Of(NewProject));
         _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
 
         seen.IsCancellationRequested.ShouldBeTrue();
@@ -731,7 +769,7 @@ public class CloudResourcesViewModelTests
         var viewModel = NewViewModel();
         var seen = CancellationToken.None;
         var gate = new TaskCompletionSource<IReadOnlyList<VmDescriptor>>();
-        _compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(call =>
+        _compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             seen = call.Arg<CancellationToken>();
             return gate.Task;

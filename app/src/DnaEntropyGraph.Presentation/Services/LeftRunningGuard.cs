@@ -34,13 +34,16 @@ public sealed class LeftRunningGuard : IDisposable
     private readonly IStringResourceProvider _strings;
     private readonly IDiagnosticsLog _log;
     private readonly TimeProvider _clock;
+    private readonly IGcpAccount _account;
     private readonly HashSet<(string Name, string Zone)> _announced = [];
     private readonly object _gate = new();
     private ITimer? _timer;
     private bool _scanning;
+    private int _lastUnread;
 
-    public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock)
+    public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock, IGcpAccount account)
     {
+        _account = account;
         _scanner = scanner;
         _cleanup = cleanup;
         _settings = settings;
@@ -81,15 +84,59 @@ public sealed class LeftRunningGuard : IDisposable
 
     private async Task<LeftRunningReport> BoundedScanAsync(CancellationToken cancellationToken)
     {
-        var scan = _scanner.ScanAsync(cancellationToken);
+        // Issue #830: the scan lists in every scope a recent run of this installation was made in plus the selection (the selection path); what it finds carries the scope it was found in,
+        // and every stop or delete below uses that one. A signed-out selection still scans the scopes of recent runs.
+        var scan = _scanner.ScanAllAsync(SelectionForScan(), cancellationToken);
         try
         {
-            return await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
+            var report = await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
+            NoteUnread(report.UnreadScopes);
+            return report;
         }
         catch (TimeoutException)
         {
             ObserveLate(scan, "left-running-scan", null);
+
+            // Review F2: a per-scope failure is no longer a fault of the scan, so an abandoned scan that later finishes with unread scopes is observed here too (classes only).
+            _ = scan.ContinueWith(
+                t =>
+                {
+                    foreach (var unread in t.Result.UnreadList)
+                    {
+                        _log.Warning("left-running-scan", null, unread.ErrorClass ?? nameof(Exception));
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Round 4 M-A: the scope the exit scan treats as the selected one. A signed-out active account has no selected scope (it reads null), which would make an unreadable selection
+    /// invisible exactly when it matters, so the active account's own snapshot (account and project, from ONE read, also when it must sign in again) is used instead; for a signed-in account it is the same scope.
+    /// Null when no account or no project exists at all.
+    /// </summary>
+    private CloudScope? SelectionForScan()
+        => _account.ActiveSnapshot() is { ProjectId.Length: > 0 } snapshot ? new CloudScope(snapshot.ProjectId, snapshot.AccountSub) : null;
+
+    /// <summary>Logs "some scope was unreadable" once per change of that state (and once again after it clears), not on every 5-minute tick.</summary>
+    private void NoteUnread(int unread)
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            if (unread != _lastUnread)
+            {
+                _lastUnread = unread;
+                changed = unread > 0;
+            }
+        }
+
+        if (changed)
+        {
+            _log.Warning("left-running-scan", null, "unread-scopes");
         }
     }
 
@@ -177,6 +224,14 @@ public sealed class LeftRunningGuard : IDisposable
             return true;
         }
 
+        // Review F4: only a scope with something that could still be running is worth a prompt; the rest was logged by the scan.
+        var worrying = report.UnreadList.Where(u => u.HasObligation).ToList();
+        if (worrying.Count > 0 && await AskAboutUnreadAsync(worrying, cancellationToken).ConfigureAwait(false))
+        {
+            // Sign-in was chosen: the window stays open so the next close scans again with that account back.
+            return false;
+        }
+
         if (report.RunningVms.Count == 0)
         {
             return true;
@@ -197,6 +252,55 @@ public sealed class LeftRunningGuard : IDisposable
             1 => await EndAllAsync(report.RunningVms, true, "LeftRunning_DeleteFailedTitle", "LeftRunning_DeleteFailedBody", cancellationToken).ConfigureAwait(false),
             _ => true,
         };
+    }
+
+    /// <summary>
+    /// Issue #830 review M4: some account's computers could not be listed, so "nothing is running" would be a guess. Says so, names the signed-out account(s), and offers Sign in
+    /// (or, when the cause is not a sign-in, only Close anyway with the Cloud page named as the place to look). Returns true when Sign in was chosen and ran (the caller keeps the window open).
+    /// </summary>
+    private async Task<bool> AskAboutUnreadAsync(IReadOnlyList<UnreadScope> unread, CancellationToken cancellationToken)
+    {
+        var needsSignIn = unread.Where(u => u.NeedsSignIn).ToList();
+        string body;
+        string[] buttons;
+        if (needsSignIn.Count > 0)
+        {
+            var accounts = _account.Accounts;
+            var emails = needsSignIn
+                .Select(u => accounts.FirstOrDefault(a => a.Sub == u.Scope.AccountSub)?.Email)
+                .Where(email => !string.IsNullOrEmpty(email))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(email => email!)
+                .ToList();
+            var who = emails.Count == 0 ? Text("LeftRunning_UnreadAccountUnknown") : string.Join(Text("SignInNeeded_Joiner"), emails);
+            body = Text("LeftRunning_UnreadBodySignIn", who);
+            buttons = [Text("LeftRunning_UnreadSignIn"), Text("LeftRunning_UnreadCloseAnyway")];
+        }
+        else
+        {
+            body = Text("LeftRunning_UnreadBodyOther");
+            buttons = [Text("LeftRunning_UnreadCloseAnyway")];
+        }
+
+        var choice = await _dialog.ChooseAsync(Text("LeftRunning_UnreadTitle"), body, buttons, DialogGateTimeout, cancellationToken).ConfigureAwait(false);
+        if (needsSignIn.Count == 0 || choice != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Review F7a: a cancelled browser wait or a network error is not an AccountAuthException; none of them may escape the exit. Log the class, say the existing sign-in-failed copy.
+            _log.Warning("left-running-exit", null, ex.GetType().Name);
+            _toasts.ShowToast(Text("LeftRunning_UnreadTitle"), Text("AuthError_SIGNIN_FAILED"), ToastSeverity.Error);
+        }
+
+        return true;
     }
 
     private enum EndResult
@@ -220,7 +324,14 @@ public sealed class LeftRunningGuard : IDisposable
             Task<VmEndResult>? work = null;
             try
             {
-                work = _cleanup.EndVmAsync(installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken);
+                // Issue #830: each computer is ended in the scope it was found in, never in whatever is selected by the time the user clicks.
+                var scope = vm.Scope;
+                if (scope is null)
+                {
+                    return (vm, EndResult.Failed);
+                }
+
+                work = _cleanup.EndVmAsync(scope, installation, vm.Descriptor, delete, () => Volatile.Write(ref accepted, true), cancellationToken);
                 var result = await work.WaitAsync(EndTimeout, _clock, cancellationToken).ConfigureAwait(false);
                 return (vm, result switch
                 {

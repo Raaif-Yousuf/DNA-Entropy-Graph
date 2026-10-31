@@ -22,7 +22,7 @@ public class ProxySignInTests
         harness.Proxy = policy;
         var service = harness.NewService();
 
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.SigninProxy);
         proxy.Connects.ShouldContain(c => c.Contains("googleapis.com:443", StringComparison.Ordinal));
@@ -39,7 +39,7 @@ public class ProxySignInTests
         var service = harness.NewService();
         harness.Google.NetworkDown = true;
 
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.NetworkUnavailable);
     }

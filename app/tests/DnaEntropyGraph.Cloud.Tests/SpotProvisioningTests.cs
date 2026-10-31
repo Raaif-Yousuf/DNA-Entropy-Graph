@@ -54,8 +54,8 @@ public class SpotProvisioningTests
     public void The_Spot_option_reaches_the_VmSpec_and_is_off_by_default()
     {
         var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
-        var on = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", SpotVm = true }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
-        var off = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }, "20260101-000000-abcdef", Project, "install-1", "0.1.0", null, inputs, @"C:\out");
+        var on = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", SpotVm = true }, "20260101-000000-abcdef", new CloudScope(Project), "install-1", "0.1.0", null, inputs, @"C:\out");
+        var off = CloudJobRequestFactory.Create(new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" }, "20260101-000000-abcdef", new CloudScope(Project), "install-1", "0.1.0", null, inputs, @"C:\out");
 
         on.Spec.Spot.ShouldBeTrue();
         off.Spec.Spot.ShouldBeFalse();
@@ -189,7 +189,7 @@ public class SpotProvisioningTests
         await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         gcp.CreatedSpecs.Count.ShouldBe(1);
-        LastRow(repo, jobId).Phase.ShouldBe(JobPhase.Cancelled);
+        LastRow(repo, jobId).Phase.ShouldBe(JobPhase.Cancelled, "error code " + LastRow(repo, jobId).ErrorCode);
         LastRow(repo, jobId).PreemptionCount.ShouldBe(0);
     }
 

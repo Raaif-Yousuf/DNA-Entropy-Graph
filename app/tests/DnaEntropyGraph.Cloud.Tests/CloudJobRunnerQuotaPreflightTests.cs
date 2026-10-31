@@ -89,21 +89,21 @@ public class CloudJobRunnerQuotaPreflightTests
     {
         public int Completed { get; private set; }
 
-        public async Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
+        public async Task<int> GetGpuQuotaAsync(CloudScope scope, string region, string acceleratorType, CancellationToken cancellationToken)
         {
             await Task.Yield();
             clock.Advance(SlowRead);
             cancellationToken.ThrowIfCancellationRequested();
-            var answer = await inner.GetGpuQuotaAsync(projectId, region, acceleratorType, cancellationToken);
+            var answer = await inner.GetGpuQuotaAsync(scope, region, acceleratorType, cancellationToken);
             Completed++;
             return answer;
         }
 
-        public Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken) => inner.ReadQuotaAsync(projectId, cancellationToken);
+        public Task<QuotaReadResult> ReadQuotaAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ReadQuotaAsync(scope, cancellationToken);
 
-        public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken) => inner.GetQuotaIncreaseEligibilityAsync(projectId, metric, cancellationToken);
+        public Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(CloudScope scope, string metric, CancellationToken cancellationToken) => inner.GetQuotaIncreaseEligibilityAsync(scope, metric, cancellationToken);
 
-        public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken) => inner.RequestQuotaIncreaseAsync(projectId, request, cancellationToken);
+        public Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(CloudScope scope, QuotaIncreaseRequest request, CancellationToken cancellationToken) => inner.RequestQuotaIncreaseAsync(scope, request, cancellationToken);
     }
 
     private static (CloudJobRunner Runner, SlowQuota Quota) NewSlowRunner(TimeSpan quotaBudget)

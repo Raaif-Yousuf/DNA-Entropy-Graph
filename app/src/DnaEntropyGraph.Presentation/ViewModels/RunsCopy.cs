@@ -87,6 +87,7 @@ public static class RunsCopy
         CloudResultsStatus.NoCloudCopy => Pair("Runs_Redownload_NoCloudCopy_Title", "Runs_Redownload_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.ResultNotFound => Pair("Runs_Redownload_ResultNotFound_Title", "Runs_Redownload_ResultNotFound_Body", ToastSeverity.Error),
         CloudResultsStatus.Refused => Pair("Runs_Redownload_Refused_Title", "Runs_Redownload_Refused_Body", ToastSeverity.Error),
+        CloudResultsStatus.SignInNeeded => Pair("Runs_Redownload_SignIn_Title", "Runs_Redownload_SignIn_Body", ToastSeverity.Warning),
         _ => Pair("Runs_Redownload_Failed_Title", "Runs_Redownload_Failed_Body", ToastSeverity.Error),
     };
 
@@ -153,6 +154,7 @@ public static class RunsCopy
         CloudResultsStatus.NoCloudCopy => Pair("Runs_DeleteCloud_NoCloudCopy_Title", "Runs_DeleteCloud_NoCloudCopy_Body", ToastSeverity.Info),
         CloudResultsStatus.Refused => Pair("Runs_DeleteCloud_Refused_Title", "Runs_DeleteCloud_Refused_Body", ToastSeverity.Error),
         CloudResultsStatus.NotConnected => Pair("Runs_DeleteCloud_NotConnected_Title", "Runs_DeleteCloud_NotConnected_Body", ToastSeverity.Warning),
+        CloudResultsStatus.SignInNeeded => Pair("Runs_DeleteCloud_SignIn_Title", "Runs_DeleteCloud_SignIn_Body", ToastSeverity.Warning),
         CloudResultsStatus.PartiallyDeleted => Pair("Runs_DeleteCloud_Partial_Title", "Runs_DeleteCloud_Partial_Body", ToastSeverity.Warning),
         _ => Pair("Runs_DeleteCloud_Failed_Title", "Runs_DeleteCloud_Failed_Body", ToastSeverity.Error),
     };
