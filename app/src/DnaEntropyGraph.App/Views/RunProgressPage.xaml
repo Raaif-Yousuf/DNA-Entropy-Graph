@@ -32,6 +32,22 @@
                 Message="{x:Bind ViewModel.SlowNoticeText, Mode=OneWay}"
                 Severity="Warning"
                 IsClosable="False" />
+            <!-- Issue #830: this run's Google account is signed out, so its computer cannot be stopped or deleted until the person signs in as it. -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasSignInPrompt, Mode=OneWay}"
+                Message="{x:Bind ViewModel.SignInPromptText, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False">
+                <InfoBar.ActionButton>
+                    <Button x:Uid="RunProgressSignIn" Command="{x:Bind ViewModel.SignInCommand}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+            <!-- Issue #830 review M5: no history row for this run, so the app cannot say where its computer is; the message names the Cloud page. -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasActionNotice, Mode=OneWay}"
+                Message="{x:Bind ViewModel.ActionNoticeText, Mode=OneWay}"
+                Severity="Warning"
+                IsClosable="False" />
         </StackPanel>
 
         <TextBlock

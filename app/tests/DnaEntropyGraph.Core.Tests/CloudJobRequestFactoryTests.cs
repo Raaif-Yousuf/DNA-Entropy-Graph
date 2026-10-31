@@ -10,7 +10,7 @@ namespace DnaEntropyGraph.Core.Tests;
 internal static class FactoryCall
 {
     public static CloudJobRequest Create(RunOptions options, string jobId, string projectId, string installationId, string appVersion, string? workerImage = null)
-        => CloudJobRequestFactory.Create(options, jobId, projectId, installationId, appVersion, workerImage, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb")], @"C:\out");
+        => CloudJobRequestFactory.Create(options, jobId, new CloudScope(projectId), installationId, appVersion, workerImage, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb")], @"C:\out");
 }
 
 /// <summary>
@@ -47,6 +47,27 @@ public class CloudJobRequestFactoryTests
             AfterTask = AfterTask,
             MaxRunDurationMinutes = MaxRunDurationMinutes,
         };
+    }
+
+    [Fact]
+    public void The_request_carries_the_scope_it_was_created_in_and_the_spec_names_that_scopes_project()
+    {
+        var scope = new CloudScope("my-project", "sub-a");
+
+        var request = CloudJobRequestFactory.Create(Options(), "20260101-000000-abcdef", scope, "install-1", "0.0.1", null, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb")], @"C:\out");
+
+        request.Scope.ShouldBe(scope);
+        request.ResolvedScope.ShouldBe(scope);
+        request.Spec.ProjectId.ShouldBe("my-project");
+    }
+
+    [Fact]
+    public void A_request_built_without_a_scope_never_guesses_one_from_its_spec()
+    {
+        // Issue #830: a silent "the spec's project as the current account" fallback would let a run act in the wrong account.
+        var request = CloudJobRequestFactory.Create(Options(), "20260101-000000-abcdef", new CloudScope("my-project", "sub-a"), "install-1", "0.0.1", null, [new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb")], @"C:\out") with { Scope = null };
+
+        Should.Throw<InvalidOperationException>(() => request.ResolvedScope);
     }
 
     [Fact]
@@ -181,7 +202,7 @@ public class CloudJobRequestFactoryTransferTests
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" };
         var inputs = new[] { new DnaEntropyGraph.Core.Contract.StagedInput(@"C:\x\a.gb", "a.gb") };
 
-        var request = CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1", null, inputs, @"C:\out");
+        var request = CloudJobRequestFactory.Create(options, "job-1", new CloudScope("p"), "i", "0.0.1", null, inputs, @"C:\out");
 
         request.Inputs.ShouldBe(inputs);
         request.Options.ShouldBeSameAs(options);
@@ -193,7 +214,7 @@ public class CloudJobRequestFactoryTransferTests
     {
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud" };
 
-        Should.Throw<ArgumentException>(() => CloudJobRequestFactory.Create(options, "job-1", "p", "i", "0.0.1", null, [], @"C:\out"));
+        Should.Throw<ArgumentException>(() => CloudJobRequestFactory.Create(options, "job-1", new CloudScope("p"), "i", "0.0.1", null, [], @"C:\out"));
     }
 }
 

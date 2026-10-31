@@ -81,7 +81,7 @@ public class ReattachOnStartupTests : IDisposable
         var copy = await inputs.StageAsync(jobId, original, CancellationToken.None);
         var output = Path.Combine(_root, "out");
         var options = new RunOptions { ModelId = "evo2_7b", RunTarget = "Cloud", AfterTask = after, InputPath = original, OutputFolder = output };
-        var request = CloudJobRequestFactory.Create(options, jobId, Project, "install-1", "0.1.0", null, [copy], output);
+        var request = CloudJobRequestFactory.Create(options, jobId, new CloudScope(Project), "install-1", "0.1.0", null, [copy], output);
         if (vm)
         {
             var gcp = provider.GetRequiredService<FakeGcp>();
@@ -353,9 +353,10 @@ public class ReattachOnStartupTests : IDisposable
     {
         private int _reads;
 
-        // Read 1 is the This PC pass at launch (issue #734); read 2 is the cloud reattach's own listing, the one this test needs to fail.
+        // Read 1 is the left-running scan LeftRunningGuard starts first (issue #830: it reads the run table for the scopes of recent runs; its first read happens synchronously inside StartAsync); read 2 is the This PC pass at launch (issue #734);
+        // read 3 is the cloud reattach's own listing, the one this test needs to fail.
         public Task<IReadOnlyList<RunRecord>> GetAllAsync(CancellationToken cancellationToken)
-            => Interlocked.Increment(ref _reads) == 2 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
+            => Interlocked.Increment(ref _reads) == 3 ? throw new TimeoutException() : Task.FromResult<IReadOnlyList<RunRecord>>([]);
 
         public Task UpsertAsync(RunRecord run, CancellationToken cancellationToken) => Task.CompletedTask;
     }

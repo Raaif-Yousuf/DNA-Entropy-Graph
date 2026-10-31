@@ -15,7 +15,7 @@ public class GpuQuotaRequesterTests
     private const string Project = "my-project";
     private const string Region = "us-central1";
 
-    private static GpuQuotaRequester Requester(FakeGcp gcp) => new(gcp);
+    private static GpuQuotaRequester Requester(FakeGcp gcp) => new(gcp, gcp);
 
     private static FakeGcp NoQuota() => new FakeGcp().WithGpuQuota(Region, "nvidia-l4", 0).WithAllRegionsGpuCap(0);
 

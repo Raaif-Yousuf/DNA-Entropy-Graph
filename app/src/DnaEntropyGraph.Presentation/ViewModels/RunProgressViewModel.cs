@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -32,6 +33,8 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly IStringResourceProvider _strings;
     private readonly IRunRepository _runRepository;
     private readonly INavigator _navigator;
+    private readonly IGcpAccount? _account;
+    private readonly IDiagnosticsLog _log;
 
     [ObservableProperty]
     private string? _jobId;
@@ -78,8 +81,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
         IStringResourceProvider strings,
         IRunRepository runRepository,
         INavigator navigator,
-        IMessenger messenger)
+        IMessenger messenger,
+        IGcpAccount? account = null,
+        IDiagnosticsLog? log = null)
     {
+        _account = account;
+        _log = log ?? NullDiagnosticsLog.Instance;
         _jobEngine = jobEngine;
         _dispatcher = dispatcher;
         _dialogService = dialogService;
@@ -94,6 +101,92 @@ public sealed partial class RunProgressViewModel : ObservableObject
         messenger.Register<RunProgressViewModel, RunProgressChangedMessage>(this, static (recipient, message) => recipient.OnRunProgressChanged(message));
         messenger.Register<RunProgressViewModel, RunNoticeMessage>(this, static (recipient, message) => recipient.OnRunNotice(message));
     }
+
+    /// <summary>
+    /// Issue #830: set when this run's Google account is signed out and a stop or delete of its computer could not be sent: "Sign in as (the account) to stop this run's computer".
+    /// Empty when there is nothing to sign in to. The account named is the run's own, never the one that happens to be current.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSignInPrompt))]
+    private string _signInPromptText = string.Empty;
+
+    public bool HasSignInPrompt => SignInPromptText.Length > 0;
+
+    /// <summary>The account the sign-in prompt asks for (its sub, never the email); null when the prompt is not showing or the account is not known.</summary>
+    private string? _promptSub;
+
+    /// <summary>Issue #830 review M5: set when Stop, Delete or Cancel found no history row for this run (the app cannot say where its computer is), naming the Cloud page. Empty otherwise.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActionNotice))]
+    private string _actionNoticeText = string.Empty;
+
+    public bool HasActionNotice => ActionNoticeText.Length > 0;
+
+    /// <summary>The prompt's button: starts Google sign-in; on success the prompt goes away and the person presses Stop or Delete again. A failed or cancelled sign-in keeps the prompt.</summary>
+    [RelayCommand]
+    private async Task SignInAsync(CancellationToken cancellationToken)
+    {
+        if (_account is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
+
+            // The sign-in can end as ANY Google account: the prompt goes only when the run's own account is signed in again (an unknown account cannot be checked, so any sign-in answers it).
+            var promptSub = _promptSub;
+            if (promptSub is null || _account.Accounts.Any(a => a.Sub == promptSub && !a.NeedsSignIn))
+            {
+                SetSignInPrompt(string.Empty);
+            }
+        }
+        catch (AccountAuthException)
+        {
+            // The sign-in screen said why (cancelled, timed out); the prompt stays so the person can try again.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Review F7a: a cancelled browser wait or a network error is not an AccountAuthException and must not escape the command. Log the class only; the prompt (with its button) now says the sign-in failed.
+            _log.Warning("run-sign-in", JobId, ex.GetType().Name);
+            SetSignInPrompt(_strings.GetString("AuthError_SIGNIN_FAILED"));
+        }
+    }
+
+    /// <summary>Runs a stop or delete of this run's computer; a signed-out account becomes the sign-in prompt instead of an unhandled exception.</summary>
+    private async Task RunVmActionAsync(Func<Task> action)
+    {
+        try
+        {
+            await action().ConfigureAwait(false);
+            SetSignInPrompt(string.Empty);
+            SetActionNotice(string.Empty);
+        }
+        catch (RunNotFoundException)
+        {
+            SetSignInPrompt(string.Empty);
+            SetActionNotice(_strings.GetString("RunAction_RunNotFound"));
+        }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            ShowSignInPrompt(ex.AccountSub);
+        }
+    }
+
+    /// <summary>The prompt for the run's own account (never the current one): "Sign in as (email)", or the no-email wording when the list no longer knows the account.</summary>
+    private void ShowSignInPrompt(string? accountSub)
+    {
+        _promptSub = accountSub;
+        var email = _account?.Accounts.FirstOrDefault(a => a.Sub == accountSub)?.Email;
+        SetSignInPrompt(email is null
+            ? _strings.GetString("RunSignIn_PromptUnknown")
+            : string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("RunSignIn_Prompt"), email));
+    }
+
+    private void SetSignInPrompt(string text) => _dispatcher.Enqueue(() => SignInPromptText = text);
+
+    private void SetActionNotice(string text) => _dispatcher.Enqueue(() => ActionNoticeText = text);
 
     /// <summary>The "taking longer than usual" or "looks stuck" line for this run (issue #675); empty when there is none.</summary>
     [ObservableProperty]
@@ -212,7 +305,35 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _jobEngine.CancelRunAsync(JobId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _jobEngine.CancelRunAsync(JobId, cancellationToken).ConfigureAwait(false);
+            SetActionNotice(string.Empty);
+        }
+        catch (RunNotFoundException)
+        {
+            SetActionNotice(_strings.GetString("RunAction_RunNotFound"));
+            return;
+        }
+
+        // Review F1: a cancel whose account is signed out does not throw: the row ends Failed with account_signed_out, whose copy points at a Sign in button. Show it here.
+        await ShowSignInPromptIfCancelEndedSignedOutAsync().ConfigureAwait(false);
+    }
+
+    private async Task ShowSignInPromptIfCancelEndedSignedOutAsync()
+    {
+        try
+        {
+            var rows = await _runRepository.GetAllAsync(CancellationToken.None).ConfigureAwait(false);
+            if (rows.LastOrDefault(r => r.JobId == JobId) is { Phase: JobPhase.Failed, ErrorCode: RunErrorCodes.AccountSignedOut } row)
+            {
+                ShowSignInPrompt(row.AccountSub);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("run-cancel", JobId, ex.GetType().Name);
+        }
     }
 
     [RelayCommand(CanExecute = nameof(IsVmActionable))]
@@ -234,7 +355,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _vmActions.StopVmAsync(JobId, cancellationToken).ConfigureAwait(false);
+        await RunVmActionAsync(() => _vmActions.StopVmAsync(JobId, cancellationToken)).ConfigureAwait(false);
     }
 
     [RelayCommand(CanExecute = nameof(IsVmActionable))]
@@ -256,7 +377,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        await _vmActions.DeleteVmAsync(JobId, cancellationToken).ConfigureAwait(false);
+        await RunVmActionAsync(() => _vmActions.DeleteVmAsync(JobId, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>

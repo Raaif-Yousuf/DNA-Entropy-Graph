@@ -59,7 +59,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 await calls.CallAsync(
                     async token =>
                     {
-                        await storage.UploadAsync(bucket, prefix + input.ObjectName, content, token).ConfigureAwait(false);
+                        await storage.UploadAsync(request.ResolvedScope, bucket, prefix + input.ObjectName, content, token).ConfigureAwait(false);
                         return true;
                     },
                     cancellationToken,
@@ -81,7 +81,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             await calls.CallAsync(
                 async token =>
                 {
-                    await storage.UploadAsync(bucket, prefix + ResultsBucket.ManifestObject, manifestStream, token).ConfigureAwait(false);
+                    await storage.UploadAsync(request.ResolvedScope, bucket, prefix + ResultsBucket.ManifestObject, manifestStream, token).ConfigureAwait(false);
                     return true;
                 },
                 cancellationToken,
@@ -128,7 +128,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 try
                 {
                     EnsureNoLinkedFolder(runFolderFull, destination, label);
-                    await DownloadFileAsync(runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
+                    await DownloadFileAsync(request.ResolvedScope, runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
                 {
@@ -178,7 +178,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
         }
     }
-    private async Task DownloadFileAsync(string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
+    private async Task DownloadFileAsync(CloudScope scope, string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
         try
@@ -187,7 +187,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             EnsureNoLinkedFolder(runFolderFull, destination, label);
 
             // Issue #588: the gateway streams the object straight into a unique .part file (memory stays flat for a result of any size) under a stall deadline, then the file is verified below.
-            var found = await StreamedDownload.RunAsync(storage, settings.TimeProvider, bucket, objectKey, partial, file.Bytes, settings.DownloadStallTimeout, cancellationToken).ConfigureAwait(false);
+            var found = await StreamedDownload.RunAsync(storage, settings.TimeProvider, scope, bucket, objectKey, partial, file.Bytes, settings.DownloadStallTimeout, cancellationToken).ConfigureAwait(false);
             if (!found)
             {
                 throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.WorkerFailed, $"{label} is listed by the worker but is not in the bucket.");

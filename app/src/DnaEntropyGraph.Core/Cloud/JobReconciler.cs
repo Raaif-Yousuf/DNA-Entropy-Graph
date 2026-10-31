@@ -35,10 +35,13 @@ public enum ReattachAction
 
     /// <summary>Not a cloud run (a local-engine run has no cloud state to reattach).</summary>
     Skipped,
+
+    /// <summary>Issue #830: the Google account this run was made under is signed out, so nothing could be asked about it. The row is untouched (nothing about the run was decided) and <see cref="ReattachOutcome.AccountSub"/> names the account to sign in as. Never reported as an unexpected error, and it does not keep the reconnect probe alive.</summary>
+    NeedsSignIn,
 }
 
 /// <summary>One row's outcome. <paramref name="FinalPhase"/> and <paramref name="ErrorCode"/> are what the row ended as, when it ended.</summary>
-public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPhase? FinalPhase = null, string? ErrorCode = null);
+public sealed record ReattachOutcome(string JobId, ReattachAction Action, JobPhase? FinalPhase = null, string? ErrorCode = null, string? AccountSub = null);
 
 /// <summary>What the lifecycle enforcement did with one VM (issue #530).</summary>
 public enum LifecycleAction
@@ -57,10 +60,13 @@ public enum LifecycleAction
 
     /// <summary>The cloud refused the stop or delete (permission, org policy, billing). Nothing was changed; <see cref="LifecycleOutcome.ErrorCode"/> names why.</summary>
     Failed,
+
+    /// <summary>Issue #830: the Google account this run's computer belongs to is signed out. Nothing was changed; <see cref="LifecycleOutcome.AccountSub"/> names the account to sign in as, and the pass went on with every other account's rows.</summary>
+    NeedsSignIn,
 }
 
 /// <summary>One VM the lifecycle enforcement acted on, or could not. A VM it looked at and left alone has no outcome.</summary>
-public sealed record LifecycleOutcome(string JobId, string VmName, LifecycleAction Action, string? ErrorCode = null);
+public sealed record LifecycleOutcome(string JobId, string VmName, LifecycleAction Action, string? ErrorCode = null, string? AccountSub = null);
 
 /// <summary>
 /// Issue #59 (docs/architecture.md section 6, "Crash-safe resumption"): on launch, every run a killed or closed app left in a
@@ -124,6 +130,20 @@ public sealed class JobReconciler
     /// </summary>
     internal Action<string>? CancelSettleArmed { get; set; }
     private readonly IDiagnosticsLog _log;
+    private readonly Action<string?>? _onSignInNeeded;
+
+    /// <summary>Tells the app an account needs to sign in (review M3); the handler is the app's and must not be able to break a reconcile pass.</summary>
+    private void SignInNeeded(string? accountSub)
+    {
+        try
+        {
+            _onSignInNeeded?.Invoke(accountSub);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("reconciler", null, ex.GetType().Name);
+        }
+    }
 
     /// <summary>Jobs whose last reattach could not ask the cloud (Deferred), until a later pass judges them (issue #559).</summary>
     private readonly ConcurrentDictionary<string, byte> _deferredRuns = new();
@@ -217,11 +237,19 @@ public sealed class JobReconciler
     /// How far back a finished run's VM is looked up by its job-id label. Older leaks are caught by the idle sweep, which lists by installation and
     /// so costs one call however long the history is; this keeps a launch from making one lookup per run row ever recorded.
     /// </summary>
-    private static readonly TimeSpan LifecycleLookback = TimeSpan.FromDays(14);
+    private static readonly TimeSpan LifecycleLookback = CloudScopes.LifecycleLookback;
+
+    /// <summary>Issue #830: the scopes the installation-wide sweeps cover besides those of recent runs (the scope selected now: a VM of this installation with no history row is found there).</summary>
+    private readonly Func<IEnumerable<CloudScope>> _additionalSweepScopes;
+
+    /// <summary>Accounts (key: sub, empty for none) whose sign-out was already logged as "no obligation": the line is written when that state CHANGES for an account, not on every pass.</summary>
+    private readonly HashSet<string> _loggedNoObligation = [];
 
     /// <param name="activeRuns">The registry the engine's Cancel looks in. Required: a private one would let a cancel miss a reattached run.</param>
     /// <param name="settings">Where the installation id (which VMs are ours, Hard Rule 9) and the idle-VM limit are read, on every pass so a changed setting applies at once.</param>
     /// <param name="onPhaseChanged">Told after the reconciler itself commits a phase (a run it fails); a run it resumes reports through the runner's own callback.</param>
+    /// <param name="additionalSweepScopes">Issue #830: the scopes, besides those of every recent run row, the installation-wide sweeps (idle sweep) list in; the app passes the selected scope, so a VM no row names is still found.</param>
+    /// <param name="onSignInNeeded">Issue #830 review M3: told with the account's sub (null when it is not known) each time a run or computer could not be looked at because its Google account is signed out, so the shell can offer "Sign in as ...". A failing handler never stops the pass. Never given the email.</param>
     /// <param name="downloadsFolder">The default output parent for a run whose row names none.</param>
     public JobReconciler(
         CloudJobRunner runner,
@@ -238,8 +266,12 @@ public sealed class JobReconciler
         TimeSpan? lookupTimeout = null,
         TimeSpan? mutationTimeout = null,
         IDiagnosticsLog? log = null,
-        TimeSpan? cancelSettleTimeout = null)
+        TimeSpan? cancelSettleTimeout = null,
+        Func<IEnumerable<CloudScope>>? additionalSweepScopes = null,
+        Action<string?>? onSignInNeeded = null)
     {
+        _onSignInNeeded = onSignInNeeded;
+        _additionalSweepScopes = additionalSweepScopes ?? (() => []);
         _log = log ?? NullDiagnosticsLog.Instance;
         _lookupTimeout = lookupTimeout ?? DefaultLookupTimeout;
         _mutationTimeout = mutationTimeout ?? DefaultMutationTimeout;
@@ -358,7 +390,14 @@ public sealed class JobReconciler
             await EnforceRowAsync(row, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
         }
 
-        await SweepIdleAsync(installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        // Issue #830: the idle sweep lists in every scope a recent finished run of this installation was made in, never in whatever is selected now.
+        var extra = _additionalSweepScopes().ToList();
+        var sweepScopes = CloudScopes.Dedupe(finished.Select(ScopeOf).Concat(extra), extra.FirstOrDefault(s => s.AccountSub is not null));
+        foreach (var scope in sweepScopes)
+        {
+            await SweepIdleAsync(scope, installation, now, outcomes, cancellationToken).ConfigureAwait(false);
+        }
+
         bool deferred;
         lock (outcomes)
         {
@@ -366,6 +405,49 @@ public sealed class JobReconciler
         }
 
         SetLifecycleDeferred(generation, deferred);
+
+        LifecycleOutcome[] signedOut;
+        lock (outcomes)
+        {
+            signedOut = [.. outcomes.Where(o => o.Action == LifecycleAction.NeedsSignIn)];
+        }
+
+        // Review F4: the shell bar is only for an account with something that could still be running (an unfinished run, an unconfirmed end, an unexpired keep-alive); otherwise it is logged only.
+        // Round 5 L2: an outcome that names no account (a row with none) acted as the ACTIVE account, so it is resolved to it here (the selection path's scope carries it); only when there is none does it match rows with no account alone. The resolution happens BEFORE the distinct, so a null-sub outcome and a named one of the same account are one account and one message.
+        var activeSub = extra.FirstOrDefault(s => s.AccountSub is not null)?.AccountSub;
+        var signedOutSubs = signedOut.Select(o => o.AccountSub ?? activeSub).Distinct().ToList();
+        foreach (var sub in signedOutSubs)
+        {
+            var key = sub ?? string.Empty;
+            if (RunObligations.ExistForAccount(all, sub, installation, now))
+            {
+                lock (_loggedNoObligation)
+                {
+                    _loggedNoObligation.Remove(key);
+                }
+
+                SignInNeeded(sub);
+            }
+            else
+            {
+                bool changed;
+                lock (_loggedNoObligation)
+                {
+                    changed = _loggedNoObligation.Add(key);
+                }
+
+                if (changed)
+                {
+                    _log.Warning("reconciler", null, "account-signed-out-no-obligation");
+                }
+            }
+        }
+
+        // An account that is no longer signed out forgets its state, so a later sign-out is logged again.
+        lock (_loggedNoObligation)
+        {
+            _loggedNoObligation.RemoveWhere(k => !signedOutSubs.Any(s => (s ?? string.Empty) == k));
+        }
 
         return outcomes;
     }
@@ -378,13 +460,14 @@ public sealed class JobReconciler
     {
         try
         {
+            var scope = ScopeOf(row);
             var driver = _active.TryStart(row.JobId, async token =>
             {
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
                 IReadOnlyList<VmDescriptor> vms;
                 try
                 {
-                    vms = await Lookup(t => _compute.FindByJobIdAsync(row.JobId, t), linked.Token).ConfigureAwait(false);
+                    vms = await Lookup(t => _compute.FindByJobIdAsync(scope, row.JobId, t), linked.Token).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                 {
@@ -401,7 +484,33 @@ public sealed class JobReconciler
                         continue;
                     }
 
-                    await ApplyAsync(row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
+                    // Round 10 M1, round 11 M1, round 12 M1 (code read 2026-10-30): the listing is a snapshot, and another run's reuse may have relabelled this VM since, so before ANY delete or stop it is read
+                    // again and skipped unless it still carries this row's job id. This NARROWS the window and cannot close it: Compute's delete and stop have no label precondition, so a reuse's setLabels that
+                    // lands between this read and the call still affects the VM. Consequence (THEORY, unverified): for a delete, that run's reuse then fails (the VM is gone) and falls to the create ladder,
+                    // so no VM leaks and the run proceeds. Round 12 M2, round 13 M2: when the LISTED descriptor had labels, null labels on the re-read mean they were
+                    // removed in between (GoogleComputeGateway.ToDescriptor maps the API's absent label map to null), so the VM skips like a mismatch (maxRunDuration is the backstop only for a RUNNING one; a STOPPED one is never listed again and must be deleted by hand in the console, the log line is the only trace). When the listing itself had null labels
+                    // (labels not read, as IsOurs documents) there is nothing to compare: the documented fallback stands and the action proceeds. A VM that is gone is nothing to act on.
+                    try
+                    {
+                        var fresh = await Lookup(t => _compute.GetVmAsync(scope, vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        string? skip = fresh is null ? "vm-gone"
+                            : fresh.Labels is null ? (vm.Labels is not null ? "vm-unlabelled" : null)
+                            : (!fresh.Labels.TryGetValue("job-id", out var jobLabel) || jobLabel != row.JobId) ? "vm-relabelled"
+                            : null;
+                        if (skip is not null)
+                        {
+                            // Observable (ids and states only, never a name).
+                            _log.Warning("reconciler", row.JobId, (want == VmWant.Delete ? "delete-skipped-" : "stop-skipped-") + skip);
+                            continue;
+                        }
+                    }
+                    catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
+                    {
+                        Record(outcomes, row.JobId, vm.Name, ex);
+                        continue;
+                    }
+
+                    await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped, outcomes, linked.Token).ConfigureAwait(false);
                 }
             });
             if (driver is not null)
@@ -416,6 +525,8 @@ public sealed class JobReconciler
         }
     }
 
+    private static CloudScope ScopeOf(RunRecord row) => RunScope.Of(row);
+
     private enum VmWant
     {
         Leave,
@@ -426,9 +537,29 @@ public sealed class JobReconciler
     /// <summary>What a finished run's VM should be now, from its lifecycle label (or, when the gateway did not read labels, the run's own options).</summary>
     private static VmWant WantedByLifecycle(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
     {
+        var want = WantedByLifecycleCore(row, vm, options, installation, now);
+
+        // Round 8 M3: a VM that is not the row's own deg-<job> is another run's (a failed or cancelled reuse relabelled it), whatever the row's state or the lifecycle label says:
+        // stopped at most, never deleted. Round 9 M2 (DECISION, reversible): the one exception is the user's own after-run Delete (or keep-alive-then-Delete) of a run that COMPLETED (or partially completed, as RunOutcomeRecorder also applies it live) on that VM,
+        // the VM the row records as its own (VmName); the app died before the live delete, so the launch finishes it.
+        var completedOnIt = row.Phase is JobPhase.Completed or JobPhase.PartiallyCompleted && row.VmName is not null && row.VmName == vm.Name;
+        return want == VmWant.Delete && !completedOnIt && vm.Name != VmTerminator.OwnVmName(row.JobId) ? (vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave) : want;
+    }
+
+    private static VmWant WantedByLifecycleCore(RunRecord row, VmDescriptor vm, RunOptions? options, string installation, DateTimeOffset now)
+    {
         if (!IsOurs(vm, installation))
         {
             return VmWant.Leave;
+        }
+
+        if (CancelOwnsTheVm(row))
+        {
+            // Issue #938: a cancel deletes the VM the run CREATED. One found under a cancelled run's job id (a create Compute accepted after the app stopped looking, or after the app was closed
+            // mid-cancel) is that cancel's to delete, whatever its lifecycle label says: nothing is left worth stopping or keeping.
+            // Round 3 H1: a VM that does not carry the run's own name was created by ANOTHER run and only relabelled to this one by a reuse that landed after the cancel. It is stopped,
+            // never deleted (its owner's keep-alive promise stands), and its labels are left.
+            return vm.Name == VmTerminator.OwnVmName(row.JobId) ? VmWant.Delete : vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;
         }
 
         var lifecycle = vm.Labels is not null && vm.Labels.TryGetValue("lifecycle", out var label)
@@ -436,7 +567,7 @@ public sealed class JobReconciler
             : options is null ? null : CloudJobRequestFactory.LifecycleLabel(options.AfterTask);
         switch (lifecycle)
         {
-            case "delete":
+            case var l when l == CloudJobRequestFactory.LifecycleLabel(AfterTaskAction.Delete):
                 return VmWant.Delete;
             case "stop":
                 return vm.Status == "RUNNING" ? VmWant.Stop : VmWant.Leave;
@@ -456,20 +587,32 @@ public sealed class JobReconciler
         }
     }
 
-    /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read say nothing against it (its job id already matched a row of this installation).</summary>
+    /// <summary>
+    /// A run the user cancelled (Cancelled with no code of its own: a cleanup's Stop or Delete is Cancelled under <see cref="RunErrorCodes.StoppedByCleanup"/> / <see cref="RunErrorCodes.DeletedByCleanup"/>, which the user chose),
+    /// or one whose cancel could not confirm its VM gone (<see cref="RunErrorCodes.CancelFailed"/>).
+    /// </summary>
+    private static bool CancelOwnsTheVm(RunRecord row)
+        => (row.Phase == JobPhase.Cancelled && (string.IsNullOrEmpty(row.ErrorCode) || row.ErrorCode == RunErrorCodes.LateCreateUnconfirmed)) || (row.Phase == JobPhase.Failed && RunErrorCodes.IsUnconfirmedCancel(row.ErrorCode));
+
+    /// <summary>Hard Rule 9: a VM whose labels were read must carry our app label and this installation's id. Labels not read (null in the LISTING) say nothing against it (its job id already matched a row of this installation); null labels on a re-read of a VM the listing showed with labels mean they were removed, and that VM is skipped (round 13 M2).</summary>
     private static bool IsOurs(VmDescriptor vm, string installation)
         => vm.Labels is null
             || (vm.Labels.TryGetValue("app", out var app) && app == VmSpec.AppLabelValue
                 && vm.Labels.TryGetValue("installation-id", out var owner) && owner == installation);
 
-    private async Task SweepIdleAsync(string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task SweepIdleAsync(CloudScope scope, string installation, DateTimeOffset now, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         var limit = CloudHousekeepingSettings.IdleStoppedVmLimit(_settings);
 
         IReadOnlyList<VmDescriptor> listed;
         try
         {
-            listed = await Lookup(token => _compute.ListByInstallationAsync(installation, token), cancellationToken).ConfigureAwait(false);
+            listed = await Lookup(token => _compute.ListByInstallationAsync(scope, installation, token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (AccountAuthException ex)
+        {
+            RecordUnexpected(outcomes, string.Empty, string.Empty, ex);
+            return;
         }
         catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
         {
@@ -495,7 +638,7 @@ public sealed class JobReconciler
                     VmDescriptor? fresh;
                     try
                     {
-                        fresh = await Lookup(t => _compute.GetVmAsync(vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
+                        fresh = await Lookup(t => _compute.GetVmAsync(scope, vm.Name, vm.Zone, t), linked.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is CloudOperationException or TimeoutException)
                     {
@@ -503,9 +646,16 @@ public sealed class JobReconciler
                         return;
                     }
 
+                    // Round 13 M1: a donor a reuse is claiming keeps its stop time (setLabels does not change it), so the re-read also checks the job id the listing carried.
+                    if (fresh is not null && (fresh.Labels is null || !fresh.Labels.TryGetValue("job-id", out var freshJob) || freshJob != jobId))
+                    {
+                        _log.Warning("reconciler", jobId, fresh.Labels is null ? "idle-delete-skipped-vm-unlabelled" : "idle-delete-skipped-vm-relabelled");
+                        return;
+                    }
+
                     if (fresh is not null && IsIdle(fresh, now, limit))
                     {
-                        await ApplyAsync(jobId, vm, true, LifecycleAction.IdleVmDeleted, outcomes, linked.Token).ConfigureAwait(false);
+                        await ApplyAsync(scope, jobId, vm, true, LifecycleAction.IdleVmDeleted, outcomes, linked.Token).ConfigureAwait(false);
                     }
                 });
                 if (driver is not null)
@@ -526,7 +676,7 @@ public sealed class JobReconciler
         => VmFacts.IsStopped(vm) && vm.StoppedAt is { } stoppedAt && now - stoppedAt >= limit;
 
     /// <summary>Deletes or stops one VM under its own name and zone (found by label, never by a remembered name). A 404 on delete is the state wanted.</summary>
-    private async Task ApplyAsync(string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
+    private async Task ApplyAsync(CloudScope scope, string jobId, VmDescriptor vm, bool delete, LifecycleAction done, List<LifecycleOutcome> outcomes, CancellationToken cancellationToken)
     {
         try
         {
@@ -535,7 +685,7 @@ public sealed class JobReconciler
                 {
                     try
                     {
-                        await (delete ? _compute.DeleteVmAsync(vm.Name, vm.Zone, token) : _compute.StopVmAsync(vm.Name, vm.Zone, token)).ConfigureAwait(false);
+                        await (delete ? _compute.DeleteVmAsync(scope, vm.Name, vm.Zone, token) : _compute.StopVmAsync(scope, vm.Name, vm.Zone, token)).ConfigureAwait(false);
                     }
                     catch (CloudOperationException ex) when (ex.Error.HttpStatus == 404)
                     {
@@ -566,7 +716,7 @@ public sealed class JobReconciler
     private static void Record(List<LifecycleOutcome> outcomes, string jobId, string vmName, Exception ex)
     {
         var noAnswer = IsNoAnswerException(ex);
-        var code = ex is CloudOperationException c ? c.Error.Code : "TIMEOUT";
+        var code = NoAnswerCode(ex);
         lock (outcomes)
         {
             outcomes.Add(new LifecycleOutcome(jobId, vmName, noAnswer ? LifecycleAction.Deferred : LifecycleAction.Failed, code));
@@ -578,7 +728,14 @@ public sealed class JobReconciler
     {
         lock (outcomes)
         {
-            outcomes.Add(new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name));
+            // Issue #830: an account that is signed out is a named, fixable state (sign in as it), not an error nobody foresaw.
+            // Only an expired sign-in has "Sign in" as its action (review M2); a lost connection or a locked accounts file is Deferred and the reconnect probe looks again.
+            outcomes.Add(ex switch
+            {
+                AccountAuthException auth when NeedsSignIn(auth) => new LifecycleOutcome(jobId, vmName, LifecycleAction.NeedsSignIn, auth.Code, auth.AccountSub),
+                AccountAuthException auth => new LifecycleOutcome(jobId, vmName, LifecycleAction.Deferred, auth.Code),
+                _ => new LifecycleOutcome(jobId, vmName, LifecycleAction.Failed, ex.GetType().Name),
+            });
         }
     }
 
@@ -687,9 +844,16 @@ public sealed class JobReconciler
             // A failing repository or an unforeseen error must not stop the other runs from being reattached; the row is
             // left as it is and the next launch tries again. Only a missing answer from the cloud (network class) is Deferred and keeps the
             // reconnect probe alive; anything else is logged by class and left for the next launch (issue #559).
+            if (ex is AccountAuthException auth && NeedsSignIn(auth))
+            {
+                _log.Warning("reconciler", row.JobId, "account-signed-out");
+                SignInNeeded(auth.AccountSub);
+                return new ReattachOutcome(row.JobId, ReattachAction.NeedsSignIn, null, auth.Code, auth.AccountSub);
+            }
+
             if (IsNoAnswerException(ex))
             {
-                return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, ex is CloudOperationException c ? c.Error.Code : "TIMEOUT");
+                return new ReattachOutcome(row.JobId, ReattachAction.Deferred, null, NoAnswerCode(ex));
             }
 
             _log.Warning("reconciler", row.JobId, ex.GetType().Name);
@@ -802,7 +966,7 @@ public sealed class JobReconciler
         var request = CloudJobRequestFactory.Create(
             options,
             row.JobId,
-            row.ProjectId,
+            ScopeOf(row),
             row.InstallationId,
             appVersion,
             image.Status == WorkerImageStatus.Available ? image.Reference : null,
@@ -892,7 +1056,7 @@ public sealed class JobReconciler
             return ReattachAction.CancelFinished;
         }
 
-        if (finalPhase == JobPhase.Failed && (errorCode == RunErrorCodes.CancelFailed || underway == ReattachAction.CancelFinished))
+        if (finalPhase == JobPhase.Failed && (RunErrorCodes.IsUnconfirmedCancel(errorCode) || underway == ReattachAction.CancelFinished))
         {
             return ReattachAction.CancelFailed;
         }
@@ -929,7 +1093,7 @@ public sealed class JobReconciler
         try
         {
             var bucket = row.Bucket;
-            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
+            var stream = await Lookup(token => _storage.TryDownloadAsync(ScopeOf(row), bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 return (null, null, null);
@@ -988,7 +1152,7 @@ public sealed class JobReconciler
     {
         try
         {
-            var vms = await Lookup(token => _compute.FindByJobIdAsync(row.JobId, token), cancellationToken).ConfigureAwait(false);
+            var vms = await Lookup(token => _compute.FindByJobIdAsync(ScopeOf(row), row.JobId, token), cancellationToken).ConfigureAwait(false);
             if (vms.Count > 0)
             {
                 return Evidence.Found;
@@ -1000,7 +1164,7 @@ public sealed class JobReconciler
             }
 
             var bucket = row.Bucket;
-            var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
+            var stream = await Lookup(token => _storage.TryDownloadAsync(ScopeOf(row), bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "result.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
                 return Evidence.Nothing;
@@ -1043,7 +1207,17 @@ public sealed class JobReconciler
 
     /// <summary>The cloud gave no answer about the run: nothing is connected, or the network is down. That says nothing about the run itself.</summary>
     private static bool IsNoAnswerException(Exception ex)
-        => ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud));
+        => ex is TimeoutException || (ex is CloudOperationException cloud && IsNoAnswer(cloud)) || (ex is AccountAuthException auth && !NeedsSignIn(auth));
+
+    /// <summary>Issue #830 review M2: the one account failure whose action is Sign in (the stored sign-in was refused or is gone). Every other <see cref="AccountAuthException"/> (no connection, proxy, locked or unreadable accounts file, storage, a failed token answer) is a no-answer the reconnect probe retries.</summary>
+    private static bool NeedsSignIn(AccountAuthException ex) => ex.Code == AuthErrorCodes.SigninExpired;
+
+    private static string? NoAnswerCode(Exception ex) => ex switch
+    {
+        CloudOperationException cloud => cloud.Error.Code,
+        AccountAuthException auth => auth.Code,
+        _ => "TIMEOUT",
+    };
 
     private static bool IsNoAnswer(CloudOperationException ex)
         => ex.Error.Code == RunErrorCodes.NotConnectedGatewayCode || ex.Kind == CloudErrorKind.Network;
@@ -1109,7 +1283,7 @@ public sealed class JobReconciler
     {
         try
         {
-            await _runner.CancelAsync(row.JobId, cancellationToken).ConfigureAwait(false);
+            await _runner.CancelAsync(ScopeOf(row), row.JobId, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudOperationException ex) when (IsNoAnswer(ex))
         {

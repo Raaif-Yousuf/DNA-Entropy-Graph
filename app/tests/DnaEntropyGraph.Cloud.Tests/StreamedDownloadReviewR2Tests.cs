@@ -222,13 +222,13 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
         }
 
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync("b", "k", path, Arg.Any<CancellationToken>()).Returns(async ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), "b", "k", path, Arg.Any<CancellationToken>()).Returns(async ci =>
         {
-            await Task.Delay(1500, ci.ArgAt<CancellationToken>(3));
+            await Task.Delay(1500, ci.ArgAt<CancellationToken>(4));
             return true;
         });
 
-        var found = await StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", path, null, TimeSpan.FromMilliseconds(1000), CancellationToken.None, Probe).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        var found = await StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", path, null, TimeSpan.FromMilliseconds(1000), CancellationToken.None, Probe).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
 
         found.ShouldBeTrue("an IOException while reading the length is 'no progress observed yet', not a timeout");
         calls.ShouldBeGreaterThan(2, "vacuity: the probe really ran and threw");
@@ -238,13 +238,13 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
     public async Task A_probe_that_keeps_failing_still_ends_in_the_stall_deadline_not_a_hang()
     {
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(async ci =>
         {
-            await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(3));
+            await Task.Delay(Timeout.Infinite, ci.ArgAt<CancellationToken>(4));
             return true;
         });
 
-        var ex = await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, "b", "k", Path.Combine(_base, "m2b.part"), null, TimeSpan.FromMilliseconds(200), CancellationToken.None, _ => throw new IOException("locked")).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
+        var ex = await Should.ThrowAsync<CloudOperationException>(() => StreamedDownload.RunAsync(storage, TimeProvider.System, TestScopedGateways.Default, "b", "k", Path.Combine(_base, "m2b.part"), null, TimeSpan.FromMilliseconds(200), CancellationToken.None, _ => throw new IOException("locked")).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken));
 
         ex.Kind.ShouldBe(CloudErrorKind.Network);
     }

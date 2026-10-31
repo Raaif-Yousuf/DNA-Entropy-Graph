@@ -156,7 +156,8 @@ public sealed partial class HistoryViewModel : ObservableObject
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_account.SelectedProjectId))
+        // Issue #830: the import reads the selected project as the current account, taken together from one snapshot (the selection path).
+        if (_account.SelectedScope() is not { } scope || string.IsNullOrWhiteSpace(scope.ProjectId))
         {
             ImportStatusText = _strings.GetString(RunsCopy.ImportNoProject);
             return;
@@ -166,7 +167,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         ImportStatusText = _strings.GetString(RunsCopy.ImportRunning);
         try
         {
-            var result = await _importer.ImportAsync(_account.SelectedProjectId, cancellationToken);
+            var result = await _importer.ImportAsync(scope, cancellationToken);
             ImportStatusText = _strings.GetString(result.Imported switch { 0 => RunsCopy.ImportNone, 1 => RunsCopy.ImportDoneOne, _ => RunsCopy.ImportDoneMany });
             if (result.Imported > 0)
             {

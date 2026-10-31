@@ -75,9 +75,9 @@ public sealed class RunTransferResumeReviewTests : IDisposable
 
         var swapped = false;
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
         {
-            var partial = ci.ArgAt<string>(2);
+            var partial = ci.ArgAt<string>(3);
             File.WriteAllBytes(partial, worker);
             var seq = Path.GetDirectoryName(partial)!;
 
@@ -134,9 +134,9 @@ public sealed class RunTransferResumeReviewTests : IDisposable
 
         var swapped = false;
         var storage = Substitute.For<IStorageGateway>();
-        storage.TryDownloadToFileAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        storage.TryDownloadToFileAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
         {
-            var partial = ci.ArgAt<string>(2);
+            var partial = ci.ArgAt<string>(3);
             File.WriteAllBytes(partial, worker);
             var runFolder = Path.GetDirectoryName(Path.GetDirectoryName(partial))!;
 
