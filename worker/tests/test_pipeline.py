@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -103,7 +104,7 @@ def test_build_predictor_passes_max_len_as_evo_max_context(
         def predict(self, seq):  # pragma: no cover - not exercised here
             raise AssertionError("predict() should not be called by this test")
 
-    fake_module = types.ModuleType("dna_entropy.predictors.evo")
+    fake_module: Any = types.ModuleType("dna_entropy.predictors.evo")
     fake_module.EvoPredictor = _StubEvoPredictor
     monkeypatch.setitem(sys.modules, "dna_entropy.predictors.evo", fake_module)
 

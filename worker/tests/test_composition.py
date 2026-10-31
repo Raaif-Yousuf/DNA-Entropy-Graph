@@ -108,11 +108,13 @@ def test_codon_counts_frequency_and_rscu() -> None:
 def test_minus_strand_is_read_as_the_reverse_complement() -> None:
     fwd = codon_usage("ATGGCTGCCTAA", _feat(1, 12))
     rev = codon_usage("TTAGGCAGCCAT", _feat(1, 12, "-"))  # reverse complement of the above
+    assert fwd is not None and rev is not None
     assert [(r.codon, r.count) for r in fwd] == [(r.codon, r.count) for r in rev]
 
 
 def test_compound_feature_joins_its_segments_not_the_intron() -> None:
     rows = codon_usage("ATGGCTCCCCCCGCCTAA", _feat(1, 18, segments=((1, 6), (13, 18))))
+    assert rows is not None
     assert {r.codon for r in rows} == {"ATG", "GCT", "GCC", "TAA"}
 
 
@@ -122,6 +124,7 @@ def test_feature_whose_length_is_not_a_multiple_of_three_is_skipped() -> None:
 
 def test_ambiguous_codons_are_not_counted() -> None:
     rows = codon_usage("ATGNNNTAA", _feat(1, 9))
+    assert rows is not None
     assert {r.codon for r in rows} == {"ATG", "TAA"}
     assert next(r for r in rows if r.codon == "ATG").frequency == pytest.approx(0.5)
 

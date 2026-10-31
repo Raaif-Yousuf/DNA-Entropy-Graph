@@ -10,6 +10,12 @@ public sealed class CostLedgerRepository : ICostLedgerRepository
         FROM CostLedger;
         """;
 
+    private const string SelectByKindSql = """
+        SELECT Id, RunId, ResourceId, Kind, StartedUtc, EndedUtc, UsdEst
+        FROM CostLedger
+        WHERE Kind = @Kind;
+        """;
+
     private const string InsertSql = """
         INSERT INTO CostLedger (RunId, ResourceId, Kind, StartedUtc, EndedUtc, UsdEst)
         VALUES (@RunId, @ResourceId, @Kind, @StartedUtc, @EndedUtc, @UsdEst);
@@ -31,6 +37,14 @@ public sealed class CostLedgerRepository : ICostLedgerRepository
     {
         using var connection = _database.OpenConnection();
         var command = new CommandDefinition(SelectAllSql, cancellationToken: cancellationToken);
+        var rows = await connection.QueryAsync<Row>(command).ConfigureAwait(false);
+        return rows.Select(ToRecord).ToList();
+    }
+
+    public async Task<IReadOnlyList<CostLedgerEntry>> GetByKindAsync(string kind, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(SelectByKindSql, new { Kind = kind }, cancellationToken: cancellationToken);
         var rows = await connection.QueryAsync<Row>(command).ConfigureAwait(false);
         return rows.Select(ToRecord).ToList();
     }
