@@ -39,6 +39,7 @@ public sealed class LeftRunningGuard : IDisposable
     private readonly object _gate = new();
     private ITimer? _timer;
     private bool _scanning;
+    private int _lastUnread;
 
     public LeftRunningGuard(LeftRunningScanner scanner, InstallationCleanup cleanup, ISettingsStore settings, IChoiceDialogService dialog, IToastService toasts, IStringResourceProvider strings, IDiagnosticsLog log, TimeProvider clock, IGcpAccount account)
     {
@@ -89,17 +90,32 @@ public sealed class LeftRunningGuard : IDisposable
         try
         {
             var report = await scan.WaitAsync(ScanTimeout, _clock, cancellationToken).ConfigureAwait(false);
-            if (report.UnreadScopes > 0)
-            {
-                _log.Warning("left-running-scan", null, "unread-scopes");
-            }
-
+            NoteUnread(report.UnreadScopes);
             return report;
         }
         catch (TimeoutException)
         {
             ObserveLate(scan, "left-running-scan", null);
             throw;
+        }
+    }
+
+    /// <summary>Logs "some scope was unreadable" once per change of that state (and once again after it clears), not on every 5-minute tick.</summary>
+    private void NoteUnread(int unread)
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            if (unread != _lastUnread)
+            {
+                _lastUnread = unread;
+                changed = unread > 0;
+            }
+        }
+
+        if (changed)
+        {
+            _log.Warning("left-running-scan", null, "unread-scopes");
         }
     }
 
@@ -181,10 +197,22 @@ public sealed class LeftRunningGuard : IDisposable
         {
             report = await BoundedScanAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            // Every scope failed and the failure is a signed-out account: there is no report, but the person must still be told (issue #830 review M4).
+            _log.Warning("left-running-exit", null, ex.GetType().Name);
+            report = new LeftRunningReport([], [], 1, [new UnreadScope(new CloudScope("unknown", ex.AccountSub), true)]);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.Warning("left-running-exit", null, ex.GetType().Name);
             return true;
+        }
+
+        if (report.UnreadList.Count > 0 && await AskAboutUnreadAsync(report.UnreadList, cancellationToken).ConfigureAwait(false))
+        {
+            // Sign-in was chosen: the window stays open so the next close scans again with that account back.
+            return false;
         }
 
         if (report.RunningVms.Count == 0)
@@ -209,6 +237,53 @@ public sealed class LeftRunningGuard : IDisposable
         };
     }
 
+    /// <summary>
+    /// Issue #830 review M4: some account's computers could not be listed, so "nothing is running" would be a guess. Says so, names the signed-out account(s), and offers Sign in
+    /// (or, when the cause is not a sign-in, only Close anyway with the Cloud page named as the place to look). Returns true when Sign in was chosen and ran (the caller keeps the window open).
+    /// </summary>
+    private async Task<bool> AskAboutUnreadAsync(IReadOnlyList<UnreadScope> unread, CancellationToken cancellationToken)
+    {
+        var needsSignIn = unread.Where(u => u.NeedsSignIn).ToList();
+        string body;
+        string[] buttons;
+        if (needsSignIn.Count > 0)
+        {
+            var accounts = _account.Accounts;
+            var emails = needsSignIn
+                .Select(u => accounts.FirstOrDefault(a => a.Sub == u.Scope.AccountSub)?.Email)
+                .Where(email => !string.IsNullOrEmpty(email))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(email => email!)
+                .ToList();
+            var who = emails.Count == 0 ? Text("LeftRunning_UnreadAccountUnknown") : string.Join(Text("SignInNeeded_Joiner"), emails);
+            body = Text("LeftRunning_UnreadBodySignIn", who);
+            buttons = [Text("LeftRunning_UnreadSignIn"), Text("LeftRunning_UnreadCloseAnyway")];
+        }
+        else
+        {
+            body = Text("LeftRunning_UnreadBodyOther");
+            buttons = [Text("LeftRunning_UnreadCloseAnyway")];
+        }
+
+        var choice = await _dialog.ChooseAsync(Text("LeftRunning_UnreadTitle"), body, buttons, DialogGateTimeout, cancellationToken).ConfigureAwait(false);
+        if (needsSignIn.Count == 0 || choice != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            await _account.SignInAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (AccountAuthException ex)
+        {
+            _log.Warning("left-running-exit", null, ex.GetType().Name);
+        }
+
+        return true;
+    }
+
     private enum EndResult
     {
         Done,
@@ -231,7 +306,7 @@ public sealed class LeftRunningGuard : IDisposable
             try
             {
                 // Issue #830: each computer is ended in the scope it was found in, never in whatever is selected by the time the user clicks.
-                var scope = vm.Scope ?? _account.SelectedScope();
+                var scope = vm.Scope;
                 if (scope is null)
                 {
                     return (vm, EndResult.Failed);

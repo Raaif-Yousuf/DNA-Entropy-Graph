@@ -2748,6 +2748,24 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="LeftRunning_DiskNoteNoPrice" xml:space="preserve">
     <value>{0} stopped disk(s) also keep costing money until you delete them on the Cloud page.</value>
   </data>
+  <data name="LeftRunning_UnreadTitle" xml:space="preserve">
+    <value>Some computers could not be checked</value>
+  </data>
+  <data name="LeftRunning_UnreadBodySignIn" xml:space="preserve">
+    <value>The app could not look at the rented computers (VMs) started under {0}, because that Google account is signed out. A computer left running costs money until it ends itself at its time limit. Press Sign in to look again, or Close anyway and check the Cloud page later.</value>
+  </data>
+  <data name="LeftRunning_UnreadBodyOther" xml:space="preserve">
+    <value>The app could not reach Google to check every rented computer (VM) it may have started. A computer left running costs money until it ends itself at its time limit. Open the Cloud page when you are online to see what is running.</value>
+  </data>
+  <data name="LeftRunning_UnreadAccountUnknown" xml:space="preserve">
+    <value>a Google account you used for a recent run</value>
+  </data>
+  <data name="LeftRunning_UnreadSignIn" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
+    <value>Close anyway</value>
+  </data>
   <data name="LeftRunning_Stop" xml:space="preserve">
     <value>Stop it</value>
   </data>

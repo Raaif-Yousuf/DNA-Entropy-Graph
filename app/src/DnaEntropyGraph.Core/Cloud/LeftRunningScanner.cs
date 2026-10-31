@@ -13,9 +13,15 @@ public sealed record LeftRunningVm(string Name, string Zone, string? JobId, Time
 /// <summary>A disk of this installation that no running computer holds: it keeps billing every month until it is deleted.</summary>
 public sealed record LeftStoppedDisk(string Name, string Zone, int SizeGb, double? UsdPerMonth, CloudScope? Scope = null);
 
+/// <summary>A scope the scan could not list. <paramref name="NeedsSignIn"/> is true when its Google account is signed out (the one failure whose action is Sign in); any other failure (offline, a locked accounts file) is false.</summary>
+public sealed record UnreadScope(CloudScope Scope, bool NeedsSignIn);
+
 /// <summary>What the scan found. <see cref="IsClean"/> is true when nothing of this installation runs and no disk is being paid for. <paramref name="UnreadScopes"/> counts the scopes (project and account) that could not be listed (signed out, offline) while others were.</summary>
-public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks, int UnreadScopes = 0)
+public sealed record LeftRunningReport(IReadOnlyList<LeftRunningVm> RunningVms, IReadOnlyList<LeftStoppedDisk> StoppedDisks, int UnreadScopes = 0, IReadOnlyList<UnreadScope>? Unread = null)
 {
+    /// <summary>Issue #830 review M4: which scopes could not be read and whether signing in is the fix, so the exit prompt can name the account and offer the action.</summary>
+    public IReadOnlyList<UnreadScope> UnreadList => Unread ?? [];
+
     public bool IsClean => RunningVms.Count == 0 && StoppedDisks.Count == 0;
 }
 
@@ -70,11 +76,11 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
         {
             try
             {
-                return (Report: await ScanAsync(scope, cancellationToken).ConfigureAwait(false), Error: (Exception?)null);
+                return (Scope: scope, Report: await ScanAsync(scope, cancellationToken).ConfigureAwait(false), Error: (Exception?)null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                return (Report: (LeftRunningReport?)null, Error: ex);
+                return (Scope: scope, Report: (LeftRunningReport?)null, Error: ex);
             }
         })).ConfigureAwait(false);
 
@@ -85,7 +91,7 @@ public sealed class LeftRunningScanner(IComputeGateway compute, ISettingsStore s
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failed[0].Error!).Throw();
         }
 
-        return new LeftRunningReport([.. ok.SelectMany(r => r.RunningVms)], [.. ok.SelectMany(r => r.StoppedDisks)], failed.Count);
+        return new LeftRunningReport([.. ok.SelectMany(r => r.RunningVms)], [.. ok.SelectMany(r => r.StoppedDisks)], failed.Count, [.. failed.Select(f => new UnreadScope(f.Scope, f.Error is AccountAuthException { Code: AuthErrorCodes.SigninExpired }))]);
     }
 
     private static TimeSpan? RemainingOf(VmDescriptor vm, DateTimeOffset localNow)

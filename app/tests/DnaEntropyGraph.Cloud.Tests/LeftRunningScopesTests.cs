@@ -17,12 +17,12 @@ public sealed class LeftRunningScopesTests
 
     private sealed class KeyStrings : IStringResourceProvider
     {
-        public string GetString(string key) => key;
+        public string GetString(string key) => key is "LeftRunning_UnreadBodySignIn" or "SignInNeeded_Joiner" ? (key == "SignInNeeded_Joiner" ? " or " : "UNREAD:{0}") : key;
     }
 
     private sealed class Rig
     {
-        public Rig(string selectedProject)
+        public Rig(string selectedProject, IDiagnosticsLog? log = null)
         {
             Clock = new ManualTimeProvider(Start);
             Gcp = new FakeGcp(Clock).WithSelectedProject(selectedProject);
@@ -31,7 +31,7 @@ public sealed class LeftRunningScopesTests
             Scanner = new LeftRunningScanner(Gcp, Settings, Runs, null, Clock);
             Cleanup = new InstallationCleanup(Gcp, Gcp, Runs, clock: Clock);
             Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call => Task.FromResult<int?>(Choice));
-            Guard = new LeftRunningGuard(Scanner, Cleanup, Settings, Dialog, Toasts, new KeyStrings(), NullDiagnosticsLog.Instance, Clock, Gcp);
+            Guard = new LeftRunningGuard(Scanner, Cleanup, Settings, Dialog, Toasts, new KeyStrings(), log ?? NullDiagnosticsLog.Instance, Clock, Gcp);
         }
 
         public ManualTimeProvider Clock { get; }
@@ -212,5 +212,132 @@ public sealed class LeftRunningScopesTests
     public void Dedupe_with_no_selection_leaves_a_null_account_alone()
     {
         CloudScopes.Dedupe([new CloudScope("p", null), new CloudScope("p", null)], null).ShouldBe([new CloudScope("p", null)]);
+    }
+
+    // ---- Issue #830 review M4: an unreadable scope is said at exit, not only logged ----
+
+    private sealed class CountingLog : IDiagnosticsLog
+    {
+        public List<string> Lines { get; } = [];
+
+        public void Warning(string source, string? jobId, string errorClass) => Lines.Add($"{source}/{errorClass}");
+    }
+
+    private static Rig RigWithSignedOutAccountA(IDiagnosticsLog? log = null)
+    {
+        var rig = new Rig("project-b", log);
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountSignedOut("sub-a");
+        return rig;
+    }
+
+    [Fact]
+    public async Task Exit_with_one_account_signed_out_says_so_and_offers_sign_in_even_when_nothing_else_is_running()
+    {
+        var rig = RigWithSignedOutAccountA();
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        string? title = null;
+        string? body = null;
+        IReadOnlyList<string>? buttons = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            (title, body, buttons) = (call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<IReadOnlyList<string>>(2));
+            return Task.FromResult<int?>(1);
+        });
+
+        var mayClose = await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        title.ShouldBe("LeftRunning_UnreadTitle");
+        body.ShouldBe("UNREAD:a@example.org", "the account whose computers could not be checked is named");
+        buttons.ShouldBe(["LeftRunning_UnreadSignIn", "LeftRunning_UnreadCloseAnyway"]);
+        mayClose.ShouldBeTrue("Close anyway on a scope that cannot be read never traps the person");
+    }
+
+    [Fact]
+    public async Task Choosing_Sign_in_at_that_prompt_starts_sign_in_and_keeps_the_window_open()
+    {
+        var rig = RigWithSignedOutAccountA();
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        rig.Choice = 0;
+
+        var mayClose = await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        rig.Gcp.SignInAttempts.ShouldBe(1);
+        mayClose.ShouldBeFalse("after signing in the next close scans again");
+    }
+
+    [Fact]
+    public async Task Close_anyway_on_the_unread_prompt_goes_on_to_the_running_computers_prompt()
+    {
+        var rig = RigWithSignedOutAccountA();
+        await rig.VmAsync("project-b", FakeGcp.DefaultAccountSub, "job-b");
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        var titles = new List<string>();
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            titles.Add(call.ArgAt<string>(0));
+            return Task.FromResult<int?>(titles.Count == 1 ? 1 : 2);
+        });
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        titles.ShouldBe(["LeftRunning_UnreadTitle", "LeftRunning_ExitTitle"]);
+    }
+
+    [Fact]
+    public async Task Every_account_signed_out_still_says_so_at_exit_instead_of_closing_silently()
+    {
+        var rig = RigWithSignedOutAccountA();
+        rig.Gcp.WithSignedOut();
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        rig.Choice = 1;
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        await rig.Dialog.Received(1).ChooseAsync("LeftRunning_UnreadTitle", Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_scope_unreadable_for_a_reason_other_than_sign_in_is_said_without_a_sign_in_button()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a").WithAccountFailure("sub-a", AuthErrorCodes.NetworkUnavailable);
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        IReadOnlyList<string>? buttons = null;
+        rig.Dialog.ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            buttons = call.ArgAt<IReadOnlyList<string>>(2);
+            return Task.FromResult<int?>(0);
+        });
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        buttons.ShouldBe(["LeftRunning_UnreadCloseAnyway"]);
+    }
+
+    [Fact]
+    public async Task A_fully_readable_exit_shows_no_unread_prompt()
+    {
+        var rig = new Rig("project-b");
+        rig.Gcp.WithAccount("sub-a", "a@example.org", "project-a");
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+
+        (await rig.Guard.ConfirmExitAsync(CancellationToken.None)).ShouldBeTrue();
+
+        await rig.Dialog.DidNotReceive().ChooseAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_unread_scope_is_logged_once_per_state_change_not_on_every_scan()
+    {
+        var log = new CountingLog();
+        var rig = RigWithSignedOutAccountA(log);
+        await rig.RowAsync("job-a", JobPhase.Completed, "project-a", "sub-a", Start);
+        rig.Choice = 1;
+
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+        await rig.Guard.ConfirmExitAsync(CancellationToken.None);
+
+        log.Lines.Count(l => l == "left-running-scan/unread-scopes").ShouldBe(1);
     }
 }

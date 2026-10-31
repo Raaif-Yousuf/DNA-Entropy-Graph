@@ -170,6 +170,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     /// </summary>
     public Task SignInAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _signInAttempts);
         if (_signInErrorCode is not null)
         {
             throw new AccountAuthException(_signInErrorCode);
@@ -180,6 +181,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         AccountChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
+
+    private int _signInAttempts;
+
+    /// <summary>How many times <see cref="SignInAsync"/> was called (a test proves a Sign in button reached the account service).</summary>
+    public int SignInAttempts => Volatile.Read(ref _signInAttempts);
 
     private static readonly AccountInfo FakeAccount = new("fake-sub", "fake-user@example.test");
 
