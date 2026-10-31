@@ -27,17 +27,24 @@ public static class OutputFolderChoice
             return new(true, null);
         }
 
-        bool isDriveRoot;
+        return IsRefused(path) ? new(false, strings.GetString(DriveRootMessage)) : new(true, null);
+    }
+
+    /// <summary>True when <paramref name="path"/> is a whole drive. A path that cannot be resolved is not refused here: it is the run's own failure to report (output_folder_unusable).</summary>
+    public static bool IsRefused(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
         try
         {
-            isDriveRoot = RunOutputRoot.IsDriveRoot(path);
+            return RunOutputRoot.IsDriveRoot(path);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            // A path that cannot be resolved is the run's own failure to report (output_folder_unusable); this check is only about drives.
-            return new(true, null);
+            return false;
         }
-
-        return isDriveRoot ? new(false, strings.GetString(DriveRootMessage)) : new(true, null);
     }
 }

@@ -397,6 +397,7 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
         var row = _runs.AllRecordedInOrder.Last(r => r.JobId == jobId);
         row.Phase.ShouldBe(JobPhase.Completed);
         row.ErrorCode.ShouldBe(RunErrorCodes.ChangedFilesKeptAside);
+        KeptAsideDetail.TryRead(row.ErrorDetail).ShouldBe(1, "issue #929: the clean-finish row carries the count as the mark");
         File.ReadAllBytes(destination).ShouldBe(worker);
         File.ReadAllBytes(Directory.GetFiles(Path.GetDirectoryName(destination)!, "*(changed*").Single()).ShouldBe(edited);
     }

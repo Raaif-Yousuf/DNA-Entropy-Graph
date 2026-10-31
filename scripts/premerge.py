@@ -87,6 +87,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 import wt_venv  # noqa: E402
+from dotnet_env import dotnet_env  # noqa: E402
 
 PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 
@@ -94,6 +95,7 @@ PASS, FAIL, ERROR, SKIP, KNOWN = "PASS", "FAIL", "ERROR", "SKIP", "KNOWN"
 NOT_A_GATE: dict[str, str] = {
     "scripts/cloud_gpu_test.ps1": "creates billed cloud resources; never a pre-merge step",
     "scripts/gen_third_party_notices.py": "generator; its output is verified by check_third_party_notices.py",
+    "scripts/dotnet_env.py": "a library the generator and premerge import (named in ci-notices.yml paths only); tested by scripts-tests",
     "scripts/compile_sprint_log.py": "folds fragments at merge time; only its --check arm is a gate",
     "scripts/ci_changes_gate.py": (
         "a path-diff gate that needs a pull request base sha and only decides which CI jobs run; "
@@ -444,7 +446,41 @@ _PYTEST_FAILURE_LINE = re.compile(r"^(FAILED|ERROR) \S", re.MULTILINE)
 _PYTEST_PROGRESS_DONE = re.compile(r"\[100%\]")
 
 
-def classify_pytest(returncode: int, output: str) -> tuple[str, str]:
+_NODE_DOWN = "node down: Not properly terminated"
+_WORKER_CRASHED = re.compile(r"""worker 'gw\d+' crashed while running (?P<q>['"])(?P<test>.+?)(?P=q)""")
+
+
+def gate_has_test_timeout(gate: Gate) -> bool:
+    """True when the gate's own argv arms pytest-timeout (`--timeout=N`); only then can a worker die from it."""
+    return any(arg == "--timeout" or arg.startswith("--timeout=") for arg in gate.argv)
+
+
+def node_down_hint(output: str, timeout_armed: bool = False) -> str:
+    """#1044: xdist on Windows reports a dead worker as `node down: Not properly terminated`. With pytest-timeout
+    armed that is most likely a per-test timeout kill; without it the worker died for another reason. Names every
+    test from the `worker 'gwN' crashed while running <test>` lines."""
+    if _NODE_DOWN not in output:
+        return ""
+    if timeout_armed:
+        hint = f"'{_NODE_DOWN}' is most likely a per-test timeout kill (the --timeout limit)"
+    else:
+        hint = f"'{_NODE_DOWN}' means a pytest worker process died (OOM or a native crash; also what a pytest-timeout kill looks like)"
+    tests = list(dict.fromkeys(m.group("test") for m in _WORKER_CRASHED.finditer(output)))
+    if tests:
+        hint += "; crashed while running " + ", ".join(tests)
+    return hint
+
+
+def classify_pytest(returncode: int, output: str, timeout_armed: bool = False) -> tuple[str, str]:
+    """(status, detail) for a finished pytest process, with the #1044 node-down hint appended."""
+    status, detail = _classify_pytest(returncode, output)
+    hint = node_down_hint(output, timeout_armed) if status != PASS else ""
+    if hint:
+        detail = f"{detail}; {hint}" if detail else hint
+    return status, detail
+
+
+def _classify_pytest(returncode: int, output: str) -> tuple[str, str]:
     """(status, detail) for a finished pytest process. The verdict follows the test outcome, so a
     crash after green tests is never reported as a failing test, and never as a pass."""
     counts = _PYTEST_COUNTS.search(output)
@@ -682,6 +718,7 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
     child_env.setdefault("PYTHONUNBUFFERED", "1")  # partial pytest progress must survive a kill
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     argv = [resolved, *gate.argv[1:]]
+    child_env = dotnet_env(argv, child_env)  # node reuse and compiler servers off for dotnet gates (#1070)
     if gate.pytest and basetemp_root is not None:
         argv += ["--basetemp", str(basetemp_root / gate.name), "-p", "no:cacheprovider"]
     try:
@@ -694,7 +731,7 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
     if returncode is None:
         return Result(gate, ERROR, seconds, text, _timeout_detail(gate, text, captured))
     if gate.pytest:
-        status, detail = classify_pytest(returncode, text)
+        status, detail = classify_pytest(returncode, text, gate_has_test_timeout(gate))
         return Result(gate, status, seconds, text, detail)
     if returncode == 0:
         return Result(gate, PASS, seconds, text)

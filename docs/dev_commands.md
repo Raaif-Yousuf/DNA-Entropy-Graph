@@ -160,6 +160,10 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
   and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
   naming an unknown gate, is exit 2, never a green run.
+- **xdist `node down` hint (#1044).** When a pytest gate's output holds xdist's `node down: Not properly terminated`, the
+  failure header says why and names every test from the `worker 'gwN' crashed while running <test>` lines (`node_down_hint`).
+  For a gate whose argv arms `--timeout` (only `scripts-tests`) it says this is most likely a per-test timeout kill; for any
+  other pytest gate it says a worker process died (OOM or a native crash). premerge's own gate timeout never carries this hint.
 - **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
   (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
   old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT` (kept at 1800 s after #959: the parallel run measured 549 s, 3.3x headroom). A timed-out pytest gate is
@@ -185,6 +189,12 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   `docs/changelog.d/` fragment came with them (rules in `docs/changelog.d/README.md`).
 - **Not in it:** the CPU container smoke (needs Docker) and `shellcheck` (not on the laptop);
   both stay CI-only. `DnaEntropyGraph.App.UiTests` is exempt (WinUI-hosted).
+- **Dotnet gates run with node reuse off** (#1070). Each gate's child env defaults `MSBUILDDISABLENODEREUSE=1`,
+  `DOTNET_CLI_USE_MSBUILD_SERVER=0` and `UseSharedCompilation=false` (a value you set wins), the same definition
+  `heavy.py` uses (`scripts/dotnet_env.py`); `heavy.py` alone did not cover it because premerge.py is a python command.
+  MEASURED 2026-10-31: with reuse on, `/nodemode:1` workers were still alive in the gate's kill-on-close job after the
+  build exited; with the defaults none were. THEORY (unverified): a gate job closing killed such a node under another
+  premerge's build (MSB4166 x3-4 nodes, twice); not reproduced, the defaults remove the precondition.
 - **Pytest gates get a private `--basetemp`** (a short `%TEMP%\pm-*` dir premerge removes when all gates passed, never under
   `--log-dir`, whose path is only recorded in `<log-dir>basetemp.txt`; #469: a deep basetemp made `git push` fail inside the
   temp bare repos of `test_land_pr`, MEASURED 2026-10-02: reproduced with a plain deep path, "remote unpack failed: unable to create temporary object directory"; `core.longpaths=true` on the bare repo also cures it, but a short basetemp fixes every test at once) and
@@ -438,11 +448,13 @@ python scripts\<any check_*.py> --self-test   # every one of them supports this
 ```
 
 `check_pyright.py` is the static-type gate for the Python side (pyright, MIT, dev-only: nothing ships it, so no
-THIRD-PARTY-NOTICES change). It is a RATCHET, not a zero gate. Measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode`
-"basic", config in `pyrightconfig.json`): 345 errors in 238 files at the start; `worker/src` was taken to 0 and the rest
-is debt in the test suites and `scripts/tests`, recorded per file in `scripts/pyright_baseline.json`:
+THIRD-PARTY-NOTICES change). History: measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode` "basic", config in
+`pyrightconfig.json`), the first run found 345 errors in 238 files, so the gate was built as a per-file ratchet with the
+debt in the test suites and `scripts/tests` recorded in `scripts/pyright_baseline.json`. That debt is paid (#877):
+`scripts/pyright_baseline.json` now has an empty `files` object, so the gate is zero errors everywhere. The ratchet
+machinery stays, so the baseline file and its semantics are still enforced:
 
-- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0). Fix the error. Never raise the baseline.
+- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0, which today is every file). Fix the error. Never raise the baseline.
 - `STALE`: a file has fewer errors than its baseline, or its entry names a deleted file. Run `--lower` and commit the
   smaller baseline, otherwise the slack lets a new error in unseen (the same self-expiring shape as the unused-fields allowlist).
 - `ZERO`: `worker/src` may not be listed in the baseline at all.

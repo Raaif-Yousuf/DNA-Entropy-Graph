@@ -110,6 +110,9 @@
                                                     Values="{x:Bind Sparkline, Mode=OneWay}"
                                                     Visibility="{x:Bind HasSparkline, Mode=OneWay}" />
                                                 <TextBlock Text="{x:Bind ReasonText}" Visibility="{x:Bind HasReason}" TextWrapping="Wrap" />
+                                                <!-- Issue #929: a download renamed changed files aside; shown whatever the run's primary reason is. -->
+                                                <TextBlock Text="{x:Bind KeptAsideText}" Visibility="{x:Bind HasKeptAside}" TextWrapping="Wrap" />
+                                                <Button x:Uid="RunsOpenOutputFolderButton" Command="{x:Bind OpenOutputFolderCommand}" Visibility="{x:Bind HasKeptAside}" HorizontalAlignment="Left" />
                                                 <TextBlock Text="{x:Bind ImportedText}" Visibility="{x:Bind HasImportedText}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <TextBlock Text="{x:Bind PresetText}" Visibility="{x:Bind HasPreset}" TextWrapping="Wrap" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                                 <!-- Issue #141: the run's tags as chips and its note, edited on the Results page. -->

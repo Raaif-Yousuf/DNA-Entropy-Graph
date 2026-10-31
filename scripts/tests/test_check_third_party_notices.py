@@ -67,6 +67,9 @@ def test_a_planted_stale_line_in_the_real_committed_file_is_caught(real_dependen
     (tmp_path / ctpn.NOTICES_RELATIVE).write_text(real_notices + "\nplanted stale line\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir()
     (tmp_path / ctpn.GENERATOR_RELATIVE).write_text((repo_root / ctpn.GENERATOR_RELATIVE).read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "scripts" / "dotnet_env.py").write_text(
+        (repo_root / "scripts" / "dotnet_env.py").read_text(encoding="utf-8"), encoding="utf-8"
+    )  # the generator imports it
     # The generator resolves the vendored manifest + assets against the checked root, so the
     # tmp root needs them too (copied, so the real tree is never touched).
     import shutil
@@ -114,5 +117,8 @@ def test_check_reports_a_vendored_sha_mismatch_naming_the_file(tmp_path):
     )
     (tmp_path / ctpn.NOTICES_RELATIVE).write_text("# anything\n", encoding="utf-8")
     (tmp_path / ctpn.GENERATOR_RELATIVE).write_text((repo_root / ctpn.GENERATOR_RELATIVE).read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "scripts" / "dotnet_env.py").write_text(
+        (repo_root / "scripts" / "dotnet_env.py").read_text(encoding="utf-8"), encoding="utf-8"
+    )  # the generator imports it
     problems, _ = ctpn.check(tmp_path)
     assert problems and any("web/lib.js" in p and "sha256" in p for p in problems), problems

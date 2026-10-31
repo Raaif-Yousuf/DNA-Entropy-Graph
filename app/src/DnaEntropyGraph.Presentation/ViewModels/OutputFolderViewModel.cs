@@ -119,17 +119,5 @@ public sealed partial class OutputFolderViewModel : ObservableObject
         OnPropertyChanged(nameof(DisplayText));
     }
 
-    private string? Read()
-    {
-        try
-        {
-            var value = _store.GetString(SettingKey);
-            return string.IsNullOrWhiteSpace(value) ? null : value;
-        }
-        catch (SettingsUnavailableException ex)
-        {
-            System.Diagnostics.Trace.TraceWarning($"settings_unavailable while reading the output folder: {ex.GetType().Name}");
-            return null;
-        }
-    }
+    private string? Read() => OutputFolderSetting.Read(_store);
 }

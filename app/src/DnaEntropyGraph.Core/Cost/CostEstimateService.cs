@@ -16,8 +16,9 @@ public interface ICostEstimateService
         => Task.FromResult<SpendCapStatus?>(null);
 
     /// <summary>
-    /// Raised (on whatever thread the price read finished on) when a background price read changed the prices an estimate uses, so an estimate already
-    /// on screen was made from older ones and the page should ask again. Never raised for a read that changed nothing.
+    /// Raised (on whatever thread the price read finished on) when a background price read changed the prices an estimate uses, or (for a source that
+    /// reports one) where they came from, why and as of when, so what is on screen was made from older facts and the page should ask again.
+    /// Never raised for a read that changed none of those.
     /// </summary>
     event Action? PricesChanged;
 }
@@ -159,8 +160,10 @@ public sealed class CostEstimateService : ICostEstimateService, IDisposable
     }
 
     /// <summary>
-    /// The prices a source serves right now (every machine row and the disk price), as the text a changed price changes; null when it serves none.
-    /// Deliberately not the table's JSON: that carries the as-of date and source note, which change on a new day with the very same prices.
+    /// What a page made from this source shows right now: every machine row and the disk price, then (for a source that reports one) where those
+    /// prices came from, why and as of when. Null when it serves no prices. The status is part of it because the price source line under the
+    /// estimate is made from it: a read that fails, or succeeds with the very same prices on a new day, changes the line without changing a price.
+    /// Deliberately not the table's JSON, which carries a source note that is not shown.
     /// </summary>
     private string? Fingerprint()
     {
@@ -172,6 +175,14 @@ public sealed class CostEstimateService : ICostEstimateService, IDisposable
         var rows = table.Machines
             .OrderBy(m => m.MachineType, StringComparer.Ordinal)
             .Select(m => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{m.MachineType}|{m.Accelerator}|{m.OnDemandUsdPerHour:R}|{m.SpotUsdPerHour:R}"));
-        return string.Join(';', rows) + string.Create(System.Globalization.CultureInfo.InvariantCulture, $";disk={table.DiskUsdPerGbMonth:R}");
+        var prices = string.Join(';', rows) + string.Create(System.Globalization.CultureInfo.InvariantCulture, $";disk={table.DiskUsdPerGbMonth:R}");
+        if (_source is not IPricingStatus status)
+        {
+            return prices;
+        }
+
+        var current = status.Current;
+        var spotKept = current.SpotKeptFromShipped is { Count: > 0 } kept ? string.Join(',', kept) : string.Empty;
+        return prices + string.Create(System.Globalization.CultureInfo.InvariantCulture, $";status={current.Origin}|{current.Reason}|{current.AsOf:O}|{spotKept}");
     }
 }

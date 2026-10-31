@@ -83,6 +83,13 @@ public sealed partial class ResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsNoticeVisible))]
     private string _noticeText = string.Empty;
 
+    // Issue #929: the run's download renamed changed files aside (Hard Rule 14); the page's Open the output folder button is the action it names.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsKeptAsideVisible))]
+    private string _keptAsideText = string.Empty;
+
+    public bool IsKeptAsideVisible => KeptAsideText.Length > 0;
+
     // Why the numbers are missing while the files are fine.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsStatsNoticeVisible))]
@@ -223,6 +230,8 @@ public sealed partial class ResultsViewModel : ObservableObject
                 return;
             }
 
+            // Only with a folder to open: a missing folder already has its notice, and a line over a disabled button would be a dead end.
+            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings) ?? string.Empty;
             Show(folder!, snapshot);
 
             await ShowGeneTablesAsync(folder!, generation);
@@ -258,6 +267,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _outputFiles = [];
         Title = string.Empty;
         CostText = string.Empty;
+        KeptAsideText = string.Empty;
         _annotationsJobId = null;
         NotesText = string.Empty;
         TagsText = string.Empty;
@@ -495,8 +505,10 @@ public sealed partial class ResultsViewModel : ObservableObject
             (path, written) = await Task.Run(
                 () =>
                 {
+                    // One read of the export root per save (Parent and AppOwned together): the setting may change while this runs.
+                    var exportParent = ownFolder && _exportRoot is not null ? _exportRoot.Resolve() : default;
                     var target = ownFolder && _exportRoot is not null && run is not null
-                        ? RunOutputFolders.ExportsFolder(_exportRoot.Parent(), string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
+                        ? RunOutputFolders.ExportsFolder(exportParent.Parent, string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name, run.JobId)
                         : folder;
                     var file = RunOutputFolders.UniqueFilePath(target, SafeFileName(contig.Name) + ".entropy", ".png");
 
@@ -508,7 +520,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                     {
                         // The user's own export root (Downloads) must still be there: a deleted one is not brought back; only the exports folder is
                         // made. A root the app owns (portable outputs) is made on first use, since nothing makes it at startup.
-                        made = RunOutputFolders.CreateFolderChain(target, _exportRoot!.AppOwned ? null : _exportRoot.Parent());
+                        made = RunOutputFolders.CreateFolderChain(target, exportParent.AppOwned ? null : exportParent.Parent);
                     }
                     else if (!Directory.Exists(target))
                     {
