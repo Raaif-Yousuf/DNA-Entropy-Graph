@@ -8,8 +8,7 @@ namespace DnaEntropyGraph.App.Services;
 
 /// <summary>
 /// The WinRT file picker, owned by the main window through <see cref="WindowHandleProvider"/>
-/// (a desktop app's picker throws without an owner window handle). The output-folder picker
-/// is still a placeholder (a follow-up issue).
+/// (a desktop app's picker throws without an owner window handle).
 /// </summary>
 public sealed class FilePickerService(WindowHandleProvider window, IStringResourceProvider strings) : IFilePicker
 {
@@ -88,5 +87,14 @@ public sealed class FilePickerService(WindowHandleProvider window, IStringResour
         return string.IsNullOrEmpty(file?.Path) ? null : file.Path;
     }
 
-    public Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
+    public async Task<string?> PickOutputFolderAsync(CancellationToken cancellationToken)
+    {
+        var picker = new FolderPicker { SuggestedStartLocation = PickerLocationId.Downloads };
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, window.Hwnd);
+        picker.FileTypeFilter.Add("*");
+
+        // A folder with no local path (a cloud-only or library location) cannot hold results we can find again, so it is not offered on.
+        var folder = await picker.PickSingleFolderAsync();
+        return string.IsNullOrEmpty(folder?.Path) ? null : folder.Path;
+    }
 }
