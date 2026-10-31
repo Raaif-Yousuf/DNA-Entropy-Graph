@@ -37,6 +37,12 @@ public interface IRunRepository
         await UpsertAsync(run, cancellationToken).ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>
+    /// Issue #830 review M1: gives <paramref name="accountSub"/> to every cloud row whose <see cref="RunRecord.AccountSub"/> is null (a row written before
+    /// accounts were recorded); returns how many changed. The default changes nothing, for a test double with no rows to give.
+    /// </summary>
+    Task<int> AssignAccountToUnassignedRunsAsync(string accountSub, CancellationToken cancellationToken) => Task.FromResult(0);
 }
 
 /// <summary>
@@ -110,7 +116,7 @@ public sealed record RunRecord(
             {
                 nameof(Notes) when value is not null => "<notes withheld>",
                 nameof(TagsJson) when value is not null => "<tags withheld>",
-            nameof(AccountSub) when value is not null => "<account withheld>",
+                nameof(AccountSub) when value is not null => "<account withheld>",
                 _ => value is null ? "null" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
             };
             builder.Append(first ? string.Empty : ", ").Append(member.Name).Append(" = ").Append(text);

@@ -139,6 +139,17 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         }
     }
 
+    /// <summary>Issue #830 review M1: sets <c>AccountSub</c> on every cloud row that has none (one UPDATE, never touching a row that has an account or a This PC row). Returns the rows changed.</summary>
+    public async Task<int> AssignAccountToUnassignedRunsAsync(string accountSub, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(
+            "UPDATE Runs SET AccountSub = @AccountSub WHERE AccountSub IS NULL AND Target <> 'local';",
+            new { AccountSub = accountSub },
+            cancellationToken: cancellationToken);
+        return await connection.ExecuteAsync(command).ConfigureAwait(false);
+    }
+
     /// <summary>Issue #141: writes only Notes and TagsJson, so it can neither overwrite a concurrent phase write nor be overwritten by one.</summary>
     public async Task<bool> UpdateAsync(string jobId, string? notes, string? tagsJson, CancellationToken cancellationToken)
     {
@@ -300,7 +311,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         public string? InstallationId { get; set; }
         public long Imported { get; set; }
         public long PreemptionCount { get; set; }
-    public string? AccountSub { get; set; }
+        public string? AccountSub { get; set; }
         public string? Notes { get; set; }
         public string? TagsJson { get; set; }
     }

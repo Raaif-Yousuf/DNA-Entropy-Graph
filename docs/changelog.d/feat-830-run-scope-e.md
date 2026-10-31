@@ -1,0 +1,1 @@
+- Issue #830 review round 1: the Runs.AccountSub migration (0003) no longer guesses an old run's account from Projects.AccountSub; instead the first launch after the upgrade with an account signed in gives every old cloud run that account once (RunAccountBackfill, then a marker), and a launch with nobody signed in tries again next time.

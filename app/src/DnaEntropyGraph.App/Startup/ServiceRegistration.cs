@@ -390,6 +390,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<IDiagnosticsLog>(),
             sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<IGcpAccount>()));
+        services.AddSingleton<RunAccountBackfill>(sp => new RunAccountBackfill(
+            sp.GetRequiredService<IRunRepository>(), sp.GetRequiredService<IGcpAccount>(), sp.GetRequiredService<ISettingsStore>()));
         services.AddSingleton<JobReconciler>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
