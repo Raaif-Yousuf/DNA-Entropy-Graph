@@ -718,6 +718,32 @@ def test_a_file_name_with_space_quote_and_tab_is_read_exactly_and_scanned(world)
     assert world.remote_branches() == ["main"]
 
 
+def test_land_wt_uses_the_one_shared_control_byte_scanner():
+    import check_control_bytes as ccb
+
+    assert lw.CONTROL_BYTES is ccb.CONTROL_BYTES
+    # the allowlisted vendored file is skipped in the LAND check too (one implementation, one allowlist)
+    assert ccb.ALLOWLIST, "vacuity: the allowlist must hold at least the vendored igv.min.js"
+    allowed = sorted(ccb.ALLOWLIST)[0]
+    assert lw.find_control_bytes({allowed: b"a\x01b", "z.txt": b"\x08"}) == ["z.txt"]
+
+
+def test_changed_text_files_skips_a_minus_text_file_like_premerge_does(world):
+    """A `-text` fixture with a control byte and no NUL is skipped at LAND exactly as in check_control_bytes (#1016)."""
+    _git(world.clone, "switch", "-q", "-c", "feat/attr", "origin/main")
+    (world.clone / ".gitattributes").write_bytes(b"raw/** -text\n")
+    (world.clone / "raw").mkdir()
+    (world.clone / "raw" / "fixture.txt").write_bytes(b"a\x0bb")
+    (world.clone / "plain.txt").write_bytes(b"a\x0bb")
+    _git(world.clone, "add", "--", ".gitattributes", "raw/fixture.txt", "plain.txt")
+    _git(world.clone, "commit", "-q", "-m", "attr")
+    sha = _git(world.clone, "rev-parse", "HEAD")
+    _git(world.clone, "switch", "-q", "--detach", "origin/main")
+    got = lw._changed_text_files(world.ctx(), sha)
+    assert "raw/fixture.txt" not in got
+    assert got["plain.txt"] == b"a\x0bb"
+
+
 def test_esc_is_allowed_because_logs_carry_colour_but_vt_and_ff_are_not():
     assert lw.find_control_bytes({"log.txt": b"\x1b[31mred\x1b[0m\n"}) == []
     assert lw.find_control_bytes({"a": b"\x0b", "b": b"\x0c"}) == ["a", "b"]
@@ -1056,6 +1082,43 @@ def test_run_bounded_kills_the_whole_tree_on_timeout(tmp_path):
         lw.run_bounded([sys.executable, str(script), str(pidfile)], timeout=2.0)
     assert time.time() - start < 15  # the grandchild holds the pipes open: only a tree kill returns promptly
     assert _pid_gone(int(pidfile.read_text()))
+
+
+ORPHANING_PARENT = """import subprocess, sys
+from pathlib import Path
+kw = {"creationflags": 0x8 | 0x200} if sys.platform == "win32" else {}
+gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=sys.stdout, stderr=sys.stderr, **kw)
+Path(sys.argv[1]).write_text(str(gc.pid))
+sys.exit(0)
+"""
+
+
+def test_run_bounded_with_a_job_kills_a_detached_grandchild_whose_parent_already_exited(tmp_path):
+    """#930. taskkill /T cannot find a grandchild whose parent is gone; the job object can. Limit: a process started with
+    CREATE_BREAKAWAY_FROM_JOB escapes a job that allows breakaway."""
+    pidfile = tmp_path / "gc.pid"
+    script = tmp_path / "parent.py"
+    script.write_text(ORPHANING_PARENT, encoding="utf-8", newline="\n")
+    with pytest.raises(subprocess.TimeoutExpired):
+        lw.run_bounded([sys.executable, str(script), str(pidfile)], timeout=5.0, job=True)
+    pid = int(pidfile.read_text())
+    try:
+        assert _pid_gone(pid), f"detached grandchild {pid} survived the timeout"
+    finally:
+        with contextlib.suppress(Exception):
+            lw._taskkill_tree(pid) if os.name == "nt" else os.kill(pid, 9)
+
+
+def test_run_premerge_runs_the_gate_in_a_job(tmp_path, monkeypatch):
+    seen: dict[str, object] = {}
+
+    def spy(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(list(argv), 0, b"", b"")
+
+    monkeypatch.setattr(lw, "run_bounded", spy)
+    lw.run_premerge(tmp_path, tmp_path, full=False, timeout=5)
+    assert seen.get("job") is True
 
 
 def test_run_bounded_returns_output_and_stdin_like_run():

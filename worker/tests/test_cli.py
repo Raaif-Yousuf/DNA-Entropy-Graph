@@ -65,7 +65,7 @@ def test_worker_run_help_lists_local_and_gcs_options() -> None:
     result = runner.invoke(app, ["worker-run", "--help"])
     assert result.exit_code == 0
 
-    worker_run = typer.main.get_command(app).commands["worker-run"]
+    worker_run = typer.main.get_group(app).commands["worker-run"]
     declared = {opt for param in worker_run.params for opt in param.opts}
     assert {"--root", "--bucket", "--prefix"} <= declared
 
@@ -222,7 +222,7 @@ def test_validate_matches_the_prototype_exactly_on_every_recorded_case() -> None
 
 
 def _declared_option_names(command_name: str) -> set[str]:
-    click_app = typer.main.get_command(app)
+    click_app = typer.main.get_group(app)
     cmd = click_app.commands[command_name]
     names: set[str] = set()
     for param in cmd.params:

@@ -64,6 +64,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+import check_control_bytes as ccb  # noqa: E402
 import check_totest_format as ctf  # noqa: E402
 import wt_venv  # noqa: E402
 
@@ -71,9 +72,8 @@ REMOTE = "origin"
 BASE = "main"
 TOTEST = "docs/ToTest.md"
 VENV_REL = wt_venv.VENV_REL
-# NUL..BS, VT, FF and SO..US except ESC. ESC (0x1b) is allowed on purpose: captured logs and test output carry ANSI
-# colour and no measured corruption produced it. VT (0x0b, the MEASURED `\v` case) and FF are refused; TAB, LF, CR are text.
-CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f]")
+# The byte set (and why ESC is allowed) lives in check_control_bytes.py; re-exported for the existing tests.
+CONTROL_BYTES = ccb.CONTROL_BYTES
 PROTECTED = {"main", "master", "head"}
 LOCK_DIR = "locks"
 LOCK_MAX_AGE_SECONDS = 24 * 3600
@@ -263,11 +263,47 @@ def run_bounded(
     env: dict[str, str] | None = None,
     stdin: bytes | None = None,
     timeout: float | None = None,
+    job: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     """`subprocess.run(capture_output=True)` whose timeout kills the WHOLE process tree (a grandchild holding the pipes open would
-    otherwise make `run` wait forever after its own kill). Raises subprocess.TimeoutExpired (after a bounded wait) and OSError."""
+    otherwise make `run` wait forever after its own kill). Raises subprocess.TimeoutExpired (after a bounded wait) and OSError.
+
+    `job=True` (Windows) runs the child in a kill-on-close Job Object (#930), so a timeout also ends a grandchild whose parent already
+    exited (taskkill /T cannot find it) and the child's leftovers die when this returns. Off for the other calls, which may leave a
+    daemon on purpose. A job that cannot be set up prints a WARNING and falls back to taskkill /T."""
+    kill_job = wt_venv.create_kill_job() if job else None
+    try:
+        if job:
+            proc, assigned = wt_venv.spawn_in_job(
+                argv,
+                env if env is not None else dict(os.environ),
+                cwd if cwd is not None else Path.cwd(),
+                kill_job,
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        else:
+            proc, assigned = _popen_bounded(argv, cwd, env, stdin), False
+    except BaseException:
+        if kill_job is not None:
+            kill_job.close()
+        raise
+    if job and wt_venv.needs_taskkill_fallback(assigned):
+        print("WARNING: no job object for the premerge tree; falling back to taskkill /T by PID", file=sys.stderr, flush=True)
+        if kill_job is not None:
+            kill_job.close()
+        kill_job = None
+    try:
+        return _communicate_bounded(proc, argv, stdin, timeout, kill_job)
+    finally:
+        if kill_job is not None:
+            kill_job.close()
+
+
+def _popen_bounded(argv: Sequence[str], cwd: Path | None, env: dict[str, str] | None, stdin: bytes | None) -> subprocess.Popen[bytes]:
     extra: dict[str, object] = {} if os.name == "nt" else {"start_new_session": True}
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         list(argv),
         cwd=cwd,
         env=env,
@@ -276,9 +312,16 @@ def run_bounded(
         stderr=subprocess.PIPE,
         **extra,  # type: ignore[arg-type]
     )
+
+
+def _communicate_bounded(
+    proc: subprocess.Popen[bytes], argv: Sequence[str], stdin: bytes | None, timeout: float | None, kill_job: wt_venv.KillJob | None
+) -> subprocess.CompletedProcess[bytes]:
     try:
         out, err = proc.communicate(stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
+        if kill_job is not None:
+            kill_job.terminate()
         kill_tree(proc)
         try:
             out, err = proc.communicate(timeout=5)
@@ -340,7 +383,8 @@ def unlink_dir_link(link: Path) -> None:
 
 
 def find_control_bytes(files: dict[str, bytes]) -> list[str]:
-    return sorted(name for name, data in files.items() if CONTROL_BYTES.search(data))
+    # One implementation: scripts/check_control_bytes.py (#1016), also run by premerge --fast and CI.
+    return sorted({f.path for f in ccb.find_control_bytes_in(files)})
 
 
 def split_conflicts(unmerged: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -446,7 +490,7 @@ def run_premerge(wt: Path, venv: Path, full: bool, timeout: float | None = None)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(wt / "worker" / "src")
     try:
-        proc = run_bounded(argv, cwd=wt, env=env, timeout=limit)
+        proc = run_bounded(argv, cwd=wt, env=env, timeout=limit, job=True)
     except subprocess.TimeoutExpired as err:
         tail = _text((err.stdout or b"")[-2000:]) if isinstance(err.stdout, bytes) else ""
         return 124, f"ERROR: premerge timed out after {int(limit)} s and was killed (a hung gate or heavy.py slot wait)\n{tail}"
@@ -494,16 +538,17 @@ def _resolve_tip(ctx: Ctx, branch: str, sha: str) -> str:
 def _changed_text_files(ctx: Ctx, sha: str) -> dict[str, bytes]:
     # -z: NUL-terminated records with unquoted paths, so a name holding a tab, quote or newline is read exactly.
     raw = git(ctx.repo, "diff", "--numstat", "-z", "--no-renames", "--diff-filter=AM", f"{REMOTE}/{BASE}...{sha}").stdout
-    files: dict[str, bytes] = {}
+    names: list[str] = []
     for record in raw.split(b"\0"):
         if not record:
             continue
         added, _deleted, name_bytes = record.split(b"\t", 2)
         if added == b"-":  # git's verdict: binary
             continue
-        name = name_bytes.decode("utf-8", errors="surrogateescape")
-        files[name] = git(ctx.repo, "show", f"{sha}:{name}").stdout
-    return files
+        names.append(name_bytes.decode("utf-8", errors="surrogateescape"))
+    # The same `-text` / `binary` attribute skip premerge's check_control_bytes applies, read from the landing commit's tree.
+    skip = ccb.text_attr_unset(ctx.repo, [n for n in names if n not in ccb.ALLOWLIST], source=sha)
+    return {name: git(ctx.repo, "show", f"{sha}:{name}").stdout for name in names if name not in skip}
 
 
 def _remove_worktree(ctx: Ctx, wt: Path) -> None:

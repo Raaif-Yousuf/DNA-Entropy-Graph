@@ -96,7 +96,7 @@ public sealed class DiagnosticsStatusLeafTests
     private static Dictionary<string, string> Build(RunRecord run)
     {
         var files = new Dictionary<string, string> { ["runs/20261001-080000-abc234/status.json"] = PlantedStatus() };
-        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info);
+        var zip = DiagnosticsBundleBuilder.Build(new MemorySource(files), [run], Info, null);
         using var archive = new ZipArchive(new MemoryStream(zip), ZipArchiveMode.Read);
         return archive.Entries.ToDictionary(e => e.FullName, e => new StreamReader(e.Open(), Encoding.UTF8).ReadToEnd());
     }

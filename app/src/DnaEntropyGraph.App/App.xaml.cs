@@ -29,6 +29,9 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Issue #100 round 3: DispatcherAdapter captures the DispatcherQueue of the thread that first resolves it. This is the UI thread, so resolve it here, explicitly,
+        // before any ViewModel can pull it in from somewhere else (a singleton resolved off the UI thread would run its actions inline on the caller's thread).
+        _ = Services.GetRequiredService<Core.Abstractions.IDispatcher>();
         var window = new MainWindow(
             Services.GetRequiredService<Presentation.ViewModels.ShellViewModel>(),
             Services.GetRequiredService<Core.Abstractions.ISettingsStore>(),
