@@ -50,7 +50,7 @@ public class GrantedScopesTests
         var service = harness.NewService();
         harness.Google.RefreshGrantedScope = WithoutCloud;
 
-        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(CancellationToken.None));
+        var failure = await Should.ThrowAsync<AccountAuthException>(() => service.GetAccessTokenAsync(null, CancellationToken.None));
 
         failure.Code.ShouldBe(AuthErrorCodes.ConsentIncomplete);
         service.IsSignedIn.ShouldBeFalse();
@@ -66,7 +66,7 @@ public class GrantedScopesTests
         var service = harness.NewService();
         harness.Google.RefreshGrantedScope = "openid https://www.googleapis.com/auth/cloud-platform";
 
-        (await service.GetAccessTokenAsync(CancellationToken.None)).ShouldStartWith("at-");
+        (await service.GetAccessTokenAsync(null, CancellationToken.None)).ShouldStartWith("at-");
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class GrantedScopesTests
         var service = harness.NewService();
         harness.Google.RefreshGrantedScope.ShouldBeNull("the fake answers the refresh with no scope field");
 
-        (await service.GetAccessTokenAsync(CancellationToken.None)).ShouldStartWith("at-");
+        (await service.GetAccessTokenAsync(null, CancellationToken.None)).ShouldStartWith("at-");
 
         harness.Google.TokenRequests.Count(r => r["grant_type"] == "refresh_token").ShouldBe(1, "the refresh really happened");
         service.IsSignedIn.ShouldBeTrue();

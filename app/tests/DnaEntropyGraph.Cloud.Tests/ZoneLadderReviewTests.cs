@@ -63,32 +63,32 @@ public class ZoneLadderReviewTests
 
         public Func<string, string, CancellationToken, Task>? OnDelete { get; set; }
 
-        public Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken)
-            => OnCreate is null ? inner.CreateVmAsync(spec, zone, cancellationToken) : OnCreate(spec, zone, cancellationToken);
+        public Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken)
+            => OnCreate is null ? inner.CreateVmAsync(scope, spec, zone, cancellationToken) : OnCreate(spec, zone, cancellationToken);
 
-        public Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(spec, existingVmName, zone, cancellationToken);
+        public Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken) => inner.ReuseVmAsync(scope, spec, existingVmName, zone, cancellationToken);
 
-        public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(vmName, zone, cancellationToken);
+        public Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.GetVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(vmName, zone, cancellationToken);
+        public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StopVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken)
-            => OnDelete is null ? inner.DeleteVmAsync(vmName, zone, cancellationToken) : OnDelete(vmName, zone, cancellationToken);
+        public Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
+            => OnDelete is null ? inner.DeleteVmAsync(scope, vmName, zone, cancellationToken) : OnDelete(vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken)
-            => OnFind is null ? inner.FindByJobIdAsync(jobId, cancellationToken) : OnFind(jobId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
+            => OnFind is null ? inner.FindByJobIdAsync(scope, jobId, cancellationToken) : OnFind(jobId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken) => inner.ListAppVmsAsync(cancellationToken);
+        public Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListAppVmsAsync(scope, cancellationToken);
 
-        public Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(vmName, zone, cancellationToken);
+        public Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken) => inner.StartVmAsync(scope, vmName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(installationId, cancellationToken);
+        public Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken) => inner.ListDisksByInstallationAsync(scope, installationId, cancellationToken);
 
-        public Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(diskName, zone, cancellationToken);
+        public Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken) => inner.DeleteDiskAsync(scope, diskName, zone, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(acceleratorType, cancellationToken);
+        public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken) => inner.ListAcceleratorZonesAsync(scope, acceleratorType, cancellationToken);
     }
 
     private static async Task<string[]> LiveZonesAsync(FakeGcp gcp, string jobId)
@@ -463,9 +463,9 @@ public class ZoneLadderReviewTests
     /// <summary>Parks the claim write for ever, and, once parked inside the runner's call (whose deadline timer was armed before the call), moves the runner's clock past the call limit so the deadline fires.</summary>
     private sealed class ClaimHangsStorage(FakeGcp inner, VirtualTimeProvider clock) : IStorageGateway
     {
-        public Task<string> EnsureBucketAsync(string projectId, CancellationToken cancellationToken) => inner.EnsureBucketAsync(projectId, cancellationToken);
+        public Task<string> EnsureBucketAsync(CloudScope scope, CancellationToken cancellationToken) => inner.EnsureBucketAsync(scope, cancellationToken);
 
-        public async Task UploadAsync(string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
+        public async Task UploadAsync(CloudScope scope, string bucket, string objectKey, Stream content, CancellationToken cancellationToken)
         {
             if (objectKey.EndsWith("control/zone", StringComparison.Ordinal))
             {
@@ -473,20 +473,20 @@ public class ZoneLadderReviewTests
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
             }
 
-            await inner.UploadAsync(bucket, objectKey, content, cancellationToken).ConfigureAwait(false);
+            await inner.UploadAsync(scope, bucket, objectKey, content, cancellationToken).ConfigureAwait(false);
         }
 
-        public Task<Stream> DownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.DownloadAsync(bucket, objectKey, cancellationToken);
+        public Task<Stream> DownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken) => inner.DownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-        public Task<Stream?> TryDownloadAsync(string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(bucket, objectKey, cancellationToken);
+        public Task<Stream?> TryDownloadAsync(CloudScope scope, string bucket, string objectKey, CancellationToken cancellationToken) => inner.TryDownloadAsync(scope, bucket, objectKey, cancellationToken);
 
-        public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(string projectId, CancellationToken cancellationToken) => inner.ListBucketsAsync(projectId, cancellationToken);
+        public Task<IReadOnlyList<BucketDescriptor>> ListBucketsAsync(CloudScope scope, CancellationToken cancellationToken) => inner.ListBucketsAsync(scope, cancellationToken);
 
-        public Task<PrefixUsage> GetPrefixUsageAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(bucket, prefix, cancellationToken);
+        public Task<PrefixUsage> GetPrefixUsageAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.GetPrefixUsageAsync(scope, bucket, prefix, cancellationToken);
 
-        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(bucket, prefix, cancellationToken);
+        public Task<IReadOnlyList<string>> ListChildPrefixesAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.ListChildPrefixesAsync(scope, bucket, prefix, cancellationToken);
 
-        public Task<int> DeletePrefixAsync(string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(bucket, prefix, cancellationToken);
+        public Task<int> DeletePrefixAsync(CloudScope scope, string bucket, string prefix, CancellationToken cancellationToken) => inner.DeletePrefixAsync(scope, bucket, prefix, cancellationToken);
     }
 
     [Theory]

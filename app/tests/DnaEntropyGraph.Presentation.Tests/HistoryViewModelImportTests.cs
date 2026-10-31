@@ -47,6 +47,7 @@ public sealed class HistoryViewModelImportTests
             return Task.CompletedTask;
         });
         _account.SelectedProjectId.Returns("proj");
+        _account.SelectedScope().Returns(TestScopes.Of("proj"));
         var deleter = Substitute.For<IJobObjectDeleter>();
         deleter.IsAvailable.Returns(true);
         _cloud = new RunCloudResults(_storage, deleter, _repository, () => Path.GetTempPath(), new UtcClock());
@@ -57,10 +58,10 @@ public sealed class HistoryViewModelImportTests
             _rows.RemoveAll(r => r.JobId == ci.Arg<string>());
             return Task.CompletedTask;
         });
-        _storage.ListBucketsAsync("proj", Arg.Any<CancellationToken>()).Returns([new BucketDescriptor(Bucket, "US", new Dictionary<string, string>(), null)]);
-        _storage.ListChildPrefixesAsync(Bucket, "jobs/", Arg.Any<CancellationToken>()).Returns(_ => _objects.Keys.Select(k => string.Join('/', k.Split('/').Take(2)) + "/").Distinct().ToList());
-        _storage.TryDownloadAsync(Bucket, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
-            Task.FromResult<Stream?>(_objects.TryGetValue(ci.ArgAt<string>(1), out var text) ? new MemoryStream(Encoding.UTF8.GetBytes(text)) : null));
+        _storage.ListBucketsAsync(new CloudScope("proj"), Arg.Any<CancellationToken>()).Returns([new BucketDescriptor(Bucket, "US", new Dictionary<string, string>(), null)]);
+        _storage.ListChildPrefixesAsync(Arg.Any<CloudScope>(), Bucket, "jobs/", Arg.Any<CancellationToken>()).Returns(_ => _objects.Keys.Select(k => string.Join('/', k.Split('/').Take(2)) + "/").Distinct().ToList());
+        _storage.TryDownloadAsync(Arg.Any<CloudScope>(), Bucket, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(ci =>
+            Task.FromResult<Stream?>(_objects.TryGetValue(ci.ArgAt<string>(2), out var text) ? new MemoryStream(Encoding.UTF8.GetBytes(text)) : null));
     }
 
     private void PutForeignRun(string id, string installation)
@@ -133,6 +134,7 @@ public sealed class HistoryViewModelImportTests
     public async Task With_no_project_chosen_it_says_so_and_does_not_look()
     {
         _account.SelectedProjectId.Returns((string?)null);
+        _account.SelectedScope().Returns(TestScopes.Of(null));
         var importer = Substitute.For<IRunImporter>();
         var vm = Make(importer);
 
@@ -145,7 +147,7 @@ public sealed class HistoryViewModelImportTests
     [Fact]
     public async Task A_failed_scan_names_what_to_do_and_leaves_the_list_alone()
     {
-        _storage.ListBucketsAsync("proj", Arg.Any<CancellationToken>()).Returns<IReadOnlyList<BucketDescriptor>>(_ => throw new IOException("offline"));
+        _storage.ListBucketsAsync(new CloudScope("proj"), Arg.Any<CancellationToken>()).Returns<IReadOnlyList<BucketDescriptor>>(_ => throw new IOException("offline"));
         var vm = Make();
 
         await vm.ImportRunsCommand.ExecuteAsync(null);
@@ -215,7 +217,7 @@ public sealed class HistoryViewModelImportTests
     public async Task A_failed_scan_shows_the_message_for_its_kind(Exception failure, string expectedKey)
     {
         var importer = Substitute.For<IRunImporter>();
-        importer.ImportAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns<RunImportResult>(_ => throw failure);
+        importer.ImportAsync(Arg.Any<DnaEntropyGraph.Core.Cloud.CloudScope>(), Arg.Any<CancellationToken>()).Returns<RunImportResult>(_ => throw failure);
         var vm = Make(importer);
 
         await vm.ImportRunsCommand.ExecuteAsync(null);

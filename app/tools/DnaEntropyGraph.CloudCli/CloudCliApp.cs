@@ -137,14 +137,14 @@ public sealed class CloudCliApp
         if (command.Kind != ResourceKind.Bucket)
         {
             var vms = command.Install is null
-                ? await session.Compute.ListAppVmsAsync(cancellationToken).ConfigureAwait(false)
-                : await session.Compute.ListByInstallationAsync(command.Install, cancellationToken).ConfigureAwait(false);
+                ? await session.Compute.ListAppVmsAsync(ScopeOf(command), cancellationToken).ConfigureAwait(false)
+                : await session.Compute.ListByInstallationAsync(ScopeOf(command), command.Install, cancellationToken).ConfigureAwait(false);
             rows.AddRange(vms.OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new ResourceRow("vm", v.Name, v.Zone, null, v.Status, Label(v.Labels, "installation-id"), Label(v.Labels, "job-id"))));
         }
 
         if (command.Kind != ResourceKind.Vm)
         {
-            var buckets = await session.Storage.ListBucketsAsync(command.Project, cancellationToken).ConfigureAwait(false);
+            var buckets = await session.Storage.ListBucketsAsync(ScopeOf(command), cancellationToken).ConfigureAwait(false);
             // Not filtered by --install: the results bucket is shared and adopted across installations, so it carries its creator's
             // installation-id. The storage gateway already lists only buckets with the app label.
             rows.AddRange(buckets
@@ -170,7 +170,7 @@ public sealed class CloudCliApp
 
     private static async Task<int> DescribeAsync(CloudCliSession session, BucketDescribeCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
     {
-        var all = await session.Storage.ListBucketsAsync(command.Project, cancellationToken).ConfigureAwait(false);
+        var all = await session.Storage.ListBucketsAsync(ScopeOf(command), cancellationToken).ConfigureAwait(false);
         var buckets = command.Name is null ? all : all.Where(b => b.Name == command.Name).ToList();
         if (buckets.Count == 0)
         {
@@ -205,7 +205,7 @@ public sealed class CloudCliApp
 
     private static async Task<int> EnsureBucketAsync(CloudCliSession session, BucketEnsureCommand command, TextWriter stdout, CancellationToken cancellationToken)
     {
-        var name = await session.Storage.EnsureBucketAsync(command.Project, cancellationToken).ConfigureAwait(false);
+        var name = await session.Storage.EnsureBucketAsync(ScopeOf(command), cancellationToken).ConfigureAwait(false);
         stdout.WriteLine(command.Json
             ? JsonSerializer.Serialize(new { name }, JsonOptions)
             : $"OK: bucket {Ascii(name)}");
@@ -214,7 +214,7 @@ public sealed class CloudCliApp
 
     private static async Task<int> GetObjectAsync(CloudCliSession session, ObjectGetCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
     {
-        var stream = await session.Storage.TryDownloadAsync(command.Bucket, command.Key, cancellationToken).ConfigureAwait(false);
+        var stream = await session.Storage.TryDownloadAsync(ScopeOf(command), command.Bucket, command.Key, cancellationToken).ConfigureAwait(false);
         if (stream is null)
         {
             return Fail(stderr, CloudCliExitCode.NotFound, $"{Ascii(command.Key)} is not there yet in bucket {Ascii(command.Bucket)}. Wait and run this again, or check the key with 'bucket describe'.");
@@ -333,7 +333,7 @@ public sealed class CloudCliApp
             return Fail(stderr, CloudCliExitCode.Usage, $"{ex.Message} Fix the flag it names and run this again.");
         }
 
-        var vm = await session.Compute.CreateVmAsync(spec, command.Zone, cancellationToken).ConfigureAwait(false);
+        var vm = await session.Compute.CreateVmAsync(ScopeOf(command), spec, command.Zone, cancellationToken).ConfigureAwait(false);
         if (command.Json)
         {
             stdout.WriteLine(JsonSerializer.Serialize(new { name = vm.Name, zone = vm.Zone, status = vm.Status, maxRunDurationSeconds = (long)command.MaxRunDuration.TotalSeconds }, JsonOptions));
@@ -346,11 +346,11 @@ public sealed class CloudCliApp
 
     private static async Task<int> DeleteAsync(CloudCliSession session, VmDeleteCommand command, TextWriter stdout, TextWriter stderr, CancellationToken cancellationToken)
     {
-        var vm = await session.Compute.GetVmAsync(command.Name, command.Zone, cancellationToken).ConfigureAwait(false);
+        var vm = await session.Compute.GetVmAsync(ScopeOf(command), command.Name, command.Zone, cancellationToken).ConfigureAwait(false);
         if (vm is null)
         {
             // Not "already gone": a wrong zone looks identical, and the VM would keep billing. Look for the name elsewhere.
-            var elsewhere = (await session.Compute.ListAppVmsAsync(cancellationToken).ConfigureAwait(false))
+            var elsewhere = (await session.Compute.ListAppVmsAsync(ScopeOf(command), cancellationToken).ConfigureAwait(false))
                 .FirstOrDefault(v => string.Equals(v.Name, command.Name, StringComparison.Ordinal));
             return Fail(stderr, CloudCliExitCode.NotFound, elsewhere is not null
                 ? $"{Ascii(command.Name)} is not in zone {Ascii(command.Zone)}; it is in zone {Ascii(elsewhere.Zone)}. Run this again with --zone {Ascii(elsewhere.Zone)}."
@@ -363,12 +363,15 @@ public sealed class CloudCliApp
             return Fail(stderr, CloudCliExitCode.Refused, $"Refusing to delete '{command.Name}': it does not carry the label app={VmSpec.AppLabelValue}, so it is not one of ours. Delete it in the Google Cloud console if you are sure.");
         }
 
-        await session.Compute.DeleteVmAsync(command.Name, command.Zone, cancellationToken).ConfigureAwait(false);
+        await session.Compute.DeleteVmAsync(ScopeOf(command), command.Name, command.Zone, cancellationToken).ConfigureAwait(false);
         stdout.WriteLine(command.Json
             ? JsonSerializer.Serialize(new { name = command.Name, zone = command.Zone, deleted = true }, JsonOptions)
             : $"OK: deleted {Ascii(command.Name)} in {Ascii(command.Zone)}");
         return CloudCliExitCode.Ok;
     }
+
+    /// <summary>Issue #830: a developer command acts in the project it names, as the account the app is signed in with (null sub = the app's current account).</summary>
+    private static CloudScope ScopeOf(CliCommand command) => new(command.Project, null);
 
     private static string ActionFor(CloudErrorKind kind) => kind switch
     {

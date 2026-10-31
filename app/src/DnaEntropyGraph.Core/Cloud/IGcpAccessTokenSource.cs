@@ -7,5 +7,6 @@ namespace DnaEntropyGraph.Core.Cloud;
 /// </summary>
 public interface IGcpAccessTokenSource
 {
-    Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
+    /// <param name="accountSub">The account to act as (issue #830: token files are keyed by sub); null means the current account, for the calls that are not scoped to a run.</param>
+    Task<string> GetAccessTokenAsync(string? accountSub, CancellationToken cancellationToken);
 }

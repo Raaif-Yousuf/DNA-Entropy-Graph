@@ -23,15 +23,31 @@ internal sealed class GoogleProjectSetupGateway : IProjectSetupGateway
         _services = services;
     }
 
-    public async Task<ProjectLifecycleState> GetProjectStateAsync(string projectId, CancellationToken cancellationToken)
-        => (await _catalog.GetProjectAsync(projectId, cancellationToken).ConfigureAwait(false))?.State ?? ProjectLifecycleState.NotFound;
+    public async Task<ProjectLifecycleState> GetProjectStateAsync(CloudScope scope, CancellationToken cancellationToken)
+    {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
+        return (await _catalog.GetProjectAsync(projectId, cancellationToken).ConfigureAwait(false))?.State ?? ProjectLifecycleState.NotFound;
+    }
 
-    public async Task<bool> IsBillingEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => (await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false)).Enabled;
+    public async Task<bool> IsBillingEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
+    {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
+        return (await _billing.GetBillingStatusAsync(projectId, cancellationToken).ConfigureAwait(false)).Enabled;
+    }
 
-    public Task<bool> IsComputeApiEnabledAsync(string projectId, CancellationToken cancellationToken)
-        => _services.IsServiceEnabledAsync(projectId, RequiredServices.Compute, cancellationToken);
+    public Task<bool> IsComputeApiEnabledAsync(CloudScope scope, CancellationToken cancellationToken)
+    {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
+        return _services.IsServiceEnabledAsync(projectId, RequiredServices.Compute, cancellationToken);
+    }
 
-    public Task EnableComputeApiAsync(string projectId, CancellationToken cancellationToken)
-        => _services.EnableServicesAsync(projectId, [RequiredServices.Compute], cancellationToken);
+    public Task EnableComputeApiAsync(CloudScope scope, CancellationToken cancellationToken)
+    {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
+        return _services.EnableServicesAsync(projectId, [RequiredServices.Compute], cancellationToken);
+    }
 }

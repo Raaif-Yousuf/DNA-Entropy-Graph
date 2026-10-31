@@ -24,7 +24,7 @@ public interface IComputeGateway
     /// label or a maxRunDuration - or one the real API would itself
     /// reject - never reaches a zone at all.
     /// </summary>
-    Task<VmDescriptor> CreateVmAsync(VmSpec spec, string zone, CancellationToken cancellationToken);
+    Task<VmDescriptor> CreateVmAsync(CloudScope scope, VmSpec spec, string zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #94: starts a STOPPED VM this installation left behind for <paramref name="spec"/>'s job: claims it FIRST by rewriting its labels to
@@ -36,7 +36,7 @@ public interface IComputeGateway
     /// the VM labelled for this job: the caller ends it. The call is NOT idempotent as a whole (a replay meets a VM that already started), so a
     /// resilience layer must not replay it; a <see cref="CloudErrorKind.Network"/> failure means the outcome is unknown and the caller looks by label.
     /// </summary>
-    Task<VmDescriptor> ReuseVmAsync(VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
+    Task<VmDescriptor> ReuseVmAsync(CloudScope scope, VmSpec spec, string existingVmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #670: the zones that offer <paramref name="acceleratorType"/> (<c>nvidia-l4</c>, see <see cref="ZoneCandidates.AcceleratorFor"/>),
@@ -44,14 +44,14 @@ public interface IComputeGateway
     /// filtered to that name. An empty list means "the gateway does not know", never "no zone has it": the caller then falls back to the
     /// zones the request names. A failure throws like any other read; the caller treats it the same as an empty answer.
     /// </summary>
-    Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(string acceleratorType, CancellationToken cancellationToken);
+    Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #105: starts a stopped VM AS IT IS (no label, scheduling or metadata rewrite: that is <see cref="ReuseVmAsync"/>). A VM that is gone is a
     /// <c>VM_NOT_FOUND</c> (404) error, never a silent success; a stockout on the start is <see cref="CloudErrorKind.Stockout"/>. Starting a VM that
     /// already runs is accepted by Compute and is a no-op. THEORY (unverified, ToTest #105): a VM stopped past its <c>maxRunDuration</c> is accepted.
     /// </summary>
-    Task StartVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+    Task StartVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #105: every persistent disk carrying <c>app=dna-entropy-graph</c> AND <c>installation-id=&lt;installationId&gt;</c>, across every zone, with size,
@@ -59,12 +59,12 @@ public interface IComputeGateway
     /// rather than return a partial list, and an id no label can hold answers an empty list without asking anyone. A real gateway implements this via
     /// <c>disks.aggregatedList</c> filtered on those two labels.
     /// </summary>
-    Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(string installationId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<DiskDescriptor>> ListDisksByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken);
 
     /// <summary>Issue #105: deletes one disk. Already gone is a success; a disk still attached is an error. The caller reads back to verify (see <c>InstallationCleanup</c>).</summary>
-    Task DeleteDiskAsync(string diskName, string zone, CancellationToken cancellationToken);
+    Task DeleteDiskAsync(CloudScope scope, string diskName, string zone, CancellationToken cancellationToken);
 
-    Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+    Task<VmDescriptor?> GetVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #91: whether Compute Engine itself recorded that it took THIS incarnation of the Spot VM back: a zone operation of type
@@ -73,11 +73,11 @@ public interface IComputeGateway
     /// limit or a zone outage all look the same), and an old operation for the same name never counts for a new VM. A failed look throws like any read. The default
     /// answers false, so a gateway that cannot tell never causes a paid retry.
     /// </summary>
-    Task<bool> WasPreemptedAsync(string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken) => Task.FromResult(false);
+    Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken) => Task.FromResult(false);
 
-    Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+    Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken);
 
-    Task DeleteVmAsync(string vmName, string zone, CancellationToken cancellationToken);
+    Task DeleteVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken);
 
     /// <summary>
     /// Issue #113: <see cref="StopVmAsync"/> (<paramref name="delete"/> false) or <see cref="DeleteVmAsync"/> (true), but the caller learns WHEN GOOGLE ACCEPTED the request:
@@ -87,9 +87,9 @@ public interface IComputeGateway
     /// semantics (a task that ends when the work is done).
     /// The default implementation has no earlier moment to report, so it reports acceptance when the work is done: a gateway that can do better MUST override it.
     /// </summary>
-    async Task EndVmAsync(string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
+    async Task EndVmAsync(CloudScope scope, string vmName, string zone, bool delete, Action? onAccepted, CancellationToken cancellationToken)
     {
-        await (delete ? DeleteVmAsync(vmName, zone, cancellationToken) : StopVmAsync(vmName, zone, cancellationToken)).ConfigureAwait(false);
+        await (delete ? DeleteVmAsync(scope, vmName, zone, cancellationToken) : StopVmAsync(scope, vmName, zone, cancellationToken)).ConfigureAwait(false);
         onAccepted?.Invoke();
     }
 
@@ -105,7 +105,7 @@ public interface IComputeGateway
     /// and <c>labels.app=dna-entropy-graph</c>. More than one result means
     /// the exact leak #389 describes already happened.
     /// </summary>
-    Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(string jobId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Every VM carrying <c>app=dna-entropy-graph</c> AND <c>installation-id=&lt;installationId&gt;</c>, across every zone (Hard Rule 9:
@@ -113,7 +113,7 @@ public interface IComputeGateway
     /// carries its <see cref="VmDescriptor.Labels"/> and <see cref="VmDescriptor.StoppedAt"/>. A real gateway implements this via
     /// <c>instances.aggregatedList</c> filtered on those two labels. Used by the reconciler's idle-VM sweep (issue #530).
     /// </summary>
-    Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(string installationId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<VmDescriptor>> ListByInstallationAsync(CloudScope scope, string installationId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Every VM carrying <c>app=dna-entropy-graph</c>, whichever installation or job it belongs to, across every zone. A real gateway
@@ -121,5 +121,5 @@ public interface IComputeGateway
     /// zone cannot be read rather than return a partial list. For the CloudCli's inventory (issue #60) only: no run decides anything
     /// from another installation's VMs.
     /// </summary>
-    Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<VmDescriptor>> ListAppVmsAsync(CloudScope scope, CancellationToken cancellationToken);
 }

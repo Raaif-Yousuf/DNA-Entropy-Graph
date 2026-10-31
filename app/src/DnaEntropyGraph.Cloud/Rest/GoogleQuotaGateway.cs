@@ -44,8 +44,10 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     /// same bearer-token HTTP stack. A 404 (a quota id Google does not know) and a missing eligibility field are both an unknown answer, never "eligible".
     /// THEORY (unverified, no live project): the two quota ids in <see cref="QuotaMetrics.QuotaIdFor"/>, and the field names. docs/ToTest.md carries the row.
     /// </summary>
-    public async Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(string projectId, string metric, CancellationToken cancellationToken)
+    public async Task<QuotaEligibility> GetQuotaIncreaseEligibilityAsync(CloudScope scope, string metric, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var quotaId = QuotaMetrics.QuotaIdFor(metric) ?? throw new ArgumentException($"'{metric}' is not a quota this app asks more of.", nameof(metric));
         var url = $"{QuotasHost}/v1/projects/{Uri.EscapeDataString(projectId)}/locations/global/services/{ComputeServiceName}/quotaInfos/{quotaId}";
         string body;
@@ -91,8 +93,10 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
     /// that id and is an already-exists answer, never a second request). The body names the service, the quota id, the preferred value (a string: an int64 in JSON), the
     /// dimensions, the justification and the contact email.
     /// </summary>
-    public async Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(string projectId, QuotaIncreaseRequest request, CancellationToken cancellationToken)
+    public async Task<QuotaIncreaseResult> RequestQuotaIncreaseAsync(CloudScope scope, QuotaIncreaseRequest request, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         ArgumentNullException.ThrowIfNull(request);
         request.EnsureValid();
         var quotaId = QuotaMetrics.QuotaIdFor(request.Metric)!;
@@ -290,14 +294,16 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
             replayable: replayable,
             singleRequest: true);
 
-    public async Task<int> GetGpuQuotaAsync(string projectId, string region, string acceleratorType, CancellationToken cancellationToken)
+    public async Task<int> GetGpuQuotaAsync(CloudScope scope, string region, string acceleratorType, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var metric = QuotaMetrics.ForAccelerator(acceleratorType)
             ?? throw new CloudOperationException(
                 new CloudError("QUOTA_ACCELERATOR_UNKNOWN", null, $"No quota metric is known for the accelerator type '{acceleratorType}'."),
                 CloudErrorKind.Other);
 
-        var result = await ReadQuotaAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var result = await ReadQuotaAsync(scope, cancellationToken).ConfigureAwait(false);
         if (result.GpuRemaining(region, metric) is not { } remaining)
         {
             // Unknown is an error to the caller, never a 0 that a preflight would read as "no quota".
@@ -309,8 +315,10 @@ internal sealed class GoogleQuotaGateway : IQuotaGateway
         return (int)Math.Floor(remaining);
     }
 
-    public async Task<QuotaReadResult> ReadQuotaAsync(string projectId, CancellationToken cancellationToken)
+    public async Task<QuotaReadResult> ReadQuotaAsync(CloudScope scope, CancellationToken cancellationToken)
     {
+        using var _account = CallAccount.Use(scope);
+        var projectId = scope.ProjectId;
         var failures = new List<QuotaReadFailure>();
 
         IReadOnlyDictionary<string, IReadOnlyList<QuotaMetric>>? regions = null;

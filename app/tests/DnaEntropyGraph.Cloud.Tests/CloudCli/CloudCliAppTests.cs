@@ -236,25 +236,25 @@ public class CloudCliAppTests
     public async Task Vm_delete_refuses_a_deg_named_vm_that_lacks_the_app_label_and_never_deletes_it()
     {
         var compute = Substitute.For<IComputeGateway>();
-        compute.GetVmAsync("deg-stranger", "us-central1-a", Arg.Any<CancellationToken>())
+        compute.GetVmAsync(Arg.Any<CloudScope>(), "deg-stranger", "us-central1-a", Arg.Any<CancellationToken>())
             .Returns(new VmDescriptor("deg-stranger", "us-central1-a", "RUNNING", Labels: new Dictionary<string, string> { ["team"] = "x" }));
 
         var result = await RunAsync(new FixedSessions(compute, Substitute.For<IStorageGateway>()), "vm", "delete", "--project", Project, "--zone", "us-central1-a", "--name", "deg-stranger");
 
         result.ExitCode.ShouldBe(CloudCliExitCode.Refused);
-        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task Vm_delete_of_a_vm_whose_labels_are_unknown_is_refused_not_assumed_ours()
     {
         var compute = Substitute.For<IComputeGateway>();
-        compute.GetVmAsync("deg-job1", "z", Arg.Any<CancellationToken>()).Returns(new VmDescriptor("deg-job1", "z", "RUNNING", Labels: null));
+        compute.GetVmAsync(Arg.Any<CloudScope>(), "deg-job1", "z", Arg.Any<CancellationToken>()).Returns(new VmDescriptor("deg-job1", "z", "RUNNING", Labels: null));
 
         var result = await RunAsync(new FixedSessions(compute, Substitute.For<IStorageGateway>()), "vm", "delete", "--project", Project, "--zone", "z", "--name", "deg-job1");
 
         result.ExitCode.ShouldBe(CloudCliExitCode.Refused);
-        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -274,8 +274,8 @@ public class CloudCliAppTests
     public async Task Vm_delete_of_a_vm_that_is_nowhere_is_exit_5_with_an_action_and_no_delete_call()
     {
         var compute = Substitute.For<IComputeGateway>();
-        compute.GetVmAsync("deg-job1", "z", Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
-        compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([]));
+        compute.GetVmAsync(Arg.Any<CloudScope>(), "deg-job1", "z", Arg.Any<CancellationToken>()).Returns((VmDescriptor?)null);
+        compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([]));
 
         var result = await RunAsync(new FixedSessions(compute, Substitute.For<IStorageGateway>()), "vm", "delete", "--project", Project, "--zone", "z", "--name", "deg-job1");
 
@@ -285,7 +285,7 @@ public class CloudCliAppTests
         result.Err.ShouldContain("deg-job1");
         result.Err.ShouldContain("resources list");
         ShouldBeAscii(result.Err);
-        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await compute.DidNotReceive().DeleteVmAsync(Arg.Any<CloudScope>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public class CloudCliAppTests
     public async Task A_cloud_failure_is_exit_1_with_the_api_message_made_ascii_and_an_action()
     {
         var compute = Substitute.For<IComputeGateway>();
-        compute.ListAppVmsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ =>
+        compute.ListAppVmsAsync(Arg.Any<CloudScope>(), Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<VmDescriptor>>>(_ =>
             throw new CloudOperationException(new CloudError("PERMISSION_DENIED", 403, "Not allowed — ask the project owner."), CloudErrorKind.Permission));
 
         var result = await RunAsync(new FixedSessions(compute, Substitute.For<IStorageGateway>()), "resources", "list", "--project", Project, "--kind", "vm");

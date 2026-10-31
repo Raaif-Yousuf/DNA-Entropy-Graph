@@ -87,6 +87,19 @@ public static class AppStartup
             // The rows stay non-terminal and are judged again next launch.
         }
 
+        // Issue #830 review M3: the shell's "Sign in as ..." bar listens from before the first run is judged (it is built on first resolve).
+        _ = services.GetRequiredService<Presentation.ViewModels.SignInNeededViewModel>();
+
+        // Issue #830: before any run is judged, a row from before accounts were recorded takes the account signed in now (once).
+        try
+        {
+            await services.GetRequiredService<RunAccountBackfill>().RunAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The marker is not written on a failure, so the next launch tries again; rows stay "the current account" until then.
+        }
+
         try
         {
             // The pass runs here, not through ReconcileOnReconnect, so the reconnect probe is started by hand once the pass has judged every run:

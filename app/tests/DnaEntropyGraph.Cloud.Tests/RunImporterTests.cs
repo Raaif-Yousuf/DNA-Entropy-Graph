@@ -67,6 +67,20 @@ public sealed class RunImporterTests : IDisposable
     }
 
     [Fact]
+    public async Task An_imported_run_remembers_the_account_that_found_it_so_a_later_delete_acts_as_that_account()
+    {
+        var importer = await MakeAsync();
+        PutJob("20261014-cccc");
+        _gcp.WithAccount("sub-importer", "lab@example.org", Project); // a modeled second account that reaches the project
+
+        await importer.ImportAsync(new CloudScope(Project, "sub-importer"), TestContext.Current.CancellationToken);
+
+        var row = (await _runs.GetAllAsync(TestContext.Current.CancellationToken)).Single(r => r.JobId == "20261014-cccc");
+        row.AccountSub.ShouldBe("sub-importer");
+        RunScope.Of(row).ShouldBe(new CloudScope(Project, "sub-importer"));
+    }
+
+    [Fact]
     public async Task Two_foreign_runs_become_two_imported_rows_with_where_they_came_from()
     {
         var importer = await MakeAsync();
@@ -151,6 +165,7 @@ public sealed class RunImporterTests : IDisposable
         PutJob("20261014-aaaa", manifest: "{not json");
         PutJob("20261014-bbbb", manifest: Manifest("20261014-zzzz"));
         PutJob("20261014-cccc");
+        _gcp.WithAccount("sub-importer", "lab@example.org", Project); // a modeled second account that reaches the project
 
         var result = await importer.ImportAsync(Project, TestContext.Current.CancellationToken);
 
@@ -210,6 +225,7 @@ public sealed class RunImporterTests : IDisposable
         PutJob("20261014-bbbb");
         _gcp.PutObject(_bucket, "jobs/20261014-bbbb/result.json", Encoding.UTF8.GetBytes("""{"schema":2,"status":"done"}"""));
         PutJob("20261014-cccc");
+        _gcp.WithAccount("sub-importer", "lab@example.org", Project); // a modeled second account that reaches the project
         _gcp.PutObject(_bucket, "jobs/20261014-cccc/result.json", Encoding.UTF8.GetBytes("not json at all"));
 
         var result = await importer.ImportAsync(Project, TestContext.Current.CancellationToken);
@@ -228,6 +244,7 @@ public sealed class RunImporterTests : IDisposable
         PutJob("20261014-bbbb");
         _gcp.PutObject(_bucket, "jobs/20261014-bbbb/result.json", Encoding.UTF8.GetBytes($$$"""{"schema":1,"status":"done","inputs":[],"pad":"{{{padding}}}"}"""));
         PutJob("20261014-cccc");
+        _gcp.WithAccount("sub-importer", "lab@example.org", Project); // a modeled second account that reaches the project
 
         var result = await importer.ImportAsync(Project, TestContext.Current.CancellationToken);
 

@@ -146,6 +146,19 @@
             </InfoBar.ActionButton>
         </InfoBar>
 
+        <!-- Issue #830 review M3: a run's Google account is signed out, so its computer could not be checked. Names the account; the button starts Google sign-in. -->
+        <InfoBar
+            x:Name="SignInNeededBar"
+            IsClosable="True"
+            Severity="Warning"
+            Title="{x:Bind ViewModel.SignInNeeded.Title, Mode=OneWay}"
+            Message="{x:Bind ViewModel.SignInNeeded.Message, Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.SignInNeeded.IsOpen, Mode=TwoWay}">
+            <InfoBar.ActionButton>
+                <Button x:Uid="SignInNeededBarButton" Command="{x:Bind ViewModel.SignInNeeded.SignInCommand}" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <InfoBar
             x:Name="MessageBar"
             IsClosable="True"

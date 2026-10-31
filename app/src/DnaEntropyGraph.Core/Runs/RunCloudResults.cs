@@ -43,6 +43,9 @@ public enum CloudResultsStatus
 
     /// <summary>The run was saved straight to a drive (<c>D:\</c>), which a re-download through the History row never writes into (issue #954). Nothing was written.</summary>
     DriveRootRefused,
+
+    /// <summary>Issue #830 review M6: the Google account this run was made under is signed out, so nothing could be fetched or deleted. The action is to sign in as that account.</summary>
+    SignInNeeded,
 }
 
 /// <summary>
@@ -84,7 +87,7 @@ public interface IJobObjectDeleter
     /// <summary>False while nothing real is behind this deleter, so the UI offers no deletion it cannot perform.</summary>
     bool IsAvailable { get; }
 
-    Task DeleteJobObjectsAsync(string bucket, string jobPrefix, CancellationToken cancellationToken);
+    Task DeleteJobObjectsAsync(CloudScope scope, string bucket, string jobPrefix, CancellationToken cancellationToken);
 }
 
 /// <summary>A run's copy in the bucket (issue #101): fetch it again, or delete it.</summary>
@@ -182,7 +185,7 @@ public sealed class RunCloudResults : IRunCloudResults
         var tally = new KeptAsideTally();
         try
         {
-            await using var resultStream = await _storage.TryDownloadAsync(run.Bucket!, run.JobPrefix + "result.json", cancellationToken).ConfigureAwait(false);
+            await using var resultStream = await _storage.TryDownloadAsync(RunScope.Of(run), run.Bucket!, run.JobPrefix + "result.json", cancellationToken).ConfigureAwait(false);
             if (resultStream is null)
             {
                 return CloudResultsStatus.ResultNotFound;
@@ -210,6 +213,10 @@ public sealed class RunCloudResults : IRunCloudResults
             // Same rule as RunOutcomeRecorder: every input finished with files, else the history says "partly completed".
             var allInputsDone = result.Inputs.All(i => i.Status == "done" && i.Files.Count > 0);
             return new(string.Equals(result.Status, "done", StringComparison.Ordinal) && allInputsDone ? CloudResultsStatus.Done : CloudResultsStatus.Partial, tally.Count);
+        }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            return new(CloudResultsStatus.SignInNeeded, tally.Count);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -240,7 +247,7 @@ public sealed class RunCloudResults : IRunCloudResults
 
         try
         {
-            await _deleter.DeleteJobObjectsAsync(run.Bucket, run.JobPrefix, cancellationToken).ConfigureAwait(false);
+            await _deleter.DeleteJobObjectsAsync(RunScope.Of(run), run.Bucket, run.JobPrefix, cancellationToken).ConfigureAwait(false);
         }
         catch (CloudNotConnectedException)
         {
@@ -277,6 +284,10 @@ public sealed class RunCloudResults : IRunCloudResults
         {
             // Nothing was deleted (a partial delete is its own exception above): the classified cause picks the action the user is told.
             return new CloudDeleteResult(CloudResultsStatus.Failed, null, CauseOf(cloud), ListingStuck: IsStuck(cloud));
+        }
+        catch (AccountAuthException ex) when (ex.Code == AuthErrorCodes.SigninExpired)
+        {
+            return CloudResultsStatus.SignInNeeded;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -413,7 +424,7 @@ public sealed class RunCloudResults : IRunCloudResults
         try
         {
             // Issue #588: streamed from the bucket straight into a unique .part file under a stall deadline, then verified; memory stays flat for a result of any size.
-            if (!await StreamedDownload.RunAsync(_storage, _time, run.Bucket!, run.JobPrefix + file.Path, partial, file.Bytes, _downloadStall, cancellationToken).ConfigureAwait(false))
+            if (!await StreamedDownload.RunAsync(_storage, _time, RunScope.Of(run), run.Bucket!, run.JobPrefix + file.Path, partial, file.Bytes, _downloadStall, cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidDataException("A result file is listed but is not in the bucket.");
             }
