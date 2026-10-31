@@ -26,8 +26,11 @@ public static class VmEnding
     /// <summary>Less of the window than this left (after the margin) and no end call is started under that mark; the mark runs out and the next sweep writes a fresh one first. Round 4 of #476.</summary>
     public static readonly TimeSpan MinEndBudget = TimeSpan.FromMinutes(2);
 
-    /// <summary>The time a mark on <paramref name="labels"/> was made, when it carries a readable one.</summary>
-    public static bool TryMarkedAt(IReadOnlyDictionary<string, string>? labels, out DateTimeOffset markedAt)
+    /// <summary>How far ahead of this clock a mark may read before it is not believed (a skewed clock, not a mark this app wrote). Round 5 of #476.</summary>
+    public static readonly TimeSpan MarkSkewTolerance = TimeSpan.FromMinutes(5);
+
+    /// <summary>The time a mark on <paramref name="labels"/> was made, when it carries a readable and plausible one: a mark more than <see cref="Window"/> plus <see cref="MarkSkewTolerance"/> ahead of <paramref name="now"/> is no mark (it would overflow date arithmetic and could not have been written by this app).</summary>
+    public static bool TryMarkedAt(IReadOnlyDictionary<string, string>? labels, DateTimeOffset now, out DateTimeOffset markedAt)
     {
         markedAt = default;
         if (labels is not null
@@ -35,7 +38,13 @@ public static class VmEnding
             && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
             && seconds <= DateTimeOffset.MaxValue.ToUnixTimeSeconds())
         {
-            markedAt = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            var at = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            if (at - now > Window + MarkSkewTolerance)
+            {
+                return false;
+            }
+
+            markedAt = at;
             return true;
         }
 

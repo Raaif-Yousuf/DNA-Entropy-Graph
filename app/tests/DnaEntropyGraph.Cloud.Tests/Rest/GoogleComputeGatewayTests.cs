@@ -727,18 +727,31 @@ public class GoogleComputeGatewayTests
         (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
     }
 
-    [Theory]
-    [InlineData("CONDITION_NOT_MET")]
-    [InlineData("RESOURCE_NOT_FOUND")]
-    public async Task MarkEnding_whose_polled_operation_fails_with_the_lost_race_or_gone_code_returns_null_not_an_exception(string code)
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_the_gone_code_returns_null_not_an_exception()
     {
-        // Round 3 low finding: the 412 or 404 can surface inside the POLLED operation, under its own code and with no http status of its own.
+        // Round 3 low finding: the 404 can surface inside the POLLED operation, under its own code and with no http status of its own.
         var rig = new GoogleGatewayHarness();
         rig.Handler
             .Returns(Get, OldInstance, 200, StoppedOld())
-            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError(code, "the write did not apply"), http: 400));
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("RESOURCE_NOT_FOUND", "the write did not apply"), http: 400));
 
         (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_a_bare_condition_not_met_and_no_412_throws_as_org_policy()
+    {
+        // Round 5 finding 2: CloudErrorClassifier calls a CONDITION_NOT_MET with no HTTP 412 an org-policy refusal; the gateway used to read it as a lost race and the sweep retried silently for ever.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Operation denied"), http: 400));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+        thrown.Error.Code.ShouldBe("CONDITION_NOT_MET");
     }
 
     [Fact]

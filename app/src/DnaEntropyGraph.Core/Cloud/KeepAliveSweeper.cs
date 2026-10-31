@@ -81,15 +81,16 @@ public sealed class KeepAliveSweeper : IDisposable
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && _stop.IsCancellationRequested))
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // The shutdown cancel was taken by the clause above, so anything here (a lookup deadline included) is a failed sweep.
             try
             {
                 _log.Warning("keepalive-sweep", null, ex.GetType().Name);
             }
-            catch (Exception logEx) when (logEx is not OperationCanceledException)
+            catch (Exception logEx) when (logEx is not OutOfMemoryException)
             {
-                // The log is broken: nothing is left to tell, and a broken log must not take the timer thread down.
+                // The log is broken (a cancel thrown by it included): nothing is left to tell, and a broken log must not take the timer thread down or fault LastTickAsync.
                 _ = logEx;
             }
         }

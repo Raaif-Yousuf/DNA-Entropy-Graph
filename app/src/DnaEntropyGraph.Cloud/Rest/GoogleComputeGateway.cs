@@ -655,9 +655,8 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             return false;
         }
 
-        return ex.Error.HttpStatus == 412
-            ? CloudErrorClassifier.IsPreconditionConflict(412, ex.Error.Code, message)
-            : ex.Error.Code == "CONDITION_NOT_MET";
+        // Round 5 finding 2: the classifier is the single source. A bare CONDITION_NOT_MET with no HTTP 412 classifies as org_policy there, so it is NOT a lost race here (it rethrows as org_policy).
+        return ex.Kind != CloudErrorKind.OrgPolicy && CloudErrorClassifier.IsPreconditionConflict(ex.Error.HttpStatus, ex.Error.Code, message);
     }
 
     /// <summary>

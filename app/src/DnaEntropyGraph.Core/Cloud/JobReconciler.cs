@@ -486,15 +486,17 @@ public sealed class JobReconciler
                 }
 
                 var options = RunOptionsJson.TryDeserialize(row.OptionsJson);
-                // Round 4 of #476: a row is settled (and the sweep stops looking it up) only once every VM under its job id is ended, gone, another run's or already stopped;
-                // anything the sweep could not decide or could not do leaves it unsettled so the next tick judges it again.
-                var unsettled = false;
+                // Round 5 of #476 (finding 1): a row is settled (and the sweep stops looking it up) ONLY once a VM under its job id is confirmed DELETED (by this sweep's own delete, or
+                // gone on the re-read), the one terminal state. A STOPPED VM is not terminal (the Cloud page can Start it again and it would then run to maxRunDuration), an empty listing may be a
+                // reuse that borrowed the VM (its donor labels come back if that reuse fails, #970), and a relabelled or unlabelled VM may be given back: all stay unsettled, judged again every tick
+                // (one FindByJobId per row per tick, bounded by KeepAliveSweepReach).
+                var unsettled = vms.Count == 0;
                 foreach (var vm in vms)
                 {
                     var want = WantedByLifecycle(row, vm, options, installation, now);
                     if (want == VmWant.Leave)
                     {
-                        unsettled |= vm.Status == "RUNNING";
+                        unsettled = true;
                         continue;
                     }
 
@@ -518,6 +520,7 @@ public sealed class JobReconciler
                         {
                             // Observable (ids and states only, never a name).
                             _log.Warning("reconciler", row.JobId, (want == VmWant.Delete ? "delete-skipped-" : "stop-skipped-") + skip);
+                            unsettled |= skip != "vm-gone"; // gone on the re-read is confirmed gone; relabelled or unlabelled may come back
                             continue;
                         }
 
@@ -543,7 +546,7 @@ public sealed class JobReconciler
                             want = WantedByLifecycle(row, fresh, options, installation, now);
                             if (want == VmWant.Leave)
                             {
-                                unsettled |= fresh.Status == "RUNNING";
+                                unsettled = true;
                                 continue;
                             }
 
@@ -576,7 +579,7 @@ public sealed class JobReconciler
                             // Round 4 finding 1: a mark already inside its window (an earlier sweep's) leaves only what is left of it, less a margin; with too little left no end call starts
                             // under it (the mark runs out, and the next sweep writes a fresh one before its own end call).
                             var budget = _markedEndTimeout;
-                            if (VmEnding.TryMarkedAt(marked.Labels, out var markedAt))
+                            if (VmEnding.TryMarkedAt(marked.Labels, _time.GetUtcNow(), out var markedAt))
                             {
                                 var remaining = markedAt + VmEnding.Window - _time.GetUtcNow() - VmEnding.EndSafetyMargin;
                                 if (remaining < VmEnding.MinEndBudget)
@@ -602,7 +605,11 @@ public sealed class JobReconciler
 
                     var wantedAction = want == VmWant.Delete ? LifecycleAction.VmDeleted : LifecycleAction.VmStopped;
                     var ended = await ApplyAsync(scope, row.JobId, vm, want == VmWant.Delete, wantedAction, outcomes, linked.Token, endBudget).ConfigureAwait(false);
-                    if (!ended)
+                    if (want != VmWant.Delete)
+                    {
+                        unsettled = true; // a stopped VM is not terminal
+                    }
+                    else if (!ended)
                     {
                         // ApplyAsync adds the outcome only when the call answered (a 404 is "gone already"); a failed or timed-out end leaves the row for the next tick.
                         lock (outcomes)

@@ -357,6 +357,9 @@ public class JobReconcilerKeepAliveSweepTests
         /// <summary>When set, an end call (stop or delete) never answers on its own: it waits for its token, like a delete that keeps failing and being retried.</summary>
         public bool HangEnd { get; set; }
 
+        /// <summary>When set, an end call (stop or delete) fails with this error.</summary>
+        public Exception? EndFailure { get; set; }
+
         public async Task<IReadOnlyList<VmDescriptor>> FindByJobIdAsync(CloudScope scope, string jobId, CancellationToken cancellationToken)
         {
             var found = await inner.FindByJobIdAsync(scope, jobId, cancellationToken);
@@ -391,6 +394,11 @@ public class JobReconcilerKeepAliveSweepTests
             if (HangEnd)
             {
                 await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            if (EndFailure is { } failure)
+            {
+                throw failure;
             }
 
             if (BeforeEnd is { } hook)
@@ -657,12 +665,13 @@ public class JobReconcilerKeepAliveSweepTests
     {
         // Round 4 finding 5: every Completed keep row stayed in the sweep for 24 hours, one FindByJobId per row every tick, even once its VM was settled.
         var rig = new Rig();
-        await rig.SeedAsync("job-dn", AfterKeepAliveAction.Stop);
+        // Round 5 finding 1: only a DELETED VM is terminal. A stopped one can be started again from the Cloud page, so it is looked at every tick (see the restart test).
+        await rig.SeedAsync("job-dn", AfterKeepAliveAction.Delete);
         rig.AdvanceMinutes(40);
         var reconciler = rig.Reconciler();
 
         await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
-        (await rig.StatusAsync("job-dn")).ShouldBe("STOPPED");
+        (await rig.StatusAsync("job-dn")).ShouldBeNull();
         var before = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
         before.ShouldBeGreaterThan(0, "the call name this test counts is wrong (vacuous)");
         await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
@@ -672,8 +681,9 @@ public class JobReconcilerKeepAliveSweepTests
     }
 
     [Fact]
-    public async Task A_row_whose_VM_is_gone_is_settled_but_one_that_could_not_be_fenced_is_looked_at_again()
+    public async Task A_row_whose_listing_comes_back_empty_is_looked_at_again_because_an_empty_listing_is_not_proof_the_VM_is_gone()
     {
+        // Round 5 finding 1: an empty listing is also what a reuse that borrowed the VM looks like, so it is never settled.
         var rig = new Rig();
         await rig.SeedAsync("job-gn", AfterKeepAliveAction.Delete);
         var gone = (await rig.Gcp.FindByJobIdAsync("job-gn", CancellationToken.None)).Single();
@@ -686,7 +696,124 @@ public class JobReconcilerKeepAliveSweepTests
         await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
 
         afterFirst.ShouldBeGreaterThan(0);
-        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBe(afterFirst, "a row whose VM is gone is done after one look");
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBeGreaterThan(afterFirst);
+    }
+
+    [Fact]
+    public async Task A_stopped_VM_the_user_starts_again_is_stopped_again_by_a_later_sweep_of_the_same_process()
+    {
+        // Round 5 finding 1: STOPPED was remembered as settled for the process, so a VM started from the Cloud page ran to maxRunDuration.
+        var rig = new Rig();
+        await rig.SeedAsync("job-rs", AfterKeepAliveAction.Stop);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        (await rig.StatusAsync("job-rs")).ShouldBe("STOPPED");
+        var vm = (await rig.Gcp.FindByJobIdAsync("job-rs", CancellationToken.None)).Single();
+        await rig.Gcp.StartVmAsync(vm.Name, vm.Zone, CancellationToken.None);
+        (await rig.StatusAsync("job-rs")).ShouldBe("RUNNING");
+        rig.AdvanceMinutes(10);
+
+        var again = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        (await rig.StatusAsync("job-rs")).ShouldBe("STOPPED");
+        again.Single().Action.ShouldBe(LifecycleAction.VmStopped);
+    }
+
+    [Fact]
+    public async Task A_VM_a_reuse_borrowed_before_the_first_look_is_ended_by_a_later_sweep_of_the_same_process_once_the_labels_come_back()
+    {
+        var rig = new Rig();
+        var donor = await StoppedKeptVmAsync(rig, "job-eb");
+        rig.AdvanceMinutes(40);
+        var donorLabels = donor.Labels!;
+        await rig.Gcp.ReuseVmAsync(SpecOf("job-ec"), donor.Name, donor.Zone, CancellationToken.None); // the borrow: the listing under job-eb is empty
+        var reconciler = rig.Reconciler();
+
+        var first = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        first.ShouldBeEmpty();
+        await rig.Gcp.StopVmAsync(donor.Name, donor.Zone, CancellationToken.None);
+        (await rig.Gcp.RestoreVmLabelsAsync(donor.Name, donor.Zone, "job-ec", donorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
+        rig.AdvanceMinutes(5);
+
+        var second = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        second.Single().Action.ShouldBe(LifecycleAction.VmDeleted);
+        (await rig.StatusAsync("job-eb")).ShouldBeNull("the donor chose Delete and the labels are back: the SAME process ends it");
+    }
+
+    [Fact]
+    public async Task A_VM_relabelled_between_the_search_and_the_end_is_ended_by_a_later_sweep_of_the_same_process_once_the_labels_come_back()
+    {
+        var rig = new Rig();
+        var donor = await StoppedKeptVmAsync(rig, "job-ra");
+        rig.AdvanceMinutes(40);
+        var donorLabels = donor.Labels!;
+        var race = new RaceCompute(rig.Gcp)
+        {
+            AfterFind = async () => await rig.Gcp.ReuseVmAsync(SpecOf("job-rb"), donor.Name, donor.Zone, CancellationToken.None),
+        };
+        var reconciler = rig.Reconciler(race);
+
+        (await reconciler.EnforceKeepAliveAsync(CancellationToken.None)).ShouldBeEmpty();
+        await rig.Gcp.StopVmAsync(donor.Name, donor.Zone, CancellationToken.None);
+        (await rig.Gcp.RestoreVmLabelsAsync(donor.Name, donor.Zone, "job-rb", donorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Restored);
+        rig.AdvanceMinutes(5);
+
+        var second = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        second.Single().Action.ShouldBe(LifecycleAction.VmDeleted);
+    }
+
+    [Fact]
+    public async Task A_failed_end_leaves_the_row_unsettled_so_the_next_sweep_looks_again()
+    {
+        // Round 5 finding 4: Delete rows, because a stopped row is never settled now; here the unsettled path itself is what is proven.
+        var rig = new Rig();
+        await StoppedKeptVmAsync(rig, "job-fe");
+        rig.AdvanceMinutes(40);
+        var race = new RaceCompute(rig.Gcp) { EndFailure = new CloudOperationException(new CloudError("INTERNAL", 500, "boom"), CloudErrorKind.Other) };
+        var reconciler = rig.Reconciler(race);
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        var afterFirst = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
+        race.EndFailure = null;
+        rig.AdvanceMinutes(5);
+        var second = await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBeGreaterThan(afterFirst, "a failed end must not settle the row");
+        second.Single().Action.ShouldBe(LifecycleAction.VmDeleted);
+        (await rig.StatusAsync("job-fe")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_delete_row_skipped_for_clock_skew_is_looked_at_again_by_the_next_sweep()
+    {
+        var rig = new Rig(laptopAhead: TimeSpan.FromHours(1));
+        await rig.SeedAsync("job-cs", AfterKeepAliveAction.Delete);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        var afterFirst = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBeGreaterThan(afterFirst);
+        (await rig.StatusAsync("job-cs")).ShouldBe("RUNNING");
+    }
+
+    [Fact]
+    public void An_implausible_mark_is_no_mark_and_adding_the_window_to_one_cannot_overflow()
+    {
+        // Round 5 finding 3: a mark near DateTime max was accepted and markedAt + Window overflowed.
+        var now = Launch;
+        VmEnding.TryMarkedAt(new Dictionary<string, string> { [VmEnding.LabelKey] = "253402300799" }, now, out _).ShouldBeFalse();
+        VmEnding.TryMarkedAt(new Dictionary<string, string> { [VmEnding.LabelKey] = VmEnding.Stamp(now + VmEnding.Window + TimeSpan.FromHours(1)) }, now, out _).ShouldBeFalse("a mark far in the future cannot be this clock's");
+        VmEnding.TryMarkedAt(new Dictionary<string, string> { [VmEnding.LabelKey] = VmEnding.Stamp(now + TimeSpan.FromMinutes(2)) }, now, out var near).ShouldBeTrue("a little skew is still a mark");
+        near.ShouldBe(now + TimeSpan.FromMinutes(2));
+        VmEnding.TryMarkedAt(new Dictionary<string, string> { [VmEnding.LabelKey] = VmEnding.Stamp(now - TimeSpan.FromMinutes(2)) }, now, out _).ShouldBeTrue();
     }
 
     [Fact]
@@ -716,6 +843,24 @@ public class JobReconcilerKeepAliveSweepTests
 
         await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
         reconciler.KeepAliveBookkeepingCount.ShouldBe(1, "the skip was remembered (vacuous otherwise)");
+        rig.AdvanceMinutes(60 * 48);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        reconciler.KeepAliveBookkeepingCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_settled_memory_is_pruned_too_when_a_settled_row_leaves_the_sweep_set()
+    {
+        // Round 5 finding 5: the test above only ever filled the skip-log memory.
+        var rig = new Rig();
+        await rig.SeedAsync("job-pd", AfterKeepAliveAction.Delete);
+        rig.AdvanceMinutes(40);
+        var reconciler = rig.Reconciler();
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        (await rig.StatusAsync("job-pd")).ShouldBeNull();
+        reconciler.KeepAliveBookkeepingCount.ShouldBe(1, "the settled row was remembered (vacuous otherwise)");
         rig.AdvanceMinutes(60 * 48);
         await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
 
@@ -850,6 +995,28 @@ public class JobReconcilerKeepAliveSweepTests
 
         calls.ShouldBe(2);
         log.Entries.ShouldBe([("keepalive-sweep", null, nameof(OperationCanceledException)), ("keepalive-sweep", null, nameof(OperationCanceledException))]);
+    }
+
+    private sealed class CancellingLog : IDiagnosticsLog
+    {
+        public void Warning(string source, string? jobId, string errorClass) => throw new OperationCanceledException();
+    }
+
+    [Fact]
+    public async Task A_log_that_throws_a_cancel_does_not_fault_the_last_tick_and_the_next_tick_still_runs()
+    {
+        // Round 5 finding 6: LastTickAsync is documented never to fault; a cancel thrown by the log used to escape the handler.
+        var time = new CapturingTimeProvider();
+        var calls = 0;
+        using var sweeper = new KeepAliveSweeper(_ => { calls++; throw new TimeoutException(); }, time, new CancellingLog());
+
+        sweeper.Start();
+        time.Timers[0].Callback(null);
+        await sweeper.LastTickAsync;
+        time.Timers[0].Callback(null);
+        await sweeper.LastTickAsync;
+
+        calls.ShouldBe(2);
     }
 
     [Fact]
