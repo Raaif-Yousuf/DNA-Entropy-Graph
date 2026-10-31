@@ -113,17 +113,28 @@ public sealed class NewRunRunTargetTests : IDisposable
         var readiness = Substitute.For<ILocalReadinessSource>();
         readiness.CheckAsync(Arg.Any<CancellationToken>())
             .Returns(new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30), LocalEngineHealth.NotInstalled()));
+        var probeStarted = new TaskCompletionSource();
+        readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            probeStarted.TrySetResult();
+            return Task.FromResult(new LocalReadiness(new LocalCapability(false, [LocalBlocker.NoNvidiaGpu], null, 100L << 30), LocalEngineHealth.NotInstalled()));
+        });
         var vm = Create(withPicker: true, readiness);
         var thisPc = vm.RunTarget!.Options.Single(o => o.Value == "This PC");
         thisPc.IsAvailable.ShouldBeTrue("nothing has looked at this PC yet");
+        var reasonSet = new TaskCompletionSource();
+        vm.RunTarget.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RunTargetPickerViewModel.ThisPcReason))
+            {
+                reasonSet.TrySetResult();
+            }
+        };
 
         vm.ReceiveNavigationParameterCommand.Execute(null);
-        for (var i = 0; i < 200 && thisPc.IsAvailable; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await reasonSet.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        await readiness.Received().CheckAsync(Arg.Any<CancellationToken>());
         thisPc.IsAvailable.ShouldBeFalse();
         vm.RunTarget.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
     }
@@ -131,11 +142,13 @@ public sealed class NewRunRunTargetTests : IDisposable
     [Fact]
     public async Task A_page_without_a_picker_opens_without_looking_at_this_PC()
     {
-        var vm = Create(withPicker: false);
+        var readiness = Substitute.For<ILocalReadinessSource>();
+        var vm = Create(withPicker: false, readiness);
 
         await vm.ReceiveNavigationParameterCommand.ExecuteAsync(null);
 
-        vm.RunTarget.ShouldBeNull();
+        vm.ReceiveNavigationParameterCommand.IsRunning.ShouldBeFalse();
+        await readiness.DidNotReceive().CheckAsync(Arg.Any<CancellationToken>());
     }
 
     private async Task<NewRunViewModel> BlockedByCapAsync(string target)

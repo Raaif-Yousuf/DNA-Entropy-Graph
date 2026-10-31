@@ -1,0 +1,1 @@
+- Fix #735 (review round 2): two overlapping looks at this PC (New run and Settings share one picker) no longer let a slow older answer overwrite a newer one; the last look started wins.

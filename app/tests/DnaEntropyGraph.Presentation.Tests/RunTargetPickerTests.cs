@@ -69,6 +69,45 @@ public sealed class RunTargetPickerTests
     }
 
     [Fact]
+    public async Task When_two_looks_overlap_the_one_that_started_last_wins_even_if_the_older_one_finishes_last()
+    {
+        // Issue #735 review: New run and Settings share this picker; a slow stale probe must not overwrite a newer answer.
+        var slow = new TaskCompletionSource<LocalReadiness>();
+        var fast = new LocalReadiness(Capable(), Healthy());
+        _readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(slow.Task, Task.FromResult(fast));
+        var vm = Create();
+
+        var first = vm.RefreshAsync(TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(TestContext.Current.CancellationToken);
+        vm.Options.Single(o => o.Value == "This PC").IsAvailable.ShouldBeTrue();
+
+        slow.SetResult(new LocalReadiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled()));
+        await first;
+
+        var thisPc = vm.Options.Single(o => o.Value == "This PC");
+        thisPc.IsAvailable.ShouldBeTrue();
+        thisPc.Reason.ShouldBeEmpty();
+        vm.ThisPcReason.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task When_two_looks_overlap_and_the_older_one_finishes_first_the_newer_answer_still_wins()
+    {
+        var slowNew = new TaskCompletionSource<LocalReadiness>();
+        _readiness.CheckAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(new LocalReadiness(Capable(), Healthy())), slowNew.Task);
+        var vm = Create();
+
+        var first = vm.RefreshAsync(TestContext.Current.CancellationToken);
+        var second = vm.RefreshAsync(TestContext.Current.CancellationToken);
+        await first;
+        slowNew.SetResult(new LocalReadiness(Blocked(LocalBlocker.NoNvidiaGpu), LocalEngineHealth.NotInstalled()));
+        await second;
+
+        vm.Options.Single(o => o.Value == "This PC").IsAvailable.ShouldBeFalse();
+        vm.ThisPcReason.ShouldBe("RunTargetReason_NoNvidiaGpu");
+    }
+
+    [Fact]
     public void With_nothing_saved_the_choice_is_Cloud_and_the_three_places_are_offered_in_order()
     {
         var vm = Create();
