@@ -45,6 +45,9 @@ internal sealed class SentCreate(CloudScope scope, string jobId, string name, st
     /// <summary>Guarded by <see cref="AttemptLedger"/>'s lock: the delete this create began has ended.</summary>
     internal bool DeleteEnded;
 
+    /// <summary>Round 8: a deferred reuse watch gave up WITHOUT a cloud write (a newer attempt of the job is pending and may own the VM): its donor and send stay recorded, <see cref="VmTerminator.ForgetDonor(SentCreate)"/> leaves them, and the age bound prunes them.</summary>
+    internal volatile bool DonorKeptForNewerAttempt;
+
     /// <summary>True once a cancel owns the clean-up of this create: the terminal-state forget no longer drops it.</summary>
     public bool Claimed => Volatile.Read(ref _claimed) == 1;
 

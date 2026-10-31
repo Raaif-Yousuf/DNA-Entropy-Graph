@@ -28,6 +28,7 @@ public sealed class LocalRunDriver
     private readonly IRunInputStore _inputs;
     private readonly ActiveRuns _activeRuns;
     private readonly Func<string?> _downloadsFolder;
+    private readonly TimeProvider _clock;
 
     public LocalRunDriver(
         IMessenger messenger,
@@ -38,8 +39,10 @@ public sealed class LocalRunDriver
         IRunInputStore inputs,
         ActiveRuns activeRuns,
         Func<string?>? downloadsFolder = null,
-        AppDataRoot? dataRoot = null)
+        AppDataRoot? dataRoot = null,
+        TimeProvider? clock = null)
     {
+        _clock = clock ?? TimeProvider.System;
         _messenger = messenger;
         _runner = runner;
         _readiness = readiness;
@@ -117,12 +120,14 @@ public sealed class LocalRunDriver
             // The worker uses the card that was judged (a PC with two cards numbers them by CUDA's own order, not the order nvidia-smi lists them in).
             mock ? null : readiness.Capability.Gpu?.Uuid);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,
                 JobPhase.Draft,
                 now,
+                // Issue #1046: the run-name template's result (what names the output folder), not the job id that a null name is stored as.
+                Name: RunOutputFolders.RunFolderName(options, staged, _clock.GetLocalNow().DateTime),
                 Target: RunTargets.LocalRecord,
                 StartedAt: now,
                 OptionsJson: RunOptionsJson.Serialize(options),
@@ -178,7 +183,7 @@ public sealed class LocalRunDriver
 
     private async Task FailBeforeStartAsync(string jobId, RunOptions options, string errorCode, CancellationToken cancellationToken, string? errorDetail = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
         await _runs.UpsertAsync(
             new RunRecord(
                 jobId,

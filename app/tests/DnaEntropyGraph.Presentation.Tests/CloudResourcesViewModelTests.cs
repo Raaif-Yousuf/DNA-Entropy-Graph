@@ -432,6 +432,28 @@ public class CloudResourcesViewModelTests
     }
 
     [Fact]
+    public async Task Issue_112_after_an_account_switch_the_page_lists_as_the_new_account_and_shows_none_of_the_old_accounts_computers()
+    {
+        var viewModel = await LoadedAsync();
+        viewModel.Vms.Count.ShouldBe(2);
+        var accountB = new CloudScope(NewProject, "sub-b");
+        _account.SelectedProjectId.Returns(NewProject);
+        _account.SelectedScope().Returns(accountB);
+        _storage.ListBucketsAsync(accountB, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<BucketDescriptor>>([]));
+        _compute.ListAppVmsAsync(accountB, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([]));
+        _compute.ListDisksByInstallationAsync(accountB, Mine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<DiskDescriptor>>([]));
+        _compute.ListByInstallationAsync(accountB, Mine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<VmDescriptor>>([]));
+
+        _account.AccountChanged += Raise.Event<EventHandler>(_account, EventArgs.Empty);
+        viewModel.Vms.ShouldBeEmpty();
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+
+        await _compute.Received().ListAppVmsAsync(Arg.Is<CloudScope>(s => s.AccountSub == "sub-b" && s.ProjectId == NewProject), Arg.Any<CancellationToken>());
+        viewModel.Vms.ShouldBeEmpty();
+        viewModel.Disks.ShouldBeEmpty();
+    }
+    [Fact]
     public async Task A_project_switch_while_the_page_is_open_clears_the_old_rows_and_says_to_refresh()
     {
         var viewModel = await LoadedAsync();
