@@ -1,3 +1,4 @@
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Tracks;
 using ScottPlot;
 
@@ -14,7 +15,11 @@ public static class EntropyPlotBuilder
     /// <summary>The scale an entropy value can take (Hard Rule 3): 0 to 2 bits.</summary>
     public const double MaxBits = 2.0;
 
-    public static Plot Build(EntropyContig contig, bool dark)
+    /// <summary>
+    /// <paramref name="colors"/> are the palette's colours for the theme the plot is drawn on (issue #195): the line takes the entropy
+    /// colour and the seam line the marker colour. This file spells no colour of its own.
+    /// </summary>
+    public static Plot Build(EntropyContig contig, bool dark, PaletteColors colors)
     {
         var plot = new Plot();
         var values = new double[contig.Means.Length];
@@ -26,14 +31,14 @@ public static class EntropyPlotBuilder
         var signal = plot.Add.Signal(values, contig.BinSize);
         signal.Data.XOffset = contig.BinSize / 2.0;
         signal.LineWidth = 1.5f;
-        signal.Color = dark ? Color.FromHex("#6CB6FF") : Color.FromHex("#0F6CBD");
+        signal.Color = Color.FromHex(colors.Entropy);
 
         if (contig.Seam is { } seam)
         {
             var line = plot.Add.VerticalLine(seam);
             line.LinePattern = LinePattern.Dashed;
             line.LineWidth = 1.5f;
-            line.Color = dark ? Color.FromHex("#FFB86C") : Color.FromHex("#B54708");
+            line.Color = Color.FromHex(colors.Marker);
         }
 
         plot.Axes.SetLimitsX(0, Math.Max(1, contig.Length));
