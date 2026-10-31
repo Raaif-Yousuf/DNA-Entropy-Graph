@@ -877,6 +877,19 @@ public class GoogleComputeGatewayTests
         var state = await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None);
 
         state.ShouldBe(LabelRestoreState.Restored);
+        rig.Handler.To(Post, OldDisk + "/setLabels").Count.ShouldBe(1, "the disk write was attempted, and its failure swallowed");
+    }
+
+    [Fact]
+    public async Task D970r5_a_412_whose_re_read_finds_the_VM_deleted_is_gone_not_an_error()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, ClaimedByJob1())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "fingerprint"))
+            .Returns(Get, OldInstance, 404, RpcError(404, "NOT_FOUND", "gone"));
+
+        (await rig.Gateways.Compute.RestoreVmLabelsAsync("deg-job-old", Zone, "job1", DonorLabels, CancellationToken.None)).ShouldBe(LabelRestoreState.Gone);
     }
 
     [Fact]

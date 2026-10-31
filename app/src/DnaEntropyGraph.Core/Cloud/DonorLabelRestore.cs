@@ -55,7 +55,7 @@ public sealed record DonorRestoreOutcome(string JobId, DonorRestoreState State, 
                 DonorRestoreState.NewerOwner => "The earlier VM this run borrowed now belongs to a newer run, so its labels were left alone.",
                 DonorRestoreState.NotStopped => "The earlier VM this run borrowed could not be confirmed stopped, so its labels were not restored. Stop it from the Cloud page.",
                 DonorRestoreState.Failed => $"The earlier VM this run borrowed was stopped, but its earlier labels could not be restored ({outcome.ErrorClass ?? RunErrorCodes.Other}), so the Cloud page lists it under this run. Check the Cloud page.",
-                DonorRestoreState.NotRestored => "The earlier VM this run borrowed could not be confirmed started or refused, so its labels were left as they are. Check the Cloud page and stop it if it is running.",
+                DonorRestoreState.NotRestored => "The app could not tell whether the earlier computer (VM) this run borrowed was starting, so it left its labels as they were. Check the Cloud page.",
                 _ => null,
             };
             if (part is not null && !parts.Contains(part))

@@ -283,7 +283,16 @@ internal sealed class GoogleComputeGateway : IComputeGateway
         catch (CloudOperationException ex) when (ex.Error.HttpStatus == 412)
         {
             // The fingerprint moved: either our own write landed and its answer was lost (the labels now equal the donor's), or someone else wrote since the read (a newer run's claim).
-            var current = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            ComputeData.Instance current;
+            try
+            {
+                current = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException gone) when (gone.Error.HttpStatus == 404)
+            {
+                return LabelRestoreState.Gone; // round 5 finding 8: deleted between the refused write and the re-read
+            }
+
             if (LabelsEqual(current.Labels, target))
             {
                 return LabelRestoreState.Restored;

@@ -38,7 +38,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
     }
 
     /// <summary>Records, BEFORE the gateway is called, that this attempt is about to ask Compute for <paramref name="name"/> in <paramref name="zone"/>. It owns nothing yet: ownership moves only when the create answers.</summary>
-    private SentCreate NoteSent(CloudScope scope, string jobId, string name, string zone, string installationId, long generation, bool reuse = false)
+    internal SentCreate NoteSent(CloudScope scope, string jobId, string name, string zone, string installationId, long generation, bool reuse = false)
     {
         // Stamped with the attempt that SENDS it, never the job's newest attempt: a send that comes after a newer attempt began is still the older attempt's.
         var sent = new SentCreate(scope, jobId, name, zone, generation, installationId, reuse);

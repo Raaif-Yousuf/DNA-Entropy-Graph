@@ -160,7 +160,10 @@ internal sealed class VmCanceller(RunRowStore rows, VmProvisioner provisioner, V
         var watched = new List<SentCreate>();
         foreach (var create in sent)
         {
-            if (create.Landed || create.Settled || create.Refused)
+            // Round 5 finding 3: a reuse seen landed but never ANSWERED was skipped by the cancel's own restore (a start that has not answered is not proof the VM is quiet), so releasing it here would
+            // drop its donor with nothing restored: it stays under watch, which restores once the VM reads stopped (the cancel stopped it).
+            var landedButUnanswered = create.IsReuse && create.Landed && !create.Answered && !create.Refused;
+            if (!landedButUnanswered && (create.Landed || create.Settled || create.Refused))
             {
                 provisioner.ReleaseSent(create);
                 if (create.IsReuse)
