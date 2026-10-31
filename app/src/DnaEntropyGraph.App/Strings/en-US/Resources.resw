@@ -1204,6 +1204,18 @@
   <data name="Runs_DeleteLocal_Hint_DriveRoot" xml:space="preserve">
     <value>This run was saved straight to a drive, so it cannot be deleted from here. Press the button, then choose Open folder.</value>
   </data>
+  <data name="Runs_Redownload_OtherRun_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_OtherRun_Body" xml:space="preserve">
+    <value>Another run has since used this run's folder, so nothing was written into it. Rename or move that folder in File Explorer, then choose Download again.</value>
+  </data>
+  <data name="Runs_Redownload_FolderGone_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_FolderGone_Body" xml:space="preserve">
+    <value>The folder this run was saved to is gone, so nothing was written. If it was on a drive, reconnect the drive, or put the folder back, then choose Download again.</value>
+  </data>
   <data name="Runs_Redownload_DriveRoot_Title" xml:space="preserve">
     <value>Not downloaded</value>
   </data>
@@ -1221,30 +1233,6 @@
   </data>
   <data name="OutputFolder_DriveRoot_Message" xml:space="preserve">
     <value>A whole drive cannot be the output folder, because results saved straight to a drive cannot be deleted or downloaded again from the Runs page. Choose a folder inside the drive instead.</value>
-  </data>
-  <data name="OutputFolder_Default_Text" xml:space="preserve">
-    <value>Your Downloads folder</value>
-  </data>
-  <data name="OutputFolder_SaveFailed_Message" xml:space="preserve">
-    <value>The folder was not changed, because another copy of the app has the settings file open. Close the other copies, then choose the folder again.</value>
-  </data>
-  <data name="OutputFolder_PickFailed_Message" xml:space="preserve">
-    <value>The folder chooser did not open. Choose Change folder again. If it keeps failing, restart the app.</value>
-  </data>
-  <data name="OutputFolderHeader.Text" xml:space="preserve">
-    <value>Save results to</value>
-  </data>
-  <data name="OutputFolderChange.Content" xml:space="preserve">
-    <value>Change folder</value>
-  </data>
-  <data name="OutputFolderUseDownloads.Content" xml:space="preserve">
-    <value>Use Downloads</value>
-  </data>
-  <data name="SettingsOutputFolderHeader.Text" xml:space="preserve">
-    <value>Save results to</value>
-  </data>
-  <data name="SettingsOutputFolderExplainer.Text" xml:space="preserve">
-    <value>The folder every new run saves its results into. Each run gets its own folder inside it. The New run page shows this folder and lets you change it too.</value>
   </data>
   <data name="Runs_DeleteLocal_Link_Body" xml:space="preserve">
     <value>This run's folder, or a folder above it, is a shortcut (a junction or symbolic link) to somewhere else, so nothing was deleted. Open the folder in File Explorer to see where it leads, and delete it there if you want it gone.</value>
@@ -3563,6 +3551,30 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
     <value>Close anyway</value>
+  </data>
+  <data name="OutputFolder_Default_Text" xml:space="preserve">
+    <value>Your Downloads folder</value>
+  </data>
+  <data name="OutputFolder_SaveFailed_Message" xml:space="preserve">
+    <value>The folder was not changed, because another copy of the app has the settings file open. Close the other copies, then choose the folder again.</value>
+  </data>
+  <data name="OutputFolder_PickFailed_Message" xml:space="preserve">
+    <value>The folder chooser did not open. Choose Change folder again. If it keeps failing, restart the app.</value>
+  </data>
+  <data name="OutputFolderHeader.Text" xml:space="preserve">
+    <value>Save results to</value>
+  </data>
+  <data name="OutputFolderChange.Content" xml:space="preserve">
+    <value>Change folder</value>
+  </data>
+  <data name="OutputFolderUseDownloads.Content" xml:space="preserve">
+    <value>Use Downloads</value>
+  </data>
+  <data name="SettingsOutputFolderHeader.Text" xml:space="preserve">
+    <value>Save results to</value>
+  </data>
+  <data name="SettingsOutputFolderExplainer.Text" xml:space="preserve">
+    <value>The folder every new run saves its results into. Each run gets its own folder inside it. The New run page shows this folder and lets you change it too.</value>
   </data>
   <data name="Runs_OtherAccount_Hidden_One" xml:space="preserve">
     <value>1 run started under another Google account is hidden here.</value>

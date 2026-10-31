@@ -46,6 +46,12 @@ public enum CloudResultsStatus
 
     /// <summary>Issue #830 review M6: the Google account this run was made under is signed out, so nothing could be fetched or deleted. The action is to sign in as that account.</summary>
     SignInNeeded,
+
+    /// <summary>Issue #1047: the folder this run's results were saved to, and the folder that held it, are gone (a disconnected drive, a removed folder). Nothing was made or written. The action is to reconnect the drive or restore the folder, then choose Download again.</summary>
+    OutputFolderGone,
+
+    /// <summary>Issue #1047: the recorded folder now holds another run's marker (that run took the same name after this one was deleted), so nothing was written into it. The action is to rename or move that folder, then choose Download again.</summary>
+    OtherRunsFolderRefused,
 }
 
 /// <summary>
@@ -197,13 +203,12 @@ public sealed class RunCloudResults : IRunCloudResults
                 result = WorkerResultReader.Parse(await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false));
             }
 
-            var folder = await ResolveFolderAsync(run, cancellationToken).ConfigureAwait(false);
+            var (folder, stop) = await ResolveFolderAsync(run, cancellationToken).ConfigureAwait(false);
             if (folder is null)
             {
                 // Issue #954: a drive root is the one refusal the user can do something about, so it says so.
-                return RunOutputRoot.IsDriveRootOutput(run, _defaultOutputParent) ? CloudResultsStatus.DriveRootRefused : CloudResultsStatus.Refused;
+                return stop ?? (RunOutputRoot.IsDriveRootOutput(run, _defaultOutputParent) ? CloudResultsStatus.DriveRootRefused : CloudResultsStatus.Refused);
             }
-
             StalePartSweeper.Sweep(folder, result.Inputs.SelectMany(i => i.Files).Select(f => RunTransfer.ResultSubDirectory(f.Path)));
             foreach (var file in result.Inputs.SelectMany(i => i.Files))
             {
@@ -316,21 +321,73 @@ public sealed class RunCloudResults : IRunCloudResults
         return run.CloudResultsExpireAt is { } expires && expires <= _time.GetUtcNow() ? CloudResultsStatus.Expired : null;
     }
 
-    private async Task<string?> ResolveFolderAsync(RunRecord run, CancellationToken cancellationToken)
+    private async Task<(string? Folder, CloudResultsStatus? Stop)> ResolveFolderAsync(RunRecord run, CancellationToken cancellationToken)
     {
         var root = RunOutputRoot.Resolve(run, _defaultOutputParent);
         if (string.IsNullOrWhiteSpace(run.OutputDir))
         {
+            // Issue #1047: CreateUnique makes its parent, so a vanished output root (an unplugged or re-lettered drive) would be made again here. It is not.
+            if (!EntryExists(root))
+            {
+                return (null, CloudResultsStatus.OutputFolderGone);
+            }
+
             // Issue #934: a folder made here is the run's own, so it gets the marker a later delete requires.
             var created = RunOutputFolders.CreateUnique(root, RunOutputFolders.RedownloadFolderName(run), jobId: run.JobId);
             await _runs.UpsertAsync(run with { OutputDir = created }, cancellationToken).ConfigureAwait(false);
-            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(created));
+            return (Path.TrimEndingDirectorySeparator(Path.GetFullPath(created)), null);
         }
 
         var folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(run.OutputDir));
-        return RunOutputRoot.IsContained(folder, root) ? folder : null;
-    }
+        if (!RunOutputRoot.IsContained(folder, root))
+        {
+            return (null, null);
+        }
 
+        // Issue #1047: whatever the row, a missing output root makes nothing here (a re-lettered drive, a folder the user removed). The file download would otherwise
+        // CreateDirectory every missing ancestor, root included, unmarked.
+        if (!EntryExists(folder) && !EntryExists(root))
+        {
+            return (null, CloudResultsStatus.OutputFolderGone);
+        }
+
+        // Issue #1047: another run may have taken this name after this run's folder was deleted. Its marker names a different job, so its folder is not written into.
+        // A folder with no marker keeps the earlier behaviour (written into).
+        if (!string.IsNullOrWhiteSpace(run.JobId) && Directory.Exists(folder) && RunFolderMarker.Check(folder, run.JobId) == RunFolderMarkerState.OtherRun)
+        {
+            return (null, CloudResultsStatus.OtherRunsFolderRefused);
+        }
+
+        // Issue #1047: Delete files on this PC leaves OutputDir on the row, so a recorded folder that is gone is made again here, with this run's marker, exactly as a folder
+        // made by CreateUnique is. Only the one level CreateUnique ever makes (directly inside the output root); anything deeper is a damaged row and keeps the earlier behaviour.
+        // A recorded folder that is still there is never touched (an unmarked one stays unmarked, so a pre-marker run keeps its confirmation question), and neither is a link,
+        // even a dangling one. The root must already exist (checked above, and CreateMarked). The check-then-create window is not closed against a junction swapped in between (Hard Rule 14 residual).
+        if (!string.IsNullOrWhiteSpace(run.JobId) && IsDirectChildOf(folder, root) && !EntryExists(folder))
+        {
+            RunOutputFolders.CreateMarked(folder, run.JobId, root);
+        }
+        return (folder, null);
+    }
+    private static bool IsDirectChildOf(string folder, string root)
+        => string.Equals(Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(folder) ?? string.Empty), Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when anything is at <paramref name="path"/>, a link (even a dangling one) included; only "not found" says false, so an entry that cannot be probed is left alone.</summary>
+    private static bool EntryExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return true;
+        }
+    }
     /// <summary>How many changed local files have been renamed aside so far in one re-download; survives a failure partway through.</summary>
     private sealed class KeptAsideTally
     {
