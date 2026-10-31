@@ -750,10 +750,12 @@ public sealed class JobReconciler
                 // error code it wrote is the cause. run_time_limit needs real evidence the VM lived to its limit: the worker's last heartbeat, on ITS
                 // clock (startedAt to updatedAt), reaching the limit. The row's own start time is NOT evidence: it counts every hour the app was closed
                 // after the VM had died. With no such evidence the honest answer is vm_unhealthy.
-                var (workerCode, lived) = await ReadWorkerEvidenceAsync(row, cancellationToken).ConfigureAwait(false);
+                var (workerCode, lived, lastAlive) = await ReadWorkerEvidenceAsync(row, cancellationToken).ConfigureAwait(false);
                 var limit = TimeSpan.FromMinutes(options.MaxRunDurationMinutes) + CloudJobRequestFactory.VmGrace;
                 var code = RunErrorCodes.ForWorkerStatusCode(workerCode)
                     ?? (lived is { } age && age + LimitHeartbeatWindow >= limit ? RunErrorCodes.RunTimeLimit : RunErrorCodes.VmUnhealthy);
+                // Issue #109: the VM is gone, so it billed until the last time anything knew it was alive (VmSpan), not until the app came back.
+                await _rows.StampVmSpanAsync(row.JobId, null, VmSpan.EndOfGone(row.VmReadyAt, limit, _time.GetUtcNow(), row, lastAlive)).ConfigureAwait(false);
                 return await FailAsync(row, underway, ReattachAction.FailedVmMissing, code, "The VM no longer exists and the worker left no result.json.", cancellationToken).ConfigureAwait(false);
             }
             // Only a VM or a result actually SEEN means the run is not provisioned again, so the worker image (which only a new
@@ -917,11 +919,11 @@ public sealed class JobReconciler
     /// What the worker's <c>status.json</c> says about a VM that is gone: its error code (if any) and how long the VM had lived at the last heartbeat
     /// (<c>updatedAt</c> minus <c>startedAt</c>, falling back to <c>stageStartedAt</c>; one clock, the worker's). Anything unreadable is no evidence.
     /// </summary>
-    private async Task<(string? WorkerCode, TimeSpan? Lived)> ReadWorkerEvidenceAsync(RunRecord row, CancellationToken cancellationToken)
+    private async Task<(string? WorkerCode, TimeSpan? Lived, DateTimeOffset? LastAlive)> ReadWorkerEvidenceAsync(RunRecord row, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(row.Bucket))
         {
-            return (null, null);
+            return (null, null, null);
         }
 
         try
@@ -930,7 +932,7 @@ public sealed class JobReconciler
             var stream = await Lookup(token => _storage.TryDownloadAsync(bucket, WorkerManifestBuilder.JobPrefix(row.JobId) + "status.json", token), cancellationToken).ConfigureAwait(false);
             if (stream is null)
             {
-                return (null, null);
+                return (null, null, null);
             }
 
             string text;
@@ -942,19 +944,25 @@ public sealed class JobReconciler
 
             var status = WorkerStatusReader.TryParseStatus(text);
             TimeSpan? lived = null;
-            if (status is not null
-                && DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote)
-                && DateTimeOffset.TryParse(status.StartedAt ?? status.StageStartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var began)
-                && wrote >= began)
+            DateTimeOffset? lastWrite = null;
+            if (status is not null && DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var wrote))
             {
-                lived = wrote - began;
+                lastWrite = wrote;
             }
 
-            return (WorkerResultReader.TryReadStatusErrorCode(text), lived);
+            if (status is not null
+                && lastWrite is { } written
+                && DateTimeOffset.TryParse(status.StartedAt ?? status.StageStartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var began)
+                && written >= began)
+            {
+                lived = written - began;
+            }
+
+            return (WorkerResultReader.TryReadStatusErrorCode(text), lived, lastWrite);
         }
         catch (Exception ex) when (ex is TimeoutException or CloudOperationException or IOException)
         {
-            return (null, null); // A diagnostic read: no answer is no evidence, never a reason to leave the run unjudged.
+            return (null, null, null); // A diagnostic read: no answer is no evidence, never a reason to leave the run unjudged.
         }
     }
     private enum Evidence

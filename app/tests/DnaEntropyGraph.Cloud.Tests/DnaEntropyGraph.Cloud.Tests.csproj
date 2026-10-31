@@ -21,6 +21,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Core\DnaEntropyGraph.Core.csproj" />
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Cloud\DnaEntropyGraph.Cloud.csproj" />
+    <!-- Issue #109: the spend ledger is exercised through the real runner on FakeGcp (the wired observable). -->
+    <ProjectReference Include="..\..\src\DnaEntropyGraph.Persistence\DnaEntropyGraph.Persistence.csproj" />
     <!-- Issue #113: the exit guard lives in Presentation and is tested through the real FakeGcp (the wired observable). -->
     <ProjectReference Include="..\..\src\DnaEntropyGraph.Presentation\DnaEntropyGraph.Presentation.csproj" />
     <ProjectReference Include="..\..\tools\DnaEntropyGraph.CloudCli\DnaEntropyGraph.CloudCli.csproj" />
