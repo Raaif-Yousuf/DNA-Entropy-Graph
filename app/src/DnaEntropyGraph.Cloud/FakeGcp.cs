@@ -1755,9 +1755,13 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     }
     private CloudErrorKind? _restoreFailure;
     private int _restoreAttempts;
+    private int _stopAttempts;
 
     /// <summary>How many times <see cref="RestoreVmLabelsAsync(string, string, string, IReadOnlyDictionary{string, string}, CancellationToken)"/> was called (issue #970).</summary>
     public int RestoreAttempts => Volatile.Read(ref _restoreAttempts);
+
+    /// <summary>How many stops were requested of a VM from outside (a worker's own stop does not count), a test's own setup stops included: compare against a baseline.</summary>
+    public int StopAttempts => Volatile.Read(ref _stopAttempts);
 
     /// <summary>Every restore of a borrowed VM's labels fails with this kind of error (a 403 for permission), as the real label write can. Issue #970.</summary>
     public FakeGcp WithRestoreFailure(CloudErrorKind kind)
@@ -1932,6 +1936,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _stopAttempts);
         ThrowIfScriptedTransient();
         StopCore(vmName, zone);
         return Task.CompletedTask;

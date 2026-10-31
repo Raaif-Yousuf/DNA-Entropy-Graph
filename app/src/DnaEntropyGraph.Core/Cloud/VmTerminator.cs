@@ -320,6 +320,11 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// </summary>
     public void ForgetDonor(SentCreate sent)
     {
+        if (sent.DonorKeptForNewerAttempt)
+        {
+            return; // round 8: left for the age bound; a newer attempt may own the VM
+        }
+
         var key = (sent.JobId, sent.Name, sent.Zone);
 
         // Round 5 finding 5: only when the recorded send IS this send. NoteDonor runs before NoteReuseSend, so a key with no send yet may be a later attempt's donor in that gap; a donor that never got a
@@ -922,49 +927,17 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             && labels.TryGetValue("installation-id", out var installation) && installation == sent.InstallationId;
 
     /// <summary>
-    /// Round 6 finding 1: the end of a watch that kept deferring to a newer attempt of the job (Defer only says SOME newer attempt is pending, not that it holds this VM). Our start still in flight: no label
-    /// is written (<c>StartUnanswered</c>). Another attempt's send recorded for the same VM: that attempt owns the donor, this watch stands down. Otherwise the INSTANCE says who owns it: a VM that still
-    /// carries THIS job's labels and reads stopped is restored (an attempt that never claimed it cannot be using it); anything else is <c>NotRestored:DeferredNewerAttempt</c>, logged.
+    /// Round 8 (replaces rounds 6 and 7 of this branch): the end of a watch that kept deferring to a newer attempt of the job. <c>Defer</c> says a newer attempt is pending and may be LISTING or ADOPTING
+    /// this very VM through <c>FindByJobId</c> (an adoption records no send, so <see cref="IsRecordedSend"/> cannot tell), and this branch holds no ledger delete hold: so it performs NO cloud write at all,
+    /// no stop and no label restore. It only logs <c>NotRestored</c> (class <c>StartUnanswered</c> while our start is in flight, else <c>DeferredNewerAttempt</c>) and leaves the donor and send recorded
+    /// (<see cref="SentCreate.DonorKeptForNewerAttempt"/>; the age bound prunes them). A newer attempt that adopts the VM owns it; one that does not leaves it STOPPED or RUNNING under this job's labels,
+    /// which the #938 by-name guards, <c>maxRunDuration</c> and the Cloud page's label scan backstop (THEORY, unverified; #1052 tracks restart-safe recovery).
     /// </summary>
-    private async Task<LateCreateOutcome> DeferredReuseGaveUpAsync(SentCreate sent)
+    private Task<LateCreateOutcome> DeferredReuseGaveUpAsync(SentCreate sent)
     {
-        if (StartInFlight(sent))
-        {
-            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "StartUnanswered"));
-        }
-
-        if (!IsRecordedSend(sent))
-        {
-            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp);
-        }
-
-        VmDescriptor? vm = null;
-        try
-        {
-            vm = await calls.CallAsync(token => compute.GetVmAsync(sent.Scope, sent.Name, sent.Zone, token), CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            // Not looked at: the restore is not attempted below, and the outcome says so.
-        }
-
-        if (vm is not null && CarriesJob(vm, sent) && !VmFacts.IsStopped(vm) && vm.Status != "STOPPING")
-        {
-            // Round 7 finding 2: a deferred watch never looked before the window's end, so a start that landed during the deferral was never stopped. Stopped here (never deleted: the VM is borrowed);
-            // no label is written in this pass (the start just landed and the rule needs the VM stopped through a grace this pass cannot give).
-            var (stopped, _) = await StopByNameAsync(sent.Scope, sent.Name, sent.Zone).ConfigureAwait(false);
-            return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, stopped ? "DeferredStartLandedStopped" : "DeferredStartLandedStopFailed"));
-        }
-
-        if (vm is not null && CarriesJob(vm, sent) && VmFacts.IsStopped(vm))
-        {
-            // Round 7 finding 1: a start that completed WITHOUT answering, being refused or being seen to land (Canceled, a lost answer) tracked no grace on this path: it may still land, so no write.
-            return sent.Answered || sent.Refused || sent.Landed
-                ? new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: await RestoreDonorLabelsAsync(sent).ConfigureAwait(false))
-                : new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "StartUnanswered"));
-        }
-
-        return new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, "DeferredNewerAttempt"));
+        sent.DonorKeptForNewerAttempt = true;
+        var errorClass = StartInFlight(sent) ? "StartUnanswered" : "DeferredNewerAttempt";
+        return Task.FromResult(new LateCreateOutcome(sent.JobId, LateCreateState.GaveUp, Restore: NoteNotRestored(sent, errorClass)));
     }
 
     /// <summary>
