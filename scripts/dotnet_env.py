@@ -1,7 +1,8 @@
 """The one definition of the env a dotnet child runs with (heavy.py and premerge.py both import it).
 
-Node reuse, the MSBuild server and the shared compiler server are off for a dotnet command, so no
-MSBuild node or VBCSCompiler outlives a build in a place another lane's concurrent build can adopt it.
+Node reuse, the MSBuild server and the shared compiler server are off for the dotnet commands that pass
+through it: heavy.py's wrapped dotnet command, premerge.py's dotnet gates and gen_third_party_notices.py's
+`dotnet list package`. Dotnet run any other way (a hand-typed `dotnet build`, another script) is NOT covered.
 MEASURED 2026-10-31 (#1070, scratch experiment, 4 parallel Exec projects, `dotnet msbuild -m:4` inside a
 kill-on-close job): with node reuse on, `dotnet.exe ... /nodemode:1` workers were still alive in the
 gate's job after the build exited (3 of them) and died only when the job closed; with the defaults below
@@ -12,6 +13,7 @@ was not reproduced, the defaults remove the precondition.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 DOTNET_ENV_DEFAULTS = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0", "UseSharedCompilation": "false"}
@@ -29,6 +31,8 @@ def dotnet_env(argv: list[str], env: dict[str, str]) -> dict[str, str]:
     if not _is_dotnet(argv):
         return env
     out = dict(env)
+    present = {k.upper() for k in out} if os.name == "nt" else set(out)  # Windows env names are case-insensitive
     for key, value in DOTNET_ENV_DEFAULTS.items():
-        out.setdefault(key, value)
+        if (key.upper() if os.name == "nt" else key) not in present:
+            out[key] = value
     return out

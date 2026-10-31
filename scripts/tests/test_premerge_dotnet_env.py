@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -50,3 +51,10 @@ def test_heavy_and_premerge_share_one_definition():
     assert heavy.DOTNET_ENV_DEFAULTS is de.DOTNET_ENV_DEFAULTS
     assert heavy.dotnet_env is de.dotnet_env
     assert de.DOTNET_ENV_DEFAULTS == DEFAULTS
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows env keys are case-insensitive")
+def test_a_caller_value_wins_whatever_the_key_case_on_windows():
+    out = de.dotnet_env(["dotnet", "build"], {"USESHAREDCOMPILATION": "true"})
+    keys = [k for k in out if k.lower() == "usesharedcompilation"]
+    assert keys == ["USESHAREDCOMPILATION"] and out["USESHAREDCOMPILATION"] == "true"

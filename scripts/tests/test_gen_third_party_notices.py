@@ -210,3 +210,19 @@ def test_real_manifest_matches_the_committed_vendored_section_and_files():
     section = gtpn.render_vendored_section(entries)
     committed = (repo_root / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8").replace("\r\n", "\n")
     assert section in committed
+
+
+def test_dotnet_list_package_runs_with_node_isolation_defaults(monkeypatch, tmp_path):
+    seen: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"projects": []}', stderr="")
+
+    monkeypatch.setattr(gtpn.subprocess, "run", fake_run)
+    monkeypatch.delenv("MSBUILDDISABLENODEREUSE", raising=False)
+    gtpn._dotnet_list_packages(tmp_path / "x.csproj")
+    env = seen["env"]
+    assert isinstance(env, dict)
+    assert env["MSBUILDDISABLENODEREUSE"] == "1" and env["UseSharedCompilation"] == "false"
