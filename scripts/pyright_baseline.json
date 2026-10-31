@@ -6,20 +6,14 @@
     "worker/tests/fake_gcs.py": 1,
     "worker/tests/test_blobstore_streaming.py": 1,
     "worker/tests/test_cli.py": 2,
-    "worker/tests/test_composition.py": 5,
     "worker/tests/test_evo_predictor.py": 1,
     "worker/tests/test_genbank.py": 3,
     "worker/tests/test_genbank_note_mean_spliced.py": 2,
-    "worker/tests/test_model_gating.py": 7,
     "worker/tests/test_multi_record_fasta.py": 2,
     "worker/tests/test_pipeline.py": 1,
-    "worker/tests/test_probs_writer.py": 13,
-    "worker/tests/test_property_windowing_direction.py": 12,
     "worker/tests/test_regions.py": 1,
-    "worker/tests/test_worker_blobstore.py": 14,
     "worker/tests/test_worker_lifecycle.py": 1,
     "worker/tests/test_worker_manifest_fields.py": 2,
-    "worker/tests/test_worker_runner.py": 23,
-    "worker/tests/test_worker_status.py": 6
+    "worker/tests/test_worker_runner.py": 23
   }
 }

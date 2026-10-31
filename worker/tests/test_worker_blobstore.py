@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.parse
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -243,7 +244,7 @@ def test_gcs_exists_false_on_404() -> None:
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 404, "Not Found", {}, None),
+            urllib.error.HTTPError("url", 404, "Not Found", Message(), None),
         ]
     )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener)
@@ -254,7 +255,7 @@ def test_gcs_other_http_error_raises_blobstore_error() -> None:
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+            urllib.error.HTTPError("url", 403, "Forbidden", Message(), None),
         ]
     )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener)
@@ -325,8 +326,8 @@ def test_gcs_retries_a_503_then_succeeds(tmp_path: Path) -> None:
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None),
-            urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None),
+            urllib.error.HTTPError("url", 503, "Service Unavailable", Message(), None),
+            urllib.error.HTTPError("url", 503, "Service Unavailable", Message(), None),
             _FakeResponse(b"{}"),
         ]
     )
@@ -341,7 +342,7 @@ def test_gcs_retries_429_and_5xx_but_not_other_4xx() -> None:
         opener = _RecordingOpener(
             [
                 _token_response(),
-                urllib.error.HTTPError("url", code, "retriable", {}, None),
+                urllib.error.HTTPError("url", code, "retriable", Message(), None),
                 _FakeResponse(b"{}"),
             ]
         )
@@ -356,7 +357,7 @@ def test_gcs_a_403_makes_exactly_one_request_no_retry() -> None:
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+            urllib.error.HTTPError("url", 403, "Forbidden", Message(), None),
         ]
     )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
@@ -370,7 +371,7 @@ def test_gcs_a_404_without_not_found_ok_makes_exactly_one_request() -> None:
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 404, "Not Found", {}, None),
+            urllib.error.HTTPError("url", 404, "Not Found", Message(), None),
         ]
     )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
@@ -383,7 +384,7 @@ def test_gcs_a_401_refreshes_the_token_once_and_retries() -> None:
     opener = _RecordingOpener(
         [
             _token_response(),  # initial token
-            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+            urllib.error.HTTPError("url", 401, "Unauthorized", Message(), None),
             _token_response(),  # refreshed token after invalidate()
             _FakeResponse(b"{}"),
         ]
@@ -402,9 +403,9 @@ def test_gcs_a_second_consecutive_401_after_the_one_refresh_is_not_retried_again
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+            urllib.error.HTTPError("url", 401, "Unauthorized", Message(), None),
             _token_response(),
-            urllib.error.HTTPError("url", 401, "Unauthorized", {}, None),
+            urllib.error.HTTPError("url", 401, "Unauthorized", Message(), None),
         ]
     )
     store = GcsBlobstore("bucket", "jobs/x/", opener=opener, sleep=_no_sleep, rand=_fixed_jitter)
@@ -418,7 +419,7 @@ def test_gcs_gives_up_after_the_stated_number_of_attempts() -> None:
     from dna_entropy.worker.blobstore import _WRITE_MAX_ATTEMPTS
 
     responses = [_token_response()] + [
-        urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None)
+        urllib.error.HTTPError("url", 503, "Service Unavailable", Message(), None)
         for _ in range(_WRITE_MAX_ATTEMPTS)
     ]
     opener = _RecordingOpener(responses)
@@ -463,9 +464,9 @@ def test_gcs_retries_use_a_growing_backoff_not_a_fixed_one(tmp_path: Path) -> No
     opener = _RecordingOpener(
         [
             _token_response(),
-            urllib.error.HTTPError("url", 503, "x", {}, None),
-            urllib.error.HTTPError("url", 503, "x", {}, None),
-            urllib.error.HTTPError("url", 503, "x", {}, None),
+            urllib.error.HTTPError("url", 503, "x", Message(), None),
+            urllib.error.HTTPError("url", 503, "x", Message(), None),
+            urllib.error.HTTPError("url", 503, "x", Message(), None),
             _FakeResponse(b"{}"),
         ]
     )
