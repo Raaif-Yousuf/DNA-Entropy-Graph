@@ -47,7 +47,8 @@ public class PaletteValidatorTests
         // Dark theme: dark.css puts the filter on #igv, whose canvases are white, so the tracks sit on the FILTERED white (about #191919),
         // not on the body's #1F1F1F. The colours on screen are the filtered ones.
         var onScreenBackground = ViewerDarkFilter.Apply(PaletteBackgrounds.Light);
-        PaletteValidator.Validate(ViewerDarkFilter.Apply(viewer), onScreenBackground, contrast, 8.0).ShouldBeEmpty();    }
+        PaletteValidator.Validate(ViewerDarkFilter.Apply(viewer), onScreenBackground, contrast, 8.0).ShouldBeEmpty();
+    }
 
     [Fact]
     public void The_dark_filter_matches_the_css_filter_spec_on_known_colours()
