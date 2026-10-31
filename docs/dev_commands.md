@@ -443,11 +443,13 @@ python scripts\<any check_*.py> --self-test   # every one of them supports this
 ```
 
 `check_pyright.py` is the static-type gate for the Python side (pyright, MIT, dev-only: nothing ships it, so no
-THIRD-PARTY-NOTICES change). It is a RATCHET, not a zero gate. Measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode`
-"basic", config in `pyrightconfig.json`): 345 errors in 238 files at the start; `worker/src` was taken to 0 and the rest
-is debt in the test suites and `scripts/tests`, recorded per file in `scripts/pyright_baseline.json`:
+THIRD-PARTY-NOTICES change). History: measured 2026-10-28 (pyright 1.1.407, `typeCheckingMode` "basic", config in
+`pyrightconfig.json`), the first run found 345 errors in 238 files, so the gate was built as a per-file ratchet with the
+debt in the test suites and `scripts/tests` recorded in `scripts/pyright_baseline.json`. That debt is paid (#877):
+`scripts/pyright_baseline.json` now has an empty `files` object, so the gate is zero errors everywhere. The ratchet
+machinery stays, so the baseline file and its semantics are still enforced:
 
-- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0). Fix the error. Never raise the baseline.
+- `NEW`: a file has more errors than its baseline (an unlisted file is held to 0, which today is every file). Fix the error. Never raise the baseline.
 - `STALE`: a file has fewer errors than its baseline, or its entry names a deleted file. Run `--lower` and commit the
   smaller baseline, otherwise the slack lets a new error in unseen (the same self-expiring shape as the unused-fields allowlist).
 - `ZERO`: `worker/src` may not be listed in the baseline at all.
