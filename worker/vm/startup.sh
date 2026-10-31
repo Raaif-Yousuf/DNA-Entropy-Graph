@@ -263,6 +263,7 @@ PY
     "${GPU_FLAGS[@]}" --shm-size=8g \
     -v /var/cache/deg-hf:/hf-cache \
     -e HF_HOME=/hf-cache \
+    -e DEG_TEST_INSTALLED=1 \
     -w /opt/worker \
     "$IMAGE" \
     python -c "$select_py" 2>&1 | tee "$log"; then

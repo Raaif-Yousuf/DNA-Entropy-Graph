@@ -348,6 +348,60 @@ public sealed class HistoryViewModelTests
         Item(vm, "offline").DeleteCloudHint.ShouldBe("Runs_DeleteCloud_Hint_NotConnected");
     }
 
+    /// <summary>Issue #914: whatever a Delete cloud copy hint tells the user to choose must be a control that is on for that row.</summary>
+    [Fact]
+    public async Task Every_delete_cloud_hint_names_an_action_that_is_enabled_for_that_row()
+    {
+        // Answers as the real RunCloudResults does: an imported row can never be deleted from here, but its cloud copy is "available".
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(ci => ci.Arg<RunRecord>() is { Imported: false, CloudResultsDeleted: false, Bucket: not null });
+        _cloud.IsAvailable(Arg.Any<RunRecord>()).Returns(ci => ci.Arg<RunRecord>() is { CloudResultsDeleted: false, Bucket: not null });
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(ci => ci.Arg<RunRecord>().OutputDir is not null);
+        var gone = Row("gone") with { CloudResultsDeleted = true };
+        var failedGone = Row("failed-gone", JobPhase.Failed) with { CloudResultsDeleted = true };
+        var cloudLinked = Row("cloud-linked") with { Imported = true, InstallationId = "inst-other" };
+        var cloudNoLink = Row("cloud-nolink") with { Imported = true, InstallationId = "inst-other", JobPrefix = null };
+        var protoFolder = Row("legacy-1", outputDir: @"C:\Users\me\Downloads\p1") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
+        var protoNoFolder = Row("legacy-2") with { Imported = true, Target = DnaEntropyGraph.Core.LocalEngine.RunTargets.LocalRecord, Bucket = null, JobPrefix = null };
+        var vm = await Loaded(gone, failedGone, cloudLinked, cloudNoLink, protoFolder, protoNoFolder);
+
+        var checkedKinds = new List<string>();
+        foreach (var item in vm.Groups.SelectMany(g => g.Items))
+        {
+            item.CanDeleteCloud.ShouldBeFalse(item.JobId);
+            var named = item.DeleteCloudHint switch
+            {
+                RunsCopy.DeleteCloudHintNoCopy => item.RerunCommand.CanExecute(null),
+                RunsCopy.DeleteCloudHintImported => item.ShowStoragePage && item.OpenStoragePageCommand!.CanExecute(null),
+                RunsCopy.DeleteCloudHintImportedNoLink => item.CanRemove,
+                RunsCopy.DeleteCloudHintPrototype => item.HasLocalFiles && item.OpenCommand.CanExecute(null),
+                RunsCopy.DeleteCloudHintPrototypeNoFolder => item.CanRemove,
+                _ => false,
+            };
+            named.ShouldBeTrue($"{item.JobId}: hint {item.DeleteCloudHint} names an action that is off for this row");
+            checkedKinds.Add($"{item.JobId}={item.DeleteCloudHint}");
+        }
+
+        checkedKinds.Order().ShouldBe(
+        [
+            "cloud-linked=Runs_DeleteCloud_Hint_Imported",
+            "cloud-nolink=Runs_DeleteCloud_Hint_ImportedNoLink",
+            "failed-gone=Runs_DeleteCloud_Hint_NoCopy",
+            "gone=Runs_DeleteCloud_Hint_NoCopy",
+            "legacy-1=Runs_DeleteCloud_Hint_Prototype",
+            "legacy-2=Runs_DeleteCloud_Hint_PrototypeNoFolder",
+        ]);
+    }
+
+    [Fact]
+    public async Task A_row_found_in_the_bucket_with_a_storage_link_offers_the_storage_page_button_at_once()
+    {
+        _cloud.CanDelete(Arg.Any<RunRecord>()).Returns(false);
+        var vm = await Loaded(Row("cloud-linked") with { Imported = true }, Row("own"));
+
+        Item(vm, "cloud-linked").ShowStoragePage.ShouldBeTrue();
+        Item(vm, "own").ShowStoragePage.ShouldBeFalse();
+    }
+
     [Fact]
     public async Task A_live_run_whose_deleter_is_also_unavailable_gets_the_running_hint_first()
     {

@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.PrototypeImport;
+using DnaEntropyGraph.Core.Runs;
 using DnaEntropyGraph.Presentation.Services;
 using DnaEntropyGraph.Presentation.ViewModels;
 using NSubstitute;
@@ -192,6 +193,29 @@ public sealed class PrototypeImportViewModelTests : IDisposable
 
         await _dialogs.DidNotReceive().ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         vm.Status.ShouldBe("PrototypeImportAlreadyDone");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Runs_the_user_removed_are_reported_as_removed_not_as_already_in_Runs(bool anotherIsInHistory)
+    {
+        // Issue #915 review: "already in Runs" is false for a removed run and names no way back.
+        LegacyRun("a");
+        var dismissals = new ImportedRunDismissals(_settings);
+        dismissals.Add(PrototypeImporter.JobIdFor(Path.Combine(_root, "Downloads", "a")));
+        if (anotherIsInHistory)
+        {
+            LegacyRun("b");
+            await new PrototypeImporter(_runs, dismissals).ImportAsync(PrototypeScanner.Scan(Path.Combine(_root, "none.json"), Path.Combine(_root, "Downloads")), CancellationToken.None);
+        }
+
+        var vm = new PrototypeImportViewModel(_settings, new PrototypeSearchPaths(Path.Combine(_root, "none.json"), Path.Combine(_root, "Downloads")), new PrototypeImporter(_runs, dismissals), _dialogs, _strings, _toasts);
+
+        await vm.FindCommand.ExecuteAsync(null);
+
+        await _dialogs.DidNotReceive().ConfirmAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        vm.Status.ShouldBe("PrototypeImportOnlyRemoved");
     }
 
     [Fact]
