@@ -718,6 +718,15 @@ def test_a_file_name_with_space_quote_and_tab_is_read_exactly_and_scanned(world)
     assert world.remote_branches() == ["main"]
 
 
+def test_land_wt_uses_the_one_shared_control_byte_scanner():
+    import check_control_bytes as ccb
+
+    assert lw.CONTROL_BYTES is ccb.CONTROL_BYTES
+    # the allowlisted vendored file is skipped in the LAND check too (one implementation, one allowlist)
+    allowed = next(iter(ccb.ALLOWLIST))
+    assert lw.find_control_bytes({allowed: b"a\x01b", "z.txt": b"\x08"}) == ["z.txt"]
+
+
 def test_esc_is_allowed_because_logs_carry_colour_but_vt_and_ff_are_not():
     assert lw.find_control_bytes({"log.txt": b"\x1b[31mred\x1b[0m\n"}) == []
     assert lw.find_control_bytes({"a": b"\x0b", "b": b"\x0c"}) == ["a", "b"]

@@ -409,6 +409,7 @@ python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behavio
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
 python scripts\check_actions_pinned.py       # every workflow `uses:` is a 40-char commit SHA with a `# vX.Y.Z` comment; local and docker:// are exempt (#485). Dependabot's github-actions entry bumps SHA and comment together
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)
+python scripts\check_control_bytes.py        # no stray control byte (a mangled backslash escape, e.g. 0x0b) in any tracked or untracked text file; ESC allowed, binary by git's NUL rule or `-text` skipped; named file:line:column. Same function land_wt.py refuses with at LAND time (#1016). Auto-run by premerge --fast and ci-docs.yml's glob loop
 python scripts\check_write_newline.py        # Hard Rule 5: every text writer in scripts/ and worker/src passes newline="\n" (#444)
 python scripts\check_manifest_spec_reads.py  # every manifest spec dataclass field is READ, resolved by class not name (#432)
 python scripts\check_guard_drift.py           # the guard scripts themselves haven't silently started passing by checking nothing
