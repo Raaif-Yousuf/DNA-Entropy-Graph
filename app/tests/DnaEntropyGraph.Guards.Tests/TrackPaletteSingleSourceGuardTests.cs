@@ -14,7 +14,8 @@ public class TrackPaletteSingleSourceGuardTests
 {
     // Every source file the user can see colors from: the App and Presentation projects. The palette definition is in Core, so it is not scanned.
     private static readonly string[] Roots = ["DnaEntropyGraph.App", "DnaEntropyGraph.Presentation"];
-    private static readonly string[] Extensions = [".cs", ".xaml", ".js", ".css"];
+
+    private static readonly string[] Extensions = [".cs", ".xaml", ".js", ".css", ".html"];
 
     // Files that may spell a color, each with the reason. Add here AND explain in docs/ui_conventions.md (Track colours), or add to neither.
     // MEASURED 2026-10-31 on the tree at f75845b3: the glob flagged exactly these (the first three are not track colors); nothing else.
@@ -177,6 +178,16 @@ public class TrackPaletteSingleSourceGuardTests
         {
             reason.ShouldNotBeNullOrWhiteSpace();
             ScannedFiles().ShouldContain(f => f.Relative.Equals(relative, StringComparison.OrdinalIgnoreCase), $"the allowlist names {relative}, which is not scanned; remove the stale entry.");
+        }
+    }
+
+    [Fact]
+    public void Every_allowlisted_file_still_spells_a_color_or_the_entry_has_expired()
+    {
+        foreach (var (relative, _) in Allowed)
+        {
+            var file = ScannedFiles().Single(f => f.Relative.Equals(relative, StringComparison.OrdinalIgnoreCase));
+            Literals(File.ReadAllText(file.Path), Path.GetExtension(file.Path).ToLowerInvariant()).ShouldNotBeEmpty($"{relative} is allowlisted but no longer spells a color; remove the entry.");
         }
     }
 

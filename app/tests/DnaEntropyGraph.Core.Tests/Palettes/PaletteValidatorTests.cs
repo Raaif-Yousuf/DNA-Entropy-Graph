@@ -97,14 +97,21 @@ public class PaletteValidatorTests
         PaletteValidator.ContrastRatio("#767676", "#FFFFFF").ShouldBe(4.54, 0.01); // the well-known smallest grey with 4.5:1 on white
     }
 
-    // Sharma, Wu and Dalal (2005), "The CIEDE2000 Color-Difference Formula: Implementation Notes", test data given as Lab pairs:
-    // pairs 1 to 3 (hue near 270, the dTheta term), 7 (a near-neutral pair), 14 to 17 (hue near 0, where the mean hue wraps),
-    // 22, 24, 27 and 31 (the lightness and chroma weighting ends of the table).
+    // Sharma, Wu and Dalal (2005), "The CIEDE2000 Color-Difference Formula: Implementation Notes", test data given as Lab pairs. The Lab inputs
+    // and expected values are typed from that paper's table 1 (pair numbers as reviewed in round 2: 1-3, 7, 9-15, 17-20, 25, 27, 30, 34); the
+    // pairs 9-15 sit where the mean hue wraps around 0/360 or the chroma is near zero, which is what exercises the hBar branches.
     [Theory]
     [InlineData(50.0000, 2.6772, -79.7751, 50.0000, 0.0000, -82.7485, 2.0425)]
     [InlineData(50.0000, 3.1571, -77.2803, 50.0000, 0.0000, -82.7485, 2.8615)]
     [InlineData(50.0000, 2.8361, -74.0200, 50.0000, 0.0000, -82.7485, 3.4412)]
     [InlineData(50.0000, 0.0000, 0.0000, 50.0000, -1.0000, 2.0000, 2.3669)]
+    [InlineData(50.0000, 2.4900, -0.0010, 50.0000, -2.4900, 0.0009, 7.1792)]
+    [InlineData(50.0000, 2.4900, -0.0010, 50.0000, -2.4900, 0.0010, 7.1792)]
+    [InlineData(50.0000, 2.4900, -0.0010, 50.0000, -2.4900, 0.0011, 7.2195)]
+    [InlineData(50.0000, 2.4900, -0.0010, 50.0000, -2.4900, 0.0012, 7.2195)]
+    [InlineData(50.0000, -0.0010, 2.4900, 50.0000, 0.0009, -2.4900, 4.8045)]
+    [InlineData(50.0000, -0.0010, 2.4900, 50.0000, 0.0010, -2.4900, 4.8045)]
+    [InlineData(50.0000, -0.0010, 2.4900, 50.0000, 0.0011, -2.4900, 4.7461)]
     [InlineData(50.0000, 2.5000, 0.0000, 73.0000, 25.0000, -18.0000, 27.1492)]
     [InlineData(50.0000, 2.5000, 0.0000, 61.0000, -5.0000, 29.0000, 22.8977)]
     [InlineData(50.0000, 2.5000, 0.0000, 56.0000, -27.0000, -3.0000, 31.9030)]
@@ -125,6 +132,7 @@ public class PaletteValidatorTests
         PaletteValidator.DeltaE2000("#000000", "#000000", ColorVision.Normal).ShouldBe(0.0, 0.0001);
         PaletteValidator.DeltaE2000("#000000", "#FFFFFF", ColorVision.Normal).ShouldBe(100.0, 0.5);
     }
+
     [Fact]
     public void Simulation_leaves_greys_alone_and_collapses_red_and_green_under_deuteranopia()
     {

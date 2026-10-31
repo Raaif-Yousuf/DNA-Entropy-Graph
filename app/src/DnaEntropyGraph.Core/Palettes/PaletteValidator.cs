@@ -10,7 +10,11 @@ public enum ColorVision
     Tritanopia,
 }
 
-/// <summary>The backgrounds the tracks are drawn on: the viewer's own <c>viewer.css</c> and <c>dark.css</c> (a Guards test pins them to these).</summary>
+/// <summary>
+/// The backgrounds the tracks are drawn on: the viewer's own <c>viewer.css</c> and <c>dark.css</c> (a Guards test pins them to these). In the dark
+/// theme the viewer's tracks do not sit on <see cref="Dark"/>: the dark filter is on <c>#igv</c>, whose canvases are white, so they sit on the
+/// filtered white, <c>ViewerDarkFilter.Apply(Light)</c>. <see cref="Dark"/> is the page body behind it and the app's own dark surfaces.
+/// </summary>
 public static class PaletteBackgrounds
 {
     public const string Light = "#FFFFFF";

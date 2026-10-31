@@ -27,8 +27,9 @@ public sealed partial class PaletteSettingsViewModel : ObservableObject
         // The field, not the property: opening the page must not save what was just read.
         _paletteIndex = IndexOf(new SettingsTrackPaletteProvider(settings).Current);
 
-        // Reset all settings (#677) empties the file, so the radio goes back to the default without saving it again.
-        messenger?.Register<PaletteSettingsViewModel, SettingsResetMessage>(this, static (vm, _) => vm.ShowDefault());
+        // Reset all settings (#677) empties the file and a settings import (#242) may have written a palette; both send this message, so the radio
+        // shows whatever is saved now (read from the store, not the provider cache, so the order of listeners cannot matter) without saving it again.
+        messenger?.Register<PaletteSettingsViewModel, SettingsResetMessage>(this, static (vm, _) => vm.ShowSaved());
     }
 
     private static int IndexOf(TrackPalette palette)
@@ -44,12 +45,22 @@ public sealed partial class PaletteSettingsViewModel : ObservableObject
         return 0;
     }
 
-    private void ShowDefault()
+    private void ShowSaved()
     {
+        int index;
+        try
+        {
+            index = IndexOf(TrackPalettes.Resolve(_settings.GetString(TrackPalettes.SettingKey)));
+        }
+        catch (SettingsUnavailableException)
+        {
+            index = 0;
+        }
+
         _catchingUp = true;
         try
         {
-            PaletteIndex = 0;
+            PaletteIndex = index;
         }
         finally
         {

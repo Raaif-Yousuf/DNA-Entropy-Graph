@@ -111,7 +111,7 @@ public interface ITrackPaletteProvider
 /// <summary>
 /// Reads <see cref="TrackPalettes.SettingKey"/> once and keeps the answer until <see cref="Invalidate"/> (the settings store takes a lock and
 /// reads its file on every call, and a Runs list asks once per row). A locked settings file gives the default rather than a crash (#558) and
-/// is not remembered, so the next ask tries the file again. A hand edit of settings.json while the app runs shows after a restart.
+/// is not remembered, so the next ask tries the file again (a locked file is retried on every draw; acceptable, the lock clears in milliseconds). A hand edit of settings.json while the app runs shows after a restart.
 /// </summary>
 public sealed class SettingsTrackPaletteProvider(ISettingsStore settings) : ITrackPaletteProvider
 {

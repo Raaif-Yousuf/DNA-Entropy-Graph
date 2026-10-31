@@ -90,6 +90,7 @@ public class TrackPaletteTests
         provider.Current.Id.ShouldBe(TrackPalettes.DefaultId);
         provider.Current.Id.ShouldBe(TrackPalettes.HighContrastId);
     }
+
     [Fact]
     public void A_locked_settings_file_gives_the_default_palette()
     {
