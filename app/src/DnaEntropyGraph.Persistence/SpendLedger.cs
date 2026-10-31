@@ -229,6 +229,9 @@ public sealed class LedgerRecordingRunRepository(IRunRepository inner, SpendLedg
 
     public Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken) => inner.GetAsync(jobId, cancellationToken);
 
+    /// <summary>Declared here on purpose (the interface default is a no-op that would silently drop the #830 backfill).</summary>
+    public Task<int> AssignAccountToUnassignedRunsAsync(string accountSub, CancellationToken cancellationToken) => inner.AssignAccountToUnassignedRunsAsync(accountSub, cancellationToken);
+
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)
     {
         var (stamped, quote) = Quote(run);

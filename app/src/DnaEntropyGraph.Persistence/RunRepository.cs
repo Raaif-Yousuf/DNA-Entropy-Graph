@@ -20,7 +20,7 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
                EstimatedCostUsd, ActualCostUsd, VmSeconds, CloudResultsExpireAt, CloudResultsDeleted,
                AppVersion, WorkerVersion, WorkerImageDigest, ContractVersion, InstallationId, Imported,
                Notes, TagsJson, PreemptionCount, AccountSub
-        FROM Runs;
+        FROM Runs
         """;
 
     private const string SelectAllSql = SelectColumnsSql + ";";
