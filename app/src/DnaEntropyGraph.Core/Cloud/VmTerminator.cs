@@ -1041,7 +1041,6 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
 
         var clockStart = settings.StartClock();
-        var seen = new HashSet<(string Name, string Zone)>();
         while (true)
         {
             HashSet<(string Name, string Zone)> stillThere;
@@ -1060,7 +1059,6 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 listUnreadable = true;
             }
 
-            seen.UnionWith(stillThere);
             var confirmed = stillThere.ToHashSet(); // READ present by the listing or by name below; an unreadable look is not a VM that is there
             var unreadable = false;
             foreach (var create in sent)
@@ -1070,7 +1068,6 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
                 if (state == NameLook.Present)
                 {
                     stillThere.Add((create.Name, create.Zone));
-                    seen.Add((create.Name, create.Zone));
                     confirmed.Add((create.Name, create.Zone));
                 }
                 else if (state == NameLook.Unknown)
