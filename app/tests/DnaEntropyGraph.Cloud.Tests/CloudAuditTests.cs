@@ -415,6 +415,7 @@ public class CloudAuditTests
                 ("StopVmAsync", "Compute.StopVm"), ("DeleteVmAsync", "Compute.DeleteVm"), ("DeleteDiskAsync", "Compute.DeleteDisk"),
                 ("EndVmAsync", "Compute.DeleteVm"), // ArgFor passes delete: true
                 ("RestoreVmLabelsAsync", "Compute.RestoreVmLabels"), // issue #970
+                ("MarkEndingAsync", "Compute.MarkEnding"), // issue #476: a label write
             ],
             ["ListAcceleratorZonesAsync", "ListDisksByInstallationAsync", "GetVmAsync", "FindByJobIdAsync", "ListByInstallationAsync", "ListAppVmsAsync", "WasPreemptedAsync"]),
         [typeof(IStorageGateway)] = (

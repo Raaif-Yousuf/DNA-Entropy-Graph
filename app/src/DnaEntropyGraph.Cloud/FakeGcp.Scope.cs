@@ -180,6 +180,12 @@ public sealed partial class FakeGcp
             : RestoreVmLabelsAsync(vmName, zone, fromJobId, donorLabels, cancellationToken);
     }
 
+    public Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken)
+    {
+        using var _ = EnterCall(scope, "MarkEnding");
+        return ElsewhereVm(scope, vmName, zone) ? Task.FromResult<VmDescriptor?>(null) : MarkEndingAsync(vmName, zone, jobId, cancellationToken);
+    }
+
     public Task<IReadOnlyList<string>> ListAcceleratorZonesAsync(CloudScope scope, string acceleratorType, CancellationToken cancellationToken)
     {
         using var _ = EnterCall(scope, "ListAcceleratorZones");

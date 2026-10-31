@@ -889,6 +889,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 || !vm.Labels.TryGetValue("installation-id", out var owner) || owner != spec.InstallationId
                 || !vm.Labels.TryGetValue("model", out var vmModel) || vmModel != model
                 || !vm.Labels.TryGetValue("job-id", out var oldJob) || oldJob == request.JobId
+                || VmEnding.IsEnding(vm.Labels, settings.TimeProvider.GetUtcNow()) // issue #476: the app is ending it for an expired Keep-alive window
                 || (vm.Labels.TryGetValue("lifecycle", out var lifecycle) && lifecycle == CloudJobRequestFactory.LifecycleLabel(AfterTaskAction.Delete))) // round 10 M1: due for deletion, the reconciler may delete it by name any moment; the keep-alive expiry is not readable from labels, so the reconciler's re-read covers that case
             {
                 continue;

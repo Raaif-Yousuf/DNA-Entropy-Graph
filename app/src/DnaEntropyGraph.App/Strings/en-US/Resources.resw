@@ -3468,4 +3468,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
   </data>
+  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
+    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  </data>
 </root>
