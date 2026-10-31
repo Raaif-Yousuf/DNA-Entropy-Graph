@@ -202,6 +202,14 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <!-- Issue #814: where the prices came from and as of when. -->
+            <TextBlock
+                Text="{x:Bind ViewModel.PriceSourceText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.HasPriceSource, Mode=OneWay}"
+                TextWrapping="Wrap"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
             <TextBlock
                 Text="{x:Bind ViewModel.EstimateDiskText, Mode=OneWay}"
                 Visibility="{x:Bind ViewModel.HasEstimateDisk, Mode=OneWay}"

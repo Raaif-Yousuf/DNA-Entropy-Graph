@@ -132,6 +132,20 @@ public class DiResolutionTests
     }
 
     [Fact]
+    public void The_real_build_gives_New_run_the_pricing_status_that_the_estimate_service_uses()
+    {
+        // Issue #814, wired-to-nothing: the pricing status is an optional argument of NewRunViewModel, so a missing registration would not fail
+        // resolution; the price source line under the estimate would just never appear. Same instance as the source behind the estimate.
+        using var provider = BuildRealServiceProvider();
+
+        var page = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel>();
+        var held = typeof(DnaEntropyGraph.Presentation.ViewModels.NewRunViewModel).GetField("_pricing", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(page);
+        held.ShouldNotBeNull("New run was built with no pricing status, so it can never show where the prices came from");
+        held.ShouldBeSameAs(provider.GetRequiredService<DnaEntropyGraph.Core.Cost.IPricingStatus>());
+    }
+
+    [Fact]
     public void Every_Presentation_facing_and_Cloud_gateway_interface_resolves()
     {
         using var provider = BuildRealServiceProvider();
