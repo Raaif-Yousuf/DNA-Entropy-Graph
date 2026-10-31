@@ -16,6 +16,7 @@ parser, so this logic has exactly one place to drift from, not four.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 _UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
@@ -43,6 +44,6 @@ def decode_bytes(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def read_text(path: str) -> str:
+def read_text(path: str | os.PathLike[str]) -> str:
     """Read ``path`` from disk and decode it via :func:`decode_bytes`."""
     return decode_bytes(Path(path).read_bytes())
