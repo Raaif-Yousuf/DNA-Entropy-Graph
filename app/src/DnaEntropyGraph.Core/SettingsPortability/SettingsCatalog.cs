@@ -1,5 +1,6 @@
 using System.Globalization;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Net;
 using DnaEntropyGraph.Core.Presets;
@@ -53,7 +54,7 @@ public static class SettingsCatalog
     {
         [InstallationId.SettingsKey] = "Identifies this PC's cloud resources (Hard Rules 9 and 10); sharing it would let two PCs claim each other's VMs.",
         ["MainWindowPlacement"] = "Where the window sits on this PC's screens.",
-        ["dismissed_imported_runs"] = "Imported-run rows this user dismissed on this PC (ImportedRunDismissals.SettingsKey, #111); they name job ids from the bucket and are re-derived from it, so they are not carried over.",
+        ["dismissed_imported_runs"] = "Imported-run rows this user dismissed on this PC (ImportedRunDismissals.SettingsKey, #111); they name job ids from the bucket (and legacy- ids hashed from a folder path, #915) and are re-derived from those, so they are not carried over.",
         // Literal on purpose: TourSettings.CompletedKey lives in Presentation, which references Core, so Core cannot name it. A Presentation.Tests test pins the two together.
         ["onboarding_tour_done"] = "Whether the first-run tour was shown on this PC (TourSettings.CompletedKey, #143); a new PC should show it once, so it is not carried over.",
         [ProxySettingKeys.ModeKey] = "The network proxy choice is specific to this PC and its network; an imported file must not be able to route traffic through a proxy (#239).",
@@ -65,6 +66,8 @@ public static class SettingsCatalog
         ["session.page"] = "Where the user was when they closed the app (issue #244); about this PC's last session, not a preference.",
         ["session.run"] = "The run the user was looking at when they closed the app (issue #244).",
         [Cloud.RunAccountBackfill.MarkerKey] = "Whether this PC already gave its old run rows an account (issue #830); about this PC's run history, not a preference.",
+        [SpendCapSettings.CapUsdKey] = "A monthly cap checked against this PC's own spend ledger (issue #109); a second PC has its own month-to-date, so the number is not carried over.",
+        [SpendCapSettings.HardStopKey] = "Goes with the spending cap (issue #109): it only means something against this PC's own ledger, so it is not carried over.",
         ["prototype_import_done"] = "Whether this PC already looked for the earlier version's runs (issue #243); about this PC, not a preference.",
         [PresetStore.SettingsKey] = "Presets travel in their own versioned block of the file, not as a raw setting.",
     };

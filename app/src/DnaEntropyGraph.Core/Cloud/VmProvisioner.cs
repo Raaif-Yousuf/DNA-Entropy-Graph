@@ -169,6 +169,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             progress.VmName = kept.Name;
             progress.VmAdopted = true;
+            // Issue #109: an adopted VM has been billing since the platform started it, not since this run found it (VmSpan).
+            progress.Observe(kept);
             await ClaimAsync(progress, kept.Zone, cancellationToken).ConfigureAwait(false);
             return ProvisionResult.Ok(kept.Zone, kept.Name);
         }
@@ -297,6 +299,12 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 // if it cannot be confirmed the run says so (vm_end_unconfirmed). The VM's own maxRunDuration
                 // (Hard Rule 10) is the backstop.
                 var settleNote = await SettleAbandonedCreateAsync(request, createTask!, zone).ConfigureAwait(false);
+                if (createTask!.IsCompletedSuccessfully)
+                {
+                    // The abandoned create did land (and was deleted above): that VM billed from about now back to its landing, so the run books it.
+                    progress.Observe(createTask.Result);
+                }
+
                 if (settleNote is not null)
                 {
                     return ZoneAttempt.Aborted(zone, ProvisionResult.Failed(CloudErrorKind.Network, outcome.Error!.Message, settleNote));
@@ -308,6 +316,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
 
             if (outcome.Success)
             {
+                // Issue #109: the create was answered, so the VM exists and bills from its own start; recorded now, not when provisioning returns.
+                progress.Observe(outcome.Value!);
                 return ZoneAttempt.Win(zone);
             }
 
@@ -321,6 +331,8 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 var vm = await calls.CallAsync(token => compute.GetVmAsync(request.ResolvedScope, request.Spec.VmName, zone, token), cancellationToken).ConfigureAwait(false);
                 if (vm is not null)
                 {
+                    // Issue #109: an adopted VM billed from its own start like any other; without this the run books nothing for it.
+                    progress.Observe(vm);
                     return ZoneAttempt.Win(zone);
                 }
             }
@@ -855,6 +867,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
                 cancellationToken,
                 settings.CreateTimeout).ConfigureAwait(false);
             progress.VmName = started.Name;
+            progress.Observe(started);
             return ProvisionResult.Ok(started.Zone, started.Name);
         }
         catch (CloudOperationException ex)
@@ -871,6 +884,7 @@ internal sealed class VmProvisioner(IComputeGateway compute, GatewayCalls calls,
             if (ex.Kind == CloudErrorKind.Network && await TryAdoptReusedAsync(request, cancellationToken).ConfigureAwait(false) is { } adopted)
             {
                 progress.VmName = adopted.Name;
+                progress.Observe(adopted);
                 return ProvisionResult.Ok(adopted.Zone, adopted.Name);
             }
 

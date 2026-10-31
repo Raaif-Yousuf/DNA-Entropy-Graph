@@ -1,0 +1,1 @@
+- Pay down pyright debt in four `worker/tests` files (#877 slice 2: `test_direction`, `test_provenance`, `test_entrez`, `test_circular`): stub predictors now match the `Predictor.predict(seq)` protocol parameter name, Optional `DirectionResult` tracks are asserted non-None before use, loosely typed helper dicts/kwargs are annotated. Baseline entries for these files removed.

@@ -2466,7 +2466,7 @@ Never included: sequences, input file names, output files, your email, sign-in t
     <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
   </data>
   <data name="RunError_input_accession_too_large" xml:space="preserve">
-    <value>That NCBI record is larger than one run can read. Ask for a smaller range of it (the From base and To base boxes), then start the run again.</value>
+    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
   </data>
   <data name="RunError_input_accession_unreachable" xml:space="preserve">
     <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
@@ -2860,7 +2860,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>Found in your cloud results, made on computer {0}. Read-only here; you can download its files again.</value>
   </data>
   <data name="Runs_DeleteCloud_Hint_Imported" xml:space="preserve">
-    <value>This run was made on another computer. Delete its cloud copy from that computer.</value>
+    <value>This run was made on another computer, so this app does not delete its cloud copy. Choose Open storage page to delete it in Google Cloud.</value>
   </data>
   <data name="ResultsOverviewChart.ToolTipService.ToolTip" xml:space="preserve">
     <value>Drag along the strip to open the viewer at that part of the sequence.</value>
@@ -3238,7 +3238,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>This run is no longer in your list, so the note was not saved. Open the Runs page to see what is there.</value>
   </data>
   <data name="Results_ExportPngFailedInExports" xml:space="preserve">
-    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder ending in "exports" inside your output folder (usually Downloads). Check that this folder can be reached and has free space, then choose Save picture again.</value>
+    <value>The picture could not be saved. Your own results folder is left alone, so the picture goes in a new folder inside your output folder (usually Downloads), named after the run followed by "exports" and a short code. Check that your output folder is still there and has free space, then choose Save picture again.</value>
   </data>
   <data name="Results_ExportPngNoFolder" xml:space="preserve">
     <value>The picture could not be saved because the app has no folder set aside for it. Close the app, open it again, then choose Save picture again.</value>
@@ -3404,5 +3404,50 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="RunError_changed_files_kept_aside" xml:space="preserve">
     <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
+  </data>
+  <data name="RunError_spend_cap" xml:space="preserve">
+    <value>This run was not started because your estimated spending this month has reached the cap you set, and the hard stop is on. Open Settings, raise the cap or turn the hard stop off, then start the run again.</value>
+  </data>
+  <data name="NewRunSpendCapWarning" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would take it to your monthly warning cap of {1} or past it. You can still run. To change the cap, open Settings.</value>
+  </data>
+  <data name="NewRunSpendCapBlocked" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would reach your monthly cap of {1} with the hard stop on, so it will not start. To allow it, open Settings and raise the cap or turn the hard stop off.</value>
+  </data>
+  <data name="SettingsSpendHeader.Text" xml:space="preserve">
+    <value>Spending</value>
+  </data>
+  <data name="SettingsSpendExplainer.Text" xml:space="preserve">
+    <value>Set a monthly warning cap in US dollars. The app adds up its own estimate of what your runs cost this calendar month (your PC's local time) and warns you before a run that would reach the cap. This is an estimate, not your Google bill. Leave the box empty for no cap.</value>
+  </data>
+  <data name="SpendCapBox.Header" xml:space="preserve">
+    <value>Monthly warning cap (US dollars)</value>
+  </data>
+  <data name="SpendHardStopBox.Content" xml:space="preserve">
+    <value>Hard stop: do not start a run once the cap is reached</value>
+  </data>
+  <data name="SpendCapInvalid" xml:space="preserve">
+    <value>Type a number above zero, such as 50, or empty the box for no cap. The cap was not changed.</value>
+  </data>
+  <data name="SpendMonthToDate" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0}</value>
+  </data>
+  <data name="SpendMonthToDateWithLive" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0} (includes runs in progress, counted up to now)</value>
+  </data>
+  <data name="NewRunSpendCapInProgress" xml:space="preserve">
+    <value>The month's figure includes runs in progress.</value>
+  </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
+  </data>
+  <data name="PrototypeImportOnlyRemoved" xml:space="preserve">
+    <value>The earlier runs found here are either in Runs already or ones you removed from the list. To see the removed ones again, choose Reset all settings on the Settings page (this also resets your other settings).</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_ImportedNoLink" xml:space="preserve">
+    <value>This run was made on another computer, so this app cannot delete its cloud copy. To take it off this list, choose Remove from list.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_PrototypeNoFolder" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete, and its folder is no longer here. To take it off this list, choose Remove from list.</value>
   </data>
 </root>

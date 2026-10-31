@@ -13,7 +13,7 @@ namespace DnaEntropyGraph.Persistence;
 /// </summary>
 public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnnotations
 {
-    private const string SelectAllSql = """
+    private const string SelectColumnsSql = """
         SELECT Id, Name, IsBatch, Target, Phase, ErrorCode, ErrorDetail, CreatedAt, StartedAt, VmReadyAt, FinishedAt,
                OptionsJson, ManifestJson, ProjectId, Bucket, JobPrefix, VmName, Zone, MachineType, GpuType,
                IsSpot, VmReused, LastProgressSeq, LastHeartbeatAt, StatusGeneration, OutputDir,
@@ -22,6 +22,11 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
                Notes, TagsJson, PreemptionCount, AccountSub
         FROM Runs;
         """;
+
+    private const string SelectAllSql = SelectColumnsSql + ";";
+
+    // The same columns, one job: a write that needs only its own row (a heartbeat) must not read the whole history.
+    private const string SelectOneSql = SelectColumnsSql + " WHERE Id = @Id;";
 
     // Notes and TagsJson (issue #141's future columns) are deliberately
     // excluded from ON CONFLICT ... DO UPDATE SET, exactly like CreatedAt:
@@ -86,6 +91,14 @@ public sealed class RunRepository : IRunRepository, IRunHistoryRemover, IRunAnno
         var command = new CommandDefinition(SelectAllSql, cancellationToken: cancellationToken);
         var rows = await connection.QueryAsync<RunRow>(command).ConfigureAwait(false);
         return rows.Select(ToRecord).ToList();
+    }
+
+    public async Task<RunRecord?> GetAsync(string jobId, CancellationToken cancellationToken)
+    {
+        using var connection = _database.OpenConnection();
+        var command = new CommandDefinition(SelectOneSql, new { Id = jobId }, cancellationToken: cancellationToken);
+        var row = await connection.QuerySingleOrDefaultAsync<RunRow>(command).ConfigureAwait(false);
+        return row is null ? null : ToRecord(row);
     }
 
     public async Task UpsertAsync(RunRecord run, CancellationToken cancellationToken)

@@ -299,7 +299,7 @@ public sealed partial class HistoryViewModel : ObservableObject
             hasFolder,
             _cloud.IsAvailable(run),
             _cloud.CanDelete(run),
-            DeleteCloudHint(run),
+            DeleteCloudHint(run, hasFolder),
             ReasonFor(run),
             new AsyncRelayCommand(() => OpenAsync(run)),
             new AsyncRelayCommand(() => RerunAsync(run), () => IsFinished(run.Phase) && !run.Imported),
@@ -312,7 +312,7 @@ public sealed partial class HistoryViewModel : ObservableObject
         {
             PresetText = PresetLine(run),
             OpenStoragePageCommand = new RelayCommand(() => OpenStoragePage(run)),
-            ShowStoragePage = _storagePageOffered.Contains(run.JobId) && HasStoragePageLink(run),
+            ShowStoragePage = (_storagePageOffered.Contains(run.JobId) || run.IsCloudImport) && HasStoragePageLink(run),
             Tags = RunTags.Parse(run.TagsJson),
             NotesText = string.IsNullOrWhiteSpace(run.Notes) ? null : run.Notes,
             DeleteLocalHint = run.IsPrototypeImport ? _strings.GetString(RunsCopy.DeleteLocalHintImported) : null,
@@ -402,7 +402,7 @@ public sealed partial class HistoryViewModel : ObservableObject
     }
 
     /// <summary>Why Delete cloud copy is off for this run (one reason, one action), or empty when it is on.</summary>
-    private string? DeleteCloudHint(RunRecord run)
+    private string? DeleteCloudHint(RunRecord run, bool hasFolder)
     {
         if (_cloud.CanDelete(run) && IsFinished(run.Phase))
         {
@@ -410,8 +410,11 @@ public sealed partial class HistoryViewModel : ObservableObject
             return null;
         }
 
-        var key = run.IsCloudImport ? RunsCopy.DeleteCloudHintImported
-            : run.IsPrototypeImport ? RunsCopy.DeleteCloudHintPrototype
+        // Issue #914: each hint may only name a control that is on for that row.
+        // Cloud-imported: Open storage page (shown for these rows) when the folder can be linked, else Remove from list.
+        // Prototype: Open when its folder is still here, else Remove from list. Own run with no copy left: Run again.
+        var key = run.IsCloudImport ? (HasStoragePageLink(run) ? RunsCopy.DeleteCloudHintImported : RunsCopy.DeleteCloudHintImportedNoLink)
+            : run.IsPrototypeImport ? (hasFolder ? RunsCopy.DeleteCloudHintPrototype : RunsCopy.DeleteCloudHintPrototypeNoFolder)
             : !IsFinished(run.Phase) ? RunsCopy.DeleteCloudHintRunning
             : !_cloud.IsAvailable(run) ? RunsCopy.DeleteCloudHintNoCopy
             : RunsCopy.DeleteCloudHintNotConnected;
@@ -617,9 +620,9 @@ public sealed partial class HistoryViewModel : ObservableObject
                 return null;
             }
 
-            // Issue #111: remember an imported run was dismissed, or the next scan would add it straight back.
-            // Only a bucket-found run: a prototype run's id can never come back from the bucket scan, so it does not belong in that setting.
-            if (run.IsCloudImport)
+            // Issue #111 / #915: remember an imported run was dismissed, or the next scan (bucket or earlier-version folder) would add it straight back.
+            // A prototype row's id is derived from its folder, so the same setting holds both kinds without a clash.
+            if (run.Imported)
             {
                 _dismissals?.Add(run.JobId);
             }

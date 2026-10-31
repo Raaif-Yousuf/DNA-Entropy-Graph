@@ -762,7 +762,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
     /// Only a VM this run CREATED (named <see cref="OwnVmName"/>) is deleted: one the run borrowed by reuse keeps its owner's name, is STOPPED here, and is never counted as left.
     /// Returns null when the VMs are confirmed gone, else why not.
     /// </summary>
-    public async Task<EndFailure?> DeleteOwnedVmsAndVerifyAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null)
+    public async Task<EndFailure?> DeleteOwnedVmsAndVerifyAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate>? sentCreates = null, Action<VmDescriptor>? foundVm = null)
     {
         var sent = sentCreates ?? [];
 
@@ -770,7 +770,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         using var hold = Ledger.HoldDelete(jobId);
         try
         {
-            return await DeleteOwnedCoreAsync(scope, jobId, settle, cancellationToken, sent).ConfigureAwait(false);
+            return await DeleteOwnedCoreAsync(scope, jobId, settle, cancellationToken, sent, foundVm).ConfigureAwait(false);
         }
         finally
         {
@@ -781,7 +781,7 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
-    private async Task<EndFailure?> DeleteOwnedCoreAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent)
+    private async Task<EndFailure?> DeleteOwnedCoreAsync(CloudScope scope, string jobId, CreateSettleState settle, CancellationToken cancellationToken, IReadOnlyList<SentCreate> allSent, Action<VmDescriptor>? foundVm)
     {
         // Round 4 M3: a REUSE names another run's VM: it is never a delete target nor counted as left (the watch stops it if it lands), so only creates go through the by-name delete and read-back below.
         var sent = allSent.Where(c => !c.IsReuse).ToList();
@@ -797,6 +797,12 @@ internal sealed class VmTerminator(IComputeGateway compute, GatewayCalls calls, 
             // The names this job asked for are still deleted; only the label sweep is missing, and the run says so. The class, never the message (it can carry a path).
             owned = [];
             listError = EndFailure.Of("The VMs for this job could not be listed", ErrorClassOf(ex), "Check the Cloud page and delete any VM left for this job.");
+        }
+
+        // Issue #109: each VM the delete finds is an observation of that VM (VmSpan), whether or not the create that made it was settled.
+        foreach (var observed in owned)
+        {
+            foundVm?.Invoke(observed);
         }
 
         var targets = new Dictionary<(string Name, string Zone), VmDescriptor?>();

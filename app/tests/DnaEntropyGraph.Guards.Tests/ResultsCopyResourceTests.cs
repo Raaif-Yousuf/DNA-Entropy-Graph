@@ -34,4 +34,16 @@ public class ResultsCopyResourceTests
             resw[key].ShouldContain("{0", customMessage: key);
         }
     }
+
+    /// <summary>Issue #922: the picture goes in <c>&lt;run&gt; exports &lt;code&gt;</c>, not in a folder "ending in exports".</summary>
+    [Fact]
+    public void The_save_picture_failure_text_names_the_folder_the_picture_really_goes_in()
+    {
+        var value = RepoPaths.AllReswFiles
+            .SelectMany(f => XDocument.Load(f).Descendants("data"))
+            .Single(d => d.Attribute("name")!.Value == ResultsCopy.ExportPngFailedInExports).Element("value")!.Value;
+
+        value.ShouldNotContain("ending in");
+        value.ShouldContain("named after the run followed by \"exports\" and a short code");
+    }
 }

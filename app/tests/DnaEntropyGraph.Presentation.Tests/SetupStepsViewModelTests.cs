@@ -56,6 +56,25 @@ public class SetupStepsViewModelTests
     }
 
     [Fact]
+    public async Task A_linked_but_off_choose_account_result_renders_the_BILLING_STILL_OFF_message_not_the_catch_all()
+    {
+        _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(
+            new SetupStepResult(SetupStep.Billing, SetupStatus.NeedsAction)
+            {
+                Code = SetupErrorCodes.BillingStillOff,
+                Accounts = [new BillingAccountSummary("billingAccounts/B", "Department")],
+                Action = new SetupAction(SetupActionKind.PickBillingAccount, "SetupAction_PickAnotherBillingAccount"),
+            });
+        var viewModel = NewViewModel();
+
+        await viewModel.RunAllCommand.ExecuteAsync(null);
+
+        var billing = viewModel.Rows[0];
+        billing.MessageText.ShouldBe("SetupError_BILLING_STILL_OFF");
+        billing.ActionText.ShouldBe("SetupAction_PickAnotherBillingAccount");
+    }
+
+    [Fact]
     public async Task A_red_billing_row_stops_the_chain_so_nobody_pays_for_a_step_that_cannot_work()
     {
         _service.CheckBillingAsync(Project, Arg.Any<CancellationToken>()).Returns(Fix(SetupStep.Billing, SetupErrorCodes.NoBilling, SetupActionKind.OpenLink, "SetupAction_LinkBilling") with { Link = BillingLinks.ForProject(Project) });

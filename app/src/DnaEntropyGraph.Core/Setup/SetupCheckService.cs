@@ -239,6 +239,7 @@ public sealed class SetupCheckService : ISetupCheckService
                 {
                     ProjectId = projectId,
                     Accounts = outcome.Accounts,
+                    Code = outcome.Code,
                     Action = new SetupAction(SetupActionKind.PickBillingAccount, "SetupAction_PickAnotherBillingAccount"),
                 };
             default:

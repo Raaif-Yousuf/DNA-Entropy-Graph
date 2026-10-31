@@ -1,0 +1,1 @@
+- Pay down pyright debt in 11 `scripts/tests` files (#877 slice 1): narrow Optional results with an assert, annotate `PWSH`/`Sequence` params; add `scripts/hooks` to pyright `extraPaths` so the hook-module imports resolve. Baseline entries for these files removed (or lowered).

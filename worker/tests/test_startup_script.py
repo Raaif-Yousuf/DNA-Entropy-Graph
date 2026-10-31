@@ -878,3 +878,10 @@ def test_a_failing_early_step_in_gpu_test_mode_writes_the_result_object_through_
     assert out.index("cleanup:delete") > out.index("put:jobs/job1/logs/gpu-test-result.json")
     parsed = json.loads(next(ln for ln in out if ln.startswith("{")))
     assert parsed["error"] == "WORKER_CRASH"
+
+
+def test_gpu_test_container_tests_the_installed_wheel_not_the_source_tree() -> None:
+    """#937: the conftest prefers worker/src in a dev layout; the GPU image must test the installed wheel."""
+    text = STARTUP_SH.read_text(encoding="utf-8")
+    run = text[text.index('docker run --rm --init --name "$cname"') :]
+    assert "-e DEG_TEST_INSTALLED=1" in run[: run.index('python -c "$select_py"')]

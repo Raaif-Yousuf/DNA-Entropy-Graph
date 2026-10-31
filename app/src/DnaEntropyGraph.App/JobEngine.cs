@@ -4,6 +4,7 @@ using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
+using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Runs;
@@ -38,6 +39,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
     private readonly IWorkerImageProvider _images;
     private readonly IAccessionLookup _accessionLookup;
     private readonly Func<string?> _downloadsFolder;
+    private readonly ICostEstimateService? _estimates;
     private readonly IRunTargetResolver _targets;
     private readonly LocalRunDriver _local;
 
@@ -55,8 +57,10 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         IRunTargetResolver targets,
         LocalRunDriver local,
         Func<string?>? downloadsFolder = null,
-        AppDataRoot? dataRoot = null)
+        AppDataRoot? dataRoot = null,
+        ICostEstimateService? estimates = null)
     {
+        _estimates = estimates;
         _targets = targets;
         _local = local;
         _activeRuns = activeRuns;
@@ -117,6 +121,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         // Issue #684: an NCBI accession is no file. It is checked here with the worker's own pattern (Hard Rule 2), nothing is copied or
         // uploaded, and the manifest names it; the worker fetches the record on the VM.
         StagedInput? staged;
+        long? bases = null;
         var uploads = new List<StagedInput>();
         if (options.Accession is not null)
         {
@@ -136,6 +141,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 return jobId;
             }
 
+            bases = lookup.Length;
             staged = StagedInput.ForAccession(accession.Accession, accession.Range);
             uploads.Add(staged);
         }
@@ -157,6 +163,7 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
                 return jobId;
             }
 
+            bases = check.TotalLength;
             uploads.Add(staged);
         }
 
@@ -200,6 +207,15 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         catch (SettingsUnavailableException ex)
         {
             await FailBeforeStartAsync(jobId, options, RunErrorCodes.Other, cancellationToken, ex.GetType().Name).ConfigureAwait(false);
+            return jobId;
+        }
+
+        // Issue #109: the hard stop refuses before any bucket object or VM exists. It asks the same shared path the New run page's card asks
+        // (RunSpendCheck: the run's own estimate plus this month's spend against the cap), so the card and the engine cannot disagree. A
+        // warning never stops a run, and a ledger or price list that cannot be read does not block the user.
+        if (await IsBlockedBySpendCapAsync(options, bases, cancellationToken).ConfigureAwait(false))
+        {
+            await FailBeforeStartAsync(jobId, options, RunErrorCodes.SpendCap, cancellationToken).ConfigureAwait(false);
             return jobId;
         }
 
@@ -320,6 +336,24 @@ public sealed class JobEngine : IJobEngine, IRunVmActions
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return null;
+        }
+    }
+
+    private async Task<bool> IsBlockedBySpendCapAsync(RunOptions options, long? bases, CancellationToken cancellationToken)
+    {
+        if (_estimates is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var (_, cap) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(options.GpuTier), options.SpotVm, bases, options.BootDiskGb, cancellationToken).ConfigureAwait(false);
+            return cap?.Level == SpendCapLevel.Blocked;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
         }
     }
 

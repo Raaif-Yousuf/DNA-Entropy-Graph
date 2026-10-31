@@ -191,6 +191,20 @@
                 TextWrapping="Wrap"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
+            <!-- Issue #109: the monthly spending cap card. A warning leaves Run allowed; the hard stop refuses the run at Run. -->
+            <TextBlock
+                Text="{x:Bind ViewModel.SpendCapText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.IsSpendCapWarning, Mode=OneWay}"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Polite"
+                Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+            <TextBlock
+                Text="{x:Bind ViewModel.SpendCapText, Mode=OneWay}"
+                Visibility="{x:Bind ViewModel.IsSpendCapBlocked, Mode=OneWay}"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Assertive"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+
             <!-- Issue #87: the model and graphics card pickers are linked; a lock keeps one side where it is. Run waits on the confirmation when the pair will not fit. -->
             <Expander x:Uid="NewRunGpuExpander" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                 <StackPanel Spacing="8">

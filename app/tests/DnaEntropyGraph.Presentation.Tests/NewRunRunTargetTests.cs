@@ -104,4 +104,54 @@ public sealed class NewRunRunTargetTests : IDisposable
     {
         (await RunAsync(Create(withPicker: false))).RunTarget.ShouldBe("Cloud");
     }
+
+    private async Task<NewRunViewModel> BlockedByCapAsync(string target)
+    {
+        _saved[RunTargetPickerViewModel.SettingKey] = target;
+        _estimates.CheckSpendCapAsync(Arg.Any<double?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SpendCapStatus?>(new SpendCapStatus(SpendCapLevel.Blocked, 12.0, 10.0)));
+        var vm = Create(withPicker: true);
+        var path = Path.Combine(_dir, "cap.fasta");
+        await File.WriteAllTextAsync(path, ">a\n" + string.Concat(Enumerable.Repeat("ACGT", 40)) + "\n", new UTF8Encoding(false), TestContext.Current.CancellationToken);
+        await vm.AddDroppedCommand.ExecuteAsync(new DroppedItems([path], 0, false));
+        for (var i = 0; i < 100; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return vm;
+    }
+
+    [Fact]
+    public async Task A_cloud_run_over_a_hard_cap_is_blocked()
+    {
+        var vm = await BlockedByCapAsync("Cloud");
+
+        vm.IsSpendCapBlocked.ShouldBeTrue();
+        vm.StartRunCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_This_PC_run_is_neither_blocked_nor_warned_by_the_cloud_spend_cap()
+    {
+        var vm = await BlockedByCapAsync("This PC");
+
+        vm.IsSpendCapBlocked.ShouldBeFalse("the engine never applies the cap to a local run");
+        vm.HasSpendCap.ShouldBeFalse();
+        vm.StartRunCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Switching_the_target_to_This_PC_and_back_moves_the_cap_card_with_it()
+    {
+        var vm = await BlockedByCapAsync("Cloud");
+
+        vm.RunTarget!.SelectedTarget = "This PC";
+        vm.IsSpendCapBlocked.ShouldBeFalse();
+        vm.StartRunCommand.CanExecute(null).ShouldBeTrue();
+
+        vm.RunTarget.SelectedTarget = "Cloud";
+        vm.IsSpendCapBlocked.ShouldBeTrue();
+        vm.StartRunCommand.CanExecute(null).ShouldBeFalse();
+    }
 }

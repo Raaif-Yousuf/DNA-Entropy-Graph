@@ -8,6 +8,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
+using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
@@ -25,9 +26,6 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private const string DefaultModelId = "evo2_7b";
 
     // The tier and the VM kind (on-demand, or Spot where the tier is Spot-only) come from the Gpu pickers and feed both StartRunAsync and the estimate.
-
-    // The boot disk a run on this page gets: the same default StartRunAsync's RunOptions uses, so the disk in the estimate is the disk created.
-    private static readonly int DefaultBootDiskGb = new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.BootDiskGb;
 
     // A count of this many characters or fewer is worked out on the spot; a bigger paste is counted off the UI thread.
     private const int InlineCountLimit = 20_000;
@@ -125,6 +123,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         OffersAccession = offerAccession ?? WorkerManifestSupport.Accession;
         _accessionLookup = accessionLookup;
         RunTarget = runTarget;
+        if (runTarget is not null)
+        {
+            runTarget.PropertyChanged += OnRunTargetPropertyChanged;
+        }
+
         _clipboard = clipboard;
         _validateAnnotation = validateAnnotation ?? ((fasta, gff, topology) => AnnotationPairValidator.Check(fasta, gff, topology));
         OffersAnnotation = offerAnnotation ?? WorkerManifestSupport.Annotation;
@@ -371,6 +374,23 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     public bool HasEstimate => EstimateText.Length > 0;
 
     public bool HasEstimateDisk => EstimateDiskText.Length > 0;
+
+    /// <summary>The spending-cap card (issue #109): empty when there is no cap or this run stays under it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSpendCap))]
+    [NotifyPropertyChangedFor(nameof(IsSpendCapWarning))]
+    private string _spendCapText = string.Empty;
+
+    /// <summary>True when the hard stop will refuse this run; the card then reads as an error. A warning leaves Run allowed.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSpendCapWarning))]
+    [NotifyCanExecuteChangedFor(nameof(StartRunCommand))]
+    private bool _isSpendCapBlocked;
+
+    public bool HasSpendCap => SpendCapText.Length > 0;
+
+    /// <summary>The card in its warning tone: shown, and Run stays allowed.</summary>
+    public bool IsSpendCapWarning => HasSpendCap && !IsSpendCapBlocked;
 
     public bool HasStatusMessage => StatusMessage.Length > 0;
 
@@ -734,6 +754,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private Task ReceiveNavigationParameterAsync(object? parameter)
     {
         _intake?.Attach(this);
+        // The page is showing (again): a cap changed in Settings, or spend booked since, must show now (issue #109).
+        _ = RefreshEstimateAsync();
 
         // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
         if (parameter is NavigationArrival arrival)
@@ -998,27 +1020,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
         // {date} and {time} are read when the name is made: raise the preview now so the page shows the same minute the run takes (#514).
         OnPropertyChanged(nameof(RunNamePreview));
-        var options = new RunOptions
-        {
-            ModelId = Gpu.ModelId,
-            RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
-            GpuTier = Gpu.Tier,
-            SpotVm = Gpu.RequiresSpot,
-            InputPath = SelectedItem!.IsAccession ? null : SelectedItem.Path,
-            AnnotationPath = SelectedItem.AnnotationPath,
-            Accession = SelectedItem.Accession,
-            AccessionRange = SelectedItem.AccessionRange,
-            NameTemplate = NameTemplate,
-            TreatAsRna = IsTreatingAsRna,
-            Direction = Presets?.Direction ?? Direction.BothCombined,
-            ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
-            Topology = Presets?.Topology ?? Topology.Auto,
-            PresetId = Presets?.PresetId,
-            PresetName = Presets?.PresetName,
-            OutputFiles = outputs,
-            // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
-            TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
-        };
+        var options = BuildRunOptions(startedItem, outputs);
         string jobId;
         try
         {
@@ -1073,6 +1075,33 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
+    /// <summary>
+    /// The options a run of <paramref name="item"/> starts with. The ONE builder: Run sends this to the engine and the cost estimate and spending-cap
+    /// card (issue #109) read their machine, Spot flag and boot disk from it, so a picker, a preset or a default can never make the card price a
+    /// different run than the one that starts.
+    /// </summary>
+    private RunOptions BuildRunOptions(InputPillItem item, OutputFileKinds outputs) => new()
+    {
+        ModelId = Gpu.ModelId,
+        RunTarget = RunTarget?.SelectedTarget ?? "Cloud",
+        InputPath = item.IsAccession ? null : item.Path,
+        AnnotationPath = item.AnnotationPath,
+        Accession = item.Accession,
+        AccessionRange = item.AccessionRange,
+        NameTemplate = NameTemplate,
+        TreatAsRna = IsTreatingAsRna,
+        Direction = Presets?.Direction ?? Direction.BothCombined,
+        ContextLength = Presets?.ContextLength ?? new RunOptions { ModelId = DefaultModelId, RunTarget = "Cloud" }.ContextLength,
+        Topology = Presets?.Topology ?? Topology.Auto,
+        PresetId = Presets?.PresetId,
+        PresetName = Presets?.PresetName,
+        GpuTier = Gpu.Tier,
+        SpotVm = Gpu.RequiresSpot,
+        OutputFiles = outputs,
+        // Both track boxes ticked keeps the default (bedGraph); WIG alone means the WIG track.
+        TrackFormat = outputs.HasFlag(OutputFileKinds.Wig) && !outputs.HasFlag(OutputFileKinds.BedGraph) ? TrackFormat.Wig : TrackFormat.BedGraph,
+    };
+
     private void RememberOutputs(OutputInputKinds group, OutputFileKinds outputs)
     {
         try
@@ -1086,7 +1115,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
-    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && Gpu.IsRunnable;
+    private bool CanStartRun() => SelectedItem is { IsValid: true } && _shownOutputGroup is not null && !HasNoOutputChosen && !IsSpendCapBlocked && Gpu.IsRunnable;
 
     private async Task SetTreatAsRnaAsync(bool value, CancellationToken cancellationToken)
     {
@@ -1217,18 +1246,39 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = string.Empty;
             EstimateDiskText = string.Empty;
+            // No file yet: a cap this month's spend has already reached still shows (the estimate of a run that is not chosen is zero).
+            SpendCapStatus? noFileCap = null;
+            try
+            {
+                noFileCap = await _estimates.CheckSpendCapAsync(null, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Advice only.
+            }
+
+            if (version == Volatile.Read(ref _estimateVersion))
+            {
+                SetSpendCap(noFileCap);
+            }
+
             return;
         }
 
         string text;
         string diskText;
+        SpendCapStatus? cap = null;
         try
         {
-            var result = await _estimates.EstimateAsync(CloudJobRequestFactory.MachineTypeFor(Gpu.Tier), Gpu.RequiresSpot, bases, DefaultBootDiskGb, CancellationToken.None);
+            // The same shared path the engine asks at Run (issue #109), so the card and the refusal cannot disagree. A cap check that
+            // throws is no card and never takes the estimate away (the helper keeps them apart).
+            var priced = BuildRunOptions(SelectedItem!, default);
+            var (result, status) = await _estimates.CheckAsync(CloudJobRequestFactory.MachineTypeFor(priced.GpuTier), priced.SpotVm, bases, priced.BootDiskGb, CancellationToken.None);
             text = EstimateLine(result);
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
+            cap = status;
         }
         catch (Exception)
         {
@@ -1240,6 +1290,48 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = text;
             EstimateDiskText = diskText;
+            SetSpendCap(cap);
+        }
+    }
+
+    /// <summary>The last cap answer, kept so a change of target can show or hide the card without asking the ledger again.</summary>
+    private SpendCapStatus? _lastSpendCap;
+
+    private void OnRunTargetPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RunTargetPickerViewModel.SelectedTarget))
+        {
+            SetSpendCap(_lastSpendCap);
+        }
+    }
+
+    private void SetSpendCap(SpendCapStatus? status)
+    {
+        _lastSpendCap = status;
+
+        // The cap is a cloud spending cap: the engine routes a This PC run before it ever asks (JobEngine.StartRunAsync), so the card must neither
+        // block nor warn for one. Auto stays as asked (it may resolve to the cloud).
+        if (RunTargets.IsThisPc(RunTarget?.SelectedTarget))
+        {
+            status = null;
+        }
+
+        if (status is not { Level: not SpendCapLevel.None, CapUsd: { } cap })
+        {
+            SpendCapText = string.Empty;
+            IsSpendCapBlocked = false;
+            return;
+        }
+
+        IsSpendCapBlocked = status.Level == SpendCapLevel.Blocked;
+        SpendCapText = Format(
+            IsSpendCapBlocked ? "NewRunSpendCapBlocked" : "NewRunSpendCapWarning",
+            Format("NewRunEstimateMoney", status.MonthToDateUsd.ToString("0.00", CultureInfo.InvariantCulture)),
+            Format("NewRunEstimateMoney", cap.ToString("0.00", CultureInfo.InvariantCulture)));
+        if (status.InProgressUsd > 0)
+        {
+            // The month figure includes VM time accrued by runs that have not ended; say so.
+            SpendCapText += " " + _strings.GetString("NewRunSpendCapInProgress");
         }
     }
 
@@ -1262,6 +1354,8 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         Interlocked.Increment(ref _estimateVersion);
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
+        // The cap card is about the month, not the file: re-ask it with no file chosen.
+        _ = RefreshEstimateAsync();
     }
 
     private string EstimateLine(CostEstimateResult result)
