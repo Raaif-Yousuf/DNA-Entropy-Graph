@@ -1480,6 +1480,15 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
         return this;
     }
 
+    private bool _reuseStartLostThatLandsLater;
+
+    /// <summary>A reuse's start is accepted by Compute but the client gets a network failure (the answer was lost): the VM is still stopped under the new job's labels until <see cref="LandAcceptedReuseStartsAsync"/> runs it. Issue #970.</summary>
+    public FakeGcp WithReuseStartLostThatLandsLater()
+    {
+        _reuseStartLostThatLandsLater = true;
+        return this;
+    }
+
     private TaskCompletionSource? _reuseParkGate;
     private readonly TaskCompletionSource _reuseParked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1693,6 +1702,14 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             _maxRunByVm[IncarnationOf(vm)] = reuse.MaxRunDuration;
         }
 
+        if (_reuseStartLostThatLandsLater)
+        {
+            // The production shape of a reuse whose answer was lost AFTER Compute accepted instances.start: the client sees a network failure, the VM is still stopped and carries the new job's labels,
+            // and the start runs later (LandAcceptedReuseStartsAsync). Issue #970 review round 2, finding 1.
+            _acceptedReuseStarts.Enqueue((reuse, existingVmName, zone, vm));
+            throw Build(CloudErrorKind.Network, null, 503, "The service is unavailable: the answer to the start was lost.");
+        }
+
         if (_reuseStartFailure is { } kind)
         {
             throw kind switch
@@ -1736,6 +1753,62 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
         return vm;
     }
+    private CloudErrorKind? _restoreFailure;
+    private int _restoreAttempts;
+    private int _stopAttempts;
+
+    /// <summary>How many times <see cref="RestoreVmLabelsAsync(string, string, string, IReadOnlyDictionary{string, string}, CancellationToken)"/> was called (issue #970).</summary>
+    public int RestoreAttempts => Volatile.Read(ref _restoreAttempts);
+
+    /// <summary>How many stops were requested of a VM from outside (a worker's own stop does not count), a test's own setup stops included: compare against a baseline.</summary>
+    public int StopAttempts => Volatile.Read(ref _stopAttempts);
+
+    /// <summary>Every restore of a borrowed VM's labels fails with this kind of error (a 403 for permission), as the real label write can. Issue #970.</summary>
+    public FakeGcp WithRestoreFailure(CloudErrorKind kind)
+    {
+        _restoreFailure = kind;
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #970: the label restore of the real gateway: only a VM that still carries <paramref name="fromJobId"/> as its <c>job-id</c> is rewritten (to <paramref name="donorLabels"/>, and its labelFingerprint
+    /// moves like any labels write); one a newer run took is left as it is; one that is gone is <see cref="LabelRestoreState.Gone"/>. The read and the write happen under the claim lock, so a restore
+    /// never overwrites a claim that landed between them.
+    /// </summary>
+    public Task<LabelRestoreState> RestoreVmLabelsAsync(string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        Interlocked.Increment(ref _restoreAttempts);
+        if (_restoreFailure is { } kind)
+        {
+            throw Build(kind, "SCRIPTED_RESTORE_FAILURE", kind == CloudErrorKind.Permission ? 403 : null, "The label restore was scripted to fail.");
+        }
+
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out var vm))
+            {
+                return Task.FromResult(LabelRestoreState.Gone);
+            }
+
+            if (vm.Labels is null || !vm.Labels.TryGetValue("job-id", out var owner) || owner != fromJobId)
+            {
+                return Task.FromResult(LabelRestoreState.NewerOwner);
+            }
+
+            var read = vm;
+            var restored = UpdateVm(key, v => v.InstanceId == read.InstanceId ? v with { Labels = new Dictionary<string, string>(donorLabels) } : v);
+            if (restored is null || restored.InstanceId != read.InstanceId)
+            {
+                return Task.FromResult(LabelRestoreState.Gone);
+            }
+
+            _labelFingerprints[IncarnationOf(restored)] = NextFingerprint();
+            return Task.FromResult(LabelRestoreState.Restored);
+        }
+    }
+
     public Task<VmDescriptor?> GetVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
         if (ConsumeHang())
@@ -1863,6 +1936,7 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
     public Task StopVmAsync(string vmName, string zone, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _stopAttempts);
         ThrowIfScriptedTransient();
         StopCore(vmName, zone);
         return Task.CompletedTask;

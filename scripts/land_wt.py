@@ -547,7 +547,13 @@ def _changed_text_files(ctx: Ctx, sha: str) -> dict[str, bytes]:
             continue
         names.append(name_bytes.decode("utf-8", errors="surrogateescape"))
     # The same `-text` / `binary` attribute skip premerge's check_control_bytes applies, read from the landing commit's tree.
-    skip = ccb.text_attr_unset(ctx.repo, [n for n in names if n not in ccb.ALLOWLIST], source=sha)
+    try:
+        skip = ccb.text_attr_unset(ctx.repo, [n for n in names if n not in ccb.ALLOWLIST], source=sha)
+    except ccb.GitCommandFailed as err:
+        raise LandError(
+            f"{err}. `git check-attr --source` needs git 2.40 or later (#1028); update git, then land again",
+            EXIT_REFUSED,
+        ) from err
     return {name: git(ctx.repo, "show", f"{sha}:{name}").stdout for name in names if name not in skip}
 
 

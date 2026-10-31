@@ -69,6 +69,8 @@ public static class SettingsCatalog
         [SpendCapSettings.CapUsdKey] = "A monthly cap checked against this PC's own spend ledger (issue #109); a second PC has its own month-to-date, so the number is not carried over.",
         [SpendCapSettings.HardStopKey] = "Goes with the spending cap (issue #109): it only means something against this PC's own ledger, so it is not carried over.",
         ["prototype_import_done"] = "Whether this PC already looked for the earlier version's runs (issue #243); about this PC, not a preference.",
+        // Literal on purpose, like the tour key: OutputFolderViewModel.SettingKey lives in Presentation. A Presentation.Tests test pins the two together.
+        ["output_folder"] = "A folder on this PC (OutputFolderViewModel.SettingKey, #1037); a second PC has its own folders, and an imported file must not be able to point results at one.",
         [PresetStore.SettingsKey] = "Presets travel in their own versioned block of the file, not as a raw setting.",
     };
 

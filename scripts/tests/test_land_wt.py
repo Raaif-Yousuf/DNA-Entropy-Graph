@@ -2129,3 +2129,25 @@ def test_an_open_pr_that_blocks_the_reland_is_named_in_the_refusal(world, capsys
     out = capsys.readouterr().out
     assert rc == lw.EXIT_FAILED
     assert "https://github.com/o/r/pull/7" in out and "already exists" in out and out.isascii()
+
+
+def test_an_old_git_that_rejects_check_attr_source_becomes_a_land_error_naming_the_cause(world, monkeypatch):
+    """#1028: git < 2.40 has no `check-attr --source`; that must be a LandError (exit code, git 2.40 named), not a traceback."""
+    import check_control_bytes as ccb
+
+    sha = world.commit_on_branch("feat/1-x", {"a.txt": b"ok\n"})
+    real = ccb.subprocess.run
+
+    def old_git(argv, *a, **k):
+        if "--source" in argv:
+            return subprocess.CompletedProcess(argv, 129, b"", b"error: unknown option `source'")
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(ccb.subprocess, "run", old_git)
+    with pytest.raises(lw.LandError) as err:
+        lw._changed_text_files(world.ctx(), sha)
+    assert "2.40" in str(err.value) and "check-attr" in str(err.value) and "129" in str(err.value)
+    assert "not a git repository" not in str(err.value)
+    assert err.value.code == lw.EXIT_REFUSED
+    assert _land(world, "feat/1-x", sha) == lw.EXIT_REFUSED
+    assert world.remote_branches() == ["main"]

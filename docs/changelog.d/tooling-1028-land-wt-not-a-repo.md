@@ -1,0 +1,1 @@
+- land_wt and check_control_bytes: a git call that fails (for example check-attr --source on git older than 2.40) now raises GitCommandFailed, distinct from NotAGitRepo; land_wt turns it into a LandError naming the git version floor and exit code instead of a traceback saying 'not a git repository' (#1028).

@@ -79,6 +79,22 @@ public static class RunsCopy
     public static readonly RunsMessage RemoveFailed = Pair("Runs_Remove_Failed_Title", "Runs_Remove_Failed_Body", ToastSeverity.Error);
     public static readonly RunsMessage RefreshFailed = Pair("Runs_Refresh_Failed_Title", "Runs_Refresh_Failed_Body", ToastSeverity.Error);
 
+    // Issue #112: runs of another Google account are not listed; each line below names an action that exists (a button, or the sign-in button).
+    public const string HiddenOne = "Runs_OtherAccount_Hidden_One";
+
+    public const string HiddenMany = "Runs_OtherAccount_Hidden_Many";
+
+    public const string SwitchLabel = "Runs_OtherAccount_Switch";
+
+    public const string HintSwitch = "Runs_OtherAccount_Hint_Switch";
+
+    public const string HintSignIn = "Runs_OtherAccount_Hint_SignIn";
+
+    public const string HintSignInUnknown = "Runs_OtherAccount_Hint_SignInUnknown";
+
+    public static readonly RunsMessage SwitchFailed = Pair("Runs_OtherAccount_SwitchFailed_Title", "Runs_OtherAccount_SwitchFailed_Body", ToastSeverity.Error);
+
+    public static readonly RunsMessage SignInFailed = Pair("Runs_OtherAccount_SignInFailed_Title", "Runs_OtherAccount_SignInFailed_Body", ToastSeverity.Error);
     private static readonly string[] FilterKeys = ["Runs_Filter_All", "Runs_Filter_Active", "Runs_Filter_Completed", "Runs_Filter_Failed", "Runs_Filter_Cancelled"];
 
     /// <summary>The "changed files kept" copy for <paramref name="count"/> files: singular for exactly one (the <c>_One</c> key), else plural.</summary>
@@ -218,7 +234,7 @@ public static class RunsCopy
         EmptyNone, EmptyNoMatch, GroupToday, GroupYesterday,
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
-        DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
+        DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn, HiddenOne, HiddenMany, SwitchLabel, HintSwitch, HintSignIn, HintSignInUnknown, .. Flatten(SwitchFailed), .. Flatten(SignInFailed),
         RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
         DeleteLocalUnmarkedConfirmTitle, DeleteLocalUnmarkedConfirmBody, OpenFolderLabel, CloseLabel, DeleteLocalHintDriveRoot, RedownloadHintDriveRoot,

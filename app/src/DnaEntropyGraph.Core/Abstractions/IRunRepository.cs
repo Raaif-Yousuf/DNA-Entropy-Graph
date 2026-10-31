@@ -140,6 +140,12 @@ public sealed record RunRecord(
                 nameof(Notes) when value is not null => "<notes withheld>",
                 nameof(TagsJson) when value is not null => "<tags withheld>",
                 nameof(AccountSub) when value is not null => "<account withheld>",
+                // Issue #1046: the name carries the input file's stem; the output folder, options and manifest name the file or a user path too.
+                // The options default of "{}" holds nothing, so it still prints as itself.
+                nameof(Name) when value is not null => "<name withheld>",
+                nameof(OutputDir) when value is not null => "<output folder withheld>",
+                nameof(OptionsJson) when value is not null and not "{}" => "<options withheld>",
+                nameof(ManifestJson) when value is not null => "<manifest withheld>",
                 _ => value is null ? "null" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
             };
             builder.Append(first ? string.Empty : ", ").Append(member.Name).Append(" = ").Append(text);
