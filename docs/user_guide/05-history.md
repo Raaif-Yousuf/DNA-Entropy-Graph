@@ -5,7 +5,9 @@
 Every run you have ever started, whether it finished, failed, or was cancelled, appears
 on the **Runs** page, grouped by day. Each entry shows its name, what was in it, which
 model and computer type were used, how long it took, roughly what it cost, and whether
-its results are still available in the cloud or only on your own computer.
+its results are still available in the cloud or only on your own computer. A new run's name
+is the name its results folder gets (from the run name box on the New run page, for example
+`SetTnpB_evo2_7b`); a run that failed before it began has no name yet and shows its run code.
 
 Next to its time, a run that used a rented computer shows its estimated cost (the same figure as the top of its Results page, worked out from the computer's running time and list price, not your Google bill). A run on your own PC says there was no cloud cost, and a run that never got a rented computer shows no cost.
 
