@@ -149,7 +149,7 @@ is tested as installed, and `DEG_TEST_INSTALLED=1` forces that mode (`startup.sh
 sets it for the gpu-test container run). `tests/test_import_isolation.py` proves both arms in a
 fake two-checkout layout. `scripts/tests/conftest.py` loads this same file by path so a
 scripts-only session (`pytest scripts/tests/...`) gets the guard too (it did not before;
-`scripts/tests/test_import_isolation.py` asserts in-process, child-process and PYTHONPATH origin). `worker/tests/data/` carries file fixtures:
+`scripts/tests/test_scripts_import_isolation.py` asserts in-process, child-process and PYTHONPATH origin). `worker/tests/data/` carries file fixtures:
 `sample.fasta`, `sample.gb`, `multi.gb` (multi-record), `prokaryotic_demo.
 fasta`. `worker/tests/contract-fixtures/` carries JSON vectors shared with
 the (future) C# side: `cloud_error_classification.json`, `cloud_quota_
