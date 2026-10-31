@@ -1693,7 +1693,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // A VM made again under the name is another incarnation with a fingerprint of its own: the claim on the one that was read is lost either way.
             if (IncarnationOf(vm) != readIncarnation || _labelFingerprints.GetValueOrDefault(IncarnationOf(vm)) != readFingerprint)
             {
-                throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
+                // The real shape (round 6 of #476), with the kind the classifier gives it, so the fake tests exercise the classifier's reading of a lost race.
+                const string FingerprintMessage = "Labels fingerprint either invalid or resource labels have changed";
+                throw Build(CloudErrorClassifier.Classify(new CloudError("CONDITION_NOT_MET", 412, FingerprintMessage)), "CONDITION_NOT_MET", 412, FingerprintMessage);
             }
 
             var claimed = vm;

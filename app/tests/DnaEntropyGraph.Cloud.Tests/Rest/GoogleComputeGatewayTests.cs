@@ -740,6 +740,18 @@ public class GoogleComputeGatewayTests
     }
 
     [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_a_real_fingerprint_mismatch_returns_null()
+    {
+        // Round 6: HTTP 412, raw code CONDITION_NOT_MET, the message Compute really words a lost fingerprint race with (no "precondition" in it): a lost race, not an org policy.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Labels fingerprint either invalid or resource labels have changed"), http: 412));
+
+        (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task MarkEnding_whose_polled_operation_fails_with_a_bare_condition_not_met_and_no_412_throws_as_org_policy()
     {
         // Round 5 finding 2: CloudErrorClassifier calls a CONDITION_NOT_MET with no HTTP 412 an org-policy refusal; the gateway used to read it as a lost race and the sweep retried silently for ever.
@@ -807,7 +819,7 @@ public class GoogleComputeGatewayTests
     public async Task Reuse_refuses_a_VM_the_app_marked_for_ending_and_writes_nothing()
     {
         var rig = new GoogleGatewayHarness();
-        var marked = StoppedOld().Replace("\"installation-id\":\"install-1\"}", "\"installation-id\":\"install-1\",\"" + VmEnding.LabelKey + "\":\"" + VmEnding.Stamp(DateTimeOffset.UtcNow) + "\"}", StringComparison.Ordinal);
+        var marked = StoppedOld().Replace("\"installation-id\":\"install-1\"}", "\"installation-id\":\"install-1\",\"" + VmEnding.LabelKey + "\":\"" + VmEnding.Stamp(rig.Clock.GetUtcNow()) + "\"}", StringComparison.Ordinal);
         rig.Handler.Returns(Get, OldInstance, 200, marked);
 
         var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));

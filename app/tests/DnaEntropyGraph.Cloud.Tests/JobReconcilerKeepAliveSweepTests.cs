@@ -805,6 +805,34 @@ public class JobReconcilerKeepAliveSweepTests
     }
 
     [Fact]
+    public void A_far_future_mark_is_no_mark_for_the_reuse_fence_either()
+    {
+        // Round 6 low 1: IsEnding treated ending-since=253402300799 as recent for ever while TryMarkedAt rejected it.
+        var labels = new Dictionary<string, string> { [VmEnding.LabelKey] = "253402300799" };
+
+        VmEnding.IsEnding(labels, Launch).ShouldBeFalse("an implausible mark must not make a VM unreusable for ever");
+        VmEnding.IsEnding(new Dictionary<string, string> { [VmEnding.LabelKey] = VmEnding.Stamp(Launch + TimeSpan.FromMinutes(2)) }, Launch).ShouldBeTrue("a little skew still counts as a recent mark");
+    }
+
+    [Fact]
+    public async Task A_delete_that_answers_404_settles_the_row_because_gone_is_gone()
+    {
+        // Round 6 low 2.
+        var rig = new Rig();
+        await StoppedKeptVmAsync(rig, "job-404");
+        rig.AdvanceMinutes(40);
+        var race = new RaceCompute(rig.Gcp) { EndFailure = new CloudOperationException(new CloudError("RESOURCE_NOT_FOUND", 404, "gone"), CloudErrorKind.Other) };
+        var reconciler = rig.Reconciler(race);
+
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+        var afterFirst = rig.Gcp.Calls.Count(c => c.Method == "FindByJobId");
+        afterFirst.ShouldBeGreaterThan(0);
+        await reconciler.EnforceKeepAliveAsync(CancellationToken.None);
+
+        rig.Gcp.Calls.Count(c => c.Method == "FindByJobId").ShouldBe(afterFirst, "gone already is terminal");
+    }
+
+    [Fact]
     public void An_implausible_mark_is_no_mark_and_adding_the_window_to_one_cannot_overflow()
     {
         // Round 5 finding 3: a mark near DateTime max was accepted and markedAt + Window overflowed.

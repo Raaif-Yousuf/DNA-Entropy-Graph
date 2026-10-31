@@ -56,8 +56,5 @@ public static class VmEnding
 
     /// <summary>True when <paramref name="labels"/> carry a mark made within <see cref="Window"/> of <paramref name="now"/> (a mark from the future, by a skewed clock, counts as recent).</summary>
     public static bool IsEnding(IReadOnlyDictionary<string, string>? labels, DateTimeOffset now)
-        => labels is not null
-            && labels.TryGetValue(LabelKey, out var value)
-            && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
-            && now - DateTimeOffset.FromUnixTimeSeconds(seconds) <= Window;
+        => TryMarkedAt(labels, now, out var markedAt) && now - markedAt <= Window; // an implausible mark (far in the future) is no mark, so it cannot hold a VM unreusable for ever
 }
