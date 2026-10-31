@@ -83,6 +83,13 @@ public sealed partial class ResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsNoticeVisible))]
     private string _noticeText = string.Empty;
 
+    // Issue #929: the run's download renamed changed files aside (Hard Rule 14); the page's Open the output folder button is the action it names.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsKeptAsideVisible))]
+    private string _keptAsideText = string.Empty;
+
+    public bool IsKeptAsideVisible => KeptAsideText.Length > 0;
+
     // Why the numbers are missing while the files are fine.
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsStatsNoticeVisible))]
@@ -195,6 +202,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
             Title = string.IsNullOrWhiteSpace(run.Name) ? run.JobId : run.Name;
             _run = run;
+            KeptAsideText = RunsCopy.KeptAsideLine(run, _strings) ?? string.Empty;
             var booked = await RunCostText.ReadBookedAsync(_costs, cancellationToken, _log);
             if (generation != Volatile.Read(ref _loadGeneration))
             {
@@ -258,6 +266,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _outputFiles = [];
         Title = string.Empty;
         CostText = string.Empty;
+        KeptAsideText = string.Empty;
         _annotationsJobId = null;
         NotesText = string.Empty;
         TagsText = string.Empty;

@@ -340,6 +340,68 @@ public sealed class HistoryViewModelTests
         Item(vm, "bad").ReasonText.ShouldBe("RunError_other");
     }
 
+    // ---- Issue #929: a renamed-aside file is visible on EVERY path that recorded one, whatever the primary code is ----
+
+    public static TheoryData<JobPhase, string> EveryPathThatRenamedAFileAside() => new()
+    {
+        { JobPhase.Completed, RunErrorCodes.ChangedFilesKeptAside },
+        { JobPhase.Completed, RunErrorCodes.LifecycleUnverified },
+        { JobPhase.PartiallyCompleted, RunErrorCodes.LifecycleUnverified },
+        { JobPhase.Failed, RunErrorCodes.WorkerFailed },
+        { JobPhase.Failed, RunErrorCodes.DownloadFailed },
+        { JobPhase.Failed, RunErrorCodes.VmEndUnconfirmed },
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryPathThatRenamedAFileAside))]
+    public async Task A_row_that_renamed_files_aside_shows_the_count_and_an_open_folder_button_whatever_its_code(JobPhase phase, string code)
+    {
+        _strings.GetString(RunsCopy.KeptAsideMany).Returns("{0} files were kept under new names.");
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+        _launcher.OpenFolder(Arg.Any<string>()).Returns(true);
+        var detail = KeptAsideDetail.Append("Some diagnostics.", 2);
+
+        var vm = await Loaded(Row("aside", phase, outputDir: @"C:\out\aside") with { ErrorCode = code, ErrorDetail = detail });
+
+        var item = Item(vm, "aside");
+        item.HasKeptAside.ShouldBeTrue();
+        item.KeptAsideText.ShouldBe("2 files were kept under new names.");
+        item.ReasonText.ShouldBe(RunErrorCodes.ResourceKey(code), "the primary code stays the headline");
+        item.OpenOutputFolderCommand.ShouldNotBeNull();
+        await item.OpenOutputFolderCommand!.ExecuteAsync(null);
+        _launcher.Received(1).OpenFolder(@"C:\out\aside");
+    }
+
+    [Fact]
+    public async Task One_renamed_file_uses_the_singular_text_and_a_row_with_no_mark_shows_no_line_and_no_button()
+    {
+        _strings.GetString(RunsCopy.KeptAsideOne).Returns("one file kept");
+        _strings.GetString(RunsCopy.KeptAsideMany).Returns("{0} files kept");
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(true);
+
+        var vm = await Loaded(
+            Row("one", JobPhase.Failed, outputDir: @"C:\out\one") with { ErrorCode = RunErrorCodes.WorkerFailed, ErrorDetail = KeptAsideDetail.Append("x", 1) },
+            Row("none", JobPhase.Failed, outputDir: @"C:\out\none") with { ErrorCode = RunErrorCodes.WorkerFailed, ErrorDetail = "x" },
+            Row("run", JobPhase.Running, outputDir: @"C:\out\run") with { ErrorDetail = KeptAsideDetail.Append("x", 1) });
+
+        Item(vm, "one").KeptAsideText.ShouldBe("one file kept");
+        Item(vm, "none").HasKeptAside.ShouldBeFalse();
+        Item(vm, "none").OpenOutputFolderCommand.ShouldBeNull();
+        Item(vm, "run").HasKeptAside.ShouldBeFalse("a run still going has not finished downloading");
+    }
+
+    [Fact]
+    public async Task The_open_folder_button_on_a_row_whose_folder_has_gone_says_so_instead_of_doing_nothing()
+    {
+        _local.OutputFolderExists(Arg.Any<RunRecord>()).Returns(false);
+        var vm = await Loaded(Row("gone", JobPhase.Failed, outputDir: @"C:\out\gone") with { ErrorCode = RunErrorCodes.WorkerFailed, ErrorDetail = KeptAsideDetail.Append("x", 1) });
+
+        await Item(vm, "gone").OpenOutputFolderCommand!.ExecuteAsync(null);
+
+        _launcher.DidNotReceive().OpenFolder(Arg.Any<string>());
+        _toasts.Received(1).ShowToast("Runs_Open_Missing_Title", "Runs_Open_Missing_Body", ToastSeverity.Warning);
+    }
+
     [Fact]
     public async Task A_completed_run_with_a_code_shows_it_as_a_warning_and_one_without_shows_nothing()
     {

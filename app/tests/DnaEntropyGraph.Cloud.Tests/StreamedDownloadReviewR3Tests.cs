@@ -235,6 +235,8 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
 
         result.FinalPhase.ShouldBe(JobPhase.Failed);
         _runs.AllRecordedInOrder.Last(r => r.JobId == "job-r3e").ErrorDetail!.ShouldContain("changed file(s)");
+        // Issue #929: the count is a mark the Runs row and the run page read, not only prose in a diagnostics-only field.
+        KeptAsideDetail.TryRead(_runs.AllRecordedInOrder.Last(r => r.JobId == "job-r3e").ErrorDetail).ShouldBe(1);
     }
 
     [Fact]
@@ -248,6 +250,7 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
 
         ex.Code.ShouldBe(RunErrorCodes.WorkerFailed, "the primary error stays the headline");
         ex.Message!.ShouldContain("changed file(s)");
+        KeptAsideDetail.TryRead(ex.Message).ShouldBe(1, "issue #929: the failed-download path carries the count as the mark too");
     }
 
     [Fact]
@@ -264,6 +267,7 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
         result.FailureCode.ShouldBe(RunErrorCodes.LifecycleUnverified, "vacuity: the stop never landed");
         result.FailureMessage!.ShouldContain("changed file(s)");
         _runs.AllRecordedInOrder.Last(r => r.JobId == "job-r3g").ErrorDetail!.ShouldContain("changed file(s)");
+        KeptAsideDetail.TryRead(_runs.AllRecordedInOrder.Last(r => r.JobId == "job-r3g").ErrorDetail).ShouldBe(1, "issue #929: the lifecycle-unverified row carries the count as the mark");
     }
     private sealed class RestoreRefusingMover : IRunFileMover
     {

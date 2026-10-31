@@ -1,6 +1,7 @@
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Runs;
+using DnaEntropyGraph.Presentation.Services;
 
 namespace DnaEntropyGraph.Presentation.ViewModels;
 
@@ -74,6 +75,22 @@ public static class RunsCopy
     public static RunsMessage RedownloadChangedKeptAside(int count) => count == 1
         ? Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body_One", ToastSeverity.Info)
         : Pair("Runs_Redownload_Changed_Title", "Runs_Redownload_Changed_Body", ToastSeverity.Info);
+
+    // Issue #929: a finished run's own line when a download renamed changed files aside (Runs row and run page); the many form takes the count as {0}.
+    public const string KeptAsideOne = "Runs_KeptAside_One";
+    public const string KeptAsideMany = "Runs_KeptAside_Many";
+
+    /// <summary>The kept-aside line for a finished run (the count is read from its <see cref="DnaEntropyGraph.Core.Cloud.KeptAsideDetail"/> mark), or null when no file was renamed aside.</summary>
+    public static string? KeptAsideLine(RunRecord run, IStringResourceProvider strings)
+    {
+        var count = HistoryViewModel.IsFinished(run.Phase) ? KeptAsideDetail.TryRead(run.ErrorDetail) : 0;
+        return count switch
+        {
+            0 => null,
+            1 => strings.GetString(RunsCopy.KeptAsideOne),
+            _ => string.Format(System.Globalization.CultureInfo.CurrentCulture, strings.GetString(RunsCopy.KeptAsideMany), count),
+        };
+    }
 
     public const string RedownloadAgainLabel = "Runs_RedownloadAgain_Label";
     public const string RedownloadPartialLabel = "Runs_RedownloadPartial_Label";
@@ -180,7 +197,7 @@ public static class RunsCopy
         StatusActive, StatusCompleted, StatusPartial, StatusFailed, StatusCancelled,
         OwnerRequestActAs, OwnerRequestGrantee, PresetLine, DeleteCloudHintRunning, DeleteCloudHintNoCopy, DeleteCloudHintNotConnected, DeleteCloudConfirmTitle, DeleteCloudConfirmBody, DeleteLocalConfirmTitle, DeleteLocalConfirmBody, RemoveConfirmTitle, RemoveConfirmBody,
         DeleteCloudHintImported, DeleteCloudHintPrototype, DeleteCloudHintImportedNoLink, DeleteCloudHintPrototypeNoFolder, ImportedBadge, ImportRunning, ImportNone, ImportDoneOne, ImportDoneMany, ImportNoProject, ImportFailed, ImportFailedPermission, ImportFailedSetup, ImportFailedNetwork, ImportFailedSignIn,
-        RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
+        KeptAsideOne, KeptAsideMany, RedownloadAgainLabel, RedownloadPartialLabel, .. Flatten(RedownloadCancelledPartial),
         .. FilterKeys, DeleteLocalHintImported,
         .. Flatten(OwnerRequestCopied), .. Flatten(OwnerRequestCopyFailed), .. Flatten(OpenMissing), .. Flatten(RerunNoOptions), .. Flatten(RerunNoInput), .. Flatten(RerunFailed), .. Flatten(RemoveFailed), .. Flatten(RefreshFailed), .. Flatten(RedownloadChangedKeptAside(1)), .. Flatten(RedownloadChangedKeptAside(2)),
         .. Enum.GetValues<CloudResultsStatus>().SelectMany(s => Flatten(Redownload(s))).Distinct(),

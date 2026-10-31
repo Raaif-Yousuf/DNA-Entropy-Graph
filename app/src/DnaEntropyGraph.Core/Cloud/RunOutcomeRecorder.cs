@@ -110,8 +110,11 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
         return new CloudJobResult(finalPhase);
     }
 
-    /// <summary>Detail text (never the message the user reads, Hard Rule 13) saying how many of the user's changed files were renamed aside; empty when none.</summary>
-    internal static string AsideNote(int count) => count > 0 ? $" {count} changed file(s) in the output folder were kept under a changed name." : string.Empty;
+    /// <summary>
+    /// Detail text (never the message the user reads, Hard Rule 13) saying how many of the user's changed files were renamed aside; empty when none.
+    /// Ends with the <see cref="KeptAsideDetail"/> mark (issue #929): the Runs row and the run page read the count from it on every path that used this note.
+    /// </summary>
+    internal static string AsideNote(int count) => count > 0 ? " " + KeptAsideDetail.Append($"{count} changed file(s) in the output folder were kept under a changed name.", count) : string.Empty;
 
     private static Exception WithAsideNote(Exception ex, int count)
         => count > 0 && ex is RunFailureException failure
