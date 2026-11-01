@@ -73,13 +73,14 @@ public sealed class NewRunPriceSourceTests : IDisposable
     private void EstimateReturns(CostEstimateResult result)
         => _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(result));
 
-    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true, IPricingStatus? pricing = null, ICostEstimateService? estimates = null, bool a100IsSpotOnlyAndPicked = false)
+    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true, IPricingStatus? pricing = null, ICostEstimateService? estimates = null, bool a100IsSpotOnlyAndPicked = false, GpuTier? spotOnlyTierPicked = null)
     {
-        // The shipped catalog offers no Spot-only tier (H100 is not offered), so the Spot cases make the A100 Spot-only in a test catalog.
-        var gpu = TestGpu.Plan(a100IsSpotOnlyAndPicked ? SpotOnlyA100Catalog() : null);
-        if (a100IsSpotOnlyAndPicked)
+        // The shipped catalog offers no Spot-only tier (H100 is not offered), so the Spot cases make one tier (the A100 by default) Spot-only in a test catalog.
+        var tier = spotOnlyTierPicked ?? (a100IsSpotOnlyAndPicked ? GpuTier.A100_40 : (GpuTier?)null);
+        var gpu = TestGpu.Plan(tier is { } t ? SpotOnlyCatalog(t) : null);
+        if (tier is { } picked)
         {
-            gpu.SelectedGpu = gpu.Gpus.Single(g => g.Tier == GpuTier.A100_40);
+            gpu.SelectedGpu = gpu.Gpus.Single(g => g.Tier == picked);
         }
 
         var vm = new NewRunViewModel(
@@ -189,10 +190,66 @@ public sealed class NewRunPriceSourceTests : IDisposable
     }
 
     // Issue #1074. The A100 is Spot-only (machine a2-highgpu-1g); the default L4 (g2-standard-8) is on-demand.
-    private const string SpotNote = "The Spot price is from the list that came with this app, not from Google's price list.";
+    private const string SpotNote = "The discounted (Spot) price is from the list that came with this app, not from Google's price list.";
 
-    private static GpuCatalog SpotOnlyA100Catalog()
-        => new(GpuCatalog.Shipped.Models, [.. GpuCatalog.Shipped.Gpus.Select(g => g.Tier == GpuTier.A100_40 ? g with { SpotOnly = true } : g)]);
+    private static GpuCatalog SpotOnlyCatalog(GpuTier tier)
+        => new(GpuCatalog.Shipped.Models, [.. GpuCatalog.Shipped.Gpus.Select(g => g.Tier == tier ? g with { SpotOnly = true } : g)]);
+
+    private const string ShippedWithSpotJson = """
+        {
+          "schema": 1,
+          "asOf": "2026-09-01",
+          "currency": "USD",
+          "region": "us-central1",
+          "source": "test",
+          "disk": { "type": "pd-balanced", "usdPerGbMonth": 0.10 },
+          "machines": {
+            "g2-standard-8": { "accelerator": "1x NVIDIA L4", "onDemandUsdPerHour": 0.85, "spotUsdPerHour": 0.18 },
+            "a2-highgpu-1g": { "accelerator": "1x NVIDIA A100 40GB", "onDemandUsdPerHour": 3.67, "spotUsdPerHour": 1.10 }
+          }
+        }
+        """;
+
+    /// <summary>The real resolver and source (not a hand-made snapshot) over the catalog SKUs, then the page.</summary>
+    private async Task<string> LineThroughRealResolverAsync(GpuTier spotTier, IReadOnlyList<DnaEntropyGraph.Core.Cloud.CatalogSku> skus)
+    {
+        var shipped = Substitute.For<IPricingSource>();
+        shipped.Load().Returns(PricingTable.Parse(ShippedWithSpotJson));
+        var gateway = Substitute.For<DnaEntropyGraph.Core.Cloud.IPricingCatalogGateway>();
+        gateway.ListComputeSkusAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(skus));
+        var source = new CatalogPricingSource(shipped, gateway, new MemoryCache(), _time);
+        await source.RefreshIfStaleAsync(TestContext.Current.CancellationToken);
+        source.Current.Origin.ShouldBe(PricingOrigin.Catalog);
+        var vm = await OpenWithAFileAsync(pricing: source, spotOnlyTierPicked: spotTier);
+        vm.Gpu.RequiresSpot.ShouldBeTrue();
+        return await LineAsync(vm);
+    }
+
+    [Fact]
+    public async Task A_Spot_machine_Google_gave_no_price_for_at_all_says_its_shipped_Spot_price_is_on_screen()
+    {
+        // The catalog prices only the L4; the A100 row (Spot price included) is copied whole from the shipped list.
+        var line = await LineThroughRealResolverAsync(GpuTier.A100_40, G2Skus());
+
+        line.ShouldContain(SpotNote);
+    }
+
+    [Fact]
+    public async Task A_Spot_price_dropped_for_being_above_on_demand_is_not_named_as_a_shipped_Spot_price()
+    {
+        // Every on-demand SKU is scaled down so the shipped 0.18 Spot price is above it and is discarded: no Spot price is on screen, so no note.
+        var cheap = G2Skus().Select(s => s with { UsdPerUnit = s.Description.StartsWith("Balanced", StringComparison.Ordinal) ? s.UsdPerUnit : s.UsdPerUnit * 0.01 }).ToArray();
+
+        var line = await LineThroughRealResolverAsync(GpuTier.L4, cheap);
+
+        line.ShouldNotContain(SpotNote);
+    }
+
+    [Fact]
+    public async Task A_Spot_price_that_survives_from_the_shipped_list_beside_a_Google_on_demand_price_is_named()
+    {
+        (await LineThroughRealResolverAsync(GpuTier.L4, G2Skus())).ShouldContain(SpotNote);
+    }
 
     private async Task<string> SpotLineAsync(PricingOrigin origin, string[]? keptFromShipped, bool pickA100 = true)
     {

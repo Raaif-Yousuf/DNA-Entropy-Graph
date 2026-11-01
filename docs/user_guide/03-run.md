@@ -126,7 +126,7 @@ read failed, and the line says why in plain words and one thing to do: sign in a
 the Cloud page, ask the project owner to allow it or to switch on the price list service,
 check your internet connection, or try again later. When the estimate is for a Spot
 computer (a cheaper rented computer that Google can take back) and Google's list had no
-Spot price for it, the line adds "The Spot price is from the list that came with this app,
+Spot price for it, the line adds "The discounted (Spot) price is from the list that came with this app,
 not from Google's price list." The Spot price is then the app's own, so treat it as less
 exact. The estimate is still usable in every
 case; only how fresh the prices are changes. See

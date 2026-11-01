@@ -3637,7 +3637,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>Prices from the list that came with this app.</value>
   </data>
   <data name="PriceSource_SpotFromShipped" xml:space="preserve">
-    <value>The Spot price is from the list that came with this app, not from Google&apos;s price list.</value>
+    <value>The discounted (Spot) price is from the list that came with this app, not from Google&apos;s price list.</value>
   </data>
   <data name="PriceSourceReason_SignedOut" xml:space="preserve">
     <value>You are signed out of Google, so today&apos;s price list could not be read. Sign in again from the Cloud page.</value>
