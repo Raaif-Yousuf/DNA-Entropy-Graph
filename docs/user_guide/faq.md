@@ -32,10 +32,10 @@ trying again. See [02-connect-google-cloud.md](02-connect-google-cloud.md) Step 
 
 ## Why is my first run so much slower than later ones?
 
-The analysis model is a large file that has to be downloaded once and cached the first
-time you use a new Google Cloud project. Later runs reuse that cache and skip the wait,
-often around eight minutes faster. This is a real, expected delay, not something going
-wrong.
+The analysis model is a large file that has to be downloaded when it is not yet saved in
+your Google Cloud project's storage, which takes several minutes. A copy is saved when
+possible, so later runs can usually reuse it and skip most of that wait. This is a real,
+expected delay, not something going wrong.
 
 ## How much will a run actually cost me?
 

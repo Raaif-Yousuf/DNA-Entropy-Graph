@@ -154,6 +154,7 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
         var request = TestInputs.Request(jobId, Spec(jobId));
         var folder = Path.Combine(request.OutputFolder, "resumed");
         Directory.CreateDirectory(folder);
+        RunFolderMarker.Write(folder, jobId); // issue #1043
         if (!Junction(Path.Combine(folder, "seq"), outside))
         {
             Assert.Skip("A junction could not be created on this machine.");
@@ -197,6 +198,7 @@ public sealed class StreamedDownloadReviewR3Tests : IDisposable
         var request = TestInputs.Request(jobId, Spec(jobId), afterTask: after);
         var folder = Path.Combine(request.OutputFolder, "resumed");
         Directory.CreateDirectory(Path.Combine(folder, "seq"));
+        RunFolderMarker.Write(folder, jobId); // issue #1043
         File.WriteAllBytes(Path.Combine(folder, "seq", "a.bedgraph"), edited);
         _runs.UpsertAsync(new RunRecord(jobId, JobPhase.Downloading, DateTimeOffset.UtcNow, OutputDir: folder), CancellationToken.None).GetAwaiter().GetResult();
         _gcp.PutObject(TransferBucket, WorkerManifestBuilder.JobPrefix(jobId) + "output/seq/a.bedgraph", worker);

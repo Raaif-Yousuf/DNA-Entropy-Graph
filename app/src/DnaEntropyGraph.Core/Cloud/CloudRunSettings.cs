@@ -1,3 +1,5 @@
+using DnaEntropyGraph.Core.Contract;
+
 namespace DnaEntropyGraph.Core.Cloud;
 
 /// <summary>
@@ -81,6 +83,9 @@ internal sealed class CloudRunSettings
 
     /// <summary>Issue #675: told when a stage is taking longer than usual and when a stall question opens or is withdrawn. Null means nobody is listening.</summary>
     public Action<RunNotice>? OnNotice { get; set; }
+
+    /// <summary>Issue #1086: called (job id, event) for each NEW progress the worker's status.json reports while the run waits for result.json. A handler that throws is ignored.</summary>
+    public Action<string, ProgressEvent>? OnProgress { get; set; }
 
     /// <summary>Issue #675: asked to choose Stop, Delete or Keep waiting when the heartbeat watch fires. Null means the VM is ended at once the way the run chose.</summary>
     public StallDecision? OnStall { get; set; }

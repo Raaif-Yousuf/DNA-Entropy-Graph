@@ -249,6 +249,11 @@ public class CloudErrorClassifierTests
     [InlineData("FAILED_PRECONDITION", "Precondition check failed: constraints/compute.requireOsLogin is enforced.", CloudErrorKind.OrgPolicy)]
     [InlineData("CONDITION_NOT_MET", "Operation denied", CloudErrorKind.OrgPolicy)]
     [InlineData("CONDITION_NOT_MET", "Precondition Failed", CloudErrorKind.Other)]
+    // Round 6: the real shape of a lost label-fingerprint race on Compute (a polled operation keeps the raw CONDITION_NOT_MET code, and the message has no "precondition" wording).
+    [InlineData("CONDITION_NOT_MET", "Labels fingerprint either invalid or resource labels have changed", CloudErrorKind.Other)]
+    [InlineData(null, "Labels fingerprint either invalid or resource labels have changed", CloudErrorKind.Other)]
+    [InlineData("conditionNotMet", "Labels fingerprint either invalid or resource labels have changed", CloudErrorKind.Other)]
+    [InlineData("CONDITION_NOT_MET", "Labels fingerprint invalid; Operation denied by constraints/compute.requireOsLogin", CloudErrorKind.OrgPolicy)]
     public void A_412_is_a_precondition_conflict_only_when_it_positively_looks_like_one(string? code, string message, CloudErrorKind expected)
     {
         CloudErrorClassifier.Classify(new CloudError(code, 412, message)).ShouldBe(expected);
