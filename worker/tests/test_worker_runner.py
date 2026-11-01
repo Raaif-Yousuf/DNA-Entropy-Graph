@@ -1534,7 +1534,7 @@ def test_an_oserror_scanning_the_hf_dir_after_a_good_load_does_not_fail_the_job(
     def _flaky(path):
         nonlocal calls
         calls += 1
-        if calls >= 2:  # the post-load scan
+        if calls >= 3:  # the post-load scan (1: the miss check in the restore, 2: the pre-load emptiness test)
             raise OSError("scan failed")
         return real(path)
 
@@ -2108,3 +2108,47 @@ def test_a_restore_that_fails_after_hit_is_overwritten_with_unavailable(
 
     loading = _cache_details(rec, "model-loading")
     assert loading and "hit" not in loading and "unavailable" in loading
+
+
+def test_a_warm_local_hf_dir_with_an_empty_bucket_cache_never_reports_miss(tmp_path: Path) -> None:
+    """Issue #177 review: a kept-alive VM already holds the weights, so the loader downloads nothing and the
+    mirror is skipped; "being downloaded now" would be false for the whole model-loading stage."""
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    (hf / "blobs").mkdir(parents=True)
+    (hf / "blobs" / "warm").write_bytes(b"weights already on this VM")
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path))
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    assert any(s["stage"] == "model-loading" for s in rec.snapshots)
+    assert all(s["detail"].get("cache") != "miss" for s in rec.snapshots)
+
+
+def test_a_mirror_that_fails_leaves_no_saving_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dna_entropy.worker import runner as runner_mod
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path))
+
+    def _boom(*args, **kwargs):
+        raise OSError("bucket unreachable")
+
+    monkeypatch.setattr(runner_mod, "save_to_cache", _boom)
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    loading = [s for s in rec.snapshots if s["stage"] == "model-loading"]
+    assert any(s["detail"].get("cache") == "saving" for s in loading), "the save was never announced"
+    assert loading[-1]["detail"].get("cache") is None

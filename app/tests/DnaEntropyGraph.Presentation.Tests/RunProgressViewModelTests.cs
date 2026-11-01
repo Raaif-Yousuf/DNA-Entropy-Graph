@@ -112,6 +112,7 @@ public class RunProgressViewModelTests
     [InlineData("restoring-cache", "hit", "ProgressCacheWarm")]
     [InlineData("model-loading", "hit", "ProgressCacheWarm")]
     [InlineData("model-loading", "saving", "ProgressCacheSaving")]
+    // The worker never writes "saving" at restoring-cache; this row pins the defensive default (the plain line, never the saving claim).
     [InlineData("restoring-cache", "saving", "ProgressRestoringCache")]
     [InlineData("restoring-cache", "unavailable", "ProgressCacheUnavailable")]
     [InlineData("restoring-cache", null, "ProgressRestoringCache")]

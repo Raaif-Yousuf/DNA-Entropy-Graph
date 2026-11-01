@@ -229,7 +229,15 @@ class _SharedPredictor:
             if not is_cached(store, model_id):
                 # Issue #177: the structured twin of the notice below. It stays in status.json through
                 # model-loading (the long download), until the next stage that sets its own detail.
-                status.update(detail={"cache": "miss"})
+                # Only when this computer holds no weights either: a warm local HF dir (a kept-alive
+                # VM) downloads nothing, so "miss" would say a download is happening that is not.
+                # A scan that fails reports nothing rather than guess.
+                try:
+                    local_empty = not snapshot_tree(hf_dir)
+                except OSError:
+                    local_empty = False
+                if local_empty:
+                    status.update(detail={"cache": "miss"})
                 status.notice(
                     f"model weights for {model_id} are not in the bucket cache; "
                     "the model loader will download them from Hugging Face"
@@ -277,6 +285,8 @@ class _SharedPredictor:
                 store, model_id, hf_dir, should_stop=self._cancel.poll if self._cancel else None
             )
         except Exception as exc:
+            # The save is over (it failed): "saving" would stay on screen until the next stage.
+            status.update(detail={})
             status.notice(
                 f"model weights for {model_id} could not be mirrored to the bucket cache ({exc}); "
                 "the next job will download them again"
