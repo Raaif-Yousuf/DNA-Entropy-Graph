@@ -1275,7 +1275,9 @@ public sealed class JobReconciler
             return options.OutputFolder;
         }
 
-        var existing = string.IsNullOrWhiteSpace(row.OutputDir) ? null : Path.GetDirectoryName(row.OutputDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        // Issue #1043: the row's own folder names the output root only when it carries this run's marker (the app made it). A damaged row naming someone else's folder must not make that
+        // folder's parent the place a fresh run folder is created; it falls back to the default output folder like a row with no folder.
+        var existing = string.IsNullOrWhiteSpace(row.OutputDir) || RunFolderMarker.Check(row.OutputDir, row.JobId) != RunFolderMarkerState.Matches ? null : Path.GetDirectoryName(row.OutputDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return string.IsNullOrWhiteSpace(existing) ? RunOutputFolders.DefaultParent(_downloadsFolder) : existing;
     }
 

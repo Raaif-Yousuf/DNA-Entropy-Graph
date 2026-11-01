@@ -175,6 +175,7 @@ public sealed class StreamedDownloadConsumerTests : IDisposable
             MachineType: "g2-standard-8", MaxRunDuration: TimeSpan.FromHours(4), TerminationAction: "DELETE"));
         var folder = Path.Combine(request.OutputFolder, "resumed");
         Directory.CreateDirectory(folder);
+        RunFolderMarker.Write(folder, jobId); // issue #1043: a resumed run only reuses a folder that carries its own marker
         var settings = new CloudRunSettings();
         var rows = new RunRowStore(_runs, null);
         _runs.UpsertAsync(new RunRecord(jobId, JobPhase.Downloading, _now, OutputDir: folder), CancellationToken.None).GetAwaiter().GetResult();
