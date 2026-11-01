@@ -2,6 +2,7 @@ using System.Text;
 using System.Xml.Linq;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
+using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.Inputs;
 using DnaEntropyGraph.Presentation.Services;
@@ -72,8 +73,15 @@ public sealed class NewRunPriceSourceTests : IDisposable
     private void EstimateReturns(CostEstimateResult result)
         => _estimates.EstimateAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<long?>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(result));
 
-    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true, IPricingStatus? pricing = null, ICostEstimateService? estimates = null)
+    private async Task<NewRunViewModel> OpenWithAFileAsync(bool withPricing = true, IPricingStatus? pricing = null, ICostEstimateService? estimates = null, bool a100IsSpotOnlyAndPicked = false)
     {
+        // The shipped catalog offers no Spot-only tier (H100 is not offered), so the Spot cases make the A100 Spot-only in a test catalog.
+        var gpu = TestGpu.Plan(a100IsSpotOnlyAndPicked ? SpotOnlyA100Catalog() : null);
+        if (a100IsSpotOnlyAndPicked)
+        {
+            gpu.SelectedGpu = gpu.Gpus.Single(g => g.Tier == GpuTier.A100_40);
+        }
+
         var vm = new NewRunViewModel(
             Substitute.For<IFilePicker>(),
             Substitute.For<IJobEngine>(),
@@ -83,7 +91,7 @@ public sealed class NewRunPriceSourceTests : IDisposable
             estimates ?? _estimates,
             new OutputSelectionStore(Substitute.For<ISettingsStore>()),
             NullDiagnosticsLog.Instance,
-            TestGpu.Plan(),
+            gpu,
             clock: _time,
             pricing: withPricing ? pricing ?? _pricing : null);
         var path = Path.Combine(_dir, "a.fasta");
@@ -178,6 +186,70 @@ public sealed class NewRunPriceSourceTests : IDisposable
         var line = await LineForAsync(PricingOrigin.Shipped, Shipped);
 
         line.ShouldBe("Prices from the list that came with this app, as of 1 Sep 2026.");
+    }
+
+    // Issue #1074. The A100 is Spot-only (machine a2-highgpu-1g); the default L4 (g2-standard-8) is on-demand.
+    private const string SpotNote = "The Spot price is from the list that came with this app, not from Google's price list.";
+
+    private static GpuCatalog SpotOnlyA100Catalog()
+        => new(GpuCatalog.Shipped.Models, [.. GpuCatalog.Shipped.Gpus.Select(g => g.Tier == GpuTier.A100_40 ? g with { SpotOnly = true } : g)]);
+
+    private async Task<string> SpotLineAsync(PricingOrigin origin, string[]? keptFromShipped, bool pickA100 = true)
+    {
+        _pricing.Current = new PricingSnapshot(origin, Today, PricingFallbackReason.None, keptFromShipped);
+        var vm = await OpenWithAFileAsync(a100IsSpotOnlyAndPicked: pickA100);
+        vm.Gpu.RequiresSpot.ShouldBe(pickA100, "the test must be pricing the machine it thinks it is");
+        return await LineAsync(vm);
+    }
+
+    [Fact]
+    public async Task A_Spot_estimate_whose_Spot_price_came_from_the_shipped_list_says_so_after_the_catalog_line()
+    {
+        var line = await SpotLineAsync(PricingOrigin.Catalog, ["a2-highgpu-1g"]);
+
+        line.ShouldBe("Prices from Google's price list, as of 31 Oct 2026. " + SpotNote);
+        line.ShouldNotContain("—", Case.Sensitive);
+    }
+
+    [Fact]
+    public async Task A_Spot_estimate_with_Google_Spot_prices_adds_nothing()
+    {
+        (await SpotLineAsync(PricingOrigin.Catalog, null)).ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
+        (await SpotLineAsync(PricingOrigin.Catalog, [])).ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
+    }
+
+    [Fact]
+    public async Task An_on_demand_estimate_never_shows_the_Spot_note_even_when_a_Spot_price_was_kept()
+    {
+        var line = await SpotLineAsync(PricingOrigin.Catalog, ["g2-standard-8", "a2-highgpu-1g"], pickA100: false);
+
+        line.ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
+    }
+
+    [Fact]
+    public async Task A_Spot_estimate_for_a_machine_whose_Spot_price_is_Googles_does_not_show_the_note_for_another_machine()
+    {
+        (await SpotLineAsync(PricingOrigin.Catalog, ["g2-standard-8"])).ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
+    }
+
+    [Fact]
+    public async Task When_everything_is_already_from_the_shipped_list_the_Spot_note_is_not_repeated()
+    {
+        (await SpotLineAsync(PricingOrigin.Shipped, ["a2-highgpu-1g"])).ShouldBe("Prices from the list that came with this app, as of 31 Oct 2026.");
+    }
+
+    [Theory]
+    [InlineData(PricingFallbackReason.SignedOut)]
+    [InlineData(PricingFallbackReason.Network)]
+    public async Task The_Spot_note_comes_before_a_failure_reason_so_the_action_stays_last(PricingFallbackReason reason)
+    {
+        _pricing.Current = new PricingSnapshot(PricingOrigin.CacheStale, Today, reason, ["a2-highgpu-1g"]);
+        var vm = await OpenWithAFileAsync(a100IsSpotOnlyAndPicked: true);
+
+        var line = await LineAsync(vm);
+
+        line.ShouldContain(SpotNote);
+        line.IndexOf(SpotNote, StringComparison.Ordinal).ShouldBeLessThan(line.IndexOf(reason == PricingFallbackReason.SignedOut ? "signed out" : "connection", StringComparison.Ordinal));
     }
 
     [Theory]

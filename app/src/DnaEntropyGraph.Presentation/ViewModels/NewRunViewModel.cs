@@ -1326,7 +1326,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
             // Read after the estimate: asking for it is what lets the day's catalog read finish (or fail), so this is the answer the numbers came from.
-            priceText = result.Estimate is not null && _pricing is not null ? PriceSourceLine(_pricing.Current) : string.Empty;
+            priceText = result.Estimate is not null && _pricing is not null ? PriceSourceLine(_pricing.Current, priced.SpotVm, CloudJobRequestFactory.MachineTypeFor(priced.GpuTier)) : string.Empty;
             cap = status;
         }
         catch (Exception)
@@ -1454,8 +1454,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     /// the real source ages a catalog read at midnight itself, so this does not date-check again), or "the list that came with this app" with the reason
     /// today's read failed and one action. With no reason it can also mean the read has not finished yet or was not tried: the line then corrects itself
     /// when the service reports the read's outcome. The date is the list's own, never today's by default.
+    /// For a Spot estimate whose machine's Spot price is the shipped list's while the rest came from Google (<see cref="PricingSnapshot.SpotKeptFromShipped"/>,
+    /// issue #1074) one more sentence says so, before any failure reason so the action stays last. Never for on-demand, never for another machine, and not
+    /// when the whole line already says the shipped list.
     /// </summary>
-    private string PriceSourceLine(PricingSnapshot snapshot)
+    private string PriceSourceLine(PricingSnapshot snapshot, bool spot, string machineType)
     {
         var reason = ReasonText(snapshot.Reason);
         var hasDate = snapshot.AsOf != default;
@@ -1475,6 +1478,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         else
         {
             line = Format("PriceSource_Catalog", date);
+        }
+
+        if (spot && snapshot.Origin != PricingOrigin.Shipped && snapshot.SpotKeptFromShipped?.Contains(machineType, StringComparer.Ordinal) == true)
+        {
+            line += " " + _strings.GetString("PriceSource_SpotFromShipped");
         }
 
         return reason.Length == 0 ? line : line + " " + reason;
