@@ -235,6 +235,9 @@ class _SharedPredictor:
                     "the model loader will download them from Hugging Face"
                 )
                 return False
+            # Issue #177: "hit" is written BEFORE the restore (it can copy gigabytes), so the page says the saved
+            # copy is being reused for as long as that takes; a restore that then fails overwrites it below.
+            status.update(detail={"cache": "hit"})
             count = restore_from_cache(store, model_id, hf_dir)
         except Exception as exc:  # never fail the job over the cache
             status.update(detail={"cache": "unavailable"})
@@ -243,7 +246,6 @@ class _SharedPredictor:
                 "downloading from Hugging Face instead"
             )
             return False
-        status.update(detail={"cache": "hit"})
         status.notice(f"model weights for {model_id} restored from the cache ({count} files)")
         return True
 
@@ -267,6 +269,8 @@ class _SharedPredictor:
                 return
             if not snapshot_tree(hf_dir):
                 return  # nothing was downloaded
+            # Issue #177: the download is over and the copy is being saved; "miss" would now be untrue.
+            status.update(detail={"cache": "saving"})
             status.notice(f"mirroring model weights for {model_id} to the bucket cache")
             count = save_to_cache(
                 store, model_id, hf_dir, should_stop=self._cancel.poll if self._cancel else None

@@ -119,11 +119,12 @@ public sealed class RunProgressWiringTests : IDisposable
     [Theory]
     [InlineData("miss", "ProgressCacheFirstRun")]
     [InlineData("unavailable", "ProgressCacheUnavailable")]
-    [InlineData("hit", "ProgressModelLoading")]
+    [InlineData("hit", "ProgressCacheWarm")]
+    [InlineData("saving", "ProgressCacheSaving")]
     public async Task A_status_json_with_detail_cache_at_model_loading_reaches_the_run_page_as_that_caches_resw_line_through_the_real_container(string cache, string expectedKey)
     {
         // Issue #177, wired-to-nothing: the worker's detail.cache is read by WorkerStatusReader, carried by WorkerProgressTracker and picked by RunProgressViewModel; each hop is
-        // unit-tested alone. Observable: with the Cache plumbing dropped the page shows the plain model-loading line on a miss.
+        // unit-tested alone. Observable: with the Cache plumbing dropped the page shows the plain model-loading line on every row.
         var worker = new FakeWorkerProcess();
         var services = new ServiceCollection();
         services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
@@ -142,7 +143,7 @@ public sealed class RunProgressWiringTests : IDisposable
         var strings = provider.GetRequiredService<IStringResourceProvider>();
         var expected = strings.GetString(expectedKey);
         (expected == expectedKey).ShouldBeFalse("the resw key must exist and resolve, or this test proves nothing");
-        (expected == strings.GetString(expectedKey == "ProgressModelLoading" ? "ProgressCacheFirstRun" : "ProgressModelLoading")).ShouldBeFalse("the lines under test must differ from the plain one");
+        (expected == strings.GetString("ProgressModelLoading")).ShouldBeFalse("the lines under test must differ from the plain one");
 
         var run = provider.GetRequiredService<LocalJobRunner>().RunAsync(
             new LocalJobRequest(

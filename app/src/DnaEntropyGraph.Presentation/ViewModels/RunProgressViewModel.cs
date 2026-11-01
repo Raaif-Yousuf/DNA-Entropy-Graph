@@ -430,6 +430,9 @@ public sealed partial class RunProgressViewModel : ObservableObject
             "unavailable" => _strings.GetString("ProgressCacheUnavailable"),
             _ => _strings.GetString("ProgressRestoringCache"),
         },
+        // "hit" at model-loading: the saved copy was restored and the loader is reading it from the computer's own disk, so the warm line is still true. "saving": the download is over and a copy is being saved to the bucket.
+        WorkerStages.ModelLoading when progress.Cache == "hit" => _strings.GetString("ProgressCacheWarm"),
+        WorkerStages.ModelLoading when progress.Cache == "saving" => _strings.GetString("ProgressCacheSaving"),
         WorkerStages.ModelLoading when progress.Cache == "miss" => _strings.GetString("ProgressCacheFirstRun"),
         WorkerStages.ModelLoading when progress.Cache == "unavailable" => _strings.GetString("ProgressCacheUnavailable"),
         WorkerStages.ModelLoading => _strings.GetString("ProgressModelLoading"),

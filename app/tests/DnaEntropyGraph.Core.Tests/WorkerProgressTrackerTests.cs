@@ -23,6 +23,7 @@ public class WorkerProgressTrackerTests
     [InlineData("miss")]
     [InlineData("hit")]
     [InlineData("unavailable")]
+    [InlineData("saving")]
     public void The_status_reader_reads_the_worker_cache_field_and_the_event_carries_it(string cache)
     {
         var json = "{\"stage\":\"restoring-cache\",\"percent\":0,\"detail\":{\"cache\":\"" + cache + "\"},\"heartbeatSeq\":2,\"worker\":{\"version\":\"1.0.0\"}}";

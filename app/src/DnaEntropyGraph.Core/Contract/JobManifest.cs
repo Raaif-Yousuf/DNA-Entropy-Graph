@@ -12,7 +12,7 @@ public sealed record JobManifest(string JobId, string ModelId, IReadOnlyList<str
 /// <summary>
 /// One progress step of a run, as DATA (Hard Rule 13: Core builds no user text). <paramref name="Window"/> and <paramref name="Windows"/> are the worker's
 /// <c>detail.window</c>/<c>detail.windows</c> within the current input; the presentation layer turns the stage and counts into a resource string.
-/// <paramref name="Cache"/> is the worker's <c>detail.cache</c> at restoring-cache and model-loading ("hit", "miss" or "unavailable"); null when the worker reported none (This PC, the mock predictor, the startup script).
+/// <paramref name="Cache"/> is the worker's <c>detail.cache</c> at restoring-cache and model-loading ("hit", "miss", "saving" or "unavailable"); null when the worker reported none (This PC, the mock predictor, the startup script).
 /// </summary>
 public sealed record ProgressEvent(string Stage, double FractionComplete, int? Window = null, int? Windows = null, string? Cache = null);
 

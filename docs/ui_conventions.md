@@ -412,18 +412,20 @@ A run that finishes (done, partly done) or fails while the app window is not in 
 | Stage and field | Resource key |
 |---|---|
 | `booting` | `ProgressBooting` |
-| `installing` | `ProgressInstalling` (says what is happening, the analysis software is being downloaded onto the rented computer, a VM; no frequency or timing claim, it is unmeasured and false on a warm image) |
+| `installing` | `ProgressInstalling` (the rented computer, a VM, is getting the analysis software ready; worded to be true whether or not the image has to be pulled, and with no frequency or timing claim) |
 | `restoring-cache`, `detail.cache` = `miss` | `ProgressCacheFirstRun` |
-| `restoring-cache`, `detail.cache` = `hit` | `ProgressCacheWarm` |
-| `restoring-cache`, `detail.cache` = `unavailable` | `ProgressCacheUnavailable` (the saved copy could not be used, so the model is downloaded; several minutes) |
+| `restoring-cache`, `detail.cache` = `hit` | `ProgressCacheWarm` (the worker writes `hit` BEFORE the restore, so this shows for the whole restore) |
+| `restoring-cache`, `detail.cache` = `unavailable` | `ProgressCacheUnavailable` (the saved copy could not be checked or used, so the model is downloaded; several minutes) |
 | `restoring-cache`, no cache field yet | `ProgressRestoringCache` |
 | `model-loading`, `detail.cache` = `miss` | `ProgressCacheFirstRun` (the long download is in this stage, so the text stays up through it) |
+| `model-loading`, `detail.cache` = `hit` | `ProgressCacheWarm` (the saved copy was restored; the loader reads it from the computer's own disk) |
+| `model-loading`, `detail.cache` = `saving` | `ProgressCacheSaving` (the download is over; the worker is copying the weights to the bucket) |
 | `model-loading`, `detail.cache` = `unavailable` | `ProgressCacheUnavailable` (same wait as a miss) |
 | `model-loading`, anything else | `ProgressModelLoading` |
 | `running` with window counts | `ProgressAnalysingWindowCount` ("part N of M"); without, `ProgressAnalysing` |
 | any other stage (including `uploading`, which no worker code writes) | `ProgressGeneric`, never the raw stage id |
 
-The first-run signal is the worker's own `detail.cache` ("hit", "miss", "unavailable"), written when it looks in the bucket cache (`docs/job_contract.md` section 5), never the run history: a project whose cache was deleted, or a second computer after a failed first run, is told the truth. Every sentence of the miss and unavailable lines must be true on every miss (the worker's mirror step can skip the save), which is why they promise nothing about "first run" or "every later run" and carry no minute count. A This PC run and the mock predictor write no `restoring-cache` stage and no cache field, so they show `ProgressModelLoading` and never claim a cloud cache. The line never shows an input or file name (Hard Rule 14).
+The first-run signal is the worker's own `detail.cache` ("hit", "miss", "saving", "unavailable"), written as the worker goes through the bucket cache (`docs/job_contract.md` section 5), never the run history: a project whose cache was deleted, or a second computer after a failed first run, is told the truth. The miss and unavailable lines promise nothing about "first run" or "every later run" and carry no minute count, because the worker's mirror step can skip the save. `unavailable` covers both a failed look-up and a failed restore, so its line says the copy could not be checked or used. A This PC run and the mock predictor write no `restoring-cache` stage and no cache field, so they show `ProgressModelLoading` and never claim a cloud cache. The line never shows an input or file name (Hard Rule 14).
 
 ## 15. The slow-run notice and the stall question (issue #675)
 

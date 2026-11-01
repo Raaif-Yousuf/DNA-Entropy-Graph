@@ -110,7 +110,7 @@ public static class WorkerStatusReader
             && detail.TryGetProperty("cache", out var value) && value.ValueKind == JsonValueKind.String)
         {
             var cache = value.GetString();
-            return cache is "hit" or "miss" or "unavailable" ? cache : null;
+            return cache is "hit" or "miss" or "unavailable" or "saving" ? cache : null;
         }
 
         return null;

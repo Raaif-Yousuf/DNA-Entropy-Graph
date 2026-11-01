@@ -1950,7 +1950,9 @@ def test_restoring_cache_with_an_empty_bucket_cache_reports_detail_cache_miss(tm
 
     assert "miss" in _cache_details(rec, "restoring-cache")
     assert "miss" in _cache_details(rec, "model-loading"), "the long download is in model-loading"
-    assert all(s["detail"].get("cache") is None for s in rec.snapshots if s["stage"] == "running")
+    running = [s for s in rec.snapshots if s["stage"] == "running"]
+    assert running, "no running snapshot: the check below would be vacuous"
+    assert all(s["detail"].get("cache") is None for s in running)
 
 
 def test_restoring_cache_with_a_populated_bucket_cache_reports_detail_cache_hit(tmp_path: Path) -> None:
@@ -2009,3 +2011,100 @@ def test_a_run_with_no_bucket_cache_never_reports_detail_cache(tmp_path: Path) -
     assert rec.snapshots
     assert all("cache" not in s["detail"] for s in rec.snapshots)
     assert "restoring-cache" not in [s["stage"] for s in rec.snapshots]
+
+
+def test_detail_cache_is_saving_while_the_downloaded_weights_are_copied_to_the_bucket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #177 review: on a miss the mirror runs at model-loading with the weights already downloaded;
+    status.json must not still say the model is being downloaded while the copy is being saved."""
+    from dna_entropy.worker import runner as runner_mod
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path))
+    seen: list[object] = []
+    real_save = runner_mod.save_to_cache
+
+    def _spy(*args, **kwargs):
+        seen.append(rec.snapshots[-1]["detail"].get("cache"))
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(runner_mod, "save_to_cache", _spy)
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    assert seen == ["saving"]
+    running = [s for s in rec.snapshots if s["stage"] == "running"]
+    assert running and all(s["detail"].get("cache") is None for s in running)
+
+
+def test_detail_cache_is_hit_while_the_saved_weights_are_still_being_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #177 review: the restore of the saved weights takes minutes; the page must say the saved copy is
+    being reused DURING it, not only for the milliseconds after it."""
+    from dna_entropy.worker import runner as runner_mod
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf1, hf2 = tmp_path / "vm1-hf", tmp_path / "vm2-hf"
+    run_job(
+        _evo_manifest_store(tmp_path / "a"),
+        predictor_factory=_downloading_factory(hf1, []),
+        cache_store=cache,
+        hf_cache_dir=hf1,
+    )
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path / "b"))
+    seen: list[tuple[object, object]] = []
+    real_restore = runner_mod.restore_from_cache
+
+    def _spy(*args, **kwargs):
+        seen.append((rec.snapshots[-1]["stage"], rec.snapshots[-1]["detail"].get("cache")))
+        return real_restore(*args, **kwargs)
+
+    monkeypatch.setattr(runner_mod, "restore_from_cache", _spy)
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf2, []),
+        cache_store=cache,
+        hf_cache_dir=hf2,
+    )
+
+    assert seen == [("restoring-cache", "hit")]
+
+
+def test_a_restore_that_fails_after_hit_is_overwritten_with_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dna_entropy.worker import runner as runner_mod
+
+    cache = LocalBlobstore(tmp_path / "bucket-root")
+    hf = tmp_path / "hf"
+    run_job(
+        _evo_manifest_store(tmp_path / "a"),
+        predictor_factory=_downloading_factory(tmp_path / "hf0", []),
+        cache_store=cache,
+        hf_cache_dir=tmp_path / "hf0",
+    )
+    rec = _StatusRecorder(_evo_manifest_store(tmp_path / "b"))
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner_mod, "restore_from_cache", _boom)
+
+    run_job(
+        cast(Blobstore, rec),
+        predictor_factory=_downloading_factory(hf, []),
+        cache_store=cache,
+        hf_cache_dir=hf,
+    )
+
+    loading = _cache_details(rec, "model-loading")
+    assert loading and "hit" not in loading and "unavailable" in loading

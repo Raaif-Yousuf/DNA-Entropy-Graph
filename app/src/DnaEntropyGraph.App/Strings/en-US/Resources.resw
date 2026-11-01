@@ -3670,7 +3670,7 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
   </data>
   <data name="ProgressInstalling" xml:space="preserve">
-    <value>The rented computer (a virtual machine, or VM) is downloading the analysis software it needs to run your sequence.</value>
+    <value>The rented computer (a virtual machine, or VM) is getting the analysis software ready for your sequence.</value>
   </data>
   <data name="ProgressRestoringCache" xml:space="preserve">
     <value>Looking in your cloud storage for the analysis model saved by an earlier run...</value>
@@ -3679,7 +3679,10 @@ A computer that keeps running ends itself at its time limit, but you pay until t
     <value>The analysis model is not saved in your cloud storage yet, so it is being downloaded now, which takes several minutes. A copy is saved afterwards when possible, so later runs can usually start faster.</value>
   </data>
   <data name="ProgressCacheUnavailable" xml:space="preserve">
-    <value>The copy of the analysis model saved in your cloud storage could not be used, so the model is being downloaded instead, which takes several minutes.</value>
+    <value>Your saved copy of the analysis model could not be checked or used, so the model is being downloaded instead, which takes several minutes.</value>
+  </data>
+  <data name="ProgressCacheSaving" xml:space="preserve">
+    <value>The analysis model has been downloaded. A copy is being saved to your cloud storage so later runs can usually start faster.</value>
   </data>
   <data name="ProgressCacheWarm" xml:space="preserve">
     <value>Reusing the analysis model that was saved by an earlier run.</value>
