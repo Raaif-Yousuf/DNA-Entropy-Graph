@@ -226,6 +226,12 @@ def test_original_on_base_plus_added_repair_fragment_fails():
     assert FRAG_B in problem
 
 
+def test_a_collision_with_a_base_fragment_says_to_sync_with_main_first():
+    problem = ccf.extra_fragments([("A", FRAG_B)], base_fragments=[FRAG])
+    assert problem is not None
+    assert "rebase/merge origin/main first" in problem
+
+
 def test_a_stacked_branch_with_a_different_stem_passes():
     """feat/177 stacked on fix/1086: both fragments are 'added' against the merge base, but they are two changes."""
     assert ccf.extra_fragments([("A", OTHER_LANE), ("A", STACKED)]) is None

@@ -155,20 +155,24 @@ It saves `git diff HEAD --binary` of the named files under the worktree's OWN gi
 expecting RED, always restores (re-checkout, then `git apply`), and verifies the restore is
 byte-identical in both the diff and the file bytes (exit 0 only then; 10 = tests stayed green, fix
 not proven; 12 = restore failed or mismatch, patch path and two recovery commands in the message;
-15 = pytest exited 2/3/4/5, a usage, collection or no-tests error that proves nothing). It prints
+15 = pytest exited 3/4/5 or the output says `No module named pytest`, which proves nothing; pytest
+exit 2, a collection error, counts as RED with a warning). It prints
 the last 20 lines of the test output: read them, because a build failure also counts as RED. It
-refuses any directory (including `.`) and any file not in HEAD (untracked or only `git add`ed).
+refuses any directory (including `.`), any file not in HEAD (untracked or only `git add`ed) and any
+file with staged changes (exit 13).
 
 Fallback by hand: the patch path must be unique per lane and live under the worktree's own git
 dir, never in the shared scratchpad (MEASURED 2026-10-31: two workers wrote the same
 `<scratchpad>/fix.patch` and one lost its fix after `git checkout -- .` had wiped the tree):
 
 ```
-$p = "$(git rev-parse --absolute-git-dir)/revert-check/fix.patch"   # per worktree, so per lane
+$p = "$(git rev-parse --absolute-git-dir)/revert-check/fix-$(Get-Date -Format yyyyMMdd-HHmmss).patch"   # per worktree AND per run
 New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
-git diff HEAD --binary --no-ext-diff --no-textconv --output=$p -- <the source files>   # keep the fix; NEVER pipe it (PowerShell decodes stdout into lines and mangles the bytes)
+# NEVER re-run the save step while the files sit at HEAD: the diff is empty and a re-used name would overwrite the only copy.
+git diff HEAD --binary --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --output=$p -- <the source files>   # keep the fix; NEVER pipe it (PowerShell decodes stdout into lines and mangles the bytes)
 git checkout HEAD -- <the source files>   # ONLY the named source files, never "."
 <run the targeted tests; they must go RED>
+git checkout HEAD -- <the source files>   # again: a test run or formatter may have touched them, and the patch applies to HEAD's bytes
 git apply $p                              # restore
 git diff HEAD --stat -- <the source files> # prove the restore matches what you had
 ```

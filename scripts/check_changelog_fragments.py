@@ -146,13 +146,18 @@ def extra_fragments(changes: list[tuple[str, str]], base_fragments: Iterable[str
     fragment beside the lane's) and pass. A base fragment this branch deletes is not a collision."""
     deleted = {path for status, path in changes if status == "D"}
     added = sorted({path for status, path in changes if status == "A" and _is_fragment_path(path)})
-    others = sorted({path for path in base_fragments if path not in deleted} | set(added))
+    base_set = {path for path in base_fragments if path not in deleted}
+    others = sorted(base_set | set(added))
     for path in added:
         stem = fragment_stem(path.rsplit("/", 1)[-1])
         twins = [other for other in others if other != path and fragment_stem(other.rsplit("/", 1)[-1]) == stem]
         if twins:
             names = ", ".join(sorted({path, *twins}))
-            return f"a changelog fragment is added for a change that already has one ({names}): keep one (merge the bullets, delete the other)"
+            hint = ""
+            if any(twin in base_set for twin in twins):
+                hint = "; if main has already folded the base one, rebase/merge origin/main first"
+            problem = "a changelog fragment is added for a change that already has one"
+            return f"{problem} ({names}): keep one (merge the bullets, delete the other){hint}"
     return None
 
 

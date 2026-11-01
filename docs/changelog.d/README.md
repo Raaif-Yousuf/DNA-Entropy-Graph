@@ -32,6 +32,9 @@ conflict with any other branch's fragment, and the fragment is folded into
   sprint-log bullets): keep one, edit the original instead of adding a repair fragment. Two
   fragments with different names are two changes and pass, so a branch stacked on another lane's
   branch may add its own fragment beside the lane's. Modifying an existing fragment is fine.
+  Known gap, deliberate: a branch RENAMED to a different slug that adds a second fragment with a
+  different stem is not detected (the cost of letting stacked branches pass). When a collision
+  is with a fragment on the base, rebase/merge origin/main first: main may already have folded it.
 - One bullet is normal; more than one is fine if the branch did more than
   one thing worth recording.
 

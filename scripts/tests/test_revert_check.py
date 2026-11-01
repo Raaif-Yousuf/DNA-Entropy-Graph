@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -135,14 +137,127 @@ def test_pytest_usage_collection_or_no_tests_exits_never_prove_a_fix(repo: Path,
     assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
 
 
-def test_pytest_collection_error_never_proves_a_fix(repo: Path):
-    _commit_pytest_file(repo)
+def test_pytest_collection_error_is_the_normal_red_for_a_new_symbol_and_warns(repo: Path):
+    """A fix that adds a symbol a test imports makes the reverted run a COLLECTION error (exit 2): that is RED."""
     (repo / "test_broken.py").write_bytes(b"import module_that_does_not_exist\n")
     _git(repo, "add", "test_broken.py")
     _git(repo, "commit", "-q", "-m", "broken")
     (repo / "src.py").write_bytes(b"VALUE = 2\n")
     proc = _run(repo, ["src.py"], ["-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_broken.py"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "collection error; read the tail" in proc.stdout + proc.stderr
+    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
+
+
+@pytest.mark.parametrize("code", [3, 4, 5])
+def test_pytest_exit_3_4_5_stay_refused(repo: Path, code: int):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    stub = repo / "stubdir"
+    stub.mkdir()
+    (stub / "pytest.py").write_bytes(f"raise SystemExit({code})\n".encode())
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "src.py", "--", sys.executable, "-B", "-m", "pytest"],
+        cwd=repo,
+        env={**os.environ, "PYTHONPATH": str(stub)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
     assert proc.returncode == 15, proc.stdout + proc.stderr
+
+
+def test_an_argument_whose_stem_is_pytest_does_not_make_the_command_pytest(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    proc = _run(repo, ["src.py"], ["-B", "-c", "raise SystemExit(5)", "pytest"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_is_pytest_matches_only_the_executable_or_dash_m_pytest():
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    assert rc.is_pytest(["pytest", "-q"])
+    assert rc.is_pytest(["python", "-m", "pytest", "x"])
+    assert rc.is_pytest(["python", "heavy.py", "--lane", "a", "--", "python", "-m", "pytest"])
+    assert rc.is_pytest(["python", "heavy.py", "--lane", "a", "--", "pytest"])
+    assert rc.is_pytest(["uv", "run", "pytest"])
+    assert not rc.is_pytest(["python", "-c", "x", "pytest"])
+    assert not rc.is_pytest(["dotnet", "test", "--filter", "pytest"])
+    assert not rc.is_pytest(["python", "scripts/pytest.py"])
+
+
+def test_wrong_interpreter_without_pytest_is_refused(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    wrong = ["-B", "-c", "import sys\nprint('No module named pytest')\nsys.exit(1)"]
+    proc = _run(repo, ["src.py"], wrong)
+    assert proc.returncode == 15, proc.stdout + proc.stderr
+    assert "No module named pytest" in proc.stdout + proc.stderr
+    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
+
+
+def test_a_detached_grandchild_holding_the_output_cannot_hang_the_wait(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    spawn = (
+        "import subprocess, sys\n"
+        "kw = {'creationflags': 0x00000008 | 0x00000200} if sys.platform == 'win32' else {'start_new_session': True}\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'], stdout=sys.stdout, stderr=sys.stderr, **kw)\n"
+        "print('child-done')\n"
+        "sys.exit(1)\n"
+    )
+    started = time.monotonic()
+    proc = _run(repo, ["src.py"], ["-B", "-c", spawn])
+    elapsed = time.monotonic() - started
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert elapsed < 12, f"the wait blocked {elapsed:.1f}s on a grandchild that inherited the output handle"
+    assert "child-done" in proc.stdout
+    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
+
+
+def test_staged_changes_in_a_named_file_are_refused_up_front(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    _git(repo, "add", "src.py")
+    proc = _run(repo, ["src.py"], CHECK_VALUE)
+    assert proc.returncode == 13, proc.stdout + proc.stderr
+    assert "staged" in proc.stderr
+    assert _git(repo, "diff", "--cached", "--name-only").strip() == "src.py", "the staging must be untouched"
+    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
+    assert "revert-check" not in proc.stdout, "refused before anything was saved or reverted"
+
+
+def test_bracketed_file_names_are_literal_not_globs(repo: Path):
+    (repo / "[id].py").write_bytes(b"X = 1\n")
+    (repo / "i.py").write_bytes(b"I = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "bracket")
+    (repo / "[id].py").write_bytes(b"X = 2\n")
+    (repo / "i.py").write_bytes(b"I = 2\n")  # a glob of `[id].py` would also match this
+    other_before = _diff(repo, "i.py")
+    proc = _run(repo, ["[id].py"], ["-B", "-c", "import sys; sys.exit(0 if open('i.py').read() == 'I = 1\\n' else 1)"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # RED: i.py was left alone (still I = 2)
+    assert (repo / "[id].py").read_bytes() == b"X = 2\n"
+    assert _diff(repo, "i.py") == other_before
+
+
+def test_keyboard_interrupt_reprints_the_patch_path_and_recovery_commands(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+
+    def interrupted(*args: object, **kwargs: object) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(rc, "_run_tests", interrupted)
+    code = rc.run(["src.py", "--", sys.executable, "-c", "pass"], cwd=repo)
+    captured = capsys.readouterr()
+    assert code == 130
+    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n", "the interrupt still restores"
+    assert ".patch" in captured.err
+    assert "git checkout HEAD --" in captured.err
+    assert "git apply" in captured.err
 
 
 def test_only_named_files_are_reverted(repo: Path):
