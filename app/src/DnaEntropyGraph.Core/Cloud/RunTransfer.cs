@@ -338,7 +338,8 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.OutputFolderUnusable, $"The output folder could not be created: {ex.GetType().Name}.");
         }
 
-        await rows.UpdateRowAsync(request.JobId, row => row with { OutputDir = folder }, cancellationToken).ConfigureAwait(false);
+        // Issue #1059: a file an earlier attempt set aside lives in the folder the row just left; this new folder holds none, so the row's count starts again at 0 in the same write.
+        await rows.UpdateRowAsync(request.JobId, row => row with { OutputDir = folder, ErrorDetail = KeptAsideDetail.Set(row.ErrorDetail, 0) }, cancellationToken).ConfigureAwait(false);
         return folder;
     }
 
