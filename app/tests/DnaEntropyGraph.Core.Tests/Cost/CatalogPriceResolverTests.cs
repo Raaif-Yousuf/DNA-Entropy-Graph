@@ -79,6 +79,38 @@ public sealed class CatalogPriceResolverTests
         CatalogPriceResolver.Resolve(skus, Shipped(), Today).Table!.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBeNull();
     }
 
+    private static PricingTable ShippedWithA100Spot() => PricingTable.Parse(PricingTableTests.Good.Replace("\"spotUsdPerHour\": null", "\"spotUsdPerHour\": 1.10")).Table!;
+
+    [Fact]
+    public void A_machine_copied_whole_from_the_shipped_list_is_a_kept_Spot_machine_when_that_row_has_a_Spot_price()
+    {
+        // The catalog prices only the L4; the A100 row, Spot price included, is copied from the shipped list and is what the page shows (#1074).
+        var result = CatalogPriceResolver.Resolve(CatalogFixtures.G2AndDisk(), ShippedWithA100Spot(), Today);
+
+        result.Table!.Find("a2-highgpu-1g")!.SpotUsdPerHour.ShouldBe(1.10);
+        result.SpotKept.ShouldNotBeNull().ShouldContain("a2-highgpu-1g");
+    }
+
+    [Fact]
+    public void A_machine_copied_whole_from_the_shipped_list_with_no_Spot_price_is_not_a_kept_Spot_machine()
+    {
+        CatalogPriceResolver.Resolve(CatalogFixtures.G2AndDisk(), Shipped(), Today).SpotKept.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_kept_Spot_price_dropped_for_being_above_on_demand_is_not_listed_as_kept()
+    {
+        var skus = CatalogFixtures.G2AndDisk().Where(s => s.UsageType != "Preemptible").Select(s => s with { UsdPerUnit = s.UsdPerUnit * 0.01 }).ToList();
+        skus.Add(CatalogFixtures.Sku("Balanced PD Capacity", "Storage", "SSD", "OnDemand", 0.12, "GBy.mo"));
+        skus.RemoveAll(s => s.Description == "Balanced PD Capacity" && s.UsdPerUnit < 0.12);
+
+        var result = CatalogPriceResolver.Resolve(skus, Shipped(), Today);
+
+        result.Table!.Find("g2-standard-8")!.SpotUsdPerHour.ShouldBeNull();
+        result.SpotKept.ShouldBeNull("the price was discarded, so no shipped Spot price is on screen to name");
+        result.Table!.Source.ShouldNotContain("Spot price kept");
+    }
+
     [Fact]
     public void The_spot_gpu_sku_worded_attached_to_Spot_Preemptible_VMs_is_found()
     {
