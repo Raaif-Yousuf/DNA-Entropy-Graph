@@ -152,9 +152,12 @@ python scripts/revert_check.py <source files> -- <the targeted test command>
 
 It saves `git diff HEAD --binary` of the named files under the worktree's OWN git dir
 (`<git-dir>/revert-check/<timestamp>-<pid>.patch`), checks out only those files, runs the tests
-expecting RED, always restores with `git apply`, and verifies the restore is byte-identical (exit
-0 only then; 10 = tests stayed green, fix not proven; 12 = restore mismatch, patch path in the
-message). It refuses an untracked source file and a directory such as `.`.
+expecting RED, always restores (re-checkout, then `git apply`), and verifies the restore is
+byte-identical in both the diff and the file bytes (exit 0 only then; 10 = tests stayed green, fix
+not proven; 12 = restore failed or mismatch, patch path and two recovery commands in the message;
+15 = pytest exited 2/3/4/5, a usage, collection or no-tests error that proves nothing). It prints
+the last 20 lines of the test output: read them, because a build failure also counts as RED. It
+refuses any directory (including `.`) and any file not in HEAD (untracked or only `git add`ed).
 
 Fallback by hand: the patch path must be unique per lane and live under the worktree's own git
 dir, never in the shared scratchpad (MEASURED 2026-10-31: two workers wrote the same
@@ -163,7 +166,7 @@ dir, never in the shared scratchpad (MEASURED 2026-10-31: two workers wrote the 
 ```
 $p = "$(git rev-parse --absolute-git-dir)/revert-check/fix.patch"   # per worktree, so per lane
 New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
-git diff HEAD --binary -- <the source files> | Set-Content -AsByteStream $p   # keep the fix
+git diff HEAD --binary --no-ext-diff --no-textconv --output=$p -- <the source files>   # keep the fix; NEVER pipe it (PowerShell decodes stdout into lines and mangles the bytes)
 git checkout HEAD -- <the source files>   # ONLY the named source files, never "."
 <run the targeted tests; they must go RED>
 git apply $p                              # restore
