@@ -242,7 +242,10 @@ public sealed class NewRunPriceSourceTests : IDisposable
 
         var line = await LineThroughRealResolverAsync(GpuTier.L4, cheap);
 
-        line.ShouldNotContain(SpotNote);
+        // ShouldBe, not ShouldNotContain: an empty line (no estimate) would pass a negative check vacuously. The exact catalog line
+        // proves an estimate was on screen. The Core test CatalogPriceResolverTests.A_kept_Spot_price_dropped_for_being_above_on_demand_is_not_listed_as_kept
+        // guards the resolver itself.
+        line.ShouldBe("Prices from Google's price list, as of 31 Oct 2026.");
     }
 
     [Fact]
