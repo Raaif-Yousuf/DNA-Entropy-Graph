@@ -190,3 +190,145 @@ def test_base_mode_with_an_unknown_ref_is_a_usage_error_not_a_pass(tmp_path):
         check=False,
     )
     assert proc.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# #1096: one change, one fragment. Two fragments are "the same change" when their names are equal after
+# stripping a trailing -r<N> (repair round) suffix. A branch stacked on another lane's branch adds a
+# fragment of its own with a different stem, and that is fine.
+# ---------------------------------------------------------------------------
+
+FRAG_B = "docs/changelog.d/fix-1-x-r2.md"
+FRAG_C = "docs/changelog.d/fix-1-x-r3.md"
+OTHER_LANE = "docs/changelog.d/fix-1086-run-progress-sender-r4.md"
+STACKED = "docs/changelog.d/feat-177-stage-progress-text-r3.md"
+
+
+def test_two_added_fragments_of_the_same_change_are_reported_naming_both():
+    problem = ccf.extra_fragments([("A", FRAG), ("A", FRAG_B)])
+    assert problem is not None
+    assert FRAG in problem
+    assert FRAG_B in problem
+    assert "keep one" in problem
+
+
+def test_added_r2_and_r3_of_one_stem_fail():
+    problem = ccf.extra_fragments([("A", FRAG_B), ("A", FRAG_C)])
+    assert problem is not None
+    assert FRAG_B in problem
+    assert FRAG_C in problem
+
+
+def test_original_on_base_plus_added_repair_fragment_fails():
+    problem = ccf.extra_fragments([("A", FRAG_B)], base_fragments=[FRAG])
+    assert problem is not None
+    assert FRAG in problem
+    assert FRAG_B in problem
+
+
+def test_a_collision_with_a_base_fragment_says_to_sync_with_main_first():
+    problem = ccf.extra_fragments([("A", FRAG_B)], base_fragments=[FRAG])
+    assert problem is not None
+    assert "rebase/merge origin/main first" in problem
+
+
+def test_a_stacked_branch_with_a_different_stem_passes():
+    """feat/177 stacked on fix/1086: both fragments are 'added' against the merge base, but they are two changes."""
+    assert ccf.extra_fragments([("A", OTHER_LANE), ("A", STACKED)]) is None
+    assert ccf.extra_fragments([("A", STACKED)], base_fragments=[OTHER_LANE]) is None
+
+
+def test_one_added_plus_a_modified_existing_fragment_of_another_change_passes():
+    assert ccf.extra_fragments([("A", FRAG), ("M", OTHER_LANE)], base_fragments=[OTHER_LANE]) is None
+
+
+def test_a_base_fragment_this_branch_deleted_is_not_a_conflict():
+    """The fold deleted `fix-x.md`; a new `fix-x-r2.md` is then the only fragment of that change."""
+    assert ccf.extra_fragments([("D", FRAG), ("A", FRAG_B)], base_fragments=[FRAG]) is None
+
+
+def test_one_added_fragment_and_zero_fragments_pass():
+    assert ccf.extra_fragments([("A", FRAG)]) is None
+    assert ccf.extra_fragments([("M", "worker/src/a.py")]) is None
+    assert ccf.extra_fragments([]) is None
+
+
+def test_added_readme_is_not_a_fragment():
+    assert ccf.extra_fragments([("A", FRAG), ("A", "docs/changelog.d/README.md")]) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "stem"),
+    [
+        ("fix-x.md", "fix-x"),
+        ("fix-x-r2.md", "fix-x"),
+        ("fix-x-r12.md", "fix-x"),
+        ("fix-x-r2-r3.md", "fix-x-r2"),  # only ONE trailing suffix is stripped
+        ("fix-1086-run-progress.md", "fix-1086-run-progress"),
+        ("feat-r2d2-droid.md", "feat-r2d2-droid"),  # -r<N> only counts at the very end
+        ("fix-x-r.md", "fix-x-r"),
+    ],
+)
+def test_fragment_stem(name, stem):
+    assert ccf.fragment_stem(name) == stem
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_base_mode_fails_on_two_added_fragments_end_to_end(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "T")
+    (tmp_path / "README.txt").write_text("x\n", encoding="utf-8", newline="\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    (tmp_path / "docs" / "changelog.d").mkdir(parents=True)
+    for name in ("fix-1-x.md", "fix-1-x-r2.md"):
+        (tmp_path / "docs" / "changelog.d" / name).write_text("- changed x\n", encoding="utf-8", newline="\n")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--root", str(tmp_path), "--base", "main"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "fix-1-x.md" in proc.stderr
+    assert "fix-1-x-r2.md" in proc.stderr
+
+
+def _repo_with_base_fragment(tmp_path, base_fragment):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "T")
+    (tmp_path / "docs" / "changelog.d").mkdir(parents=True)
+    (tmp_path / "docs" / "changelog.d" / base_fragment).write_text("- already on main\n", encoding="utf-8", newline="\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+
+
+def _base_check(tmp_path):
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--root", str(tmp_path), "--base", "main"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_base_mode_fails_when_a_repair_fragment_sits_next_to_the_original_already_on_main(tmp_path):
+    _repo_with_base_fragment(tmp_path, "fix-x.md")
+    (tmp_path / "docs" / "changelog.d" / "fix-x-r2.md").write_text("- repaired x\n", encoding="utf-8", newline="\n")
+    proc = _base_check(tmp_path)
+    assert proc.returncode == 1
+    assert "fix-x.md" in proc.stderr
+    assert "fix-x-r2.md" in proc.stderr
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_base_mode_passes_for_a_new_fragment_of_a_different_change_beside_one_on_main(tmp_path):
+    _repo_with_base_fragment(tmp_path, "fix-1086-run-progress-sender-r4.md")
+    (tmp_path / "docs" / "changelog.d" / "feat-177-stage-progress-text-r3.md").write_text("- stacked\n", encoding="utf-8", newline="\n")
+    proc = _base_check(tmp_path)
+    assert proc.returncode == 0, proc.stderr

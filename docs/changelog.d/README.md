@@ -25,6 +25,16 @@ conflict with any other branch's fragment, and the fragment is folded into
   **No fragment needed:** anything under `docs/`, any `tests/` directory, any `*.md`. A fragment
   counts if it is added or modified in the diff; a modified `docs/sprint_log.md` also counts (the
   fold already deleted the fragment); a deleted fragment does not.
+- **One change, one fragment** (#1096, same `--base` check): a fragment you ADD must not duplicate
+  another one. Two fragments are the same change when their names are equal after stripping one
+  trailing `-r<N>` repair suffix, so `fix-x.md` already on main plus your new `fix-x-r2.md`, or an
+  added `fix-x-r2.md` plus `fix-x-r3.md`, fail naming both (they would fold into two near-identical
+  sprint-log bullets): keep one, edit the original instead of adding a repair fragment. Two
+  fragments with different names are two changes and pass, so a branch stacked on another lane's
+  branch may add its own fragment beside the lane's. Modifying an existing fragment is fine.
+  Known gap, deliberate: a branch RENAMED to a different slug that adds a second fragment with a
+  different stem is not detected (the cost of letting stacked branches pass). When a collision
+  is with a fragment on the base, rebase/merge origin/main first: main may already have folded it.
 - One bullet is normal; more than one is fine if the branch did more than
   one thing worth recording.
 

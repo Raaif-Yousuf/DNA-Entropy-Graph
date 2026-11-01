@@ -124,11 +124,12 @@ someone else.
 
 For a revert check, which is almost always why this comes up:
 
-    mkdir -p .scratch && git diff > .scratch/fix.patch   # keep the fix
-    git checkout -- <the SOURCE files only>              # keep your new tests
-    <run your targeted tests; they must go RED>
-    git apply .scratch/fix.patch                         # restore
-    git diff --stat                                      # prove byte-exact
+    python scripts/revert_check.py <the SOURCE files only> -- <your targeted test command>
+
+It saves the fix under this worktree's own git dir (no path shared with another lane),
+reverts only the named files, expects RED, restores and verifies byte-exact. By hand:
+write the patch under `git rev-parse --absolute-git-dir` (never a shared scratchpad),
+`git checkout HEAD -- <the SOURCE files only>` (never "."), run the tests, `git apply`.
 
 To park work and switch context, `git checkout -b <branch>` preserves
 uncommitted changes in place. To keep a copy, copy the files.

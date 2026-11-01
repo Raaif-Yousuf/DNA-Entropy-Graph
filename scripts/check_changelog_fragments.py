@@ -39,6 +39,10 @@ file changed and no fragment came with it.
                      docs/sprint_log.md (the fold already happened and deleted the
                      fragment, so a diff spanning the fold shows only the sprint log)
   Does not count  : a deleted fragment
+  One per change  : an ADDED fragment fails (#1096) when another fragment (also added, or already on
+                    the base) has the same name once one trailing `-r<N>` is stripped, for example
+                    `fix-x.md` on base plus an added `fix-x-r2.md`: keep one. Two added fragments with
+                    different stems are two changes (a branch stacked on another lane's branch) and pass.
 
 Exit codes: 0 clean (including no fragments at all -- an empty
 `changelog.d/` is the normal, fully-drained state), 1 at least one fragment
@@ -50,8 +54,10 @@ repository; a presence check that cannot run must never read as a pass).
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 CHANGELOG_DIR_RELATIVE = "docs/changelog.d"
@@ -124,6 +130,37 @@ def missing_fragment(changes: list[tuple[str, str]]) -> str | None:
     )
 
 
+_REPAIR_SUFFIX = re.compile(r"-r\d+$")
+
+
+def fragment_stem(name: str) -> str:
+    """A fragment's file name without `.md` and without ONE trailing `-r<N>` repair-round suffix."""
+    return _REPAIR_SUFFIX.sub("", name.removesuffix(".md"))
+
+
+def extra_fragments(changes: list[tuple[str, str]], base_fragments: Iterable[str] = ()) -> str | None:
+    """#1096: one change, one fragment. Two near-identical bullets (a `-r2` repair fragment next to the
+    original, a renamed branch) fold into the sprint log twice. An ADDED fragment collides with any other
+    fragment (also added, or already on the base) whose name is equal after `fragment_stem`. Two added
+    fragments with different stems are two changes (a branch stacked on another lane's branch adds its own
+    fragment beside the lane's) and pass. A base fragment this branch deletes is not a collision."""
+    deleted = {path for status, path in changes if status == "D"}
+    added = sorted({path for status, path in changes if status == "A" and _is_fragment_path(path)})
+    base_set = {path for path in base_fragments if path not in deleted}
+    others = sorted(base_set | set(added))
+    for path in added:
+        stem = fragment_stem(path.rsplit("/", 1)[-1])
+        twins = [other for other in others if other != path and fragment_stem(other.rsplit("/", 1)[-1]) == stem]
+        if twins:
+            names = ", ".join(sorted({path, *twins}))
+            hint = ""
+            if any(twin in base_set for twin in twins):
+                hint = "; if main has already folded the base one, rebase/merge origin/main first"
+            problem = "a changelog fragment is added for a change that already has one"
+            return f"{problem} ({names}): keep one (merge the bullets, delete the other){hint}"
+    return None
+
+
 class GitError(Exception):
     pass
 
@@ -135,12 +172,22 @@ def _git(root: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8", errors="replace")
 
 
+def _merge_base(root: Path, base: str) -> str:
+    try:
+        return _git(root, "merge-base", base, "HEAD").strip()
+    except GitError:
+        return _git(root, "rev-parse", "--verify", "--quiet", base + "^{commit}").strip()
+
+
+def fragments_on_base(root: Path, base: str) -> list[str]:
+    """The fragment files that exist at merge-base(base, HEAD)."""
+    listing = _git(root, "ls-tree", "-r", "--name-only", "-z", _merge_base(root, base), "--", CHANGELOG_DIR_RELATIVE)
+    return [path for path in listing.split("\0") if path and _is_fragment_path(path)]
+
+
 def changes_since(root: Path, base: str) -> list[tuple[str, str]]:
     """Everything that differs between merge-base(base, HEAD) and the working tree."""
-    try:
-        merge_base = _git(root, "merge-base", base, "HEAD").strip()
-    except GitError:
-        merge_base = _git(root, "rev-parse", "--verify", "--quiet", base + "^{commit}").strip()
+    merge_base = _merge_base(root, base)
     changes: list[tuple[str, str]] = []
     raw = _git(root, "diff", "--name-status", "--no-renames", "-z", merge_base).split("\0")
     index = 0
@@ -156,7 +203,8 @@ def changes_since(root: Path, base: str) -> list[tuple[str, str]]:
 
 
 def check_against_base(root: Path, base: str) -> str | None:
-    return missing_fragment(changes_since(root, base))
+    changes = changes_since(root, base)
+    return missing_fragment(changes) or extra_fragments(changes, fragments_on_base(root, base))
 
 
 def check(root: Path) -> list[str]:
