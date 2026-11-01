@@ -49,7 +49,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 TOTEST_RELATIVE = "docs/ToTest.md"
@@ -213,6 +213,40 @@ def commit_date(root: Path, sha: str) -> datetime | None:
         return None
 
 
+def resolve_commit_dates(root: Path, shas: list[str]) -> dict[str, datetime | None]:
+    """#1092: ONE `git cat-file --batch` process for every distinct sha (the per-row `cat-file -e` + `show` pair was
+    ~390 spawns on the real queue, 220 s under load). Feeds `<sha>^{commit}` on stdin and reads each commit's author
+    date from its `author` header. Maps sha -> author date for a commit this repo has; a sha that is not a commit
+    (missing, ambiguous, a tree or blob, or no repo at all) is ABSENT from the result; a commit whose date cannot be
+    parsed maps to None (the old "could not read a date" arm)."""
+    out: dict[str, datetime | None] = {}
+    unique = list(dict.fromkeys(shas))
+    if not unique:
+        return out
+    payload = "".join(f"{sha}^{{commit}}\n" for sha in unique).encode("ascii")
+    timeout = max(15.0, 15.0 + 0.5 * len(unique))  # the old 15 s bound was per call; scale it with the batch
+    proc = subprocess.run(["git", "cat-file", "--batch"], cwd=root, input=payload, capture_output=True, timeout=timeout)
+    data = proc.stdout
+    pos = 0
+    for sha in unique:
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            break
+        header = data[pos:nl].decode("utf-8", errors="replace").split()
+        pos = nl + 1
+        if len(header) != 3 or header[1] != "commit" or not header[2].isdigit():
+            continue  # "<input> missing" / "ambiguous": no body follows
+        size = int(header[2])
+        body = data[pos : pos + size].decode("utf-8", errors="replace")
+        pos += size + 1  # the object body is followed by one LF
+        out[sha] = None
+        m = re.search(r"^author .*> (\d+) ([+-])(\d{2})(\d{2})$", body, re.MULTILINE)
+        if m:
+            offset = (int(m.group(3)) * 60 + int(m.group(4))) * 60 * (1 if m.group(2) == "+" else -1)
+            out[sha] = datetime.fromtimestamp(int(m.group(1)), tz=timezone(timedelta(seconds=offset)))
+    return out
+
+
 def row_age_days(commit_dt: datetime, now: datetime) -> int:
     """Whole days between `commit_dt` and `now`, both timezone-aware. A
     pure function so --self-test never needs a real git history to prove
@@ -264,6 +298,14 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
 
     problems: list[str] = find_stray_lines(text)
     problems.extend(find_duplicate_rows(rows))
+    # #1092: one batched git call for every distinct sha on a well-shaped row, not two processes per row.
+    wanted: list[str] = []
+    for row in rows:
+        if not validate_row_shape(row):
+            row_sha = extract_sha(row.cells[1])
+            if row_sha is not None:
+                wanted.append(row_sha)
+    dates = resolve_commit_dates(root, wanted)
     for row in rows:
         shape_problems = validate_row_shape(row)
         problems.extend(shape_problems)
@@ -275,11 +317,11 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
         if sha is None:
             continue  # already reported by validate_row_shape
 
-        if not commit_exists(root, sha):
+        if sha not in dates:
             problems.append(f"L{row.line_no}: sha '{sha}' is not a commit this repo has (git cat-file -e failed)")
             continue
 
-        dt = commit_date(root, sha)
+        dt = dates[sha]
         if dt is None:
             problems.append(f"L{row.line_no}: could not read a date for commit '{sha}'")
             continue

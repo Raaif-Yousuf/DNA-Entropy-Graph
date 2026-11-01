@@ -1,0 +1,1 @@
+- `scripts/check_totest_format.py` now resolves every ToTest sha and commit date with one batched `cat-file --batch` call instead of two git processes per row (#1092). MEASURED 2026-10-31: real tree 29.6 s before (219.6 s under load), 0.3 s after; the real-tree guard test no longer times out in the parallel suite.

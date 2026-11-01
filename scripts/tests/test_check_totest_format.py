@@ -200,3 +200,80 @@ def test_a_lone_carriage_return_inside_a_cell_is_reported():
     # MEASURED 2026-10-03 (#106): the split was a bare CR (a PowerShell backtick-r), not an LF.
     row = _ROW.format(sha="abc1234").replace("Install and", "Install\rand")
     assert len(ctf.find_stray_lines(_queue(row))) == 2
+
+
+# --- #1092: one batched git call for every sha, never two processes per row ---
+
+
+def _make_repo(tmp_path):
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "T")
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8", newline="\n")
+    run("add", "f.txt")
+    run("commit", "-q", "-m", "one")
+    commit = run("rev-parse", "HEAD")
+    tree = run("rev-parse", "HEAD^{tree}")
+    return commit, tree
+
+
+def _table(shas):
+    rows = "\n".join(f"| #{i + 1} | {sha} | installer | Do thing {i} | Works | Does not |" for i, sha in enumerate(shas))
+    return (
+        "## Queue\n\n| # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |\n"
+        "| --- | --- | --- | --- | --- | --- |\n" + rows + "\n"
+    )
+
+
+def _count_git_calls(monkeypatch):
+    calls = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        if cmd and cmd[0] == "git":
+            calls.append(cmd)
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(ctf.subprocess, "run", spy)
+    return calls
+
+
+def test_check_spawns_a_bounded_number_of_git_processes_regardless_of_row_count(tmp_path, monkeypatch):
+    commit, _tree = _make_repo(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table([commit] * 25), encoding="utf-8", newline="\n")
+    calls = _count_git_calls(monkeypatch)
+    assert ctf.check(tmp_path, 36500) == []
+    assert 1 <= len(calls) <= 2, calls
+
+
+def test_batch_parity_missing_short_nonmerge_and_stale_shas(tmp_path):
+    commit, tree = _make_repo(tmp_path)
+    bogus = "0000000deadbeef0000000deadbeef00000000"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table([commit, bogus, commit[:7], tree]), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 36500)
+    assert problems == [
+        f"L6: sha '{bogus}' is not a commit this repo has (git cat-file -e failed)",
+        f"L8: sha '{tree}' is not a commit this repo has (git cat-file -e failed)",
+    ]
+    stale = ctf.check(tmp_path, -1)
+    assert [p.split(":")[0] for p in stale if "day(s) old" in p] == ["L5", "L7"]
+
+
+def test_batch_outside_a_repo_reports_every_sha_missing(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table(["abc1234", "def5678"]), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 45)
+    assert len(problems) == 2 and all("is not a commit this repo has" in p for p in problems)
+
+
+def test_resolve_commit_dates_matches_the_single_sha_helpers(tmp_path):
+    commit, _tree = _make_repo(tmp_path)
+    got = ctf.resolve_commit_dates(tmp_path, [commit, "0000000deadbeef0000000deadbeef00000000"])
+    assert "0000000deadbeef0000000deadbeef00000000" not in got
+    assert got[commit] is not None
+    assert got[commit] == ctf.commit_date(tmp_path, commit)
