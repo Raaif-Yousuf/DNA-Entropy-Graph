@@ -70,6 +70,27 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
         }
     }
 
+    /// <summary>
+    /// Issue #1059: moves the row's kept-aside count by <paramref name="delta"/> the moment a changed file is renamed aside (or put back), so the count outlives a cancel, an
+    /// unclassified failure and an app that closed mid-download. A record, not a step: the download goes on if the row cannot be written (the tally still carries the count on the
+    /// normal paths).
+    /// </summary>
+    public async Task AdjustKeptAsideAsync(string jobId, int delta)
+    {
+        try
+        {
+            await UpdateRowAsync(jobId, row => row with { ErrorDetail = KeptAsideDetail.Set(row.ErrorDetail, Math.Max(0, KeptAsideDetail.TryRead(row.ErrorDetail) + delta)) }, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Nothing more to do here; see the summary.
+        }
+    }
+
+    /// <summary>The kept-aside count the job's row holds now (0 when there is no row or no mark).</summary>
+    public async Task<int> KeptAsideAsync(string jobId)
+        => KeptAsideDetail.TryRead((await TryLatestRecordAsync(jobId).ConfigureAwait(false))?.ErrorDetail);
+
     /// <summary>The result a persisted terminal row stands for.</summary>
     public static CloudJobResult ResultFromRow(RunRecord row)
         => new(row.Phase, row.ErrorCode is null ? null : CloudErrorKind.Other, row.ErrorDetail, row.ErrorCode);
@@ -192,7 +213,8 @@ internal sealed class RunRowStore(IRunRepository runs, Action<string, JobPhase>?
 
                 if (errorCode is not null)
                 {
-                    next = next with { ErrorCode = errorCode, ErrorDetail = errorDetail };
+                    // Issue #1059: a file renamed aside earlier in the run is still the user's to hear about, whatever wrote this terminal detail.
+                    next = next with { ErrorCode = errorCode, ErrorDetail = KeptAsideDetail.Carry(errorDetail, existing?.ErrorDetail) };
                 }
 
                 // Hard Rule 16 discipline named in issue #58's own Done-when:

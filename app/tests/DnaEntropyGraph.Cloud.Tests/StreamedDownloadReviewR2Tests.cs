@@ -383,6 +383,7 @@ public sealed class StreamedDownloadReviewR2Tests : IDisposable
         var folder = Path.Combine(request.OutputFolder, "resumed");
         var destination = Path.Combine(folder, "seq", "seq.bedgraph");
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        RunFolderMarker.Write(folder, jobId); // issue #1043: a resumed run only reuses a folder that carries its own marker
         File.WriteAllBytes(destination, edited);
         await _runs.UpsertAsync(new RunRecord(jobId, JobPhase.Downloading, DateTimeOffset.UtcNow, OutputDir: folder), CancellationToken.None);
         var settings = new CloudRunSettings();

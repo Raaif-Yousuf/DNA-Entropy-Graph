@@ -711,6 +711,11 @@ transfer was a stub: a user pressing Run uploaded and downloaded nothing. Now:
   and a listed file that is not in the bucket are the worker breaking the contract and are `worker_failed` (the action there
   is to send diagnostics, not to free up space); a size or checksum mismatch is `download_corrupt`. In both the results
   are still in the bucket, so the copy says download again (Hard Rule 14), not start again.
+- A resume reuses the recorded `OutputDir` only when it carries this job's `.dna-entropy-run` marker (issue #1043, see packaging_design.md); a folder without it is never written into.
+- A changed file renamed aside (Hard Rule 14) is counted on the row the moment it is renamed (`RunRowStore.AdjustKeptAsideAsync`, the `[kept-aside=N]` mark on `ErrorDetail`, issue #1059), not only in the
+  download's tally. `SetPhaseAsync` carries the larger of the row's count and the new detail's onto every terminal error write, and `RunOutcomeRecorder.FinishAsync` takes the larger of its own tally and the row's. So
+  the count survives a cancel, a failure that is not a `RunFailureException` (a 403, billing, a raw exception) and a resume after the app closed mid-download (the second attempt finds the file identical and renames nothing itself).
+  The mark is never cleared; a later re-download that renames more files only toasts.
 
 ### The consumer side: the Runs page reason line (#459)
 
