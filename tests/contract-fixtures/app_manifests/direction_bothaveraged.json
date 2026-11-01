@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "jobId": "20261002-120000-abcdef",
+  "createdAt": "2026-10-02T12:00:00Z",
+  "createdBy": {
+    "installationId": "install-1",
+    "appVersion": "0.1.0"
+  },
+  "worker": {
+    "version": "0.1.0",
+    "image": "reg/x@sha256:a"
+  },
+  "inputs": [
+    {
+      "id": "in1",
+      "name": "SetTnpB",
+      "informat": "auto",
+      "start": 1,
+      "rna": false,
+      "genes": true,
+      "ambiguityPolicy": "keep",
+      "fastaRecords": "all",
+      "path": "input/SetTnpB.gb"
+    }
+  ],
+  "predictor": {
+    "kind": "evo",
+    "model": "evo2_7b",
+    "precision": "bf16",
+    "device": "cuda",
+    "seed": 0
+  },
+  "analysis": {
+    "contextLength": 4096,
+    "window": 8192,
+    "stride": 4096,
+    "direction": "both-averaged",
+    "format": "bedgraph",
+    "regionThreshold": 0.5,
+    "regionMinLength": 20,
+    "regionMergeGap": 5,
+    "smoothingWindows": [
+      51
+    ]
+  },
+  "outputs": [
+    "genbank",
+    "fasta",
+    "bedgraph",
+    "geneious_gff3",
+    "genes_gff3",
+    "smoothed",
+    "gene_summary",
+    "regions",
+    "stats",
+    "tsv"
+  ],
+  "limits": {
+    "maxRunSeconds": 14400,
+    "cancelPollSeconds": 10,
+    "heartbeatSeconds": 30,
+    "maxInputs": 50,
+    "maxTotalNt": 20000000
+  },
+  "lifecycle": {
+    "afterTask": "stop",
+    "keepAliveMinutes": 30,
+    "afterKeepAlive": "stop"
+  },
+  "store": {
+    "kind": "gcs",
+    "bucket": "deg-123-abc",
+    "prefix": "jobs/20261002-120000-abcdef/"
+  }
+}

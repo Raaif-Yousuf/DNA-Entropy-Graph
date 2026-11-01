@@ -1670,6 +1670,11 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             throw Build(CloudErrorKind.Other, "VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{vm.Status}', not stopped.");
         }
 
+        if (VmEnding.IsEnding(vm.Labels, _timeProvider.GetUtcNow()))
+        {
+            throw Build(CloudErrorKind.Other, "VM_ENDING", null, $"The VM '{existingVmName}' is being ended for an expired keep-alive window, so it was not reused.");
+        }
+
         var readIncarnation = IncarnationOf(vm);
         var readFingerprint = _labelFingerprints.GetValueOrDefault(readIncarnation);
         if (_reuseBarrier is { } barrier)
@@ -1688,7 +1693,9 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
             // A VM made again under the name is another incarnation with a fingerprint of its own: the claim on the one that was read is lost either way.
             if (IncarnationOf(vm) != readIncarnation || _labelFingerprints.GetValueOrDefault(IncarnationOf(vm)) != readFingerprint)
             {
-                throw Build(CloudErrorKind.Other, "CONDITION_NOT_MET", 412, "The labels fingerprint is invalid: another job claimed this VM first.");
+                // The real shape (round 6 of #476), with the kind the classifier gives it, so the fake tests exercise the classifier's reading of a lost race.
+                const string FingerprintMessage = "Labels fingerprint either invalid or resource labels have changed";
+                throw Build(CloudErrorClassifier.Classify(new CloudError("CONDITION_NOT_MET", 412, FingerprintMessage)), "CONDITION_NOT_MET", 412, FingerprintMessage);
             }
 
             var claimed = vm;
@@ -1756,12 +1763,16 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
     private CloudErrorKind? _restoreFailure;
     private int _restoreAttempts;
     private int _stopAttempts;
+    private int _markEndingAttempts;
 
     /// <summary>How many times <see cref="RestoreVmLabelsAsync(string, string, string, IReadOnlyDictionary{string, string}, CancellationToken)"/> was called (issue #970).</summary>
     public int RestoreAttempts => Volatile.Read(ref _restoreAttempts);
 
     /// <summary>How many stops were requested of a VM from outside (a worker's own stop does not count), a test's own setup stops included: compare against a baseline.</summary>
     public int StopAttempts => Volatile.Read(ref _stopAttempts);
+
+    /// <summary>How many times the keep-alive fence (<see cref="MarkEndingAsync(string, string, string, CancellationToken)"/>) was called (issue #476).</summary>
+    public int MarkEndingAttempts => Volatile.Read(ref _markEndingAttempts);
 
     /// <summary>Every restore of a borrowed VM's labels fails with this kind of error (a 403 for permission), as the real label write can. Issue #970.</summary>
     public FakeGcp WithRestoreFailure(CloudErrorKind kind)
@@ -1806,6 +1817,50 @@ public sealed partial class FakeGcp : IComputeGateway, IStorageGateway, IProject
 
             _labelFingerprints[IncarnationOf(restored)] = NextFingerprint();
             return Task.FromResult(LabelRestoreState.Restored);
+        }
+    }
+
+    private CloudErrorKind? _markEndingFailure;
+
+    /// <summary>Every keep-alive fence write fails with this kind of error, as a refused <c>setLabels</c> can (issue #476 round 4: an org policy answers 412 too).</summary>
+    public FakeGcp WithMarkEndingFailure(CloudErrorKind kind)
+    {
+        _markEndingFailure = kind;
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #476: the fence before the app ends a kept VM, as the real gateway does it: the job id is checked and the mark written in one step under the
+    /// claim lock, which moves the label fingerprint exactly as a real <c>setLabels</c> does (so a reuse that read the VM before the mark fails its claim with a 412).
+    /// A mark still inside the window is kept as it is, with no second write.
+    /// </summary>
+    public Task<VmDescriptor?> MarkEndingAsync(string vmName, string zone, string jobId, CancellationToken cancellationToken)
+    {
+        ThrowIfScriptedTransient();
+        Interlocked.Increment(ref _markEndingAttempts);
+        if (_markEndingFailure is { } failure)
+        {
+            throw Build(failure, "SCRIPTED_MARK_ENDING_FAILURE", failure == CloudErrorKind.OrgPolicy ? 412 : null, failure == CloudErrorKind.OrgPolicy ? "Operation denied by org policy on 'constraints/compute.requireOsLogin'." : "The fence write was scripted to fail.");
+        }
+
+        var key = (vmName, zone);
+        lock (_claimLock)
+        {
+            if (!_vms.TryGetValue(key, out var vm) || vm.Labels is null || !vm.Labels.TryGetValue("job-id", out var owner) || owner != jobId)
+            {
+                return Task.FromResult<VmDescriptor?>(null);
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            if (!VmEnding.IsEnding(vm.Labels, now))
+            {
+                var marked = new Dictionary<string, string>(vm.Labels) { [VmEnding.LabelKey] = VmEnding.Stamp(now) };
+                var read = vm;
+                vm = UpdateVm(key, v => v.InstanceId == read.InstanceId ? v with { Labels = marked } : v) ?? read;
+                _labelFingerprints[IncarnationOf(vm)] = NextFingerprint();
+            }
+
+            return Task.FromResult<VmDescriptor?>(vm with { ServerNow = now });
         }
     }
 

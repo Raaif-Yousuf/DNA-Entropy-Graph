@@ -441,6 +441,12 @@ public static class ServiceRegistration
                 additionalSweepScopes: () => sp.GetRequiredService<IGcpAccount>().ActiveSnapshot() is { ProjectId.Length: > 0 } active ? [new CloudScope(active.ProjectId, active.AccountSub)] : [],
                 onSignInNeeded: sub => messenger.Send(new AccountSignInNeededMessage(sub)));
         });
+        // Issue #476: while the app is open, a Keep-alive VM still running past its window is ended every few minutes (started by AppStartup).
+        services.AddSingleton<KeepAliveSweeper>(sp =>
+        {
+            var reconciler = sp.GetRequiredService<JobReconciler>();
+            return new KeepAliveSweeper(token => reconciler.EnforceKeepAliveAsync(token), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<IDiagnosticsLog>());
+        });
         // Issue #684 / Hard Rule 2: the one NCBI request that says an accession's record exists and fits, before any cloud resource. Only the real
         // build reaches NCBI; the fake backends (tests, developer mode) answer from a script so nothing live is ever asked.
         services.AddSingleton<IAccessionLookup>(sp =>

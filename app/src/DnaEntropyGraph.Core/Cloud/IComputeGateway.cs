@@ -84,6 +84,19 @@ public interface IComputeGateway
     /// answers false, so a gateway that cannot tell never causes a paid retry.
     /// </summary>
     Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken) => Task.FromResult(false);
+    /// <summary>
+    /// Issue #476: the fence before the app ends a Keep-alive VM for an expired window. Reads the VM in <paramref name="scope"/>, and when it still carries <paramref name="jobId"/>
+    /// (a VM another run reused since is that run's) writes <see cref="VmEnding.LabelKey"/> on it WITH the label fingerprint just read, so a run that
+    /// relabels the VM after this read fails its claim and a write that loses the race fails here. Returns the VM as it then reads (with
+    /// <see cref="VmDescriptor.ServerNow"/>), or null when it is gone, another run's, or the fingerprint moved: the caller leaves it alone, and the next
+    /// sweep looks again. A VM already marked within <see cref="VmEnding.Window"/> is returned without a second write. Cleanup that stops the meter: a
+    /// resilience layer bypasses the offline breaker for it.
+    /// The default throws, so a gateway that cannot fence is reported as a failed look (never as an unfenced end): a gateway that can MUST override it, and a Guards test
+    /// checks that every non-test gateway and decorator declares it.
+    /// </summary>
+    Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken)
+        => Task.FromException<VmDescriptor?>(new CloudOperationException(new CloudError("MARK_ENDING_UNSUPPORTED", null, "This gateway cannot fence a VM before ending it."), CloudErrorKind.Other));
+
 
     Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken);
 

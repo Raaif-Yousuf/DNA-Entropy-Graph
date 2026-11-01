@@ -121,7 +121,7 @@ public class JobReconcilerTests
             }
         }
 
-        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null) => new(
+        public JobReconciler Reconciler(TimeProvider? clock = null, TimeSpan? lookupTimeout = null, TimeSpan? mutationTimeout = null, IDiagnosticsLog? log = null, IComputeGateway? compute = null, Func<IEnumerable<CloudScope>>? additionalSweepScopes = null, Action<string?>? onSignInNeeded = null, TimeSpan? markedEndTimeout = null) => new(
             Runner,
             compute ?? Gcp,
             Gcp,
@@ -137,7 +137,8 @@ public class JobReconcilerTests
             mutationTimeout,
             log ?? Log,
             additionalSweepScopes: additionalSweepScopes ?? (() => [new CloudScope(Project)]),
-            onSignInNeeded: onSignInNeeded);
+            onSignInNeeded: onSignInNeeded,
+            markedEndTimeout: markedEndTimeout);
 
         public RunRecord Row(string jobId) => Repo.AllRecordedInOrder.Last(r => r.JobId == jobId);
 
