@@ -40,6 +40,30 @@ public sealed class OverviewPngExporterTests : IDisposable
         bytes.Length.ShouldBeGreaterThan(2000);
     }
 
+    private sealed class MutablePalette : DnaEntropyGraph.Core.Palettes.ITrackPaletteProvider
+    {
+        public DnaEntropyGraph.Core.Palettes.TrackPalette Current { get; set; } = DnaEntropyGraph.Core.Palettes.TrackPalettes.Default;
+    }
+
+    [Fact]
+    public void The_chosen_palette_changes_the_picture_and_is_read_at_each_export()
+    {
+        var palette = new MutablePalette();
+        var exporter = new OverviewPngExporter(palette);
+        var first = Path.Combine(_dir, "p1.png");
+        var second = Path.Combine(_dir, "p2.png");
+        var third = Path.Combine(_dir, "p3.png");
+
+        exporter.Export(Contig(seam: 2000), Labels, first).ShouldBeTrue();
+        palette.Current = DnaEntropyGraph.Core.Palettes.TrackPalettes.HighContrast;
+        exporter.Export(Contig(seam: 2000), Labels, second).ShouldBeTrue();
+        palette.Current = DnaEntropyGraph.Core.Palettes.TrackPalettes.Default;
+        exporter.Export(Contig(seam: 2000), Labels, third).ShouldBeTrue();
+
+        File.ReadAllBytes(second).ShouldNotBe(File.ReadAllBytes(first));
+        File.ReadAllBytes(third).ShouldBe(File.ReadAllBytes(first));
+    }
+
     [Fact]
     public void The_seam_changes_the_picture()
     {

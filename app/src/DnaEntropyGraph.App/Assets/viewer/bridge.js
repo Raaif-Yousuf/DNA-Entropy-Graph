@@ -1,6 +1,6 @@
 // Bridge between the WinUI host (IgvViewerHost) and igv.js (issues #72, #73).
 // Commands in (window.chrome.webview 'message'): {cmd:"load", config}, {cmd:"goto", locus},
-//   {cmd:"seams", label, seams:[{chr, pos}]}, {cmd:"track", op:"add"|"remove", config|name}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
+//   {cmd:"seams", label, color, seams:[{chr, pos}]}, {cmd:"track", op:"add"|"remove", config|name}, {cmd:"theme", dark:bool}, {cmd:"snapshot"}, {cmd:"focusLocus"}.
 // Events out (postMessage): {evt:"ready"}, {evt:"loaded"}, {evt:"warning", message},
 //   {evt:"error", message} (fatal: the run could not be drawn), {evt:"locusChanged", locus},
 //   {evt:"snapshot", svg}, {evt:"trackFailed", name, message} (an added track could not load), {evt:"key", key, ctrl} (issue #247: the host decides what a key does),
@@ -56,10 +56,13 @@
   // Seam markers (issue #116): one thin region of interest per contig at the 0-based base where the
   // reverse pass hands over to the forward pass. igv.js draws a region of interest as a vertical band
   // across every track; one base wide it reads as a line once zoomed in. Replaces any earlier set.
-  async function markSeams(seams, label) {
+  // The colour comes from the host (issue #195: one palette definition, in C#); none sent leaves igv.js's own region colour.
+  async function markSeams(seams, label, color) {
     browser.clearROIs();
     var regions = (seams || []).map(function (s) {
-      return { chr: s.chr, start: s.pos, end: s.pos + 1, name: label || '', color: 'rgba(220, 60, 60, 0.6)' };
+      var r = { chr: s.chr, start: s.pos, end: s.pos + 1, name: label || '' };
+      if (color) { r.color = color; }
+      return r;
     });
     if (regions.length > 0) { await browser.loadROI(regions); }
   }
@@ -90,7 +93,7 @@
         break;
       case 'track': if (browser) { await changeTrack(cmd); } break;
       case 'goto': if (browser) { await browser.search(cmd.locus); } break;
-      case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label); } break;
+      case 'seams': if (browser) { await markSeams(cmd.seams, cmd.label, cmd.color); } break;
       case 'theme': document.body.classList.toggle('dark', !!cmd.dark); break;
       case 'focusLocus': focusLocusBox(); break;
       case 'keys': keysOn = !!cmd.enabled; break;

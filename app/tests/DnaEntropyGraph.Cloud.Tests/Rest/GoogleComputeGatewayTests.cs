@@ -695,6 +695,139 @@ public class GoogleComputeGatewayTests
     private static string OldDiskBody()
         => "{\"kind\":\"compute#disk\",\"name\":\"deg-job-old\",\"labelFingerprint\":\"df1\",\"labels\":{\"app\":\"dna-entropy-graph\",\"job-id\":\"job-old\",\"installation-id\":\"install-1\"}}";
 
+    // Issue #476: the fence before the app ends a kept VM.
+    [Fact]
+    public async Task MarkEnding_writes_the_ending_label_with_the_fingerprint_it_read_and_keeps_the_other_labels()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels"))
+            .Returns(Get, OldInstance, 200, StoppedOld());
+
+        var vm = await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None);
+
+        vm.ShouldNotBeNull();
+        using var body = JsonDocument.Parse(rig.Handler.To(Post, OldInstance + "/setLabels").Single().Body);
+        body.RootElement.GetProperty("labelFingerprint").GetString().ShouldBe("lf1", "the write must fail if another run relabelled the VM since the read");
+        var sent = body.RootElement.GetProperty("labels").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString());
+        sent["job-id"].ShouldBe("job-old");
+        sent["installation-id"].ShouldBe("install-1");
+        sent.ShouldContainKey(VmEnding.LabelKey);
+    }
+
+    [Fact]
+    public async Task MarkEnding_that_loses_the_fingerprint_race_returns_null()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Labels fingerprint either invalid or resource labels have changed", "conditionNotMet"));
+
+        (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_the_gone_code_returns_null_not_an_exception()
+    {
+        // Round 3 low finding: the 404 can surface inside the POLLED operation, under its own code and with no http status of its own.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("RESOURCE_NOT_FOUND", "the write did not apply"), http: 400));
+
+        (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_a_real_fingerprint_mismatch_returns_null()
+    {
+        // Round 6: HTTP 412, raw code CONDITION_NOT_MET, the message Compute really words a lost fingerprint race with (no "precondition" in it): a lost race, not an org policy.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Labels fingerprint either invalid or resource labels have changed"), http: 412));
+
+        (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_with_a_bare_condition_not_met_and_no_412_throws_as_org_policy()
+    {
+        // Round 5 finding 2: CloudErrorClassifier calls a CONDITION_NOT_MET with no HTTP 412 an org-policy refusal; the gateway used to read it as a lost race and the sweep retried silently for ever.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Operation denied"), http: 400));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+        thrown.Error.Code.ShouldBe("CONDITION_NOT_MET");
+    }
+
+    [Fact]
+    public async Task MarkEnding_refused_by_an_org_policy_with_a_412_throws_as_org_policy_and_is_not_read_as_a_lost_race()
+    {
+        // Round 4 finding 2: any 412 used to mean "the labels moved", which is also the shape of an org-policy denial.
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 412, RpcError(412, "FAILED_PRECONDITION", "Operation denied by org policy on 'constraints/compute.requireOsLogin'."));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_names_an_org_policy_throws_as_org_policy()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("CONDITION_NOT_MET", "Constraint constraints/compute.requireOsLogin violated"), http: 400));
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+
+        thrown.Kind.ShouldBe(CloudErrorKind.OrgPolicy);
+    }
+
+    [Fact]
+    public async Task MarkEnding_whose_polled_operation_fails_otherwise_still_throws()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler
+            .Returns(Get, OldInstance, 200, StoppedOld())
+            .Returns(Post, OldInstance + "/setLabels", 200, Op("DONE", "setLabels", error: OpError("QUOTA_EXCEEDED", "no"), http: 403));
+
+        await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-old", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MarkEnding_for_a_VM_another_job_now_owns_writes_nothing()
+    {
+        var rig = new GoogleGatewayHarness();
+        rig.Handler.Returns(Get, OldInstance, 200, StoppedOld());
+
+        (await rig.Gateways.Compute.MarkEndingAsync("deg-job-old", Zone, "job-NEW", CancellationToken.None)).ShouldBeNull();
+
+        rig.Handler.Requests.Any(r => r.Method == Post).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Reuse_refuses_a_VM_the_app_marked_for_ending_and_writes_nothing()
+    {
+        var rig = new GoogleGatewayHarness();
+        var marked = StoppedOld().Replace("\"installation-id\":\"install-1\"}", "\"installation-id\":\"install-1\",\"" + VmEnding.LabelKey + "\":\"" + VmEnding.Stamp(rig.Clock.GetUtcNow()) + "\"}", StringComparison.Ordinal);
+        rig.Handler.Returns(Get, OldInstance, 200, marked);
+
+        var thrown = await Should.ThrowAsync<CloudOperationException>(() => rig.Gateways.Compute.ReuseVmAsync(Spec(), "deg-job-old", Zone, CancellationToken.None));
+
+        thrown.Error.Code.ShouldBe("VM_ENDING");
+        rig.Handler.Requests.Any(r => r.Method == Post).ShouldBeFalse("no claim, no start");
+    }
+
     // Issue #678. FakeGcp does not model disks, so this gateway test (the request itself) is the only proof.
     [Fact]
     public async Task Reuse_rewrites_the_boot_disk_labels_to_the_new_job_after_the_claim_and_before_the_start()

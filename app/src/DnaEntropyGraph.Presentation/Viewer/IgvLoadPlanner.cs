@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Viewers;
 
 namespace DnaEntropyGraph.Presentation.Viewer;
@@ -60,6 +61,11 @@ public static class IgvLoadPlanner
 {
     private static readonly string[] EntropyExtensions = ["bedgraph", "wig"];
 
+    // The igv.js track names: also how a later palette command finds the track to recolour (issue #195).
+    public const string EntropyTrackName = "Entropy (bits)";
+    public const string ForwardTrackName = "Entropy, forward (bits)";
+    public const string ReverseTrackName = "Entropy, reverse complement (bits)";
+
     /// <summary>
     /// Plans one run folder. A FASTA over <paramref name="maxFastaBytes"/> is refused (<see cref="IgvPlanFailure.SequenceTooLarge"/>, with its
     /// path in <see cref="IgvLoadPlan.FastaPath"/>) unless an <paramref name="indexStore"/> is given and the file is within
@@ -70,8 +76,9 @@ public static class IgvLoadPlanner
         string? runFolder,
         long maxFastaBytes = ViewerLimits.MaxFastaBytes,
         IFastaIndexStore? indexStore = null,
-        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
-        => PlanCancellable(runFolder, maxFastaBytes, indexStore, maxIndexedBytes, CancellationToken.None);
+        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes,
+        PaletteColors? colors = null)
+        => PlanCancellable(runFolder, maxFastaBytes, indexStore, maxIndexedBytes, CancellationToken.None, colors);
 
     /// <summary><see cref="Plan"/> whose index build stops with <see cref="OperationCanceledException"/> when the page is left (issue #497).</summary>
     public static IgvLoadPlan PlanCancellable(
@@ -79,7 +86,8 @@ public static class IgvLoadPlanner
         long maxFastaBytes,
         IFastaIndexStore? indexStore,
         long maxIndexedBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PaletteColors? colors = null)
     {
         if (string.IsNullOrWhiteSpace(runFolder) || !Directory.Exists(runFolder))
         {
@@ -130,9 +138,9 @@ public static class IgvLoadPlanner
 
         var stem = Path.GetFileNameWithoutExtension(fasta);
         var tracks = new List<object>();
-        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy", "Entropy (bits)");
-        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy.fwd", "Entropy, forward (bits)");
-        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy.rev", "Entropy, reverse complement (bits)");
+        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy", EntropyTrackName, colors?.Entropy);
+        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy.fwd", ForwardTrackName, colors?.Forward);
+        AddEntropyTrack(tracks, runFolder, $"{stem}.entropy.rev", ReverseTrackName, colors?.Reverse);
 
         var genes = $"{stem}.genes.gff3";
         if (File.Exists(Path.Combine(runFolder, genes)))
@@ -221,7 +229,7 @@ public static class IgvLoadPlanner
             .Any(b => EntropyExtensions.Any(e => File.Exists(Path.Combine(folder, $"{b}.{e}"))));
 
     // bedGraph is preferred over WIG for each track; at most one file per track.
-    private static void AddEntropyTrack(List<object> tracks, string folder, string baseName, string label)
+    private static void AddEntropyTrack(List<object> tracks, string folder, string baseName, string label, string? color)
     {
         foreach (var ext in EntropyExtensions)
         {
@@ -231,7 +239,7 @@ public static class IgvLoadPlanner
                 continue;
             }
 
-            tracks.Add(new Dictionary<string, object>
+            var track = new Dictionary<string, object>
             {
                 ["type"] = "wig",
                 ["format"] = ext,
@@ -240,7 +248,13 @@ public static class IgvLoadPlanner
                 ["min"] = 0,
                 ["max"] = 2,
                 ["autoscale"] = false,
-            });
+            };
+            if (color is not null)
+            {
+                track["color"] = color;
+            }
+
+            tracks.Add(track);
             return;
         }
     }

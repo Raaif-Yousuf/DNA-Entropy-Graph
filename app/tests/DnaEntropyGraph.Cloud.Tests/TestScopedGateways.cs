@@ -25,6 +25,8 @@ internal static class TestScopedGateways
 
     internal static Task<bool> WasPreemptedAsync(this IComputeGateway gateway, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken) => gateway.WasPreemptedAsync(Default, vmName, zone, incarnation, cancellationToken);
 
+    internal static Task<VmDescriptor?> MarkEndingAsync(this IComputeGateway gateway, string vmName, string zone, string jobId, CancellationToken cancellationToken) => gateway.MarkEndingAsync(Default, vmName, zone, jobId, cancellationToken);
+
     internal static Task StopVmAsync(this IComputeGateway gateway, string vmName, string zone, CancellationToken cancellationToken) => gateway.StopVmAsync(Default, vmName, zone, cancellationToken);
 
     internal static Task DeleteVmAsync(this IComputeGateway gateway, string vmName, string zone, CancellationToken cancellationToken) => gateway.DeleteVmAsync(Default, vmName, zone, cancellationToken);
