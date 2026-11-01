@@ -235,8 +235,9 @@ class _SharedPredictor:
                     "the model loader will download them from Hugging Face"
                 )
                 return False
-            # Issue #177: "hit" is written BEFORE the restore (it can copy gigabytes), so the page says the saved
-            # copy is being reused for as long as that takes; a restore that then fails overwrites it below.
+            # Issue #177: "hit" is written BEFORE the restore (it can copy gigabytes), so the page
+            # says the saved copy is being reused for as long as that takes; a restore that then
+            # fails overwrites it below.
             status.update(detail={"cache": "hit"})
             count = restore_from_cache(store, model_id, hf_dir)
         except Exception as exc:  # never fail the job over the cache
