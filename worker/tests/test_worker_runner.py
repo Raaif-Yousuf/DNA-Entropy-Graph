@@ -1534,7 +1534,7 @@ def test_an_oserror_scanning_the_hf_dir_after_a_good_load_does_not_fail_the_job(
     def _flaky(path):
         nonlocal calls
         calls += 1
-        if calls >= 3:  # the post-load scan (1: the miss check in the restore, 2: the pre-load emptiness test)
+        if calls >= 3:  # the post-load scan (1: miss check in the restore, 2: pre-load emptiness)
             raise OSError("scan failed")
         return real(path)
 
