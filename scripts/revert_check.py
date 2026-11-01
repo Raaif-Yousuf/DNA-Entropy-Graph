@@ -14,7 +14,8 @@ has no shared path:
      neutralised so the patch is always a plain `a/` `b/` patch `git apply` accepts,
   2. `git checkout HEAD -- <src files>` (ONLY the named files, never `.`),
   3. runs the test command as given (no shell) and expects a NON-ZERO exit (RED),
-  4. ALWAYS restores (a finally block, so a crash still restores): `git checkout HEAD -- <src
+  4. ALWAYS restores (a finally block, so a crash still restores; SIGINT is ignored while it runs and any
+     failure becomes the recovery message with exit 12, never a traceback): `git checkout HEAD -- <src
      files>` again (so a test command or formatter that touched a named file cannot make the
      restore fail), then `git apply` of the saved patch,
   5. verifies the restore twice: `git diff HEAD --binary` of the named files is identical to step 1
@@ -30,16 +31,22 @@ and VBCSCompiler processes that inherit a pipe, and a pipe read would block on E
 tests end. When the command is pytest, exit code 2 (collection error) counts as RED with a
 "collection error; read the tail" warning (it is the NORMAL red when the fix adds a symbol a test
 imports); exit codes 3 (internal error), 4 (usage error) and 5 (no tests collected, for example a
-mistyped `-k`) are refused with exit 15: they prove nothing about the fix. Output containing
-`No module named pytest` (the wrong interpreter; Hard Rule 20) is also refused with exit 15.
+mistyped `-k`) are refused with exit 15: they prove nothing about the fix. A `python -m pytest` that
+exits 1 with the interpreter's own standalone `No module named pytest` line and no pytest session
+header (the wrong interpreter; Hard Rule 20) is also refused with exit 15; a real RED whose output merely
+mentions the phrase is still RED. `uv run` options (`--python 3.12`, `--with x`) are skipped when deciding
+whether the command is pytest. If the test command is interrupted, its whole process tree is killed
+(`taskkill /T` on Windows, a process group elsewhere) and reaped.
 
 Name individual tracked SOURCE files only:
   - a directory (including `.` or `app/src`) is refused, never expanded (exit 2);
   - a file absent from HEAD (untracked, or only added to the index) is refused up front (exit 13):
     `git checkout HEAD -- <path>` fails for a path HEAD lacks. Commit it first or leave it out;
   - a file with STAGED changes is refused up front (exit 13): the restore would drop the staging
-    (this repo stages hunks on purpose). Unstage it (`git restore --staged <file>`) first;
-  - every git call runs with `GIT_LITERAL_PATHSPECS=1`, so a name like `[id].cs` is a file, not a glob.
+    (this repo stages hunks on purpose). Unstage it (`git --literal-pathspecs restore --staged
+    <file>`) first. Only `git diff --cached --quiet` exit 1 means staged; any other code is git failing (exit 13);
+  - every git call runs with `GIT_LITERAL_PATHSPECS=1`, so a name like `[id].cs` is a file, not a glob; the
+    commands printed for a human carry `--literal-pathspecs` for the same reason.
 
 Known limits (L1, L3, L4): a hard kill (power loss, `taskkill /F`) mid-run leaves the named files at
 HEAD; the patch path printed at the start is the recovery (`git apply <patch>`). Ctrl-C restores and
@@ -62,7 +69,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -85,6 +94,8 @@ WRONG_INTERPRETER_MARKER = "No module named pytest"
 
 # Literal pathspecs: `[id].cs` is a file name, never a glob (also covers `*` and `?`).
 GIT_ENV = {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
+# The same for commands a HUMAN runs from the printed recovery text (no env var there).
+LITERAL_C = "--literal-pathspecs"
 
 # The saved patch must not depend on the user's git config.
 DIFF_FLAGS = ["--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"]
@@ -127,11 +138,78 @@ def is_pytest(command: list[str]) -> bool:
             continue
         if _is_pytest_name(tail[0]):
             return True
-        if any(a == "-m" and b == "pytest" for a, b in zip(tail, tail[1:], strict=False)):
+        if _has_dash_m_pytest(tail):
             return True
-        if Path(tail[0]).stem.lower() == "uv" and len(tail) > 2 and tail[1] == "run" and _is_pytest_name(tail[2]):
+        if Path(tail[0]).stem.lower() == "uv" and len(tail) > 2 and tail[1] == "run" and _uv_run_target_is_pytest(tail[2:]):
             return True
     return False
+
+
+# `uv run` options that take a separate value (`--python 3.12`); `--python=3.12` carries its own.
+UV_RUN_VALUE_OPTIONS = frozenset(
+    {
+        "-p",
+        "--python",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--project",
+        "--directory",
+        "--env-file",
+        "--extra",
+        "--group",
+        "--only-group",
+        "--no-group",
+        "--package",
+        "--index",
+        "--default-index",
+        "--extra-index-url",
+        "--index-url",
+        "--config-file",
+        "--cache-dir",
+        "--isolated-env",
+    }
+)
+
+
+def _uv_run_target_is_pytest(args: list[str]) -> bool:
+    """`args` is what follows `uv run`: skip its options (and their values), then test the program name."""
+    i = 0
+    while i < len(args):
+        part = args[i]
+        if not part.startswith("-"):
+            return _is_pytest_name(part)
+        i += 2 if part in UV_RUN_VALUE_OPTIONS else 1
+    return False
+
+
+def _has_dash_m_pytest(command: list[str]) -> bool:
+    return any(a == "-m" and b == "pytest" for a, b in zip(command, command[1:], strict=False))
+
+
+# The interpreter's own startup error, as a whole line (optionally prefixed by the executable path).
+_WRONG_INTERPRETER_LINE = re.compile(r"^(?:.*[\\/][^\\/:]*: |\S+: )?No module named pytest\s*$", re.MULTILINE)
+
+
+def is_wrong_interpreter(command: list[str], returncode: int, text: str) -> bool:
+    """True only for `python -m pytest` that died at interpreter startup: exit 1, the standalone error line, and
+    no pytest session header. A real RED whose output merely MENTIONS the phrase (a test of this very script)
+    is not the wrong interpreter."""
+    if returncode != 1 or not _has_dash_m_pytest(command):
+        return False
+    if "test session starts" in text:
+        return False
+    return _WRONG_INTERPRETER_LINE.search(text) is not None
+
+
+def classify_staged(returncode: int, stderr: bytes) -> bool:
+    """`git diff --cached --quiet`: exit 0 = nothing staged, 1 = staged; anything else is git failing."""
+    if returncode == 0:
+        return False
+    if returncode == 1:
+        return True
+    detail = stderr.decode("utf-8", errors="replace").strip()
+    raise GitFailed(f"git diff --cached --quiet exited {returncode}: {detail}")
 
 
 def _working_diff(root: Path, files: list[str]) -> bytes:
@@ -157,7 +235,7 @@ def _file_hashes(root: Path, files: list[str]) -> dict[str, str | None]:
 
 
 def _restore_message(patch: Path, files: list[str], why: str) -> str:
-    checkout = "git checkout HEAD -- " + " ".join(shlex.quote(rel) for rel in files)
+    checkout = f"git {LITERAL_C} checkout HEAD -- " + " ".join(shlex.quote(rel) for rel in files)
     apply = "git apply " + shlex.quote(patch.as_posix())
     return (
         f"ERROR: restore {why}. Your fix is saved byte-for-byte in {patch}. Bring it back by running, from the repo root:\n"
@@ -177,12 +255,31 @@ def _run_tests(command: list[str], cwd: Path, log: Path) -> int:
     """Run the command with its combined output in `log` (a file, not a pipe: an inherited pipe handle held
     by a detached grandchild such as an MSBuild node would block the wait long after the tests end)."""
     with log.open("wb") as sink:
-        proc = subprocess.Popen(command, cwd=cwd, stdout=sink, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(command, cwd=cwd, stdout=sink, stderr=subprocess.STDOUT, start_new_session=sys.platform != "win32")
         try:
-            return proc.wait()
+            while True:
+                # A timed wait, not a bare one: on Windows a bare wait cannot be interrupted by Ctrl-C.
+                try:
+                    return proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    continue
         except BaseException:
-            proc.kill()  # only the PID this script started
+            _kill_tree(proc)
             raise
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the child this script started AND its descendants (a test runner's workers), then reap it."""
+    try:
+        if sys.platform == "win32":
+            # By the PID this script started; /T takes its children with it.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)  # own process group via start_new_session
+    except OSError:
+        pass
+    proc.kill()
+    proc.wait()
 
 
 def run(argv: list[str], cwd: Path | None = None) -> int:
@@ -230,10 +327,15 @@ def run(argv: list[str], cwd: Path | None = None) -> int:
 
     for rel in files:
         staged = subprocess.run(["git", "diff", "--cached", "--quiet", "--", rel], cwd=root, capture_output=True, check=False, env=GIT_ENV)
-        if staged.returncode != 0:
+        try:
+            is_staged = classify_staged(staged.returncode, staged.stderr)
+        except GitFailed as exc:
+            print(f"ERROR: could not check {rel} for staged changes: {exc}", file=sys.stderr)
+            return EXIT_GIT
+        if is_staged:
             print(
                 f"ERROR: {rel} has staged changes and the restore would drop the staging (this repo stages hunks on purpose). "
-                f"Unstage it first (git restore --staged {shlex.quote(rel)}), or leave it out of the list.",
+                f"Unstage it first (git {LITERAL_C} restore --staged {shlex.quote(rel)}), or leave it out of the list.",
                 file=sys.stderr,
             )
             return EXIT_GIT
@@ -273,7 +375,7 @@ def run(argv: list[str], cwd: Path | None = None) -> int:
             text = output.decode("utf-8", errors="replace")
             if returncode == 0:
                 result_code = EXIT_GREEN
-            elif WRONG_INTERPRETER_MARKER in text:
+            elif is_wrong_interpreter(command, returncode, text):
                 print(
                     f"ERROR: the output says '{WRONG_INTERPRETER_MARKER}': the wrong interpreter (the PATH python has no wheels; use "
                     "worker\\.venv\\Scripts\\python.exe). That is not RED and proves nothing about the fix. Fix restored below.",
@@ -303,7 +405,7 @@ def run(argv: list[str], cwd: Path | None = None) -> int:
         result_code = EXIT_INTERRUPTED
     finally:
         if reverted or _working_diff_safe(root, files) != before:
-            result_code = _restore(root, files, patch, before, hashes_before, result_code)
+            result_code = _restore_guarded(root, files, patch, before, hashes_before, result_code)
 
     if result_code == EXIT_INTERRUPTED:
         print(
@@ -316,6 +418,23 @@ def run(argv: list[str], cwd: Path | None = None) -> int:
             file=sys.stderr,
         )
     return result_code
+
+
+def _restore_guarded(root: Path, files: list[str], patch: Path, before: bytes, hashes_before: dict[str, str | None], result_code: int) -> int:
+    """`_restore` with SIGINT ignored (a second Ctrl-C between the checkout and the apply would leave the tree at
+    HEAD) and any escaping failure turned into the recovery message and exit 12, never a bare traceback."""
+    try:
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:  # not the main thread: no handler to swap
+        previous = None
+    try:
+        return _restore(root, files, patch, before, hashes_before, result_code)
+    except BaseException as exc:
+        print(_restore_message(patch, files, f"failed ({type(exc).__name__}: {exc})"), file=sys.stderr)
+        return EXIT_RESTORE
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
 
 
 def _restore(root: Path, files: list[str], patch: Path, before: bytes, hashes_before: dict[str, str | None], result_code: int) -> int:

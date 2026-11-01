@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import _thread
 import os
+import shlex
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -182,6 +186,11 @@ def test_is_pytest_matches_only_the_executable_or_dash_m_pytest():
     assert rc.is_pytest(["python", "heavy.py", "--lane", "a", "--", "python", "-m", "pytest"])
     assert rc.is_pytest(["python", "heavy.py", "--lane", "a", "--", "pytest"])
     assert rc.is_pytest(["uv", "run", "pytest"])
+    assert rc.is_pytest(["uv", "run", "--python", "3.12", "pytest"])
+    assert rc.is_pytest(["uv", "run", "--with", "x", "--no-sync", "-p", "3.12", "pytest", "-q"])
+    assert rc.is_pytest(["uv", "run", "--python=3.12", "pytest"])
+    assert not rc.is_pytest(["uv", "run", "--python", "pytest", "script.py"])
+    assert not rc.is_pytest(["uv", "run", "python", "pytest"])
     assert not rc.is_pytest(["python", "-c", "x", "pytest"])
     assert not rc.is_pytest(["dotnet", "test", "--filter", "pytest"])
     assert not rc.is_pytest(["python", "scripts/pytest.py"])
@@ -189,11 +198,35 @@ def test_is_pytest_matches_only_the_executable_or_dash_m_pytest():
 
 def test_wrong_interpreter_without_pytest_is_refused(repo: Path):
     (repo / "src.py").write_bytes(b"VALUE = 2\n")
-    wrong = ["-B", "-c", "import sys\nprint('No module named pytest')\nsys.exit(1)"]
-    proc = _run(repo, ["src.py"], wrong)
+    # -I -S: no site-packages, so the interpreter itself says "No module named pytest" (exit 1, no pytest header).
+    proc = _run(repo, ["src.py"], ["-I", "-S", "-m", "pytest"])
     assert proc.returncode == 15, proc.stdout + proc.stderr
     assert "No module named pytest" in proc.stdout + proc.stderr
     assert (repo / "src.py").read_bytes() == b"VALUE = 2\n"
+
+
+def test_a_real_red_whose_output_mentions_the_marker_is_still_red(repo: Path):
+    (repo / "test_mention.py").write_bytes(b"def test_mentions():\n    assert False, 'No module named pytest'\n")
+    _git(repo, "add", "test_mention.py")
+    _git(repo, "commit", "-q", "-m", "mention")
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    proc = _run(repo, ["src.py"], ["-B", "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_mention.py"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_wrong_interpreter_classifier_both_directions():
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    cmd = ["python", "-m", "pytest", "x"]
+    startup = "C:\\x\\python.exe: No module named pytest\n"
+    assert rc.is_wrong_interpreter(cmd, 1, startup)
+    assert rc.is_wrong_interpreter(cmd, 1, "No module named pytest\r\n")
+    assert not rc.is_wrong_interpreter(cmd, 1, "=== test session starts ===\nE  No module named pytest\n")
+    assert not rc.is_wrong_interpreter(cmd, 1, "E   AssertionError: No module named pytest\n")
+    assert not rc.is_wrong_interpreter(cmd, 2, startup)
+    assert not rc.is_wrong_interpreter(["python", "-c", "x"], 1, startup)
+    assert not rc.is_wrong_interpreter(cmd, 1, "=== test session starts ===\n" + startup)
 
 
 def test_a_detached_grandchild_holding_the_output_cannot_hang_the_wait(repo: Path):
@@ -256,7 +289,7 @@ def test_keyboard_interrupt_reprints_the_patch_path_and_recovery_commands(
     assert code == 130
     assert (repo / "src.py").read_bytes() == b"VALUE = 2\n", "the interrupt still restores"
     assert ".patch" in captured.err
-    assert "git checkout HEAD --" in captured.err
+    assert "checkout HEAD --" in captured.err
     assert "git apply" in captured.err
 
 
@@ -351,12 +384,15 @@ def test_a_test_command_that_touches_a_named_file_cannot_break_the_restore(repo:
 def test_a_failed_restore_is_loud_and_the_printed_recovery_commands_work(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    import shlex
-
     sys.path.insert(0, str(SCRIPTS_DIR))
     import revert_check as rc
 
-    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    (repo / "[id].py").write_bytes(b"X = 1\n")
+    (repo / "i.py").write_bytes(b"I = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "bracket")
+    (repo / "[id].py").write_bytes(b"X = 2\n")
+    (repo / "i.py").write_bytes(b"I = 2\n")  # a human-run glob of `[id].py` would revert this too
     real_git = rc._git
     failed = {"done": False}
 
@@ -367,17 +403,119 @@ def test_a_failed_restore_is_loud_and_the_printed_recovery_commands_work(
         return real_git(root, *args, **kwargs)
 
     monkeypatch.setattr(rc, "_git", flaky_git)
-    code = rc.run(["src.py", "--", sys.executable, "-B", "-c", "raise SystemExit(1)"], cwd=repo)
+    code = rc.run(["[id].py", "--", sys.executable, "-B", "-c", "raise SystemExit(1)"], cwd=repo)
     err = capsys.readouterr().err
 
     assert code == 12
-    assert (repo / "src.py").read_bytes() == b"VALUE = 1\n", "the apply failed, so the file is still the committed one"
+    assert (repo / "[id].py").read_bytes() == b"X = 1\n", "the apply failed, so the file is still the committed one"
     assert ".patch" in err
     recovery = [line.strip() for line in err.splitlines() if line.strip().startswith("git ")]
     assert len(recovery) == 2, err
+    assert "--literal-pathspecs" in recovery[0], "a human runs this without GIT_LITERAL_PATHSPECS"
+    env = {k: v for k, v in os.environ.items() if k != "GIT_LITERAL_PATHSPECS"}
     for command in recovery:
-        subprocess.run(shlex.split(command), cwd=repo, check=True, capture_output=True)
-    assert (repo / "src.py").read_bytes() == b"VALUE = 2\n", "the printed recovery must really bring the fix back"
+        subprocess.run(shlex.split(command), cwd=repo, check=True, capture_output=True, env=env)
+    assert (repo / "[id].py").read_bytes() == b"X = 2\n", "the printed recovery must really bring the fix back"
+    assert (repo / "i.py").read_bytes() == b"I = 2\n", "the sibling the glob would match must survive"
+
+
+def test_the_staged_hint_uses_literal_pathspecs(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    _git(repo, "add", "src.py")
+    proc = _run(repo, ["src.py"], CHECK_VALUE)
+    assert proc.returncode == 13
+    assert "git --literal-pathspecs restore --staged" in proc.stderr
+
+
+def test_a_second_interrupt_during_restore_still_exits_with_the_recovery_message(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    real_git = rc._git
+    state = {"interrupts": 0}
+
+    def hit_by_ctrl_c(root: Path, *args: str, **kwargs: bytes | None) -> bytes:
+        if args and args[0] == "apply" and state["interrupts"] == 0:
+            state["interrupts"] += 1
+            raise KeyboardInterrupt
+        return real_git(root, *args, **kwargs)
+
+    monkeypatch.setattr(rc, "_git", hit_by_ctrl_c)
+    handler_before = signal.getsignal(signal.SIGINT)
+    code = rc.run(["src.py", "--", sys.executable, "-B", "-c", "raise SystemExit(1)"], cwd=repo)
+    err = capsys.readouterr().err
+    assert code == 12
+    assert ".patch" in err
+    assert "git apply" in err
+    assert "Traceback" not in err
+    assert signal.getsignal(signal.SIGINT) == handler_before, "the SIGINT handler must be put back"
+
+
+def test_restore_ignores_sigint_while_it_runs(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    real_git = rc._git
+    seen: list[object] = []
+
+    def spy(root: Path, *args: str, **kwargs: bytes | None) -> bytes:
+        if args and args[0] == "apply":
+            seen.append(signal.getsignal(signal.SIGINT))
+        return real_git(root, *args, **kwargs)
+
+    monkeypatch.setattr(rc, "_git", spy)
+    assert rc.run(["src.py", "--", sys.executable, "-B", "-c", "raise SystemExit(1)"], cwd=repo) == 0
+    assert seen == [signal.SIG_IGN]
+
+
+def test_an_interrupted_test_run_leaves_no_surviving_grandchild(repo: Path, tmp_path: Path):
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    beat = tmp_path / "beat.txt"
+    child = f"import time\nn = 0\nwhile True:\n    n += 1\n    open({str(beat)!r}, 'w').write(str(n))\n    time.sleep(0.05)\n"
+    parent = f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', {child!r}])\ntime.sleep(25)\n"
+
+    def interrupt_when_beating() -> None:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not (beat.exists() and beat.read_text() not in ("", "1")):
+            time.sleep(0.05)
+        _thread.interrupt_main()
+
+    watcher = threading.Thread(target=interrupt_when_beating, daemon=True)
+    watcher.start()
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        rc._run_tests([sys.executable, "-B", "-c", parent], repo, tmp_path / "out.log")
+    assert time.monotonic() - started < 20, "the interrupt did not stop the wait"
+    time.sleep(0.5)
+    first = beat.read_text()
+    time.sleep(1.0)
+    assert beat.read_text() == first, "the grandchild is still running after the interrupted run returned"
+
+
+def test_staged_classifier_distinguishes_staged_from_git_failure():
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import revert_check as rc
+
+    assert rc.classify_staged(0, b"") is False
+    assert rc.classify_staged(1, b"") is True
+    with pytest.raises(rc.GitFailed, match="fatal: bad index"):
+        rc.classify_staged(128, b"fatal: bad index file\n")
+
+
+def test_a_git_failure_in_the_staged_check_is_not_reported_as_staged(repo: Path):
+    (repo / "src.py").write_bytes(b"VALUE = 2\n")
+    git_dir = Path(_git(repo, "rev-parse", "--absolute-git-dir").strip())
+    (git_dir / "index").write_bytes(b"garbage")
+    proc = _run(repo, ["src.py"], CHECK_VALUE)
+    assert proc.returncode == 13, proc.stdout + proc.stderr
+    assert "has staged changes" not in proc.stderr
+    assert "git" in proc.stderr.lower()
 
 
 def test_user_git_config_cannot_change_the_saved_patch(repo: Path):
