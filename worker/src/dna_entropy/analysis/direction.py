@@ -287,6 +287,24 @@ def _wrapped(seq: str, pad: int) -> str:
     return codes[idx].tobytes().decode("ascii")
 
 
+def count_windows(
+    seq_len: int,
+    context_length: int,
+    ceiling: int,
+    direction: Direction,
+    *,
+    circular: bool = False,
+) -> int:
+    """How many ``on_window`` calls :func:`analyze_direction` makes for one contig, absent an OOM retry.
+
+    One per window per pass: the forward and/or reverse-complement pass, over the sequence
+    padded by ``2K`` when circular. Used only for progress reporting (a retry after an OOM can
+    exceed it, so a caller clamps)."""
+    length = seq_len + 2 * context_length if circular else seq_len
+    per_pass = len(plan_windows(length, context_length, ceiling).starts)
+    return per_pass * ((direction in _NEEDS_FORWARD) + (direction in _NEEDS_REVERSE))
+
+
 def analyze_direction(
     predictor: Predictor,
     seq: str,

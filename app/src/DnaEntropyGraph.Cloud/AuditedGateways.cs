@@ -36,6 +36,9 @@ public sealed class AuditedComputeGateway(IComputeGateway inner, CloudAuditor au
     public Task<LabelRestoreState> RestoreVmLabelsAsync(CloudScope scope, string vmName, string zone, string fromJobId, IReadOnlyDictionary<string, string> donorLabels, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.RestoreVmLabels", () => (Vm(zone, vmName), fromJobId), () => inner.RestoreVmLabelsAsync(scope, vmName, zone, fromJobId, donorLabels, cancellationToken), cancellationToken: cancellationToken);
 
+    public Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken)
+        => auditor.RunAsync("Compute.MarkEnding", () => (Vm(zone, vmName), jobId), () => inner.MarkEndingAsync(scope, vmName, zone, jobId, cancellationToken), cancellationToken: cancellationToken);
+
     public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         => auditor.RunAsync("Compute.StopVm", () => (Vm(zone, vmName), CloudAuditor.JobIdFromVmName(vmName)), () => inner.StopVmAsync(scope, vmName, zone, cancellationToken), cancellationToken: cancellationToken);
 

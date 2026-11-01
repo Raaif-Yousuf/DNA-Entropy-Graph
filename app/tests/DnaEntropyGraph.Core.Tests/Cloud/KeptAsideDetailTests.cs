@@ -34,4 +34,20 @@ public sealed class KeptAsideDetailTests
     [Fact]
     public void The_last_mark_wins_so_text_that_quotes_a_mark_cannot_override_the_apps_own()
         => KeptAsideDetail.TryRead("[kept-aside=9] quoted " + KeptAsideDetail.Append(null, 2)).ShouldBe(2);
+
+    [Theory]
+    [InlineData("detail [kept-aside=1]", 3, "detail [kept-aside=3]")]
+    [InlineData("detail", 2, "detail [kept-aside=2]")]
+    [InlineData(null, 2, "[kept-aside=2]")]
+    [InlineData("detail [kept-aside=4] and more", 0, "detail  and more")]
+    public void Set_replaces_the_mark_with_exactly_one(string? detail, int count, string expected)
+        => KeptAsideDetail.Set(detail, count).ShouldBe(expected);
+
+    [Theory]
+    [InlineData("Failed.", "x [kept-aside=2]", 2)]
+    [InlineData("Failed. [kept-aside=5]", "x [kept-aside=2]", 5)]
+    [InlineData("Failed.", "no mark", 0)]
+    [InlineData(null, null, 0)]
+    public void Carry_keeps_the_larger_count(string? detail, string? previous, int expected)
+        => KeptAsideDetail.TryRead(KeptAsideDetail.Carry(detail, previous)).ShouldBe(expected);
 }

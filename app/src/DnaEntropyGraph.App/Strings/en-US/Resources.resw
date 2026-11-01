@@ -3669,4 +3669,40 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_KeptAside_Many" xml:space="preserve">
     <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
   </data>
+  <data name="ProgressModelLoading" xml:space="preserve">
+    <value>Loading the analysis model onto the computer...</value>
+  </data>
+  <data name="ProgressBooting" xml:space="preserve">
+    <value>The rented computer is starting up...</value>
+  </data>
+  <data name="ProgressAnalysing" xml:space="preserve">
+    <value>Analysing your sequence...</value>
+  </data>
+  <data name="ProgressAnalysingWindowCount" xml:space="preserve">
+    <value>Analysing your sequence: part {0} of {1}</value>
+  </data>
+  <data name="ProgressGeneric" xml:space="preserve">
+    <value>Working on your run...</value>
+  </data>
+  <data name="ProgressInstalling" xml:space="preserve">
+    <value>The rented computer (a virtual machine, or VM) is getting the analysis software ready for your sequence.</value>
+  </data>
+  <data name="ProgressRestoringCache" xml:space="preserve">
+    <value>Looking in your cloud storage for the analysis model saved by an earlier run...</value>
+  </data>
+  <data name="ProgressCacheFirstRun" xml:space="preserve">
+    <value>The analysis model is not saved in your cloud storage yet, so it is being downloaded now, which takes several minutes. A copy is saved afterwards when possible, so later runs can usually start faster.</value>
+  </data>
+  <data name="ProgressCacheUnavailable" xml:space="preserve">
+    <value>Your saved copy of the analysis model could not be checked or used, so the model is being downloaded instead, which takes several minutes.</value>
+  </data>
+  <data name="ProgressCacheSaving" xml:space="preserve">
+    <value>The analysis model has been downloaded. A copy is being saved to your cloud storage so later runs can usually start faster.</value>
+  </data>
+  <data name="ProgressCacheWarm" xml:space="preserve">
+    <value>Reusing the analysis model that was saved by an earlier run.</value>
+  </data>
+  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
+    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  </data>
 </root>

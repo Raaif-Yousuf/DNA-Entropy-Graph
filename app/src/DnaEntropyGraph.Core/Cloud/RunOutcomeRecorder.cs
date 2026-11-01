@@ -75,7 +75,7 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
                 request.JobId,
                 CloudErrorKind.Other,
                 RunErrorCodes.ForWorkerStatusCode(workerCode) ?? RunErrorCodes.WorkerFailed,
-                DescribeWorkerFailure(result) + (keptPartial ? " Partial files were kept in the output folder." : string.Empty) + AsideNote(tally.KeptAside),
+                DescribeWorkerFailure(result) + (keptPartial ? " Partial files were kept in the output folder." : string.Empty) + AsideNote(await KeptAsideAsync(tally.KeptAside, request.JobId).ConfigureAwait(false)),
                 note).ConfigureAwait(false);
         }
 
@@ -90,25 +90,26 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
             // The results are still in the bucket; the VM must not keep billing while the user sorts out the folder.
             var downloadNote = await terminator.EndVmAfterFailureAsync(request, zone).ConfigureAwait(false);
             // A file renamed aside before the failure is still the user's to hear about: it rides on the detail, the failure code stays the headline.
-            throw VmEndNotes.Apply(WithAsideNote(ex, tally.KeptAside), downloadNote);
+            throw VmEndNotes.Apply(WithAsideNote(ex, await KeptAsideAsync(tally.KeptAside, request.JobId).ConfigureAwait(false)), downloadNote);
         }
 
         var lifecycleError = request.AfterTask == AfterTaskAction.KeepAlive
             ? null
             : await terminator.EnsureVmEndedAsync(request, zone, request.AfterTask, cancellationToken).ConfigureAwait(false);
 
+        var keptAside = await KeptAsideAsync(tally.KeptAside, request.JobId).ConfigureAwait(false);
         var finalPhase = doneInputs == result.Inputs.Count ? JobPhase.Completed : JobPhase.PartiallyCompleted;
         if (lifecycleError is not null)
         {
             // A good result with an unconfirmed VM: finished, with the code that tells the user to check the Cloud page.
-            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.LifecycleUnverified, lifecycleError + AsideNote(tally.KeptAside)).ConfigureAwait(false);
-            return new CloudJobResult(finalPhase, CloudErrorKind.Other, lifecycleError + AsideNote(tally.KeptAside), RunErrorCodes.LifecycleUnverified);
+            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.LifecycleUnverified, lifecycleError + AsideNote(keptAside)).ConfigureAwait(false);
+            return new CloudJobResult(finalPhase, CloudErrorKind.Other, lifecycleError + AsideNote(keptAside), RunErrorCodes.LifecycleUnverified);
         }
 
-        if (tally.KeptAside > 0)
+        if (keptAside > 0)
         {
             // Hard Rule 14: a file the user had changed was renamed aside, not overwritten. A finished run still, with the code that tells the user where to look (the count is not text a user reads).
-            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.ChangedFilesKeptAside, AsideNote(tally.KeptAside).TrimStart()).ConfigureAwait(false);
+            await rows.SetPhaseAsync(request.JobId, finalPhase, CancellationToken.None, RunErrorCodes.ChangedFilesKeptAside, AsideNote(keptAside).TrimStart()).ConfigureAwait(false);
             return new CloudJobResult(finalPhase, null, null, RunErrorCodes.ChangedFilesKeptAside);
         }
 
@@ -121,6 +122,12 @@ internal sealed class RunOutcomeRecorder(RunRowStore rows, RunTransfer transfer,
     /// Ends with the <see cref="KeptAsideDetail"/> mark (issue #929): the Runs row and the run page read the count from it on every path that used this note.
     /// </summary>
     internal static string AsideNote(int count) => count > 0 ? " " + KeptAsideDetail.Append($"{count} changed file(s) in the output folder were kept under a changed name.", count) : string.Empty;
+
+    /// <summary>
+    /// Issue #1059: this attempt's count or the one the row holds, whichever is larger. A resume that finds its earlier files already identical renames nothing itself, but an
+    /// earlier attempt (one that never wrote a terminal row) may have set some aside.
+    /// </summary>
+    private async Task<int> KeptAsideAsync(int thisAttempt, string jobId) => Math.Max(thisAttempt, await rows.KeptAsideAsync(jobId).ConfigureAwait(false));
 
     private static Exception WithAsideNote(Exception ex, int count)
         => count > 0 && ex is RunFailureException failure

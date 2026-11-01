@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from .analysis.composition import codon_usage, gc_percent
-from .analysis.direction import DirectionResult, analyze_direction
+from .analysis.direction import DirectionResult, analyze_direction, count_windows
 from .analysis.gene_summary import GeneRow, summarize_genes
 from .analysis.regions import call_regions, mirrored_threshold, validate_region_options
 from .analysis.smoothing import rolling_mean, validate_smoothing_windows
@@ -783,6 +783,7 @@ def run(
     *,
     on_window: Callable[[], None] | None = None,
     on_contig: Callable[[Contig], None] | None = None,
+    on_plan: Callable[[int], None] | None = None,
     provenance_extra: dict[str, Any] | None = None,
     predictor: Predictor | None = None,
 ) -> RunResult:
@@ -800,6 +801,11 @@ def run(
     worker's ``CancelWatcher.check_or_raise`` plugs into either without this module
     needing to know anything about ``control/cancel``. ``None`` (the default) means no
     hook — every existing caller is unaffected.
+
+    ``on_plan``, when given, is called once with the number of ``on_window`` calls this run is
+    expected to make (every contig, every direction pass; see
+    :func:`~dna_entropy.analysis.direction.count_windows`), after validation and before the first
+    window, so a caller can report progress as a fraction. An OOM retry can exceed it.
 
     Issue #366: ``cfg.name`` is sanitized (:func:`sanitize_run_name`) FIRST, unconditionally,
     before anything is read or written — this is the one choke point every caller (a CLI
@@ -853,6 +859,19 @@ def run(
     # refused run must never pay for it.
     if predictor is None:
         predictor = build_predictor(cfg)
+    if on_plan is not None:
+        on_plan(
+            sum(
+                count_windows(
+                    len(c.seq),
+                    cfg.context_length,
+                    cfg.max_len,
+                    cfg.direction,
+                    circular=cfg.topology.resolve(c.circular),
+                )
+                for c in loaded.contigs
+            )
+        )
     try:
         for contig in loaded.contigs:
             dr = analyze_direction(

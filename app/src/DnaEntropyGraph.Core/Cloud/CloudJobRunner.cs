@@ -128,6 +128,9 @@ public sealed class CloudJobRunner
     /// <summary>Issue #675: told when a stage is taking longer than usual (75 percent of its deadline) and when a stall question opens or is withdrawn. Called on the runner's own task: a UI must marshal. A handler that throws is ignored.</summary>
     public Action<RunNotice>? OnNotice { get => _settings.OnNotice; init => _settings.OnNotice = value; }
 
+    /// <summary>Issue #1086: each new progress the worker reports in status.json, with the job id; see <see cref="CloudRunSettings.OnProgress"/>.</summary>
+    public Action<string, ProgressEvent>? OnProgress { get => _settings.OnProgress; init => _settings.OnProgress = value; }
+
     /// <summary>Issue #938: how long after a cancel gave up on an in-flight create the app keeps watching to delete the VM that create makes when it lands (default 15 minutes).</summary>
     public TimeSpan LateCreateReapWindow { get => _settings.LateCreateReapWindow; init => _settings.LateCreateReapWindow = value; }
 

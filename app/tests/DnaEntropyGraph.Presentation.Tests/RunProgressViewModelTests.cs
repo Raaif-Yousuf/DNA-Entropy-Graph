@@ -107,6 +107,28 @@ public class RunProgressViewModelTests
     }
 
     [Theory]
+    [InlineData("restoring-cache", "miss", "ProgressCacheFirstRun")]
+    [InlineData("model-loading", "miss", "ProgressCacheFirstRun")]
+    [InlineData("restoring-cache", "hit", "ProgressCacheWarm")]
+    [InlineData("model-loading", "hit", "ProgressCacheWarm")]
+    [InlineData("model-loading", "saving", "ProgressCacheSaving")]
+    // The worker never writes "saving" at restoring-cache; this row pins the defensive default (the plain line, never the saving claim).
+    [InlineData("restoring-cache", "saving", "ProgressRestoringCache")]
+    [InlineData("restoring-cache", "unavailable", "ProgressCacheUnavailable")]
+    [InlineData("restoring-cache", null, "ProgressRestoringCache")]
+    [InlineData("model-loading", "unavailable", "ProgressCacheUnavailable")]
+    [InlineData("model-loading", null, "ProgressModelLoading")]
+    [InlineData("installing", null, "ProgressInstalling")]
+    public void The_worker_cache_field_picks_the_first_run_or_warm_line_and_never_claims_a_cache_it_did_not_report(string stage, string? cache, string expectedKey)
+    {
+        var viewModel = ProgressViewModel(out var messenger, echoKeys: true);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.0, Cache: cache)));
+
+        viewModel.StatusDetailText.ShouldBe(expectedKey);
+    }
+
+    [Theory]
     [InlineData(JobPhase.Completed)]
     [InlineData(JobPhase.PartiallyCompleted)]
     [InlineData(JobPhase.Cancelled)]
@@ -179,16 +201,173 @@ public class RunProgressViewModelTests
         await vmActions.DidNotReceive().DeleteVmAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public void A_progress_message_for_this_job_updates_the_fraction_and_detail_text()
+    private static RunProgressViewModel ProgressViewModel(out IMessenger messenger, bool echoKeys = false)
     {
-        var viewModel = CreateViewModel(out _, out _, out _, out _, out var messenger);
-        viewModel.JobId = "job-1";
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        if (!echoKeys)
+        {
+            strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
+            strings.GetString("ProgressModelLoading").Returns("Loading the analysis model onto the computer...");
+            strings.GetString("ProgressGeneric").Returns("Working on your run...");
+        }
 
-        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, "SetTnpB - window 4 of 11, forward")));
+        messenger = new WeakReferenceMessenger();
+        return new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger)
+        {
+            JobId = "job-1",
+        };
+    }
+
+    [Fact]
+    public void A_running_progress_message_sets_the_fraction_and_a_resw_window_line_built_from_the_counts()
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, 4, 11)));
 
         viewModel.FractionComplete.ShouldBe(0.42);
-        viewModel.StatusDetailText.ShouldBe("SetTnpB - window 4 of 11, forward");
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 4 of 11");
+    }
+
+    [Fact]
+    public void The_model_loading_stage_shows_the_resw_line_never_the_raw_stage_id()
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("model-loading", 0.0)));
+
+        viewModel.StatusDetailText.ShouldBe("Loading the analysis model onto the computer...");
+    }
+
+    [Fact]
+    public void A_page_created_after_the_progress_was_published_shows_it_at_once_from_the_store()
+    {
+        // Issue #1086 review: the page is a transient ViewModel; an event published before it existed must not leave it blank until the worker changes again.
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.42, 4, 11)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+        strings.GetString("ProgressAnalysingWindowCount").Returns("Analysing: window {0} of {1}");
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0.42);
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 4 of 11");
+    }
+
+    [Fact]
+    public void A_page_for_a_run_with_no_stored_progress_stays_empty()
+    {
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunProgressChangedMessage("other", new ProgressEvent("running", 0.9, 9, 10)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0);
+        viewModel.StatusDetailText.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_finished_run_opened_afterwards_is_not_seeded_with_a_stale_bar_even_when_its_last_progress_arrived_late()
+    {
+        // Issue #1086 review: progress (poll thread) and the terminal phase (phase callback) race; the late progress must not be remembered.
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Completed));
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.9, 9, 10)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0);
+        viewModel.StatusDetailText.ShouldBeNull();
+    }
+    // Every stage-to-line row (Hard Rule 13: the keys live in Resources.resw; an unmapped stage gets the neutral line, never the raw id).
+    // "uploading" is NOT mapped: no worker code writes it (MEASURED 2026-10-31: grep of worker/src and worker/vm), so it is neutral like any other.
+    [Theory]
+    [InlineData(WorkerStages.Booting, null, null, "ProgressBooting")]
+    [InlineData(WorkerStages.ModelLoading, null, null, "ProgressModelLoading")]
+    [InlineData(WorkerStages.Running, null, null, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, 3, null, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, null, 9, "ProgressAnalysing")]
+    [InlineData(WorkerStages.Running, 3, 9, "ProgressAnalysingWindowCount|3|9")]
+    [InlineData(WorkerStages.Uploading, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Queued, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Provisioning, null, null, "ProgressGeneric")]
+    [InlineData(WorkerStages.Finalizing, null, null, "ProgressGeneric")]
+    [InlineData("some-future-stage", null, null, "ProgressGeneric")]
+    public void Every_stage_maps_to_its_own_resw_line(string stage, int? window, int? windows, string expected)
+    {
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => "KEY:" + call.Arg<string>());
+        strings.GetString("ProgressAnalysingWindowCount").Returns("ProgressAnalysingWindowCount|{0}|{1}");
+        var messenger = new WeakReferenceMessenger();
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger)
+        {
+            JobId = "job-1",
+        };
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.1, window, windows)));
+
+        viewModel.StatusDetailText.ShouldBe(expected.Contains('|') ? expected : "KEY:" + expected);
+    }
+
+    [Theory]
+    [InlineData("some-future-stage")]
+    [InlineData("queued")]
+    public void An_unknown_stage_shows_the_neutral_generic_line_never_the_raw_stage_id(string stage)
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent(stage, 0.0)));
+
+        viewModel.StatusDetailText.ShouldBe("Working on your run...");
+        viewModel.StatusDetailText!.ShouldNotContain(stage);
+    }
+
+    [Theory]
+    [InlineData(JobPhase.Completed)]
+    [InlineData(JobPhase.Failed)]
+    [InlineData(JobPhase.Cancelled)]
+    [InlineData(JobPhase.PartiallyCompleted)]
+    public void A_late_progress_message_after_a_terminal_phase_is_ignored(JobPhase terminal)
+    {
+        var viewModel = ProgressViewModel(out var messenger);
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.5, 5, 10)));
+        messenger.Send(new RunPhaseChangedMessage("job-1", terminal));
+
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.9, 9, 10)));
+
+        viewModel.FractionComplete.ShouldBe(0.5);
+        viewModel.StatusDetailText.ShouldBe("Analysing: window 5 of 10");
     }
 
     [Fact]
@@ -197,7 +376,7 @@ public class RunProgressViewModelTests
         var viewModel = CreateViewModel(out _, out _, out _, out _, out var messenger);
         viewModel.JobId = "job-1";
 
-        messenger.Send(new RunProgressChangedMessage("some-other-job", new ProgressEvent("running", 0.99, "should not apply")));
+        messenger.Send(new RunProgressChangedMessage("some-other-job", new ProgressEvent("running", 0.99, 1, 2)));
 
         viewModel.FractionComplete.ShouldBe(0);
         viewModel.StatusDetailText.ShouldBeNull();

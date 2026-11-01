@@ -128,7 +128,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 try
                 {
                     EnsureNoLinkedFolder(runFolderFull, destination, label);
-                    await DownloadFileAsync(request.ResolvedScope, runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
+                    await DownloadFileAsync(request.JobId, request.ResolvedScope, runFolderFull, bucket, prefix + file.Path, destination, file, label, tally, cancellationToken).ConfigureAwait(false);
                 }
                 catch (CloudOperationException ex) when (!VmFacts.IsProjectWide(ex.Kind))
                 {
@@ -178,7 +178,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.DownloadFailed, $"{label} would be written through a linked folder, so it was not downloaded.");
         }
     }
-    private async Task DownloadFileAsync(CloudScope scope, string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
+    private async Task DownloadFileAsync(string jobId, CloudScope scope, string runFolderFull, string bucket, string objectKey, string destination, WorkerResultFile file, string label, DownloadTally tally, CancellationToken cancellationToken)
     {
         var partial = StreamedDownload.TempPathFor(destination);
         try
@@ -230,6 +230,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
 
                 aside = ChangedFileAside.Move(destination, settings.TimeProvider, Mover);
                 tally.KeptAside++;
+                await rows.AdjustKeptAsideAsync(jobId, 1).ConfigureAwait(false);
             }
 
             try
@@ -243,6 +244,7 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
                 {
                     Mover.Move(aside, destination);
                     tally.KeptAside--;
+                    await rows.AdjustKeptAsideAsync(jobId, -1).ConfigureAwait(false);
                 }
                 catch (Exception restoreFailure) when (restoreFailure is IOException or UnauthorizedAccessException)
                 {
@@ -313,7 +315,12 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
         // OutputDir comes from the history database: a resumed run only reuses it when it still lies inside the output folder this run was
         // given and is a real folder with no junction or symlink below the output folder (Hard Rule 14). Otherwise it falls through to a fresh
         // folder under the chosen output folder, so nothing is written elsewhere.
-        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && IsInsideOutputFolder(existing, request.OutputFolder))
+        // Issue #1043: and it carries THIS job's marker (RunFolderMarker, written when the app made the folder). A damaged row can name a folder that passes the containment test and is
+        // still the user's own, so containment alone is not proof the folder is ours.
+        // DECISION (agent-made, reversible): a run from before markers existed (no marker) is NOT resumed into its old folder; it gets a fresh marked folder and downloads everything
+        // again. Rule 14 (never write into a folder we cannot prove we made) outweighs avoiding a duplicate download; the old folder and its files are left exactly as they were.
+        if (!string.IsNullOrWhiteSpace(existing) && Directory.Exists(existing) && IsInsideOutputFolder(existing, request.OutputFolder)
+            && RunFolderMarker.Check(existing, request.JobId) == RunFolderMarkerState.Matches)
         {
             return existing;
         }
@@ -331,7 +338,8 @@ internal sealed class RunTransfer(IStorageGateway storage, GatewayCalls calls, C
             throw new RunFailureException(CloudErrorKind.Other, RunErrorCodes.OutputFolderUnusable, $"The output folder could not be created: {ex.GetType().Name}.");
         }
 
-        await rows.UpdateRowAsync(request.JobId, row => row with { OutputDir = folder }, cancellationToken).ConfigureAwait(false);
+        // Issue #1059: a file an earlier attempt set aside lives in the folder the row just left; this new folder holds none, so the row's count starts again at 0 in the same write.
+        await rows.UpdateRowAsync(request.JobId, row => row with { OutputDir = folder, ErrorDetail = KeptAsideDetail.Set(row.ErrorDetail, 0) }, cancellationToken).ConfigureAwait(false);
         return folder;
     }
 
