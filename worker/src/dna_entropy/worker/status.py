@@ -32,6 +32,8 @@ _MAX_PROGRESS_LINES = 2000
 # re-upload cadence (job_contract.md §4-5) — one shared tick satisfies both instead of two
 # independent timers.
 DEFAULT_INTERVAL_SECONDS = 10.0
+# Minimum gap between per-window status.json writes (issue #1086); the heartbeat tick covers the rest.
+PROGRESS_WRITE_SECONDS = 2.0
 
 # issue #341, DECISION (agent-made, reversible): after this many CONSECUTIVE store-write
 # failures, an outage is treated as persistent rather than a blip and escalated (see
@@ -213,6 +215,7 @@ class StatusWriter:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._consecutive_write_failures = 0
+        self._last_progress_write: float | None = None
 
     @property
     def consecutive_write_failures(self) -> int:
@@ -240,13 +243,30 @@ class StatusWriter:
             self._state["cancelSeen"] = True
         self._write_status()
 
-    def mark_progress(self) -> None:
+    def mark_progress(self, percent: float | None = None, detail: dict | None = None) -> None:
         """Issue #522: the compute thread finished a window. Updates ``windowsDone`` and
-        ``lastProgressAt`` in memory only (no write): the next heartbeat tick, at most one
-        interval away, carries it, so a thousand-window job does not write a thousand times."""
+        ``lastProgressAt`` in memory, and ``percent``/``detail`` when given (issue #1086).
+
+        Throttled so a thousand-window job does not write a thousand times: the FIRST call
+        writes at once, later calls write only when :data:`PROGRESS_WRITE_SECONDS` have passed
+        since the last progress write; otherwise the next heartbeat tick (or any other write)
+        carries the in-memory values."""
         with self._lock:
             self._state["windowsDone"] += 1
             self._state["lastProgressAt"] = utc_now_iso()
+            if percent is not None:
+                self._state["percent"] = float(percent)
+            if detail is not None:
+                self._state["detail"] = detail
+            now = time.monotonic()
+            last = self._last_progress_write
+            due = last is None or now - last >= PROGRESS_WRITE_SECONDS
+            if due and (percent is not None or detail is not None):
+                self._last_progress_write = now
+            else:
+                due = False
+        if due:
+            self._write_status()
 
     def start(self) -> None:
         """Write an initial snapshot immediately, then start the background heartbeat."""

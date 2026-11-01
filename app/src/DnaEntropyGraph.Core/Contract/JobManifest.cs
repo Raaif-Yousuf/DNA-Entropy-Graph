@@ -9,7 +9,11 @@ namespace DnaEntropyGraph.Core.Contract;
 /// </summary>
 public sealed record JobManifest(string JobId, string ModelId, IReadOnlyList<string> InputObjectKeys);
 
-public sealed record ProgressEvent(string Stage, double FractionComplete, string Message);
+/// <summary>
+/// One progress step of a run, as DATA (Hard Rule 13: Core builds no user text). <paramref name="Window"/> and <paramref name="Windows"/> are the worker's
+/// <c>detail.window</c>/<c>detail.windows</c> within the current input; the presentation layer turns the stage and counts into a resource string.
+/// </summary>
+public sealed record ProgressEvent(string Stage, double FractionComplete, int? Window = null, int? Windows = null);
 
 public sealed record WorkerStatus(string Stage, DateTimeOffset HeartbeatUtc);
 

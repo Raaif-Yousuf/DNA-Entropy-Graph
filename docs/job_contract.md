@@ -243,8 +243,7 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
     "input": "in1",
     "contig": "SetTnpB_3",
     "window": 5,
-    "windows": 11,
-    "direction": "forward"
+    "windows": 11
   },
   "startedAt": "2026-09-18T14:23:10Z",
   "stageStartedAt": "2026-09-18T14:31:44Z",
@@ -267,9 +266,11 @@ re-uploads it every 5-10 s, capped at 1 MB (older lines roll into `progress.1.js
 }
 ```
 
-`windowsDone` and `lastProgressAt` (issue #522) are the **forward-progress signal**, separate from the heartbeat. The heartbeat is written by a background thread, so it keeps ticking (`heartbeatSeq` and `updatedAt` move) even when the compute thread is wedged in a hung CUDA call or a deadlock. These two move only when the compute thread does something: `windowsDone` counts windows finished across the whole job (never resets between inputs or contigs), and `lastProgressAt` is the UTC time, on the worker's clock, of the last window finished or stage change. They are written in memory per window and reach `status.json` with the next heartbeat tick (at most 30 s later). A reader judges them by CHANGE between its own looks, the same way it judges the heartbeat, never by comparing `lastProgressAt` with its own clock. A status without them (an older worker) has no progress signal and must not be judged stuck by it.
+`windowsDone` and `lastProgressAt` (issue #522) are the **forward-progress signal**, separate from the heartbeat. The heartbeat tick is written by a background thread (the compute thread also writes `status.json` per window since issue #1086, see section 5), so the tick keeps going (`heartbeatSeq` and `updatedAt` move) even when the compute thread is wedged in a hung CUDA call or a deadlock. These two move only when the compute thread does something: `windowsDone` counts windows finished across the whole job (never resets between inputs or contigs), and `lastProgressAt` is the UTC time, on the worker's clock, of the last window finished or stage change. They are written in memory per window and reach `status.json` with the next write: the throttled per-window progress write (at most 2 s later, issue #1086) or the heartbeat tick. A reader judges them by CHANGE between its own looks, the same way it judges the heartbeat, never by comparing `lastProgressAt` with its own clock. A status without them (an older worker) has no progress signal and must not be judged stuck by it.
 
 `cancelSeen` (issue #675) is `false` until the worker first sees `control/cancel`, then `true` (written at once): the worker's explicit acknowledgement of a cancel request (section 6).
+
+`percent` and `detail.window` / `detail.windows` (issue #1086) are what the app's run page shows as its bar and its "part N of M" line. **What the worker writes, exactly:** while an input runs, `detail` is `{input, window, windows}` (plus `contig` once the first contig of that input has finished); `window` counts the `on_window` calls finished in THIS input (forward and reverse-complement passes both count, a circular molecule is padded by `2K` first, an out-of-memory retry can add windows, so `window` is clamped to `windows`) and `windows` is the planned total for the input (`count_windows` in `analysis/direction.py`, reported by `pipeline.run` through `on_plan`). `percent` is the whole job: every input gets an equal share, windows-weighted inside its share, `100 * (input_index + window / windows) / n_inputs`, capped at 99.0 until the terminal write sets 100.0. Stages other than `running` leave `percent` and `detail` as they were. Writes are throttled: the first finished window writes `status.json` at once, later windows write at most once per 2 seconds (`PROGRESS_WRITE_SECONDS`), and the heartbeat tick or any stage change carries the latest values in between. Each runner reads them from every poll and publishes one progress event per change (`WorkerProgressTracker`); the app never shows `detail.input` or `detail.contig`. A status without them (the startup script's own stages: `booting`, `installing`) shows a neutral line and leaves the bar where it was. The page text for each stage lives in `Resources.resw` (`ProgressModelLoading`, `ProgressAnalysingWindowCount`, `ProgressGeneric`, ...), never in Core.
 
 `error`, when non-null, is `{code, message, detail, retriable, remediation}`, with `code`
 drawn from the error taxonomy in `cloud_design.md` section 5. **The worker's own subset of
@@ -342,7 +343,7 @@ actually emit these two stages, is an open question for whoever picks it up next
 ## 5. Heartbeat and death detection
 
 - The worker touches `status.json` (bumping `heartbeatSeq` and `updatedAt`) **every 30 s**
- (`limits.heartbeatSeconds`), regardless of stage, as long as it is alive.
+ (`limits.heartbeatSeconds`), regardless of stage, as long as it is alive. Every `status.json` write bumps `heartbeatSeq`, and since issue #1086 the **compute thread** also writes it (the throttled per-window progress write in `mark_progress`, at most once per 2 s), not only the background tick. So `heartbeatSeq` moving proves the worker process is alive and writing, no longer that the background thread specifically is ticking; a worker whose compute thread is wedged still ticks from the background thread, and that is why the forward-progress signal below (`windowsDone`, `lastProgressAt`) is judged separately.
 - The app polls `status.json` **every 5 s for the first 10 minutes, then every 10 s**,
  using `ifGenerationNotMatch` so an unchanged object costs one 304.
 - The app cross-checks `instances.get` **every 30 s**.

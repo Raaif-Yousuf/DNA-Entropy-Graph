@@ -107,6 +107,71 @@ public class CloudJobRunnerStallTests
         notices.ShouldBeEmpty();
     }
 
+    // ---------------------------------------------------------------- progress (issue #1086)
+
+    [Fact]
+    public async Task The_stage_the_worker_reports_is_published_once_as_a_progress_event_not_once_per_poll()
+    {
+        // The fake worker reports stage "model-loading" on every look and never finishes; the poll loop looks many times before it ends the run.
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
+        var events = new ConcurrentQueue<(string JobId, DnaEntropyGraph.Core.Contract.ProgressEvent Event)>();
+        var clock = new VirtualTimeProvider();
+        var withProgress = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
+            StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) },
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clock,
+            PollDelay = (span, token) => { token.ThrowIfCancellationRequested(); clock.Advance(span); return Task.CompletedTask; },
+            OnProgress = (jobId, ev) => events.Enqueue((jobId, ev)),
+        };
+
+        var result = await withProgress.RunAsync(TestInputs.Request("job-prog", Spec("job-prog")), CancellationToken.None);
+
+        result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        var seen = events.ToList();
+        seen.ShouldNotBeEmpty("the runner read status.json many times and published nothing");
+        seen.Select(e => e.JobId).ShouldAllBe(id => id == "job-prog");
+        seen.Select(e => e.Event.Stage).ShouldBe(["model-loading"], "an unchanged status is published once, not on every poll");
+    }
+
+    [Fact]
+    public async Task A_progress_handler_that_throws_never_breaks_a_cloud_run()
+    {
+        var thrown = 0;
+        var gcp = new FakeGcp().WithWorker(FakeWorkerMode.StuckInModelLoading);
+        var clock = new VirtualTimeProvider();
+        var runner = new CloudJobRunner(gcp, gcp, gcp, gcp, gcp, new InMemoryRunRepository())
+        {
+            ResultPollInterval = TimeSpan.FromMilliseconds(1),
+            ResultTimeout = TimeSpan.FromSeconds(20),
+            FirstHeartbeatTimeout = TimeSpan.FromSeconds(20),
+            HeartbeatStaleTimeout = TimeSpan.FromSeconds(20),
+            StageDeadlines = new Dictionary<string, TimeSpan> { ["model-loading"] = TimeSpan.FromMilliseconds(80) },
+            LifecyclePollInterval = TimeSpan.FromMilliseconds(1),
+            LifecycleTimeout = TimeSpan.FromMilliseconds(200),
+            TimeProvider = clock,
+            PollDelay = (span, token) => { token.ThrowIfCancellationRequested(); clock.Advance(span); return Task.CompletedTask; },
+            OnProgress = (_, _) =>
+            {
+                Interlocked.Increment(ref thrown);
+                throw new InvalidOperationException("a broken UI");
+            },
+        };
+
+        var result = await runner.RunAsync(TestInputs.Request("job-prog2", Spec("job-prog2")), CancellationToken.None);
+
+        // The handler really threw (not vacuous), and the run still reached its own normal outcome: the stuck stage ended it, the VM was stopped, and no UI exception replaced the failure code.
+        Volatile.Read(ref thrown).ShouldBeGreaterThanOrEqualTo(1);
+        result.FailureCode.ShouldBe(RunErrorCodes.WorkerStageStuck);
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        (await VmStatusAsync(gcp, "job-prog2")).ShouldBe("STOPPED");
+    }
+
     [Fact]
     public async Task A_notice_handler_that_throws_never_breaks_the_run()
     {

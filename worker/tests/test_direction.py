@@ -8,6 +8,7 @@ import pytest
 from dna_entropy.analysis.direction import (
     DirectionResult,
     analyze_direction,
+    count_windows,
     reverse_complement,
     run_windowed,
 )
@@ -778,3 +779,26 @@ def test_reduced_context_range_is_none_for_a_single_direction() -> None:
         MockPredictor(seed=6), "ACGT" * 30, context_length=100, ceiling=8192, direction=Direction.FORWARD_ONLY
     )
     assert result.reduced_context_range is None
+
+
+# --- Issue #1086 r2: count_windows matches what run_windowed actually runs ---------------
+
+
+@pytest.mark.parametrize("direction", list(Direction))
+@pytest.mark.parametrize("circular", [False, True])
+@pytest.mark.parametrize("length", [50, 256, 1000])
+def test_count_windows_equals_actual_on_window_calls(
+    direction: Direction, circular: bool, length: int
+) -> None:
+    calls: list[int] = []
+    seq = "ACGT" * (length // 4) + "ACGT"[: length % 4]
+    analyze_direction(
+        MockPredictor(seed=0),
+        seq,
+        context_length=64,
+        ceiling=256,
+        direction=direction,
+        on_window=lambda: calls.append(1),
+        circular=circular,
+    )
+    assert count_windows(len(seq), 64, 256, direction, circular=circular) == len(calls)

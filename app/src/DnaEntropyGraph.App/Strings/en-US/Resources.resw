@@ -18,6 +18,138 @@
   <data name="ShellTitle.Text" xml:space="preserve">
     <value>DNA Entropy Graph</value>
   </data>
+  <data name="CloudPageHeading.Text" xml:space="preserve">
+    <value>What this app has in your Google Cloud project</value>
+  </data>
+  <data name="CloudRefreshButton.Content" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="CloudEmptyText.Text" xml:space="preserve">
+    <value>Nothing of this app is in your project right now, so nothing is costing you money.</value>
+  </data>
+  <data name="CloudVmsHeading.Text" xml:space="preserve">
+    <value>Rented computers (VMs)</value>
+  </data>
+  <data name="CloudDisksHeading.Text" xml:space="preserve">
+    <value>Disks</value>
+  </data>
+  <data name="CloudStopButton.Content" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="CloudStartButton.Content" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="CloudDeleteButton.Content" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="CloudDeleteAllButton.Content" xml:space="preserve">
+    <value>Delete everything this app created</value>
+  </data>
+  <data name="CloudPage_NoProject" xml:space="preserve">
+    <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
+  </data>
+  <data name="CloudPage_ListFailed" xml:space="preserve">
+    <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
+  </data>
+  <data name="CloudPage_ActionFailed" xml:space="preserve">
+    <value>Google would not do that to {0}. Press Refresh to see where it stands, then try again.</value>
+  </data>
+  <data name="CloudPage_DeleteAllFailed" xml:space="preserve">
+    <value>Google stopped the cleanup before it began, so nothing was deleted. Press Refresh, then try Delete everything again.</value>
+  </data>
+  <data name="CloudPage_RunningBanner" xml:space="preserve">
+    <value>{0} rented computer(s) running now and costing money. Press Stop on it below if you are not waiting for a result.</value>
+  </data>
+  <data name="CloudPage_Summary" xml:space="preserve">
+    <value>Results online: {0} job folder(s), {1}, in {2}. Shared download cache: {3}.</value>
+  </data>
+  <data name="CloudPage_SummaryNoBucket" xml:space="preserve">
+    <value>No results folder online yet. Shared download cache: {0}.</value>
+  </data>
+  <data name="CloudVm_Running" xml:space="preserve">
+    <value>Running</value>
+  </data>
+  <data name="CloudVm_Stopped" xml:space="preserve">
+    <value>Stopped (its disk still costs a little)</value>
+  </data>
+  <data name="CloudVm_Changing" xml:space="preserve">
+    <value>Starting or stopping</value>
+  </data>
+  <data name="CloudVm_AnotherComputer" xml:space="preserve">
+    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. To end it, use the copy of the app that created it.</value>
+  </data>
+  <data name="CloudVm_CostRunning" xml:space="preserve">
+    <value>Up to about ${0} per hour while it runs.</value>
+  </data>
+  <data name="CloudVm_CostStopped" xml:space="preserve">
+    <value>About ${0} per day for its disk until you delete it.</value>
+  </data>
+  <data name="CloudDisk_Attached" xml:space="preserve">
+    <value>{0} GB, in use by a computer</value>
+  </data>
+  <data name="CloudDisk_Detached" xml:space="preserve">
+    <value>{0} GB, not in use</value>
+  </data>
+  <data name="CloudDisk_Cost" xml:space="preserve">
+    <value>About ${0} per day.</value>
+  </data>
+  <data name="CloudDeleteVm_Title" xml:space="preserve">
+    <value>Delete this rented computer?</value>
+  </data>
+  <data name="CloudDeleteVm_Body" xml:space="preserve">
+    <value>{0} and its disk will be deleted and billing for them stops. A run still using it ends as cancelled. This cannot be undone.</value>
+  </data>
+  <data name="CloudDeleteAll_Title" xml:space="preserve">
+    <value>Delete everything this app created?</value>
+  </data>
+  <data name="CloudDeleteAll_Body" xml:space="preserve">
+    <value>This deletes {0} rented computer(s), {1} disk(s) and {2} job folder(s) with their results online ({3}). Runs still going end as cancelled. Results already downloaded to this PC stay. Google may keep deleted job folders for a few days before they are gone for good. This cannot be undone.</value>
+  </data>
+  <data name="CloudSize_GB" xml:space="preserve">
+    <value>{0} GB</value>
+  </data>
+  <data name="CloudSize_MB" xml:space="preserve">
+    <value>{0} MB</value>
+  </data>
+  <data name="CloudSize_KB" xml:space="preserve">
+    <value>{0} KB</value>
+  </data>
+  <data name="CloudSize_B" xml:space="preserve">
+    <value>{0} bytes</value>
+  </data>
+  <data name="CloudPage_DeleteAllInterrupted" xml:space="preserve">
+    <value>The cleanup was interrupted, so some items may already be deleted. Press Refresh to see what is left, then press Delete everything again.</value>
+  </data>
+  <data name="CloudKind_Vm" xml:space="preserve">
+    <value>computer</value>
+  </data>
+  <data name="CloudKind_Disk" xml:space="preserve">
+    <value>disk</value>
+  </data>
+  <data name="CloudKind_JobData" xml:space="preserve">
+    <value>job folder</value>
+  </data>
+  <data name="CloudReport_Complete" xml:space="preserve">
+    <value>Done. Everything this app created in your project is deleted.</value>
+  </data>
+  <data name="CloudReport_Incomplete" xml:space="preserve">
+    <value>Some items are still there. Read the list below, then press Delete everything again.</value>
+  </data>
+  <data name="CloudReport_Deleted" xml:space="preserve">
+    <value>Deleted: {0}</value>
+  </data>
+  <data name="CloudReport_DeletedRecoverable" xml:space="preserve">
+    <value>Deleted: {0}. Google keeps a copy for {1} days in case you change your mind (ask Google to restore it in Google Cloud Console).</value>
+  </data>
+  <data name="CloudReport_Failed" xml:space="preserve">
+    <value>Could not delete: {0}. Press Delete everything again, or delete it in Google Cloud Console.</value>
+  </data>
+  <data name="CloudReport_NotVerified" xml:space="preserve">
+    <value>Asked Google to delete {0} but it is still listed. Press Refresh in a minute.</value>
+  </data>
+  <data name="CloudReport_Skipped" xml:space="preserve">
+    <value>Left alone: {0}. Press Refresh, then Delete everything again if it is still listed.</value>
+  </data>
   <data name="ThemeUpdated_Title" xml:space="preserve">
     <value>Theme updated</value>
   </data>
@@ -88,6 +220,54 @@
   <data name="RunProgressDeleteVm.Content" xml:space="preserve">
     <value>Delete VM now</value>
   </data>
+  <data name="RunNotice_UnknownStage" xml:space="preserve">
+    <value>the current step</value>
+  </data>
+  <data name="RunNotice_Slow" xml:space="preserve">
+    <value>{0} is taking longer than usual ({1} minutes so far). Nothing is wrong yet. Keep waiting, or press Cancel run if you would rather stop.</value>
+  </data>
+  <data name="RunNotice_Stalled" xml:space="preserve">
+    <value>The computer has stopped reporting progress during {0}. A window is asking what to do. Choose Stop, Delete or Keep waiting.</value>
+  </data>
+  <data name="StallDialog_Title" xml:space="preserve">
+    <value>This run looks stuck: {3}</value>
+  </data>
+  <data name="StallDialog_Body_Stuck" xml:space="preserve">
+    <value>The step {0} on the rented computer {2} has run far longer than it should (about {1} minutes). Stop keeps the rented computer so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_Stale" xml:space="preserve">
+    <value>The rented computer {2} has stopped reporting progress during {0} (about {1} minutes). Stop keeps it so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_Body_NoHeartbeat" xml:space="preserve">
+    <value>The rented computer {2} never reported that it started working (about {1} minutes). Stop keeps it so you can look later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
+  </data>
+  <data name="StallDialog_RunLabel" xml:space="preserve">
+    <value>{0} (job {1})</value>
+  </data>
+  <data name="StallDialog_RunLabelNoName" xml:space="preserve">
+    <value>job {0}</value>
+  </data>
+  <data name="StallDialog_ThisComputer" xml:space="preserve">
+    <value>for this run</value>
+  </data>
+  <data name="StallConfirm_Title" xml:space="preserve">
+    <value>Delete the rented computer {2}?</value>
+  </data>
+  <data name="StallConfirm_Body" xml:space="preserve">
+    <value>The rented computer {2} and its disk will be deleted and billing for them stops. It belongs to {3}. Press Delete it to go ahead, or Keep waiting to leave it as it is. A deleted computer cannot be brought back.</value>
+  </data>
+  <data name="StallConfirm_Delete" xml:space="preserve">
+    <value>Delete it</value>
+  </data>
+  <data name="StallDialog_Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="StallDialog_Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="StallDialog_KeepWaiting" xml:space="preserve">
+    <value>Keep waiting</value>
+  </data>
   <data name="RunProgressStayOpenBanner.Message" xml:space="preserve">
     <value>You can close the app. The run continues in the cloud and results download when you come back.</value>
   </data>
@@ -96,18 +276,6 @@
   </data>
   <data name="ConfirmStopVm_Body" xml:space="preserve">
     <value>Its storage still costs a small amount until you delete it. Your run stops making progress.</value>
-  </data>
-  <data name="RunAction_RunNotFound" xml:space="preserve">
-    <value>This run is no longer in your history, so the app cannot tell which Google account and project its rented computer is in. Open the Cloud page and stop or delete any computer left running there.</value>
-  </data>
-  <data name="RunSignIn_Prompt" xml:space="preserve">
-    <value>Sign in as {0} to stop or delete this run's computer.</value>
-  </data>
-  <data name="RunSignIn_PromptUnknown" xml:space="preserve">
-    <value>Sign in with the Google account this run started under to stop or delete its computer.</value>
-  </data>
-  <data name="RunProgressSignIn.Content" xml:space="preserve">
-    <value>Sign in</value>
   </data>
   <data name="ConfirmDeleteVm_Title" xml:space="preserve">
     <value>Delete this rented computer now?</value>
@@ -129,6 +297,21 @@
   </data>
   <data name="PhaseRunning_Title" xml:space="preserve">
     <value>Analysing</value>
+  </data>
+  <data name="ProgressModelLoading" xml:space="preserve">
+    <value>Loading the analysis model onto the computer...</value>
+  </data>
+  <data name="ProgressBooting" xml:space="preserve">
+    <value>The rented computer is starting up...</value>
+  </data>
+  <data name="ProgressAnalysing" xml:space="preserve">
+    <value>Analysing your sequence...</value>
+  </data>
+  <data name="ProgressAnalysingWindowCount" xml:space="preserve">
+    <value>Analysing your sequence: part {0} of {1}</value>
+  </data>
+  <data name="ProgressGeneric" xml:space="preserve">
+    <value>Working on your run...</value>
   </data>
   <data name="PhaseFinalizing_Title" xml:space="preserve">
     <value>Saving results</value>
@@ -187,26 +370,8 @@
   <data name="RunError_lifecycle_unverified" xml:space="preserve">
     <value>Your results were saved, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
   </data>
-  <data name="RunError_account_signed_out" xml:space="preserve">
-    <value>The Google account this run was made under is signed out, so its rented computer could not be reached. Sign in as that account (choose the Sign in button on this run's page or at the bottom of the window), then try again.</value>
-  </data>
-  <data name="Runs_Redownload_SignIn_Title" xml:space="preserve">
-    <value>Sign in to download</value>
-  </data>
-  <data name="Runs_Redownload_SignIn_Body" xml:space="preserve">
-    <value>The Google account this run was made under is signed out, so its files could not be downloaded. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Download again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_SignIn_Title" xml:space="preserve">
-    <value>Sign in to delete the cloud copy</value>
-  </data>
-  <data name="Runs_DeleteCloud_SignIn_Body" xml:space="preserve">
-    <value>The Google account this run was made under is signed out, so nothing was deleted. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Delete cloud copy again.</value>
-  </data>
   <data name="RunError_cancel_failed" xml:space="preserve">
     <value>We could not delete the rented computer while cancelling. Open the Cloud page and delete it so it stops billing.</value>
-  </data>
-  <data name="RunError_late_create_unconfirmed" xml:space="preserve">
-    <value>You cancelled this run, but a request for a rented computer was still on its way and we could not confirm it was deleted or stopped. Open the Cloud page and delete or stop any computer left for this run so it stops billing.</value>
   </data>
   <data name="RunError_input_missing" xml:space="preserve">
     <value>We could not read your input file. Choose the file again, then start the run again.</value>
@@ -229,8 +394,44 @@
   <data name="RunError_worker_stage_stuck" xml:space="preserve">
     <value>The analysis program on the rented computer got stuck on one step for too long, so we shut the computer down. Start the run again.</value>
   </data>
+  <data name="RunError_worker_progress_stalled" xml:space="preserve">
+    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
+  </data>
   <data name="RunError_worker_heartbeat_stale" xml:space="preserve">
     <value>The analysis program on the rented computer stopped reporting in, so we shut the computer down. Start the run again.</value>
+  </data>
+  <data name="RunError_spend_cap" xml:space="preserve">
+    <value>This run was not started because your estimated spending this month has reached the cap you set, and the hard stop is on. Open Settings, raise the cap or turn the hard stop off, then start the run again.</value>
+  </data>
+  <data name="NewRunSpendCapWarning" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would take it to your monthly warning cap of {1} or past it. You can still run. To change the cap, open Settings.</value>
+  </data>
+  <data name="NewRunSpendCapBlocked" xml:space="preserve">
+    <value>Your estimated spending this month is {0}, and this run would reach your monthly cap of {1} with the hard stop on, so it will not start. To allow it, open Settings and raise the cap or turn the hard stop off.</value>
+  </data>
+  <data name="SettingsSpendHeader.Text" xml:space="preserve">
+    <value>Spending</value>
+  </data>
+  <data name="SettingsSpendExplainer.Text" xml:space="preserve">
+    <value>Set a monthly warning cap in US dollars. The app adds up its own estimate of what your runs cost this calendar month (your PC's local time) and warns you before a run that would reach the cap. This is an estimate, not your Google bill. Leave the box empty for no cap.</value>
+  </data>
+  <data name="SpendCapBox.Header" xml:space="preserve">
+    <value>Monthly warning cap (US dollars)</value>
+  </data>
+  <data name="SpendHardStopBox.Content" xml:space="preserve">
+    <value>Hard stop: do not start a run once the cap is reached</value>
+  </data>
+  <data name="SpendCapInvalid" xml:space="preserve">
+    <value>Type a number above zero, such as 50, or empty the box for no cap. The cap was not changed.</value>
+  </data>
+  <data name="SpendMonthToDate" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0}</value>
+  </data>
+  <data name="SpendMonthToDateWithLive" xml:space="preserve">
+    <value>Estimated spending so far this month: ${0} (includes runs in progress, counted up to now)</value>
+  </data>
+  <data name="NewRunSpendCapInProgress" xml:space="preserve">
+    <value>The month's figure includes runs in progress.</value>
   </data>
   <data name="RunError_vm_end_unconfirmed" xml:space="preserve">
     <value>The run stopped, but we could not confirm that the rented computer has shut down, so it may still be billing. Open the Cloud page and delete it.</value>
@@ -294,6 +495,18 @@
   </data>
   <data name="RunError_input_too_long" xml:space="preserve">
     <value>Your sequence file is longer than one run can analyze. Split it into smaller files, choose one of them, then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_invalid" xml:space="preserve">
+    <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_not_found" xml:space="preserve">
+    <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
+  </data>
+  <data name="RunError_input_accession_too_large" xml:space="preserve">
+    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
+  </data>
+  <data name="RunError_input_accession_unreachable" xml:space="preserve">
+    <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
   </data>
   <data name="RunError_installation_id_unusable" xml:space="preserve">
     <value>The file that identifies this installation could not be used, so the run did not start. A copy was set aside in the DNAEntropyGraph folder under Local AppData, named installation_id.invalid- or settings.json.unreadable- followed by a date. Restore the id from that copy, or send the copy to support.</value>
@@ -474,6 +687,69 @@
   </data>
   <data name="NewRunPasteAdd.Content" xml:space="preserve">
     <value>Add sequence</value>
+  </data>
+  <data name="NewRunPillKind_Ncbi" xml:space="preserve">
+    <value>NCBI record</value>
+  </data>
+  <data name="NewRunPillAccessionSummary" xml:space="preserve">
+    <value>Fetched from NCBI on the rented computer when the run starts</value>
+  </data>
+  <data name="NewRunAccessionExpander.Header" xml:space="preserve">
+    <value>Fetch from NCBI</value>
+  </data>
+  <data name="NewRunAccessionBox.Header" xml:space="preserve">
+    <value>Accession</value>
+  </data>
+  <data name="NewRunAccessionBox.PlaceholderText" xml:space="preserve">
+    <value>For example NC_045512.2</value>
+  </data>
+  <data name="NewRunAccessionStart.Header" xml:space="preserve">
+    <value>From base (optional)</value>
+  </data>
+  <data name="NewRunAccessionEnd.Header" xml:space="preserve">
+    <value>To base (optional)</value>
+  </data>
+  <data name="NewRunAccessionAdd.Content" xml:space="preserve">
+    <value>Fetch record</value>
+  </data>
+  <data name="NewRunAccessionProblem_NotAnAccession" xml:space="preserve">
+    <value>That does not look like an NCBI accession. Check it for typos and type it again, for example NC_045512.2 or MN908947.3.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeIncomplete" xml:space="preserve">
+    <value>Fill in both ends of the range, or clear both to fetch the whole record.</value>
+  </data>
+  <data name="NewRunAccessionProblem_RangeInvalid" xml:space="preserve">
+    <value>The range must be whole numbers from 1 up, with the first no bigger than the second. Correct the range and try again.</value>
+  </data>
+  <data name="NewRunAccessionAlreadyAdded" xml:space="preserve">
+    <value>That record is already in the list. Choose it there, or type a different accession.</value>
+  </data>
+  <data name="NewRunAccessionLookup_NotFound" xml:space="preserve">
+    <value>NCBI has no record with that accession. Check it for typos and type it again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_RangeOutsideRecord" xml:space="preserve">
+    <value>That record is shorter than the range you asked for. Lower the From base, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_TooLarge" xml:space="preserve">
+    <value>That record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_RateLimited" xml:space="preserve">
+    <value>NCBI is limiting how fast it answers. Wait a minute, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_NcbiTrouble" xml:space="preserve">
+    <value>NCBI is having trouble right now. Try again in a few minutes.</value>
+  </data>
+  <data name="NewRunAccessionLookup_TimedOut" xml:space="preserve">
+    <value>NCBI did not answer in time. Check your internet connection, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunAccessionLookup_Unreachable" xml:space="preserve">
+    <value>We could not reach NCBI. Check your internet connection, then choose Fetch record again.</value>
+  </data>
+  <data name="NewRunPillAccessionLength" xml:space="preserve">
+    <value>{0} bases, fetched from NCBI on the rented computer when the run starts</value>
+  </data>
+  <data name="NewRunAccessionChecking.Text" xml:space="preserve">
+    <value>Asking NCBI whether that record exists...</value>
   </data>
   <data name="NewRunRemoveItem.Content" xml:space="preserve">
     <value>Remove</value>
@@ -808,6 +1084,18 @@
   <data name="RunsRerunButton.Content" xml:space="preserve">
     <value>Run again</value>
   </data>
+  <data name="Runs_RedownloadAgain_Label" xml:space="preserve">
+    <value>Download again</value>
+  </data>
+  <data name="Runs_RedownloadPartial_Label" xml:space="preserve">
+    <value>Download partial results</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Title" xml:space="preserve">
+    <value>Partial results downloaded</value>
+  </data>
+  <data name="Runs_Redownload_CancelledPartial_Body" xml:space="preserve">
+    <value>This run was cancelled, so the folder holds only what was finished before it stopped. Press Run again on the row to run it in full.</value>
+  </data>
   <data name="RunsDeleteCloudButton.Content" xml:space="preserve">
     <value>Delete cloud copy</value>
   </data>
@@ -886,8 +1174,92 @@
   <data name="Runs_DeleteLocal_Link_Title" xml:space="preserve">
     <value>Not deleted</value>
   </data>
+  <data name="Runs_DeleteLocal_Unmarked_Confirm_Title" xml:space="preserve">
+    <value>Delete this folder?</value>
+  </data>
+  <data name="Runs_DeleteLocal_Unmarked_Confirm_Body" xml:space="preserve">
+    <value>This folder does not carry the mark the app puts on its own run folders. It may come from an older version of the app, so the app cannot be sure it holds only this run's results. The folder is {0}. Check that this is the folder you mean. Choose Continue to delete the folder and everything in it, or Cancel to keep it. Your original input file is not touched.</value>
+  </data>
+  <data name="Runs_DeleteLocal_NeedsConfirmation_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_NeedsConfirmation_Body" xml:space="preserve">
+    <value>This folder changed while the app was checking it, so nothing was deleted. Choose Delete files on this PC again to review it.</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Body" xml:space="preserve">
+    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open folder to see it in File Explorer, and delete it yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_OtherRun_Toast_Body" xml:space="preserve">
+    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open on this run, then Open folder on the page that appears, and delete the folder yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Body" xml:space="preserve">
+    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open folder to see it in File Explorer, and delete only what you want gone yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Protected_Toast_Body" xml:space="preserve">
+    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete only what you want gone yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Toast_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete the run's files yourself.</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Toast_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open on this run, then Open folder on the page that appears, to see the files already saved there.</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_DriveRoot_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open folder to see it in File Explorer, and delete the run's files yourself.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_DriveRoot" xml:space="preserve">
+    <value>This run was saved straight to a drive, so it cannot be deleted from here. Press the button, then choose Open folder.</value>
+  </data>
+  <data name="Runs_Redownload_OtherRun_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_OtherRun_Body" xml:space="preserve">
+    <value>Another run has since used this run's folder, so nothing was written into it. Rename or move that folder in File Explorer, then choose Download again.</value>
+  </data>
+  <data name="Runs_Redownload_FolderGone_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_FolderGone_Body" xml:space="preserve">
+    <value>The folder this run was saved to is gone, so nothing was written. If it was on a drive, reconnect the drive, or put the folder back, then choose Download again.</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Title" xml:space="preserve">
+    <value>Not downloaded</value>
+  </data>
+  <data name="Runs_Redownload_DriveRoot_Body" xml:space="preserve">
+    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open folder to see the files already saved there.</value>
+  </data>
+  <data name="Runs_Redownload_Hint_DriveRoot" xml:space="preserve">
+    <value>This run was saved straight to a drive, so it cannot be downloaded again from here. Press the button, then choose Open folder.</value>
+  </data>
+  <data name="Runs_OpenFolder_Label" xml:space="preserve">
+    <value>Open folder</value>
+  </data>
+  <data name="Runs_Close_Label" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="OutputFolder_DriveRoot_Message" xml:space="preserve">
+    <value>A whole drive cannot be the output folder, because results saved straight to a drive cannot be deleted or downloaded again from the Runs page. Choose a folder inside the drive instead.</value>
+  </data>
   <data name="Runs_DeleteLocal_Link_Body" xml:space="preserve">
     <value>This run's folder, or a folder above it, is a shortcut (a junction or symbolic link) to somewhere else, so nothing was deleted. Open the folder in File Explorer to see where it leads, and delete it there if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Title" xml:space="preserve">
+    <value>Some files were deleted</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open folder to see what is left in File Explorer, and delete it yourself if you want it gone.</value>
+  </data>
+  <data name="Runs_DeleteLocal_LinkPartial_Toast_Body" xml:space="preserve">
+    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open on this run, then Open folder on the page that appears, to see what is left, and delete it yourself if you want it gone.</value>
   </data>
   <data name="Runs_Rerun_Failed_Title" xml:space="preserve">
     <value>Could not start the run</value>
@@ -1005,6 +1377,12 @@
   </data>
   <data name="OutputChoice_probs_npy" xml:space="preserve">
     <value>The model's probability for each base, as a NumPy array (.probs.npy). Large, so it is off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_gc" xml:space="preserve">
+    <value>GC percent along the sequence, as a track (.gc.bedgraph). Shows where the DNA is rich in G and C next to the entropy. Off unless you tick it.</value>
+  </data>
+  <data name="OutputChoice_codons" xml:space="preserve">
+    <value>How often each codon is used by the genes, as a table (.codons.tsv). Needs genes, so it is empty for a sequence with none. Off unless you tick it.</value>
   </data>
   <data name="AuthError_PROJECT_INVALID" xml:space="preserve">
     <value>That is not a valid Google Cloud project id. Check it against the Project ID column in the Google Cloud console, then choose the project again.</value>
@@ -1605,6 +1983,39 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="WizardSkipButton.Content" xml:space="preserve">
     <value>Skip for now</value>
   </data>
+  <data name="WizardGpuAskButton.Content" xml:space="preserve">
+    <value>Ask Google for a graphics card (GPU)</value>
+  </data>
+  <data name="WizardGpuAsk_Requested" xml:space="preserve">
+    <value>Your request is with Google. A decision can take a day or two, and Google emails the address of this account. Press Check again later, or Skip for now and run on the computer's own graphics card.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckAgain" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="WizardGpuAsk_NoBilling" xml:space="preserve">
+    <value>Google will not take a request until this project has a billing account. Press Check billing, then ask again.</value>
+  </data>
+  <data name="WizardGpuAsk_CheckBilling" xml:space="preserve">
+    <value>Check billing</value>
+  </data>
+  <data name="WizardGpuAsk_NoHistory" xml:space="preserve">
+    <value>Google only lets a project ask for a graphics card (GPU) after it has some past use. Open Google&apos;s page for limits (quota) and ask there with a short note about your research, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_NotEligible" xml:space="preserve">
+    <value>Google would not let this app ask for a graphics card (GPU) on this project. Open Google&apos;s page for limits (quota) and ask there, or press Skip for now.</value>
+  </data>
+  <data name="WizardGpuAsk_OpenQuotaPage" xml:space="preserve">
+    <value>Open Google&apos;s page for limits (quota)</value>
+  </data>
+  <data name="WizardGpuAsk_Permission" xml:space="preserve">
+    <value>This account is not allowed to raise the project&apos;s limit on graphics cards (its quota), or the service that sets limits is switched off. Open Google&apos;s page for limits, or ask the owner of the project to do it.</value>
+  </data>
+  <data name="WizardGpuAsk_Failed" xml:space="preserve">
+    <value>Google did not answer the request. Press Try again.</value>
+  </data>
+  <data name="WizardGpuAsk_TryAgain" xml:space="preserve">
+    <value>Try again</value>
+  </data>
   <data name="WizardDoItByHandLink.Content" xml:space="preserve">
     <value>Do it by hand</value>
   </data>
@@ -1832,8 +2243,89 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="NewRunNotice_AnnotationFeaturesPastEnd_One" xml:space="preserve">
     <value>1 gene in the GFF3 runs past the end of its sequence and is left out. If the sequence is a circle, choose a circular preset under Option presets, or check the GFF3 belongs to this FASTA file.</value>
   </data>
-  <data name="SettingsAboutHeader.Text" xml:space="preserve">
-    <value>About and updates</value>
+  <data name="NewRunGpuExpander.Header" xml:space="preserve">
+    <value>Model and graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelCombo.Header" xml:space="preserve">
+    <value>Model</value>
+  </data>
+  <data name="NewRunGpuCombo.Header" xml:space="preserve">
+    <value>Graphics card (GPU)</value>
+  </data>
+  <data name="NewRunModelLock.Content" xml:space="preserve">
+    <value>Lock model</value>
+  </data>
+  <data name="NewRunGpuLock.Content" xml:space="preserve">
+    <value>Lock graphics card</value>
+  </data>
+  <data name="NewRunGpuConfirm.Content" xml:space="preserve">
+    <value>Run anyway, I understand it will probably fail</value>
+  </data>
+  <data name="NewRunGpu_Auto" xml:space="preserve">
+    <value>Automatic (the cheapest that runs the model)</value>
+  </data>
+  <data name="NewRunGpuAuto" xml:space="preserve">
+    <value>Automatic: {0}</value>
+  </data>
+  <data name="NewRunGpu_L4" xml:space="preserve">
+    <value>L4, 24 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_40" xml:space="preserve">
+    <value>A100, 40 GB</value>
+  </data>
+  <data name="NewRunGpu_A100_80" xml:space="preserve">
+    <value>A100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100" xml:space="preserve">
+    <value>H100, 80 GB</value>
+  </data>
+  <data name="NewRunGpu_H100x2" xml:space="preserve">
+    <value>Two H100, 80 GB each</value>
+  </data>
+  <data name="NewRunGpuLocked" xml:space="preserve">
+    <value>{0} (locked: {1})</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsHopper" xml:space="preserve">
+    <value>needs an H100 graphics card</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreGpus" xml:space="preserve">
+    <value>needs two graphics cards</value>
+  </data>
+  <data name="NewRunGpuLock_NeedsMoreMemory" xml:space="preserve">
+    <value>the card has too little memory for it</value>
+  </data>
+  <data name="NewRunGpuLock_NoOfferedGpu" xml:space="preserve">
+    <value>no graphics card this app offers can run it</value>
+  </data>
+  <data name="NewRunGpuMisfit" xml:space="preserve">
+    <value>{0} will not run on {1}: {2}. Choose another graphics card or model, or tick Run anyway below.</value>
+  </data>
+  <data name="NewRunGpuNoCard" xml:space="preserve">
+    <value>No graphics card this app offers can run {0}. Choose another model.</value>
+  </data>
+  <data name="NewRunGpuSwitchedNotice" xml:space="preserve">
+    <value>Switched the graphics card to {0} for {1}.</value>
+  </data>
+  <data name="NewRunModelSwitchedNotice" xml:space="preserve">
+    <value>Switched the model to {0} to fit {1}.</value>
+  </data>
+  <data name="NewRunModel_evo2_7b" xml:space="preserve">
+    <value>Evo 2 7B (standard)</value>
+  </data>
+  <data name="NewRunModel_evo2_7b_262k" xml:space="preserve">
+    <value>Evo 2 7B, 262k context</value>
+  </data>
+  <data name="NewRunModel_evo2_1b_base" xml:space="preserve">
+    <value>Evo 2 1B (needs an H100, not a cheap option)</value>
+  </data>
+  <data name="NewRunModel_evo2_20b" xml:space="preserve">
+    <value>Evo 2 20B (needs an H100)</value>
+  </data>
+  <data name="NewRunModel_evo2_40b" xml:space="preserve">
+    <value>Evo 2 40B (experimental, expensive, quota rarely granted)</value>
+  </data>
+  <data name="NewRunModel_Unknown" xml:space="preserve">
+    <value>Unknown model</value>
   </data>
   <data name="AboutVersion_Text" xml:space="preserve">
     <value>Version {0}</value>
@@ -1843,21 +2335,6 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="UpdateRestartButton.Content" xml:space="preserve">
     <value>Restart to update</value>
-  </data>
-  <data name="SignInNeeded_Title" xml:space="preserve">
-    <value>Sign in as {0}</value>
-  </data>
-  <data name="SignInNeeded_TitleUnknown" xml:space="preserve">
-    <value>Sign in with the Google account a recent run started under</value>
-  </data>
-  <data name="SignInNeeded_Joiner" xml:space="preserve">
-    <value> or </value>
-  </data>
-  <data name="SignInNeeded_Message" xml:space="preserve">
-    <value>The app could not check on a computer that account started in Google Cloud, and a computer left running costs money. Sign in so the app can look at it and stop it.</value>
-  </data>
-  <data name="SignInNeededBarButton.Content" xml:space="preserve">
-    <value>Sign in</value>
   </data>
   <data name="UpdateBarRestartButton.Content" xml:space="preserve">
     <value>Restart to update</value>
@@ -1924,6 +2401,27 @@ Never included: sequences, input file names, output files, your email, sign-in t
   </data>
   <data name="UninstallRemoveData_Body" xml:space="preserve">
     <value>DNA Entropy Graph is being removed. Also delete your run history, settings and saved copies of your input files from this computer? Choose No to keep them for a later reinstall. Your result files in your output folder are never deleted.</value>
+  </data>
+  <data name="SettingsCloudResultsHeader.Text" xml:space="preserve">
+    <value>Cloud results</value>
+  </data>
+  <data name="SettingsCloudResultsExplainer.Text" xml:space="preserve">
+    <value>Each run's results are also stored in a storage area in your own Google Cloud project (a bucket), so you can download them again. Google deletes them automatically after the number of days you choose here.</value>
+  </data>
+  <data name="CloudRetentionBox.Header" xml:space="preserve">
+    <value>Keep stored results for</value>
+  </data>
+  <data name="CloudRetentionChoiceFormat" xml:space="preserve">
+    <value>{0} days</value>
+  </data>
+  <data name="SettingsCloudResultsNote.Text" xml:space="preserve">
+    <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
+  </data>
+  <data name="CloudRetentionSaved" xml:space="preserve">
+    <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
+  </data>
+  <data name="SettingsAboutHeader.Text" xml:space="preserve">
+    <value>About and updates</value>
   </data>
   <data name="RunError_local_engine_not_ready" xml:space="preserve">
     <value>This PC is not set up to run the analysis yet. Open Settings, find This PC, choose Install, then start the run again.</value>
@@ -2108,566 +2606,11 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="ThisPcCancelButton.Content" xml:space="preserve">
     <value>Cancel</value>
   </data>
-  <data name="SettingsCloudResultsHeader.Text" xml:space="preserve">
-    <value>Cloud results</value>
-  </data>
-  <data name="SettingsCloudResultsExplainer.Text" xml:space="preserve">
-    <value>Each run's results are also stored in a storage area in your own Google Cloud project (a bucket), so you can download them again. Google deletes them automatically after the number of days you choose here.</value>
-  </data>
-  <data name="CloudRetentionBox.Header" xml:space="preserve">
-    <value>Keep stored results for</value>
-  </data>
-  <data name="CloudRetentionChoiceFormat" xml:space="preserve">
-    <value>{0} days</value>
-  </data>
-  <data name="SettingsCloudResultsNote.Text" xml:space="preserve">
-    <value>A change applies when your next run starts. Choosing fewer days than the bucket already keeps does not shrink it, because other copies of this app may share the same bucket and we never delete results early. To go back to a longer time, choose it here.</value>
-  </data>
-  <data name="CloudRetentionSaved" xml:space="preserve">
-    <value>Saved. It applies when your next run starts. A time shorter than the one already set on the storage for your results (the bucket) never shortens it, so older results may stay. To remove them sooner, delete them in the Cloud Storage page of your Google Cloud project.</value>
-  </data>
   <data name="NewRunNotice_GenBankFeaturesDropped" xml:space="preserve">
     <value>{0} genes in record {1} were left out because their positions could not be read. Fix the positions in the file (for example 1..42 or complement(85..126)) and add the file again to include them.</value>
   </data>
   <data name="NewRunNotice_GenBankFeaturesDropped_One" xml:space="preserve">
     <value>1 gene in record {1} was left out because its position could not be read. Fix the position in the file (for example 1..42 or complement(85..126)) and add the file again to include it.</value>
-  </data>
-  <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
-    <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
-  </data>
-  <data name="DataFolderUnusable_Portable_NotAFolder" xml:space="preserve">
-    <value>The app is in portable mode but {0} is a file, not a folder. Rename or move that file, or delete the file portable.flag next to the app to use the normal folder instead.</value>
-  </data>
-  <data name="OpenWithPortable" xml:space="preserve">
-    <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
-    <value>Cloud copy only partly deleted</value>
-  </data>
-  <data name="Runs_DeleteCloud_Partial_Body" xml:space="preserve">
-    <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
-    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialUnconfirmed_Title" xml:space="preserve">
-    <value>Cloud copy delete not confirmed</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialUnconfirmed_Body" xml:space="preserve">
-    <value>The delete finished, but the app could not confirm that this run's folder in your Google Cloud storage is empty. Choose Delete cloud copy again to check.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialKnown_Body_Permission" xml:space="preserve">
-    <value>Google did not allow the delete to finish. Files still in your Google Cloud storage: {0}. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialKnown_Body_OrgPolicy" xml:space="preserve">
-    <value>A rule set by your organization stopped the delete. Files still in your Google Cloud storage: {0}. Ask your organization's administrator to allow deleting files in Google Cloud Storage, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialKnown_Body_Billing" xml:space="preserve">
-    <value>Billing is turned off on your Google Cloud project. Files still in your Google Cloud storage: {0}. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialKnown_Body_Api" xml:space="preserve">
-    <value>A Google service this needs is turned off for your project. Files still in your Google Cloud storage: {0}. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialKnown_Body_Quota" xml:space="preserve">
-    <value>Google's request limit for your project was reached. Files still in your Google Cloud storage: {0}. Wait a few minutes, then choose Delete cloud copy again to remove the rest.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
-    <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
-    <value>Cloud copy may be partly deleted</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
-    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
-    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
-    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
-    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
-    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
-    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
-    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
-  </data>
-  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
-    <value>Could not finish checking your Google Cloud storage</value>
-  </data>
-  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
-    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
-  </data>
-  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
-    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
-  </data>
-  <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
-    <value>Not deleted</value>
-  </data>
-  <data name="Runs_DeleteCloud_OtherComputer_Body" xml:space="preserve">
-    <value>This run was made on another computer, so this app will not delete its files. Choose Open storage page, then delete this run's folder there.</value>
-  </data>
-  <data name="Runs_DeleteCloud_NotConfirmed_Title" xml:space="preserve">
-    <value>Could not confirm this run is yours</value>
-  </data>
-  <data name="Runs_DeleteCloud_NotConfirmed_Body" xml:space="preserve">
-    <value>This app could not confirm that this run's files belong to this installation, so nothing was deleted. Choose Open storage page and check the folder there.</value>
-  </data>
-  <data name="Runs_DeleteCloud_StorageNotFound_Title" xml:space="preserve">
-    <value>Storage not found</value>
-  </data>
-  <data name="Runs_DeleteCloud_StorageNotFound_Body" xml:space="preserve">
-    <value>The Google Cloud storage for this run was not found, so nothing was changed. Open the Cloud page to check which project and storage this app is using.</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedOrgPolicy_Title" xml:space="preserve">
-    <value>Blocked by your organization</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
-    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
-    <value>Google is limiting requests</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedQuota_Body" xml:space="preserve">
-    <value>Google's request limit for your project was reached, so the delete stopped. Wait a few minutes, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedOther_Title" xml:space="preserve">
-    <value>Could not delete the cloud copy</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedOther_Body" xml:space="preserve">
-    <value>Something unexpected stopped the delete, and nothing was deleted. Try Delete cloud copy again. Choose Save diagnostics in Settings if it keeps happening, and send us the file.</value>
-  </data>
-  <data name="RunsOpenStoragePageButton.Content" xml:space="preserve">
-    <value>Open storage page</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedPermission_Title" xml:space="preserve">
-    <value>Not allowed to delete the cloud copy</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedPermission_Body" xml:space="preserve">
-    <value>Google did not allow the delete, and nothing was deleted. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedBilling_Title" xml:space="preserve">
-    <value>Could not delete the cloud copy</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedBilling_Body" xml:space="preserve">
-    <value>Billing is turned off on your Google Cloud project, so nothing was deleted. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedApi_Title" xml:space="preserve">
-    <value>Could not delete the cloud copy</value>
-  </data>
-  <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
-    <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
-  </data>
-  <data name="RunError_worker_progress_stalled" xml:space="preserve">
-    <value>The analysis program on the rented computer is still running but has finished no new piece of work for a long time, so we shut the computer down. Start the run again.</value>
-  </data>
-  <data name="ViewerIndexFailed_Title" xml:space="preserve">
-    <value>The viewer could not prepare this sequence file</value>
-  </data>
-  <data name="ViewerIndexFailed_Body" xml:space="preserve">
-    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
-  </data>
-  <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
-    <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
-  </data>
-  <data name="AuthAction_AllowAccess" xml:space="preserve">
-    <value>Sign in again and allow access</value>
-  </data>
-  <data name="CloudPageHeading.Text" xml:space="preserve">
-    <value>What this app has in your Google Cloud project</value>
-  </data>
-  <data name="CloudRefreshButton.Content" xml:space="preserve">
-    <value>Refresh</value>
-  </data>
-  <data name="CloudEmptyText.Text" xml:space="preserve">
-    <value>Nothing of this app is in your project right now, so nothing is costing you money.</value>
-  </data>
-  <data name="CloudVmsHeading.Text" xml:space="preserve">
-    <value>Rented computers (VMs)</value>
-  </data>
-  <data name="CloudDisksHeading.Text" xml:space="preserve">
-    <value>Disks</value>
-  </data>
-  <data name="CloudStopButton.Content" xml:space="preserve">
-    <value>Stop</value>
-  </data>
-  <data name="CloudStartButton.Content" xml:space="preserve">
-    <value>Start</value>
-  </data>
-  <data name="CloudDeleteButton.Content" xml:space="preserve">
-    <value>Delete</value>
-  </data>
-  <data name="CloudDeleteAllButton.Content" xml:space="preserve">
-    <value>Delete everything this app created</value>
-  </data>
-  <data name="CloudPage_NoProject" xml:space="preserve">
-    <value>No Google Cloud project is chosen yet. Open Set up Google Cloud and choose one.</value>
-  </data>
-  <data name="CloudPage_ListFailed" xml:space="preserve">
-    <value>Google did not answer, so this list may be out of date. Press Refresh.</value>
-  </data>
-  <data name="CloudPage_ActionFailed" xml:space="preserve">
-    <value>Google would not do that to {0}. Press Refresh to see where it stands, then try again.</value>
-  </data>
-  <data name="CloudPage_DeleteAllFailed" xml:space="preserve">
-    <value>Google stopped the cleanup before it began, so nothing was deleted. Press Refresh, then try Delete everything again.</value>
-  </data>
-  <data name="CloudPage_RunningBanner" xml:space="preserve">
-    <value>{0} rented computer(s) running now and costing money. Press Stop on it below if you are not waiting for a result.</value>
-  </data>
-  <data name="CloudPage_Summary" xml:space="preserve">
-    <value>Results online: {0} job folder(s), {1}, in {2}. Shared download cache: {3}.</value>
-  </data>
-  <data name="CloudPage_SummaryNoBucket" xml:space="preserve">
-    <value>No results folder online yet. Shared download cache: {0}.</value>
-  </data>
-  <data name="CloudVm_Running" xml:space="preserve">
-    <value>Running</value>
-  </data>
-  <data name="CloudVm_Stopped" xml:space="preserve">
-    <value>Stopped (its disk still costs a little)</value>
-  </data>
-  <data name="CloudVm_Changing" xml:space="preserve">
-    <value>Starting or stopping</value>
-  </data>
-  <data name="CloudVm_AnotherComputer" xml:space="preserve">
-    <value>Another computer: created from a different copy of this app in the same project. You can see it here but not change it. To end it, use the copy of the app that created it.</value>
-  </data>
-  <data name="CloudVm_CostRunning" xml:space="preserve">
-    <value>Up to about ${0} per hour while it runs.</value>
-  </data>
-  <data name="CloudVm_CostStopped" xml:space="preserve">
-    <value>About ${0} per day for its disk until you delete it.</value>
-  </data>
-  <data name="CloudDisk_Attached" xml:space="preserve">
-    <value>{0} GB, in use by a computer</value>
-  </data>
-  <data name="CloudDisk_Detached" xml:space="preserve">
-    <value>{0} GB, not in use</value>
-  </data>
-  <data name="CloudDisk_Cost" xml:space="preserve">
-    <value>About ${0} per day.</value>
-  </data>
-  <data name="CloudDeleteVm_Title" xml:space="preserve">
-    <value>Delete this rented computer?</value>
-  </data>
-  <data name="CloudDeleteVm_Body" xml:space="preserve">
-    <value>{0} and its disk will be deleted and billing for them stops. A run still using it ends as cancelled. This cannot be undone.</value>
-  </data>
-  <data name="CloudDeleteAll_Title" xml:space="preserve">
-    <value>Delete everything this app created?</value>
-  </data>
-  <data name="CloudDeleteAll_Body" xml:space="preserve">
-    <value>This deletes {0} rented computer(s), {1} disk(s) and {2} job folder(s) with their results online ({3}). Runs still going end as cancelled. Results already downloaded to this PC stay. Google may keep deleted job folders for a few days before they are gone for good. This cannot be undone.</value>
-  </data>
-  <data name="CloudSize_GB" xml:space="preserve">
-    <value>{0} GB</value>
-  </data>
-  <data name="CloudSize_MB" xml:space="preserve">
-    <value>{0} MB</value>
-  </data>
-  <data name="CloudSize_KB" xml:space="preserve">
-    <value>{0} KB</value>
-  </data>
-  <data name="CloudSize_B" xml:space="preserve">
-    <value>{0} bytes</value>
-  </data>
-  <data name="CloudPage_DeleteAllInterrupted" xml:space="preserve">
-    <value>The cleanup was interrupted, so some items may already be deleted. Press Refresh to see what is left, then press Delete everything again.</value>
-  </data>
-  <data name="CloudKind_Vm" xml:space="preserve">
-    <value>computer</value>
-  </data>
-  <data name="CloudKind_Disk" xml:space="preserve">
-    <value>disk</value>
-  </data>
-  <data name="CloudKind_JobData" xml:space="preserve">
-    <value>job folder</value>
-  </data>
-  <data name="CloudReport_Complete" xml:space="preserve">
-    <value>Done. Everything this app created in your project is deleted.</value>
-  </data>
-  <data name="CloudReport_Incomplete" xml:space="preserve">
-    <value>Some items are still there. Read the list below, then press Delete everything again.</value>
-  </data>
-  <data name="CloudReport_Deleted" xml:space="preserve">
-    <value>Deleted: {0}</value>
-  </data>
-  <data name="CloudReport_DeletedRecoverable" xml:space="preserve">
-    <value>Deleted: {0}. Google keeps a copy for {1} days in case you change your mind (ask Google to restore it in Google Cloud Console).</value>
-  </data>
-  <data name="CloudReport_Failed" xml:space="preserve">
-    <value>Could not delete: {0}. Press Delete everything again, or delete it in Google Cloud Console.</value>
-  </data>
-  <data name="CloudReport_NotVerified" xml:space="preserve">
-    <value>Asked Google to delete {0} but it is still listed. Press Refresh in a minute.</value>
-  </data>
-  <data name="CloudReport_Skipped" xml:space="preserve">
-    <value>Left alone: {0}. Press Refresh, then Delete everything again if it is still listed.</value>
-  </data>
-  <data name="RunNotice_UnknownStage" xml:space="preserve">
-    <value>the current step</value>
-  </data>
-  <data name="RunNotice_Slow" xml:space="preserve">
-    <value>{0} is taking longer than usual ({1} minutes so far). Nothing is wrong yet. Keep waiting, or press Cancel run if you would rather stop.</value>
-  </data>
-  <data name="RunNotice_Stalled" xml:space="preserve">
-    <value>The computer has stopped reporting progress during {0}. A window is asking what to do. Choose Stop, Delete or Keep waiting.</value>
-  </data>
-  <data name="StallDialog_Title" xml:space="preserve">
-    <value>This run looks stuck: {3}</value>
-  </data>
-  <data name="StallDialog_Body_Stuck" xml:space="preserve">
-    <value>The step {0} on the rented computer {2} has run far longer than it should (about {1} minutes). Stop keeps the rented computer so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
-  </data>
-  <data name="StallDialog_Body_Stale" xml:space="preserve">
-    <value>The rented computer {2} has stopped reporting progress during {0} (about {1} minutes). Stop keeps it so you can start it again later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
-  </data>
-  <data name="StallDialog_Body_NoHeartbeat" xml:space="preserve">
-    <value>The rented computer {2} never reported that it started working (about {1} minutes). Stop keeps it so you can look later (its disk costs a little). Delete removes it and its disk. Keep waiting gives it more time. Choose one.</value>
-  </data>
-  <data name="StallDialog_RunLabel" xml:space="preserve">
-    <value>{0} (job {1})</value>
-  </data>
-  <data name="StallDialog_RunLabelNoName" xml:space="preserve">
-    <value>job {0}</value>
-  </data>
-  <data name="StallDialog_ThisComputer" xml:space="preserve">
-    <value>for this run</value>
-  </data>
-  <data name="StallConfirm_Title" xml:space="preserve">
-    <value>Delete the rented computer {2}?</value>
-  </data>
-  <data name="StallConfirm_Body" xml:space="preserve">
-    <value>The rented computer {2} and its disk will be deleted and billing for them stops. It belongs to {3}. Press Delete it to go ahead, or Keep waiting to leave it as it is. A deleted computer cannot be brought back.</value>
-  </data>
-  <data name="StallConfirm_Delete" xml:space="preserve">
-    <value>Delete it</value>
-  </data>
-  <data name="StallDialog_Stop" xml:space="preserve">
-    <value>Stop</value>
-  </data>
-  <data name="StallDialog_Delete" xml:space="preserve">
-    <value>Delete</value>
-  </data>
-  <data name="StallDialog_KeepWaiting" xml:space="preserve">
-    <value>Keep waiting</value>
-  </data>
-  <data name="RunError_input_accession_invalid" xml:space="preserve">
-    <value>The NCBI accession or its range is not valid. Check the accession and the range, then start the run again.</value>
-  </data>
-  <data name="RunError_input_accession_not_found" xml:space="preserve">
-    <value>NCBI has no record for that accession and range. Check the accession and the range, then start the run again.</value>
-  </data>
-  <data name="RunError_input_accession_too_large" xml:space="preserve">
-    <value>That NCBI record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
-  </data>
-  <data name="RunError_input_accession_unreachable" xml:space="preserve">
-    <value>We could not ask NCBI whether that record exists. Check your internet connection, wait a minute, then start the run again.</value>
-  </data>
-  <data name="NewRunPillKind_Ncbi" xml:space="preserve">
-    <value>NCBI record</value>
-  </data>
-  <data name="NewRunPillAccessionSummary" xml:space="preserve">
-    <value>Fetched from NCBI on the rented computer when the run starts</value>
-  </data>
-  <data name="NewRunAccessionExpander.Header" xml:space="preserve">
-    <value>Fetch from NCBI</value>
-  </data>
-  <data name="NewRunAccessionBox.Header" xml:space="preserve">
-    <value>Accession</value>
-  </data>
-  <data name="NewRunAccessionBox.PlaceholderText" xml:space="preserve">
-    <value>For example NC_045512.2</value>
-  </data>
-  <data name="NewRunAccessionStart.Header" xml:space="preserve">
-    <value>From base (optional)</value>
-  </data>
-  <data name="NewRunAccessionEnd.Header" xml:space="preserve">
-    <value>To base (optional)</value>
-  </data>
-  <data name="NewRunAccessionAdd.Content" xml:space="preserve">
-    <value>Fetch record</value>
-  </data>
-  <data name="NewRunAccessionProblem_NotAnAccession" xml:space="preserve">
-    <value>That does not look like an NCBI accession. Check it for typos and type it again, for example NC_045512.2 or MN908947.3.</value>
-  </data>
-  <data name="NewRunAccessionProblem_RangeIncomplete" xml:space="preserve">
-    <value>Fill in both ends of the range, or clear both to fetch the whole record.</value>
-  </data>
-  <data name="NewRunAccessionProblem_RangeInvalid" xml:space="preserve">
-    <value>The range must be whole numbers from 1 up, with the first no bigger than the second. Correct the range and try again.</value>
-  </data>
-  <data name="NewRunAccessionAlreadyAdded" xml:space="preserve">
-    <value>That record is already in the list. Choose it there, or type a different accession.</value>
-  </data>
-  <data name="NewRunAccessionLookup_NotFound" xml:space="preserve">
-    <value>NCBI has no record with that accession. Check it for typos and type it again.</value>
-  </data>
-  <data name="NewRunAccessionLookup_RangeOutsideRecord" xml:space="preserve">
-    <value>That record is shorter than the range you asked for. Lower the From base, then choose Fetch record again.</value>
-  </data>
-  <data name="NewRunAccessionLookup_TooLarge" xml:space="preserve">
-    <value>That record is larger than one run can read. Fill in a smaller range in the From base and To base boxes, then choose Fetch record again.</value>
-  </data>
-  <data name="NewRunAccessionLookup_RateLimited" xml:space="preserve">
-    <value>NCBI is limiting how fast it answers. Wait a minute, then choose Fetch record again.</value>
-  </data>
-  <data name="NewRunAccessionLookup_NcbiTrouble" xml:space="preserve">
-    <value>NCBI is having trouble right now. Try again in a few minutes.</value>
-  </data>
-  <data name="NewRunAccessionLookup_TimedOut" xml:space="preserve">
-    <value>NCBI did not answer in time. Check your internet connection, then choose Fetch record again.</value>
-  </data>
-  <data name="NewRunAccessionLookup_Unreachable" xml:space="preserve">
-    <value>We could not reach NCBI. Check your internet connection, then choose Fetch record again.</value>
-  </data>
-  <data name="NewRunPillAccessionLength" xml:space="preserve">
-    <value>{0} bases, fetched from NCBI on the rented computer when the run starts</value>
-  </data>
-  <data name="NewRunAccessionChecking.Text" xml:space="preserve">
-    <value>Asking NCBI whether that record exists...</value>
-  </data>
-  <data name="Runs_RedownloadAgain_Label" xml:space="preserve">
-    <value>Download again</value>
-  </data>
-  <data name="Runs_RedownloadPartial_Label" xml:space="preserve">
-    <value>Download partial results</value>
-  </data>
-  <data name="Runs_Redownload_CancelledPartial_Title" xml:space="preserve">
-    <value>Partial results downloaded</value>
-  </data>
-  <data name="Runs_Redownload_CancelledPartial_Body" xml:space="preserve">
-    <value>This run was cancelled, so the folder holds only what was finished before it stopped. Press Run again on the row to run it in full.</value>
-  </data>
-  <data name="OutputChoice_gc" xml:space="preserve">
-    <value>GC percent along the sequence, as a track (.gc.bedgraph). Shows where the DNA is rich in G and C next to the entropy. Off unless you tick it.</value>
-  </data>
-  <data name="OutputChoice_codons" xml:space="preserve">
-    <value>How often each codon is used by the genes, as a table (.codons.tsv). Needs genes, so it is empty for a sequence with none. Off unless you tick it.</value>
-  </data>
-  <data name="WizardGpuAskButton.Content" xml:space="preserve">
-    <value>Ask Google for a graphics card (GPU)</value>
-  </data>
-  <data name="WizardGpuAsk_Requested" xml:space="preserve">
-    <value>Your request is with Google. A decision can take a day or two, and Google emails the address of this account. Press Check again later, or Skip for now and run on the computer's own graphics card.</value>
-  </data>
-  <data name="WizardGpuAsk_CheckAgain" xml:space="preserve">
-    <value>Check again</value>
-  </data>
-  <data name="WizardGpuAsk_NoBilling" xml:space="preserve">
-    <value>Google will not take a request until this project has a billing account. Press Check billing, then ask again.</value>
-  </data>
-  <data name="WizardGpuAsk_CheckBilling" xml:space="preserve">
-    <value>Check billing</value>
-  </data>
-  <data name="WizardGpuAsk_NoHistory" xml:space="preserve">
-    <value>Google only lets a project ask for a graphics card (GPU) after it has some past use. Open Google&apos;s page for limits (quota) and ask there with a short note about your research, or press Skip for now.</value>
-  </data>
-  <data name="WizardGpuAsk_NotEligible" xml:space="preserve">
-    <value>Google would not let this app ask for a graphics card (GPU) on this project. Open Google&apos;s page for limits (quota) and ask there, or press Skip for now.</value>
-  </data>
-  <data name="WizardGpuAsk_OpenQuotaPage" xml:space="preserve">
-    <value>Open Google&apos;s page for limits (quota)</value>
-  </data>
-  <data name="WizardGpuAsk_Permission" xml:space="preserve">
-    <value>This account is not allowed to raise the project&apos;s limit on graphics cards (its quota), or the service that sets limits is switched off. Open Google&apos;s page for limits, or ask the owner of the project to do it.</value>
-  </data>
-  <data name="WizardGpuAsk_Failed" xml:space="preserve">
-    <value>Google did not answer the request. Press Try again.</value>
-  </data>
-  <data name="WizardGpuAsk_TryAgain" xml:space="preserve">
-    <value>Try again</value>
-  </data>
-  <data name="NewRunGpuExpander.Header" xml:space="preserve">
-    <value>Model and graphics card (GPU)</value>
-  </data>
-  <data name="NewRunModelCombo.Header" xml:space="preserve">
-    <value>Model</value>
-  </data>
-  <data name="NewRunGpuCombo.Header" xml:space="preserve">
-    <value>Graphics card (GPU)</value>
-  </data>
-  <data name="NewRunModelLock.Content" xml:space="preserve">
-    <value>Lock model</value>
-  </data>
-  <data name="NewRunGpuLock.Content" xml:space="preserve">
-    <value>Lock graphics card</value>
-  </data>
-  <data name="NewRunGpuConfirm.Content" xml:space="preserve">
-    <value>Run anyway, I understand it will probably fail</value>
-  </data>
-  <data name="NewRunGpu_Auto" xml:space="preserve">
-    <value>Automatic (the cheapest that runs the model)</value>
-  </data>
-  <data name="NewRunGpuAuto" xml:space="preserve">
-    <value>Automatic: {0}</value>
-  </data>
-  <data name="NewRunGpu_L4" xml:space="preserve">
-    <value>L4, 24 GB</value>
-  </data>
-  <data name="NewRunGpu_A100_40" xml:space="preserve">
-    <value>A100, 40 GB</value>
-  </data>
-  <data name="NewRunGpu_A100_80" xml:space="preserve">
-    <value>A100, 80 GB</value>
-  </data>
-  <data name="NewRunGpu_H100" xml:space="preserve">
-    <value>H100, 80 GB</value>
-  </data>
-  <data name="NewRunGpu_H100x2" xml:space="preserve">
-    <value>Two H100, 80 GB each</value>
-  </data>
-  <data name="NewRunGpuLocked" xml:space="preserve">
-    <value>{0} (locked: {1})</value>
-  </data>
-  <data name="NewRunGpuLock_NeedsHopper" xml:space="preserve">
-    <value>needs an H100 graphics card</value>
-  </data>
-  <data name="NewRunGpuLock_NeedsMoreGpus" xml:space="preserve">
-    <value>needs two graphics cards</value>
-  </data>
-  <data name="NewRunGpuLock_NeedsMoreMemory" xml:space="preserve">
-    <value>the card has too little memory for it</value>
-  </data>
-  <data name="NewRunGpuLock_NoOfferedGpu" xml:space="preserve">
-    <value>no graphics card this app offers can run it</value>
-  </data>
-  <data name="NewRunGpuMisfit" xml:space="preserve">
-    <value>{0} will not run on {1}: {2}. Choose another graphics card or model, or tick Run anyway below.</value>
-  </data>
-  <data name="NewRunGpuNoCard" xml:space="preserve">
-    <value>No graphics card this app offers can run {0}. Choose another model.</value>
-  </data>
-  <data name="NewRunGpuSwitchedNotice" xml:space="preserve">
-    <value>Switched the graphics card to {0} for {1}.</value>
-  </data>
-  <data name="NewRunModelSwitchedNotice" xml:space="preserve">
-    <value>Switched the model to {0} to fit {1}.</value>
-  </data>
-  <data name="NewRunModel_evo2_7b" xml:space="preserve">
-    <value>Evo 2 7B (standard)</value>
-  </data>
-  <data name="NewRunModel_evo2_7b_262k" xml:space="preserve">
-    <value>Evo 2 7B, 262k context</value>
-  </data>
-  <data name="NewRunModel_evo2_1b_base" xml:space="preserve">
-    <value>Evo 2 1B (needs an H100, not a cheap option)</value>
-  </data>
-  <data name="NewRunModel_evo2_20b" xml:space="preserve">
-    <value>Evo 2 20B (needs an H100)</value>
-  </data>
-  <data name="NewRunModel_evo2_40b" xml:space="preserve">
-    <value>Evo 2 40B (experimental, expensive, quota rarely granted)</value>
-  </data>
-  <data name="NewRunModel_Unknown" xml:space="preserve">
-    <value>Unknown model</value>
   </data>
   <data name="HelpButton.Content" xml:space="preserve">
     <value>Help</value>
@@ -2732,6 +2675,21 @@ Never included: sequences, input file names, output files, your email, sign-in t
   <data name="OpenUserGuideLink.Content" xml:space="preserve">
     <value>Open the user guide</value>
   </data>
+  <data name="DataFolderUnusable_Portable_CannotCreate" xml:space="preserve">
+    <value>The app is in portable mode but could not use its data folder {0}. Move the whole app folder to a place you can write to, such as your Documents folder or a USB stick, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="DataFolderUnusable_Portable_NotAFolder" xml:space="preserve">
+    <value>The app is in portable mode but {0} is a file, not a folder. Rename or move that file, or delete the file portable.flag next to the app to use the normal folder instead.</value>
+  </data>
+  <data name="OpenWithPortable" xml:space="preserve">
+    <value>Open with is not available in portable mode, because it would add entries to this PC that point at a folder you may take away. Delete the file portable.flag next to the app to use the normal install, then turn it on.</value>
+  </data>
+  <data name="AuthError_CONSENT_INCOMPLETE" xml:space="preserve">
+    <value>Google signed you in, but the permission this app needs to set up and run your rented computer was not ticked on the permission page. Choose Sign in again and allow access, then leave every box ticked.</value>
+  </data>
+  <data name="AuthAction_AllowAccess" xml:space="preserve">
+    <value>Sign in again and allow access</value>
+  </data>
   <data name="RunError_cleanup_stopped" xml:space="preserve">
     <value>This run ended because its rented computer was stopped when you closed the app, before the results were downloaded. Choose Run to start the run again.</value>
   </data>
@@ -2765,24 +2723,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="LeftRunning_DiskNoteNoPrice" xml:space="preserve">
     <value>{0} stopped disk(s) also keep costing money until you delete them on the Cloud page.</value>
-  </data>
-  <data name="LeftRunning_UnreadTitle" xml:space="preserve">
-    <value>Some computers could not be checked</value>
-  </data>
-  <data name="LeftRunning_UnreadBodySignIn" xml:space="preserve">
-    <value>The app could not look at the rented computers (VMs) started under {0}, because that Google account is signed out. A computer left running costs money until it ends itself at its time limit. Press Sign in to look again, or Close anyway and check the Cloud page later.</value>
-  </data>
-  <data name="LeftRunning_UnreadBodyOther" xml:space="preserve">
-    <value>The app could not reach Google to check every rented computer (VM) it may have started. A computer left running costs money until it ends itself at its time limit. Open the Cloud page when you are online to see what is running.</value>
-  </data>
-  <data name="LeftRunning_UnreadAccountUnknown" xml:space="preserve">
-    <value>a Google account you used for a recent run</value>
-  </data>
-  <data name="LeftRunning_UnreadSignIn" xml:space="preserve">
-    <value>Sign in</value>
-  </data>
-  <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
-    <value>Close anyway</value>
   </data>
   <data name="LeftRunning_Stop" xml:space="preserve">
     <value>Stop it</value>
@@ -2822,6 +2762,12 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="LeftRunning_ToastMore" xml:space="preserve">
     <value>and {0} more</value>
+  </data>
+  <data name="ViewerIndexFailed_Title" xml:space="preserve">
+    <value>The viewer could not prepare this sequence file</value>
+  </data>
+  <data name="ViewerIndexFailed_Body" xml:space="preserve">
+    <value>The sequence file is long, so the viewer builds a small lookup file for it first, and that failed. Its lines may be uneven in length, or the disk may be full. Open the sequence file and the entropy track in IGV on your computer.</value>
   </data>
   <data name="RunsImportButton.Content" xml:space="preserve">
     <value>Find runs from other computers</value>
@@ -3003,6 +2949,114 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="RunsWaitForGpuButton.Content" xml:space="preserve">
     <value>Wait for a graphics card</value>
   </data>
+  <data name="RunError_proxy_blocked" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
+  </data>
+  <data name="RunError_network_certificate" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
+  </data>
+  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
+    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
+  </data>
+  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
+    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
+  </data>
+  <data name="SettingsProxyExpander.Header" xml:space="preserve">
+    <value>Network proxy</value>
+  </data>
+  <data name="ProxyExplainer.Text" xml:space="preserve">
+    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
+  </data>
+  <data name="ProxyModeBox.Header" xml:space="preserve">
+    <value>How to reach the internet</value>
+  </data>
+  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
+    <value>Use the Windows settings (recommended)</value>
+  </data>
+  <data name="ProxyModeManualItem.Content" xml:space="preserve">
+    <value>Use a proxy I type</value>
+  </data>
+  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
+    <value>No proxy</value>
+  </data>
+  <data name="ProxyAddressBox.Header" xml:space="preserve">
+    <value>Proxy address (host:port)</value>
+  </data>
+  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
+    <value>proxy.example.edu:8080</value>
+  </data>
+  <data name="ProxyUserNameBox.Header" xml:space="preserve">
+    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
+  </data>
+  <data name="ProxyPasswordBox.Header" xml:space="preserve">
+    <value>Proxy password</value>
+  </data>
+  <data name="ProxySignInSaved.Text" xml:space="preserve">
+    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
+  </data>
+  <data name="ProxyApplyButton.Content" xml:space="preserve">
+    <value>Apply</value>
+  </data>
+  <data name="ProxySaved" xml:space="preserve">
+    <value>Saved. The next connection uses this setting.</value>
+  </data>
+  <data name="ProxyAddressInvalid" xml:space="preserve">
+    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
+  </data>
+  <data name="ProxyPasswordNeeded" xml:space="preserve">
+    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
+  </data>
+  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
+    <value>Earlier version</value>
+  </data>
+  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
+    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
+  </data>
+  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
+    <value>Look for earlier runs</value>
+  </data>
+  <data name="PrototypeImportTitle" xml:space="preserve">
+    <value>Earlier runs found</value>
+  </data>
+  <data name="PrototypeImportBody" xml:space="preserve">
+    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
+  </data>
+  <data name="PrototypeImportZoneLine" xml:space="preserve">
+    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
+  </data>
+  <data name="PrototypeImportSshLine" xml:space="preserve">
+    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
+  </data>
+  <data name="PrototypeImportDone" xml:space="preserve">
+    <value>Added {0} earlier runs to Runs.</value>
+  </data>
+  <data name="PrototypeImportNothingFound" xml:space="preserve">
+    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
+  </data>
+  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
+    <value>Every earlier run found is already in Runs.</value>
+  </data>
+  <data name="PrototypeImportFailed" xml:space="preserve">
+    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
+  </data>
+  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
+    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
+  </data>
+  <data name="PageTitle_RunProgress" xml:space="preserve">
+    <value>Run progress</value>
+  </data>
+  <data name="PageTitle_Viewer" xml:space="preserve">
+    <value>Viewer</value>
+  </data>
+  <data name="PageTitle_Results" xml:space="preserve">
+    <value>Results</value>
+  </data>
+  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
+    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
+  </data>
+  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
+    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
+  </data>
   <data name="Results_GenesTruncated" xml:space="preserve">
     <value>{0} of {1} genes are shown, {2}. Choose Open next to the .genes.tsv file in the file list to see every gene in a spreadsheet.</value>
   </data>
@@ -3069,129 +3123,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="ViewerSmoothedHeading.Text" xml:space="preserve">
     <value>Smoothed tracks (a view of the raw track; a smoothed dip is not a gene boundary)</value>
   </data>
-  <data name="SettingsPrototypeHeader.Text" xml:space="preserve">
-    <value>Earlier version</value>
-  </data>
-  <data name="SettingsPrototypeExplainer.Text" xml:space="preserve">
-    <value>If you used the earlier command-line version of this tool, this looks in your Downloads folder for the runs it saved and adds them to Runs. Your files are only read, never moved or changed.</value>
-  </data>
-  <data name="SettingsPrototypeFindButton.Content" xml:space="preserve">
-    <value>Look for earlier runs</value>
-  </data>
-  <data name="PrototypeImportTitle" xml:space="preserve">
-    <value>Earlier runs found</value>
-  </data>
-  <data name="PrototypeImportBody" xml:space="preserve">
-    <value>Found {0} runs saved by the earlier version of this app, the one you ran by typing commands in a terminal window (the command-line version), in your Downloads folder. Choose Continue to add them to Runs, where each one opens from the folder it is already in. Your files are only read, never moved or changed. Choose Cancel to leave them out; you can look again from Settings.</value>
-  </data>
-  <data name="PrototypeImportZoneLine" xml:space="preserve">
-    <value>The earlier version last used the zone {0}. This version picks a zone for you, so there is nothing to set.</value>
-  </data>
-  <data name="PrototypeImportSshLine" xml:space="preserve">
-    <value>The earlier version signed in to its rented computer with a key file (an SSH key file), {0}. This version does not use SSH keys, so the file is not needed and you can delete it if nothing else uses it.</value>
-  </data>
-  <data name="PrototypeImportDone" xml:space="preserve">
-    <value>Added {0} earlier runs to Runs.</value>
-  </data>
-  <data name="PrototypeImportNothingFound" xml:space="preserve">
-    <value>No runs from the earlier version were found in your Downloads folder. If you saved them somewhere else, copy the run folders into Downloads and select Look for earlier runs again.</value>
-  </data>
-  <data name="PrototypeImportAlreadyDone" xml:space="preserve">
-    <value>Every earlier run found is already in Runs.</value>
-  </data>
-  <data name="PrototypeImportFailed" xml:space="preserve">
-    <value>The earlier runs could not be added. Close any other copy of the app, then select Look for earlier runs again.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Hint_Imported" xml:space="preserve">
-    <value>This run came from the earlier version, and its folder is your own, so this app never deletes it. To remove it, delete the folder in File Explorer.</value>
-  </data>
-  <data name="Runs_DeleteCloud_Hint_Prototype" xml:space="preserve">
-    <value>This run came from the earlier version, so it has no copy in your cloud storage to delete. Choose Open to see its files.</value>
-  </data>
-  <data name="PageTitle_RunProgress" xml:space="preserve">
-    <value>Run progress</value>
-  </data>
-  <data name="PageTitle_Viewer" xml:space="preserve">
-    <value>Viewer</value>
-  </data>
-  <data name="PageTitle_Results" xml:space="preserve">
-    <value>Results</value>
-  </data>
-  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
-    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
-  </data>
-  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
-    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
-  </data>
-  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
-    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
-  </data>
-  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
-    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
-  </data>
-  <data name="CloudPage_ProjectChanged" xml:space="preserve">
-    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
-  </data>
-  <data name="RunError_proxy_blocked" xml:space="preserve">
-    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Open Settings, choose Advanced, check the network proxy, then start the run again.</value>
-  </data>
-  <data name="RunError_network_certificate" xml:space="preserve">
-    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Ask your network administrator to install your organization&apos;s certificate, then start the run again.</value>
-  </data>
-  <data name="AuthError_SIGNIN_PROXY" xml:space="preserve">
-    <value>Your network&apos;s proxy refused the connection to Google, or it wants a sign-in. Your Google sign-in is unchanged. Open Settings, choose Advanced, and check the network proxy.</value>
-  </data>
-  <data name="AuthError_SIGNIN_CERTIFICATE" xml:space="preserve">
-    <value>A program on your network is replacing Google&apos;s security certificate, and this computer does not trust it. Your Google sign-in is unchanged. Ask your network administrator to install your organization&apos;s certificate.</value>
-  </data>
-  <data name="SettingsProxyExpander.Header" xml:space="preserve">
-    <value>Network proxy</value>
-  </data>
-  <data name="ProxyExplainer.Text" xml:space="preserve">
-    <value>Many universities and companies send internet traffic through a proxy. The default follows your Windows settings, including automatic proxy scripts and your Windows sign-in, which is right for most computers. Change this only if sign-in or a run says the proxy refused the connection.</value>
-  </data>
-  <data name="ProxyModeBox.Header" xml:space="preserve">
-    <value>How to reach the internet</value>
-  </data>
-  <data name="ProxyModeSystemItem.Content" xml:space="preserve">
-    <value>Use the Windows settings (recommended)</value>
-  </data>
-  <data name="ProxyModeManualItem.Content" xml:space="preserve">
-    <value>Use a proxy I type</value>
-  </data>
-  <data name="ProxyModeNoneItem.Content" xml:space="preserve">
-    <value>No proxy</value>
-  </data>
-  <data name="ProxyAddressBox.Header" xml:space="preserve">
-    <value>Proxy address (host:port)</value>
-  </data>
-  <data name="ProxyAddressBox.PlaceholderText" xml:space="preserve">
-    <value>proxy.example.edu:8080</value>
-  </data>
-  <data name="ProxyUserNameBox.Header" xml:space="preserve">
-    <value>Proxy user name (leave empty to use your Windows sign-in)</value>
-  </data>
-  <data name="ProxyPasswordBox.Header" xml:space="preserve">
-    <value>Proxy password</value>
-  </data>
-  <data name="ProxySignInSaved.Text" xml:space="preserve">
-    <value>A proxy password is saved on this computer, encrypted for your Windows account. Leave the password box empty to keep it.</value>
-  </data>
-  <data name="ProxyApplyButton.Content" xml:space="preserve">
-    <value>Apply</value>
-  </data>
-  <data name="ProxySaved" xml:space="preserve">
-    <value>Saved. The next connection uses this setting.</value>
-  </data>
-  <data name="ProxyAddressInvalid" xml:space="preserve">
-    <value>That is not a proxy address. Type it as host:port, for example proxy.example.edu:8080, with no user name or password in it.</value>
-  </data>
-  <data name="ProxyPasswordNeeded" xml:space="preserve">
-    <value>Type the proxy password for this user name, or empty the user name to use your Windows sign-in.</value>
-  </data>
-  <data name="NewRunStatusAnnotationTwoForOne" xml:space="preserve">
-    <value>Two annotation files match {0}, so neither was paired. Select {0} in the list, then choose Add GFF3 and pick the one you want.</value>
-  </data>
   <data name="NewRunNameTemplate.Header" xml:space="preserve">
     <value>Run name</value>
   </data>
@@ -3252,6 +3183,144 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_ExportPng_YAxis" xml:space="preserve">
     <value>Entropy (bits, 0 to 2)</value>
   </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange" xml:space="preserve">
+    <value>Some genes in record {1} were left out because their positions do not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include them.</value>
+  </data>
+  <data name="NewRunNotice_GenBankFeaturesOutOfRange_One" xml:space="preserve">
+    <value>1 gene in record {1} was left out because its position does not fit the sequence in the file. Check that the file's sequence and its gene positions belong together, then add the file again to include it.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds_One" xml:space="preserve">
+    <value>1 gene in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used instead. Its span is the coding part, not the whole gene. Fix the gene position in the file to give the gene its own span.</value>
+  </data>
+  <data name="NewRunNotice_GenBankGeneStoodInByCds" xml:space="preserve">
+    <value>Some genes in record {1} could not be used, so the matching coding sequence (a CDS) with the same gene name was used for each instead. Its span is the coding part, not the whole gene. Fix the gene positions in the file to give each gene its own span.</value>
+  </data>
+  <data name="CloudPage_ProjectChanged" xml:space="preserve">
+    <value>You switched Google Cloud projects, so nothing was changed. Press Refresh to see the new project, then try again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Title" xml:space="preserve">
+    <value>Cloud copy only partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body" xml:space="preserve">
+    <value>{0} files are still in your Google Cloud storage. Choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnknown_Body" xml:space="preserve">
+    <value>Some files may still be in your Google Cloud storage, because the delete stopped and the app could not count what is left. Choose Delete cloud copy again to remove any that remain.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Title" xml:space="preserve">
+    <value>Cloud copy delete not confirmed</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialUnconfirmed_Body" xml:space="preserve">
+    <value>The delete finished, but the app could not confirm that this run's folder in your Google Cloud storage is empty. Choose Delete cloud copy again to check.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Files still in your Google Cloud storage: {0}. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Files still in your Google Cloud storage: {0}. Ask your organization's administrator to allow deleting files in Google Cloud Storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Files still in your Google Cloud storage: {0}. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Files still in your Google Cloud storage: {0}. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialKnown_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Files still in your Google Cloud storage: {0}. Wait a few minutes, then choose Delete cloud copy again to remove the rest.</value>
+  </data>
+  <data name="Runs_DeleteCloud_Partial_Body_One" xml:space="preserve">
+    <value>One file is still in your Google Cloud storage. Choose Delete cloud copy again to remove it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Title" xml:space="preserve">
+    <value>Cloud copy may be partly deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Permission" xml:space="preserve">
+    <value>Google did not allow the delete to finish. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_OrgPolicy" xml:space="preserve">
+    <value>A rule set by your organization stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Billing" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Api" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Quota" xml:space="preserve">
+    <value>Google's request limit for your project was reached. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Network" xml:space="preserve">
+    <value>The connection to Google dropped. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Check your internet connection, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_PartialMaybe_Body_Other" xml:space="preserve">
+    <value>Something unexpected stopped the delete. Some files may have been deleted and some may still be in your Google Cloud storage, because the delete stopped partway. Choose Delete cloud copy again to finish it.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Title" xml:space="preserve">
+    <value>Could not finish checking your Google Cloud storage</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuck_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so some files may have been deleted and some may still be in your Google Cloud storage, and the app cannot tell which. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_ListingStuckNothing_Body" xml:space="preserve">
+    <value>Google kept sending back the same list of files, so nothing was deleted and the app cannot see what is stored in your Google Cloud storage. Choose Save diagnostics in Settings.</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Title" xml:space="preserve">
+    <value>Not deleted</value>
+  </data>
+  <data name="Runs_DeleteCloud_OtherComputer_Body" xml:space="preserve">
+    <value>This run was made on another computer, so this app will not delete its files. Choose Open storage page, then delete this run's folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Title" xml:space="preserve">
+    <value>Could not confirm this run is yours</value>
+  </data>
+  <data name="Runs_DeleteCloud_NotConfirmed_Body" xml:space="preserve">
+    <value>This app could not confirm that this run's files belong to this installation, so nothing was deleted. Choose Open storage page and check the folder there.</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Title" xml:space="preserve">
+    <value>Storage not found</value>
+  </data>
+  <data name="Runs_DeleteCloud_StorageNotFound_Body" xml:space="preserve">
+    <value>The Google Cloud storage for this run was not found, so nothing was changed. Open the Cloud page to check which project and storage this app is using.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Title" xml:space="preserve">
+    <value>Blocked by your organization</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOrgPolicy_Body" xml:space="preserve">
+    <value>A rule set by your organization blocked the delete, and nothing was deleted. Ask your organization's administrator to allow deleting files in Google Cloud Storage.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Title" xml:space="preserve">
+    <value>Google is limiting requests</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedQuota_Body" xml:space="preserve">
+    <value>Google's request limit for your project was reached, so the delete stopped. Wait a few minutes, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedOther_Body" xml:space="preserve">
+    <value>Something unexpected stopped the delete, and nothing was deleted. Try Delete cloud copy again. Choose Save diagnostics in Settings if it keeps happening, and send us the file.</value>
+  </data>
+  <data name="RunsOpenStoragePageButton.Content" xml:space="preserve">
+    <value>Open storage page</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Title" xml:space="preserve">
+    <value>Not allowed to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedPermission_Body" xml:space="preserve">
+    <value>Google did not allow the delete, and nothing was deleted. Open Settings, choose the Google account that owns this storage, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedBilling_Body" xml:space="preserve">
+    <value>Billing is turned off on your Google Cloud project, so nothing was deleted. Turn billing back on in the Google Cloud console, then choose Delete cloud copy again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Title" xml:space="preserve">
+    <value>Could not delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_FailedApi_Body" xml:space="preserve">
+    <value>A Google service this needs is turned off for your project, so nothing was deleted. Open the Cloud page and run the setup check, then choose Delete cloud copy again.</value>
+  </data>
   <data name="CloudActivityLogExplainer.Text" xml:space="preserve">
     <value>Every change this app makes in your Google Cloud project (starting, stopping or deleting a rented computer, and writing files to your storage bucket) is listed in a cloud activity log, with the time and whether it worked. It never holds your sequences, file names or email address, and it is included when you save diagnostics. Changes made by the developer-only command line tool, which is not part of the installed app, are not listed.</value>
   </data>
@@ -3263,6 +3332,12 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="CloudActivityLogOpenFailed" xml:space="preserve">
     <value>Windows could not show the cloud activity log. Choose Open folder under Logs in the Files group of Settings, and open the file cloud-audit.jsonl there.</value>
+  </data>
+  <data name="Results_NotesShortened" xml:space="preserve">
+    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
+  </data>
+  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
+    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
   </data>
   <data name="SettingsBudgetHeader.Text" xml:space="preserve">
     <value>Budget alert</value>
@@ -3402,45 +3477,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="BudgetRequestText_OrgPolicy" xml:space="preserve">
     <value>Hello, I use the DNA Entropy Graph app with the Google Cloud project {0}. An organization policy blocks the Cloud Billing Budget API (billingbudgets.googleapis.com) or the creation of budgets on our billing account. Please allow it, or create a monthly budget of {1} with email alerts at 50%, 90% and 100% for me. Thank you.</value>
   </data>
-  <data name="RunError_changed_files_kept_aside" xml:space="preserve">
-    <value>Your results were saved. A file already in the folder had been changed since the last download, so it was kept next to the new one, renamed to its old name followed by "(changed", the date and the time in brackets. Open the output folder to compare them, and delete the one you do not need.</value>
-  </data>
-  <data name="RunError_spend_cap" xml:space="preserve">
-    <value>This run was not started because your estimated spending this month has reached the cap you set, and the hard stop is on. Open Settings, raise the cap or turn the hard stop off, then start the run again.</value>
-  </data>
-  <data name="NewRunSpendCapWarning" xml:space="preserve">
-    <value>Your estimated spending this month is {0}, and this run would take it to your monthly warning cap of {1} or past it. You can still run. To change the cap, open Settings.</value>
-  </data>
-  <data name="NewRunSpendCapBlocked" xml:space="preserve">
-    <value>Your estimated spending this month is {0}, and this run would reach your monthly cap of {1} with the hard stop on, so it will not start. To allow it, open Settings and raise the cap or turn the hard stop off.</value>
-  </data>
-  <data name="SettingsSpendHeader.Text" xml:space="preserve">
-    <value>Spending</value>
-  </data>
-  <data name="SettingsSpendExplainer.Text" xml:space="preserve">
-    <value>Set a monthly warning cap in US dollars. The app adds up its own estimate of what your runs cost this calendar month (your PC's local time) and warns you before a run that would reach the cap. This is an estimate, not your Google bill. Leave the box empty for no cap.</value>
-  </data>
-  <data name="SpendCapBox.Header" xml:space="preserve">
-    <value>Monthly warning cap (US dollars)</value>
-  </data>
-  <data name="SpendHardStopBox.Content" xml:space="preserve">
-    <value>Hard stop: do not start a run once the cap is reached</value>
-  </data>
-  <data name="SpendCapInvalid" xml:space="preserve">
-    <value>Type a number above zero, such as 50, or empty the box for no cap. The cap was not changed.</value>
-  </data>
-  <data name="SpendMonthToDate" xml:space="preserve">
-    <value>Estimated spending so far this month: ${0}</value>
-  </data>
-  <data name="SpendMonthToDateWithLive" xml:space="preserve">
-    <value>Estimated spending so far this month: ${0} (includes runs in progress, counted up to now)</value>
-  </data>
-  <data name="NewRunSpendCapInProgress" xml:space="preserve">
-    <value>The month's figure includes runs in progress.</value>
-  </data>
-  <data name="Results_NotesShortened" xml:space="preserve">
-    <value>Saved, but only the first {0} characters. The end of the note was not saved. The box now shows what was saved: add back what you need within the limit, then press Save notes again.</value>
-  </data>
   <data name="PrototypeImportOnlyRemoved" xml:space="preserve">
     <value>The earlier runs found here are either in Runs already or ones you removed from the list. To see the removed ones again, choose Reset all settings on the Settings page (this also resets your other settings).</value>
   </data>
@@ -3468,8 +3504,92 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Results_CostShortNoCloud" xml:space="preserve">
     <value>No cloud cost</value>
   </data>
-  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
-    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  <data name="RunAction_RunNotFound" xml:space="preserve">
+    <value>This run is no longer in your history, so the app cannot tell which Google account and project its rented computer is in. Open the Cloud page and stop or delete any computer left running there.</value>
+  </data>
+  <data name="RunSignIn_Prompt" xml:space="preserve">
+    <value>Sign in as {0} to stop or delete this run's computer.</value>
+  </data>
+  <data name="RunSignIn_PromptUnknown" xml:space="preserve">
+    <value>Sign in with the Google account this run started under to stop or delete its computer.</value>
+  </data>
+  <data name="RunProgressSignIn.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="RunError_account_signed_out" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its rented computer could not be reached. Sign in as that account (choose the Sign in button on this run's page or at the bottom of the window), then try again.</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Title" xml:space="preserve">
+    <value>Sign in to download</value>
+  </data>
+  <data name="Runs_Redownload_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so its files could not be downloaded. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Download again.</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Title" xml:space="preserve">
+    <value>Sign in to delete the cloud copy</value>
+  </data>
+  <data name="Runs_DeleteCloud_SignIn_Body" xml:space="preserve">
+    <value>The Google account this run was made under is signed out, so nothing was deleted. Sign in as that account (choose the Sign in button at the bottom of the window), then choose Delete cloud copy again.</value>
+  </data>
+  <data name="RunError_late_create_unconfirmed" xml:space="preserve">
+    <value>You cancelled this run, but a request for a rented computer was still on its way and we could not confirm it was deleted or stopped. Open the Cloud page and delete or stop any computer left for this run so it stops billing.</value>
+  </data>
+  <data name="SignInNeeded_Title" xml:space="preserve">
+    <value>Sign in as {0}</value>
+  </data>
+  <data name="SignInNeeded_TitleUnknown" xml:space="preserve">
+    <value>Sign in with the Google account a recent run started under</value>
+  </data>
+  <data name="SignInNeeded_Joiner" xml:space="preserve">
+    <value> or </value>
+  </data>
+  <data name="SignInNeeded_Message" xml:space="preserve">
+    <value>The app could not check on a computer that account started in Google Cloud, and a computer left running costs money. Sign in so the app can look at it and stop it.</value>
+  </data>
+  <data name="SignInNeededBarButton.Content" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="LeftRunning_UnreadTitle" xml:space="preserve">
+    <value>Some computers could not be checked</value>
+  </data>
+  <data name="LeftRunning_UnreadBodySignIn" xml:space="preserve">
+    <value>The app could not look at the rented computers (VMs) started under {0}, because that Google account is signed out. A computer left running costs money until it ends itself at its time limit. Press Sign in to look again, or Close anyway and check the Cloud page later.</value>
+  </data>
+  <data name="LeftRunning_UnreadBodyOther" xml:space="preserve">
+    <value>The app could not reach Google to check every rented computer (VM) it may have started. A computer left running costs money until it ends itself at its time limit. Open the Cloud page when you are online to see what is running.</value>
+  </data>
+  <data name="LeftRunning_UnreadAccountUnknown" xml:space="preserve">
+    <value>a Google account you used for a recent run</value>
+  </data>
+  <data name="LeftRunning_UnreadSignIn" xml:space="preserve">
+    <value>Sign in</value>
+  </data>
+  <data name="LeftRunning_UnreadCloseAnyway" xml:space="preserve">
+    <value>Close anyway</value>
+  </data>
+  <data name="OutputFolder_Default_Text" xml:space="preserve">
+    <value>Your Downloads folder</value>
+  </data>
+  <data name="OutputFolder_SaveFailed_Message" xml:space="preserve">
+    <value>The folder was not changed, because another copy of the app has the settings file open. Close the other copies, then choose the folder again.</value>
+  </data>
+  <data name="OutputFolder_PickFailed_Message" xml:space="preserve">
+    <value>The folder chooser did not open. Choose Change folder again. If it keeps failing, restart the app.</value>
+  </data>
+  <data name="OutputFolderHeader.Text" xml:space="preserve">
+    <value>Save results to</value>
+  </data>
+  <data name="OutputFolderChange.Content" xml:space="preserve">
+    <value>Change folder</value>
+  </data>
+  <data name="OutputFolderUseDownloads.Content" xml:space="preserve">
+    <value>Use Downloads</value>
+  </data>
+  <data name="SettingsOutputFolderHeader.Text" xml:space="preserve">
+    <value>Save results to</value>
+  </data>
+  <data name="SettingsOutputFolderExplainer.Text" xml:space="preserve">
+    <value>The folder every new run saves its results into. Each run gets its own folder inside it. The New run page shows this folder and lets you change it too.</value>
   </data>
   <data name="Runs_OtherAccount_Hidden_One" xml:space="preserve">
     <value>1 run started under another Google account is hidden here.</value>
@@ -3504,138 +3624,6 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_OtherAccount_SignInFailed_Body" xml:space="preserve">
     <value>The Google sign-in did not finish. Choose Sign in again on this page and finish it in the browser window.</value>
   </data>
-  <data name="Runs_DeleteLocal_Unmarked_Confirm_Title" xml:space="preserve">
-    <value>Delete this folder?</value>
-  </data>
-  <data name="Runs_DeleteLocal_Unmarked_Confirm_Body" xml:space="preserve">
-    <value>This folder does not carry the mark the app puts on its own run folders. It may come from an older version of the app, so the app cannot be sure it holds only this run's results. The folder is {0}. Check that this is the folder you mean. Choose Continue to delete the folder and everything in it, or Cancel to keep it. Your original input file is not touched.</value>
-  </data>
-  <data name="Runs_DeleteLocal_NeedsConfirmation_Title" xml:space="preserve">
-    <value>Not deleted</value>
-  </data>
-  <data name="Runs_DeleteLocal_NeedsConfirmation_Body" xml:space="preserve">
-    <value>This folder changed while the app was checking it, so nothing was deleted. Choose Delete files on this PC again to review it.</value>
-  </data>
-  <data name="Runs_DeleteLocal_OtherRun_Title" xml:space="preserve">
-    <value>Not deleted</value>
-  </data>
-  <data name="Runs_DeleteLocal_OtherRun_Body" xml:space="preserve">
-    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open folder to see it in File Explorer, and delete it yourself if you want it gone.</value>
-  </data>
-  <data name="Runs_DeleteLocal_OtherRun_Toast_Body" xml:space="preserve">
-    <value>This folder is marked as belonging to a different run, so it was left alone. Choose Open on this run, then Open folder on the page that appears, and delete the folder yourself if you want it gone.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Protected_Title" xml:space="preserve">
-    <value>Not deleted</value>
-  </data>
-  <data name="Runs_DeleteLocal_Protected_Body" xml:space="preserve">
-    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open folder to see it in File Explorer, and delete only what you want gone yourself.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Protected_Toast_Body" xml:space="preserve">
-    <value>This folder is one of your own folders, such as Documents or Desktop, or sits directly inside one, and it does not carry the mark the app puts on its own run folders, so nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete only what you want gone yourself.</value>
-  </data>
-  <data name="Runs_DeleteLocal_DriveRoot_Toast_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open on this run, then Open folder on the page that appears, and delete the run's files yourself.</value>
-  </data>
-  <data name="Runs_Redownload_DriveRoot_Toast_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open on this run, then Open folder on the page that appears, to see the files already saved there.</value>
-  </data>
-  <data name="Runs_DeleteLocal_DriveRoot_Title" xml:space="preserve">
-    <value>Not deleted</value>
-  </data>
-  <data name="Runs_DeleteLocal_DriveRoot_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so deleting it from here could reach other files on that drive, and nothing was deleted. Choose Open folder to see it in File Explorer, and delete the run's files yourself.</value>
-  </data>
-  <data name="Runs_DeleteLocal_Hint_DriveRoot" xml:space="preserve">
-    <value>This run was saved straight to a drive, so it cannot be deleted from here. Press the button, then choose Open folder.</value>
-  </data>
-  <data name="Runs_Redownload_DriveRoot_Title" xml:space="preserve">
-    <value>Not downloaded</value>
-  </data>
-  <data name="Runs_Redownload_DriveRoot_Body" xml:space="preserve">
-    <value>This run was saved straight to a drive, so downloading it again from here could write over other files on that drive, and nothing was written. Choose Open folder to see the files already saved there.</value>
-  </data>
-  <data name="Runs_Redownload_Hint_DriveRoot" xml:space="preserve">
-    <value>This run was saved straight to a drive, so it cannot be downloaded again from here. Press the button, then choose Open folder.</value>
-  </data>
-  <data name="Runs_OpenFolder_Label" xml:space="preserve">
-    <value>Open folder</value>
-  </data>
-  <data name="Runs_Close_Label" xml:space="preserve">
-    <value>Close</value>
-  </data>
-  <data name="OutputFolder_DriveRoot_Message" xml:space="preserve">
-    <value>A whole drive cannot be the output folder, because results saved straight to a drive cannot be deleted or downloaded again from the Runs page. Choose a folder inside the drive instead.</value>
-  </data>
-  <data name="Runs_DeleteLocal_LinkPartial_Title" xml:space="preserve">
-    <value>Some files were deleted</value>
-  </data>
-  <data name="Runs_DeleteLocal_LinkPartial_Body" xml:space="preserve">
-    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open folder to see what is left in File Explorer, and delete it yourself if you want it gone.</value>
-  </data>
-  <data name="Runs_DeleteLocal_LinkPartial_Toast_Body" xml:space="preserve">
-    <value>Some of this run's files were already deleted when a folder inside it turned out to be a shortcut (a junction or symbolic link) to somewhere else, so the rest were left alone. Choose Open on this run, then Open folder on the page that appears, to see what is left, and delete it yourself if you want it gone.</value>
-  </data>
-  <data name="RunsOpenOutputFolderButton.Content" xml:space="preserve">
-    <value>Open the output folder</value>
-  </data>
-  <data name="ResultsKeptAsideOpenFolderButton.Content" xml:space="preserve">
-    <value>Open the output folder</value>
-  </data>
-  <data name="Runs_KeptAside_One" xml:space="preserve">
-    <value>1 file you had changed was kept next to the new result under a new name that ends with the word changed and the date. Open the output folder to compare them.</value>
-  </data>
-  <data name="Runs_KeptAside_Many" xml:space="preserve">
-    <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
-  </data>
-  <data name="Runs_Redownload_OtherRun_Title" xml:space="preserve">
-    <value>Not downloaded</value>
-  </data>
-  <data name="Runs_Redownload_OtherRun_Body" xml:space="preserve">
-    <value>Another run has since used this run's folder, so nothing was written into it. Rename or move that folder in File Explorer, then choose Download again.</value>
-  </data>
-  <data name="Runs_Redownload_FolderGone_Title" xml:space="preserve">
-    <value>Not downloaded</value>
-  </data>
-  <data name="Runs_Redownload_FolderGone_Body" xml:space="preserve">
-    <value>The folder this run was saved to is gone, so nothing was written. If it was on a drive, reconnect the drive, or put the folder back, then choose Download again.</value>
-  </data>
-  <data name="OutputFolder_Default_Text" xml:space="preserve">
-    <value>Your Downloads folder</value>
-  </data>
-  <data name="OutputFolder_SaveFailed_Message" xml:space="preserve">
-    <value>The folder was not changed, because another copy of the app has the settings file open. Close the other copies, then choose the folder again.</value>
-  </data>
-  <data name="OutputFolder_PickFailed_Message" xml:space="preserve">
-    <value>The folder chooser did not open. Choose Change folder again. If it keeps failing, restart the app.</value>
-  </data>
-  <data name="OutputFolderHeader.Text" xml:space="preserve">
-    <value>Save results to</value>
-  </data>
-  <data name="OutputFolderChange.Content" xml:space="preserve">
-    <value>Change folder</value>
-  </data>
-  <data name="OutputFolderUseDownloads.Content" xml:space="preserve">
-    <value>Use Downloads</value>
-  </data>
-  <data name="SettingsOutputFolderHeader.Text" xml:space="preserve">
-    <value>Save results to</value>
-  </data>
-  <data name="SettingsOutputFolderExplainer.Text" xml:space="preserve">
-    <value>The folder every new run saves its results into. Each run gets its own folder inside it. The New run page shows this folder and lets you change it too.</value>
-  </data>
-  <data name="PaletteChoices.Header" xml:space="preserve">
-    <value>Colors of the entropy lines</value>
-  </data>
-  <data name="PaletteDefaultRadio.Content" xml:space="preserve">
-    <value>Default (easy to tell apart with color blindness)</value>
-  </data>
-  <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
-    <value>High contrast (stronger colors on the background)</value>
-  </data>
-  <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
-    <value>Colors of the entropy lines</value>
-  </data>
   <data name="PriceSource_Catalog" xml:space="preserve">
     <value>Prices from Google&apos;s price list, as of {0}.</value>
   </data>
@@ -3668,5 +3656,32 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="PriceSourceReason_Other" xml:space="preserve">
     <value>Google&apos;s price list could not be read this time. Try again later.</value>
+  </data>
+  <data name="RunsOpenOutputFolderButton.Content" xml:space="preserve">
+    <value>Open the output folder</value>
+  </data>
+  <data name="ResultsKeptAsideOpenFolderButton.Content" xml:space="preserve">
+    <value>Open the output folder</value>
+  </data>
+  <data name="Runs_KeptAside_One" xml:space="preserve">
+    <value>1 file you had changed was kept next to the new result under a new name that ends with the word changed and the date. Open the output folder to compare them.</value>
+  </data>
+  <data name="Runs_KeptAside_Many" xml:space="preserve">
+    <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
+  </data>
+  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
+    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  </data>
+  <data name="PaletteChoices.Header" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
+  </data>
+  <data name="PaletteDefaultRadio.Content" xml:space="preserve">
+    <value>Default (easy to tell apart with color blindness)</value>
+  </data>
+  <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
+    <value>High contrast (stronger colors on the background)</value>
+  </data>
+  <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
   </data>
 </root>

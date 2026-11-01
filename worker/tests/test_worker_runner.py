@@ -1865,3 +1865,64 @@ def test_the_kept_original_code_is_ascii_escaped_and_cut_at_80(
     )
     assert line.isascii()
     assert len(line) <= len("original code: ") + 80
+
+
+# --- Issue #1086 r2: real per-window percent and detail.window/windows in status.json ----
+
+
+class _StatusRecorder:
+    """Wraps a blobstore and records every status.json snapshot written."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.snapshots: list[dict] = []
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if name != "write_text":
+            return attr
+
+        def _write(path, text, *a, **k):
+            if path == "status.json":
+                self.snapshots.append(json.loads(text))
+            return attr(path, text, *a, **k)
+
+        return _write
+
+
+def test_status_json_carries_mid_run_percent_and_window_counts(tmp_path: Path) -> None:
+    inner = LocalBlobstore(tmp_path)
+    store = _StatusRecorder(inner)
+    _write_manifest(cast(Blobstore, inner))
+    inner.write_text("input/locus.fasta", ">seq\n" + "ACGT" * 250 + "\n")  # 1000 nt, W=256 S=128: 7 windows
+
+    run_job(cast(Blobstore, store))
+
+    running = [s for s in store.snapshots if s["stage"] == "running" and "window" in s["detail"]]
+    assert running, "no running snapshot carried detail.window"
+    first = running[0]
+    assert first["detail"]["windows"] == 7
+    assert 1 <= first["detail"]["window"] <= 7
+    assert first["detail"]["input"] == "in1"
+    assert 0.0 < first["percent"] < 100.0
+    assert all(s["percent"] < 100.0 for s in store.snapshots if s["stage"] != "done")
+    assert store.snapshots[-1]["percent"] == 100.0
+
+
+def test_percent_spans_all_inputs_equally(tmp_path: Path) -> None:
+    inner = LocalBlobstore(tmp_path)
+    store = _StatusRecorder(inner)
+    _write_manifest(
+        cast(Blobstore, inner),
+        inputs=[
+            {"id": "in1", "path": "input/a.fasta", "name": "a"},
+            {"id": "in2", "path": "input/b.fasta", "name": "b"},
+        ],
+    )
+    inner.write_text("input/a.fasta", ">a\n" + "ACGT" * 40 + "\n")
+    inner.write_text("input/b.fasta", ">b\n" + "ACGT" * 40 + "\n")
+
+    run_job(cast(Blobstore, store))
+
+    second = [s for s in store.snapshots if s["detail"].get("input") == "in2" and s["percent"] > 0]
+    assert second and min(s["percent"] for s in second) >= 50.0  # input 2 starts at the halfway mark

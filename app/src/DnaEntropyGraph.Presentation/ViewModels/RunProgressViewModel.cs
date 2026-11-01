@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using DnaEntropyGraph.Core;
 using DnaEntropyGraph.Core.Abstractions;
 using DnaEntropyGraph.Core.Cloud;
+using DnaEntropyGraph.Core.Contract;
 using DnaEntropyGraph.Presentation.Messaging;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -35,6 +36,7 @@ public sealed partial class RunProgressViewModel : ObservableObject
     private readonly INavigator _navigator;
     private readonly IGcpAccount? _account;
     private readonly IDiagnosticsLog _log;
+    private readonly RunProgressStore? _progressStore;
 
     [ObservableProperty]
     private string? _jobId;
@@ -83,8 +85,10 @@ public sealed partial class RunProgressViewModel : ObservableObject
         INavigator navigator,
         IMessenger messenger,
         IGcpAccount? account = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        RunProgressStore? progressStore = null)
     {
+        _progressStore = progressStore;
         _account = account;
         _log = log ?? NullDiagnosticsLog.Instance;
         _jobEngine = jobEngine;
@@ -210,6 +214,12 @@ public sealed partial class RunProgressViewModel : ObservableObject
         RefreshLogTail();
         _outputFolder = null;
         UpdateCanOpenViewer();
+
+        // A page created or shown again mid-run missed the events published before it existed: start from the last one for this run.
+        if (value is not null && _progressStore?.Latest(value) is { } latest)
+        {
+            ApplyProgress(latest);
+        }
     }
 
     private void OnRunPhaseChanged(RunPhaseChangedMessage message)
@@ -229,11 +239,18 @@ public sealed partial class RunProgressViewModel : ObservableObject
             return;
         }
 
-        _dispatcher.Enqueue(() =>
+        _dispatcher.Enqueue(() => ApplyProgress(message.Progress));
+    }
+
+    private void ApplyProgress(ProgressEvent progress)
+    {
+        if (IsTerminal(CurrentPhase))
         {
-            FractionComplete = message.Progress.FractionComplete;
-            StatusDetailText = message.Progress.Message;
-        });
+            return; // a late event after the run ended must not rewrite the finished page
+        }
+
+        FractionComplete = progress.FractionComplete;
+        StatusDetailText = ProgressText(progress);
     }
 
     private void ApplyPhase(JobPhase phase)
@@ -399,6 +416,17 @@ public sealed partial class RunProgressViewModel : ObservableObject
         LogTailText = string.Join(Environment.NewLine, _logTailReader.ReadLines(JobId));
     }
 
+    // Hard Rule 13: the page text for a worker stage comes from Resources.resw; an unknown stage gets the neutral line, never the raw id, and never an input or file name.
+    private string ProgressText(ProgressEvent progress) => progress.Stage switch
+    {
+        WorkerStages.ModelLoading => _strings.GetString("ProgressModelLoading"),
+        WorkerStages.Booting => _strings.GetString("ProgressBooting"),
+        WorkerStages.Running when progress.Window is { } window && progress.Windows is { } windows
+            => string.Format(System.Globalization.CultureInfo.CurrentCulture, _strings.GetString("ProgressAnalysingWindowCount"), window, windows),
+        WorkerStages.Running => _strings.GetString("ProgressAnalysing"),
+        _ => _strings.GetString("ProgressGeneric"),
+    };
+
     private static string PhaseTitleKey(JobPhase phase) => phase switch
     {
         JobPhase.Draft or JobPhase.Validating => "PhaseValidating_Title",
@@ -416,5 +444,5 @@ public sealed partial class RunProgressViewModel : ObservableObject
         _ => "PhaseValidating_Title",
     };
 
-    private static bool IsTerminal(JobPhase phase) => phase is JobPhase.Completed or JobPhase.PartiallyCompleted or JobPhase.Cancelled or JobPhase.Failed;
+    private static bool IsTerminal(JobPhase phase) => JobStateMachine.IsTerminal(phase);
 }

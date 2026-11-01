@@ -340,12 +340,14 @@ public static class ServiceRegistration
         services.AddSingleton<LocalJobRunner>(sp =>
         {
             var messenger = sp.GetRequiredService<IMessenger>();
+            _ = sp.GetRequiredService<RunProgressStore>(); // listening before the first progress event, so a page opened mid-run is not blank
             return new LocalJobRunner(
                 sp.GetRequiredService<IProcessLauncher>(),
                 sp.GetRequiredService<IRunRepository>(),
                 sp.GetRequiredService<LocalEngineLayout>(),
                 sp.GetRequiredService<AppDataRoot>().RunsDirectory,
-                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)))
+                (jobId, phase) => messenger.Send(new RunPhaseChangedMessage(jobId, phase)),
+                onProgress: (jobId, progress) => messenger.Send(new RunProgressChangedMessage(jobId, progress))) // Issue #1086: the run page's bar and detail line.
             {
                 DefaultOutputParent = () => RunOutputFolders.DefaultParent(Services.KnownFolders.Downloads, root.PortableOutputsDirectory),
             };
@@ -365,6 +367,7 @@ public static class ServiceRegistration
         {
             var messenger = sp.GetRequiredService<IMessenger>();
             var diagnostics = sp.GetRequiredService<IDiagnosticsLog>();
+            _ = sp.GetRequiredService<RunProgressStore>(); // listening before the first progress event, so a page opened mid-run is not blank
             return new CloudJobRunner(
                 sp.GetRequiredService<IComputeGateway>(),
                 sp.GetRequiredService<IStorageGateway>(),
@@ -384,6 +387,8 @@ public static class ServiceRegistration
                 // default for a runner built without a UI (tests, the reconciler's own runner).
                 OnStall = sp.GetRequiredService<RunStallCoordinator>().AskAsync,
                 OnNotice = sp.GetRequiredService<RunStallCoordinator>().OnNotice,
+                // Issue #1086: each new progress in the worker's status.json (a reattached run goes through this same runner) moves the run page's bar and detail line.
+                OnProgress = (jobId, progress) => messenger.Send(new RunProgressChangedMessage(jobId, progress)),
             };
         });
         // Issue #59: on launch, runs a killed app left non-terminal are reattached through the runner above.
@@ -479,6 +484,8 @@ public static class ServiceRegistration
         services.AddTransient<GpuPlanViewModel>();
         // Issue #527: one instance for the app, so the files on the New run page survive a trip to another page and back; it empties itself when a run starts.
         services.AddSingleton<NewRunViewModel>();
+        // Issue #1086: the run page is transient, so the last progress per run lives here; the runner factories above build it before the first progress event.
+        services.AddSingleton<RunProgressStore>(sp => new RunProgressStore(sp.GetRequiredService<IMessenger>()));
         services.AddTransient<RunProgressViewModel>();
         services.AddTransient<ResultsViewModel>();
         // Issues #72/#73: the igv.js viewer page's state and its WebView2 host.
