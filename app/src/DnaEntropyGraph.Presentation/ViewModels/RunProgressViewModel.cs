@@ -444,5 +444,5 @@ public sealed partial class RunProgressViewModel : ObservableObject
         _ => "PhaseValidating_Title",
     };
 
-    private static bool IsTerminal(JobPhase phase) => phase is JobPhase.Completed or JobPhase.PartiallyCompleted or JobPhase.Cancelled or JobPhase.Failed;
+    private static bool IsTerminal(JobPhase phase) => JobStateMachine.IsTerminal(phase);
 }

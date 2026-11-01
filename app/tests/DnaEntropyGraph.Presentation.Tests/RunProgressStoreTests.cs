@@ -54,4 +54,38 @@ public class RunProgressStoreTests
 
         store.Latest("job-1").ShouldNotBeNull();
     }
+
+    [Theory]
+    [InlineData(JobPhase.Completed)]
+    [InlineData(JobPhase.Failed)]
+    [InlineData(JobPhase.Cancelled)]
+    [InlineData(JobPhase.PartiallyCompleted)]
+    public void A_progress_event_that_arrives_after_the_run_finished_is_dropped_not_stored(JobPhase terminal)
+    {
+        // Progress (poll thread) and phase (phase callback) are published from different threads, so the order is not guaranteed.
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+
+        messenger.Send(new RunPhaseChangedMessage("job-1", terminal));
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.9, 9, 10)));
+
+        store.Latest("job-1").ShouldBeNull();
+        store.TrackedRunCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Remembering_finished_runs_is_bounded_and_other_runs_are_unaffected()
+    {
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+
+        for (var i = 0; i < 5000; i++)
+        {
+            messenger.Send(new RunPhaseChangedMessage("old-" + i, JobPhase.Completed));
+        }
+
+        store.FinishedRunCount.ShouldBeLessThanOrEqualTo(1024);
+        messenger.Send(new RunProgressChangedMessage("live", new ProgressEvent("running", 0.1, 1, 10)));
+        store.Latest("live").ShouldNotBeNull();
+    }
 }

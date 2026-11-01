@@ -260,6 +260,28 @@ public class RunProgressViewModelTests
         viewModel.StatusDetailText.ShouldBeNull();
     }
 
+    [Fact]
+    public void A_finished_run_opened_afterwards_is_not_seeded_with_a_stale_bar_even_when_its_last_progress_arrived_late()
+    {
+        // Issue #1086 review: progress (poll thread) and the terminal phase (phase callback) race; the late progress must not be remembered.
+        var messenger = new WeakReferenceMessenger();
+        var store = new RunProgressStore(messenger);
+        messenger.Send(new RunPhaseChangedMessage("job-1", JobPhase.Completed));
+        messenger.Send(new RunProgressChangedMessage("job-1", new ProgressEvent("running", 0.9, 9, 10)));
+        var strings = Substitute.For<IStringResourceProvider>();
+        strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
+
+        var viewModel = new RunProgressViewModel(
+            Substitute.For<IJobEngine>(), new ImmediateDispatcher(), Substitute.For<IDialogService>(),
+            Substitute.For<IRunVmActions>(), Substitute.For<ILogTailReader>(), strings, Substitute.For<IRunRepository>(), Substitute.For<INavigator>(), messenger,
+            progressStore: store)
+        {
+            JobId = "job-1",
+        };
+
+        viewModel.FractionComplete.ShouldBe(0);
+        viewModel.StatusDetailText.ShouldBeNull();
+    }
     // Every stage-to-line row (Hard Rule 13: the keys live in Resources.resw; an unmapped stage gets the neutral line, never the raw id).
     // "uploading" is NOT mapped: no worker code writes it (MEASURED 2026-10-31: grep of worker/src and worker/vm), so it is neutral like any other.
     [Theory]

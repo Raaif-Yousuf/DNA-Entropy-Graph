@@ -351,11 +351,15 @@ public sealed class LocalJobRunnerTests : IDisposable
         lock (published) { published.Count.ShouldBe(1); }
         for (var i = 0; i < 5; i++)
         {
-            await TickAsync(); // the same file, read again: not republished
+            // The same progress with a newer heartbeat: the poll must really READ the file (the heartbeat reaches the run row) yet not republish the unchanged progress.
+            var seq = 10 + i;
+            File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":25,\"detail\":{\"window\":2,\"windows\":8},\"heartbeatSeq\":" + seq + ",\"worker\":{\"version\":\"0.0.1\"}}");
+            await TickAsync();
+            await WaitUntilAsync(() => _runs.Latest(JobId).LastProgressSeq == seq);
         }
 
         lock (published) { published.Count.ShouldBe(1); }
-        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":50,\"detail\":{\"window\":4,\"windows\":8},\"heartbeatSeq\":2,\"worker\":{\"version\":\"0.0.1\"}}");
+        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":50,\"detail\":{\"window\":4,\"windows\":8},\"heartbeatSeq\":20,\"worker\":{\"version\":\"0.0.1\"}}");
         await TickAsync();
         worker.End(1);
         await run;

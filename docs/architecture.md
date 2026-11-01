@@ -111,7 +111,11 @@ reattached after a restart goes through the same `CloudJobRunner`, so it publish
 Progress is published on change only and the run page is a transient ViewModel, so a page created or shown
 again mid-run would miss every earlier event. `RunProgressStore` (Presentation/Services, a singleton that
 the two runner factories build before the first event) keeps the last progress per run, drops it at the
-run's terminal phase, and `RunProgressViewModel` seeds itself from it when its `JobId` is set.
+run's terminal phase and remembers (bounded, 1024 ids) which runs finished so a progress event that
+arrives after the terminal phase (the two come from different threads) is dropped, and
+`RunProgressViewModel` seeds itself from it when its `JobId` is set (on the UI thread: it is set in
+`RunProgressPage.OnNavigatedTo`). `DiResolutionTests` asserts the real container hands the page the store
+and that every `RunProgressChangedMessage` sender sits in a factory that also builds the store.
 `Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>` call or
 an `IRecipient<...>` implementation (comments are stripped first, so a commented-out call does not count)
 and no `Send(new ...)` sender anywhere in `app/src`.
