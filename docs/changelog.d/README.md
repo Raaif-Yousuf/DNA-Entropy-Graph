@@ -25,6 +25,10 @@ conflict with any other branch's fragment, and the fragment is folded into
   **No fragment needed:** anything under `docs/`, any `tests/` directory, any `*.md`. A fragment
   counts if it is added or modified in the diff; a modified `docs/sprint_log.md` also counts (the
   fold already deleted the fragment); a deleted fragment does not.
+- **A branch adds at most one fragment** (#1096, same `--base` check): two added files for one
+  change (a `-r2` repair fragment next to the original, a renamed branch) fold into two
+  near-identical sprint-log bullets, so the check fails naming both; keep one. Modifying an
+  existing fragment alongside one added file is fine.
 - One bullet is normal; more than one is fine if the branch did more than
   one thing worth recording.
 

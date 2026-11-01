@@ -144,12 +144,30 @@ same window can have their working sets swap. Give the recipe, not just the
 ban; a bare ban with no alternative loses to the reflex, because
 revert-checking is something you actively ask for:
 
+Primary form (#1075), no shared path at all:
+
 ```
-git diff > <scratchpad>/fix.patch      # keep the fix
-git checkout -- <the source files>     # revert ONLY the source, keep the tests
+python scripts/revert_check.py <source files> -- <the targeted test command>
+```
+
+It saves `git diff HEAD --binary` of the named files under the worktree's OWN git dir
+(`<git-dir>/revert-check/<timestamp>-<pid>.patch`), checks out only those files, runs the tests
+expecting RED, always restores with `git apply`, and verifies the restore is byte-identical (exit
+0 only then; 10 = tests stayed green, fix not proven; 12 = restore mismatch, patch path in the
+message). It refuses an untracked source file and a directory such as `.`.
+
+Fallback by hand: the patch path must be unique per lane and live under the worktree's own git
+dir, never in the shared scratchpad (MEASURED 2026-10-31: two workers wrote the same
+`<scratchpad>/fix.patch` and one lost its fix after `git checkout -- .` had wiped the tree):
+
+```
+$p = "$(git rev-parse --absolute-git-dir)/revert-check/fix.patch"   # per worktree, so per lane
+New-Item -ItemType Directory -Force (Split-Path $p) | Out-Null
+git diff HEAD --binary -- <the source files> | Set-Content -AsByteStream $p   # keep the fix
+git checkout HEAD -- <the source files>   # ONLY the named source files, never "."
 <run the targeted tests; they must go RED>
-git apply <scratchpad>/fix.patch       # restore
-git diff --stat                        # prove the restore is byte-exact
+git apply $p                              # restore
+git diff HEAD --stat -- <the source files> # prove the restore matches what you had
 ```
 
 `git checkout -b` also preserves uncommitted changes in place and is the way to
@@ -210,6 +228,10 @@ directory that a folding script never scans.
 **Read the tests they wrote, not just the count.** A test can assert the
 reported bug as correct behaviour and explain that in its own comment — the
 count goes up, the bug stays.
+
+**The `cold-diff-reviewer` has no shell (Read/Grep/Glob only).** Give it the diff file plus a
+worktree checked out at the reviewed sha; telling it to `git show <sha>:path` fails (MEASURED
+2026-10-31).
 
 **A raised baseline is a claim, not a fix.** If a ratchet or allowlist
 moved, ask what was tried first. Documented and justified is fine; silent is

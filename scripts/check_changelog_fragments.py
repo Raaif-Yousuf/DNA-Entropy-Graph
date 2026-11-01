@@ -39,6 +39,8 @@ file changed and no fragment came with it.
                      docs/sprint_log.md (the fold already happened and deleted the
                      fragment, so a diff spanning the fold shows only the sprint log)
   Does not count  : a deleted fragment
+  At most one     : a branch may ADD only one fragment (#1096); one added plus one modified
+                    existing fragment is fine. Two added fail, naming both: keep one.
 
 Exit codes: 0 clean (including no fragments at all -- an empty
 `changelog.d/` is the normal, fully-drained state), 1 at least one fragment
@@ -124,6 +126,15 @@ def missing_fragment(changes: list[tuple[str, str]]) -> str | None:
     )
 
 
+def extra_fragments(changes: list[tuple[str, str]]) -> str | None:
+    """#1096: a branch ADDS at most one fragment. Two near-identical bullets (a `-r2` repair
+    fragment next to the original, a renamed branch) fold into the sprint log twice."""
+    added = sorted({path for status, path in changes if status == "A" and _is_fragment_path(path)})
+    if len(added) < 2:
+        return None
+    return f"this branch adds {len(added)} changelog fragments ({', '.join(added)}): keep one (merge the bullets into it and delete the others)"
+
+
 class GitError(Exception):
     pass
 
@@ -156,7 +167,8 @@ def changes_since(root: Path, base: str) -> list[tuple[str, str]]:
 
 
 def check_against_base(root: Path, base: str) -> str | None:
-    return missing_fragment(changes_since(root, base))
+    changes = changes_since(root, base)
+    return missing_fragment(changes) or extra_fragments(changes)
 
 
 def check(root: Path) -> list[str]:

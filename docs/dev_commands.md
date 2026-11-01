@@ -428,7 +428,8 @@ python scripts\check_third_party_notices.py   # THIRD-PARTY-NOTICES.md freshness
 python scripts\check_version_lockstep.py      # every version-bearing file agrees
 python scripts\check_version_lockstep.py --tag v1.2.3   # release mode (#33): the tag must also equal both versions; a missing app/Directory.Build.props fails. release.yml (#178, not yet written) must call it with "${GITHUB_REF_NAME}" BEFORE building
 python scripts\check_changelog_fragments.py   # docs/changelog.d/ fragment shape (what ci-docs.yml runs on every PR; --self-test)
-python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429); rules in docs/changelog.d/README.md
+python scripts\check_changelog_fragments.py --base origin/main   # ALSO: behaviour files changed => a fragment exists (#429), and the branch ADDS at most one (#1096); rules in docs/changelog.d/README.md
+python scripts\revert_check.py <src files> -- <test command>   # revert-check (#1075): saves the fix under this worktree's own git dir, reverts ONLY the named files, expects the tests RED (exit 0), restores and verifies byte-exact; 10 = stayed green, 11 = no diff, 12 = restore mismatch (patch path printed), 13 = untracked file or git failure. Never the shared scratchpad, never `git checkout -- .`
 python scripts\check_repo_hygiene.py        # legacy/clair is not tracked; AGENTS.md exists and stays under 20 lines (#449)
 python scripts\check_actions_pinned.py       # every workflow `uses:` is a 40-char commit SHA with a `# vX.Y.Z` comment; local and docker:// are exempt (#485). Dependabot's github-actions entry bumps SHA and comment together
 python scripts\check_em_dash.py              # no em dash in user-facing copy: docs/user_guide, *.resw, ISSUE_TEMPLATE, README.md (#425)

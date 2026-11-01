@@ -190,3 +190,55 @@ def test_base_mode_with_an_unknown_ref_is_a_usage_error_not_a_pass(tmp_path):
         check=False,
     )
     assert proc.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# #1096: a branch adds at most ONE fragment
+# ---------------------------------------------------------------------------
+
+FRAG_B = "docs/changelog.d/fix-1-x-r2.md"
+
+
+def test_two_added_fragments_are_reported_naming_both():
+    problem = ccf.extra_fragments([("A", FRAG), ("A", FRAG_B)])
+    assert problem is not None
+    assert FRAG in problem
+    assert FRAG_B in problem
+    assert "keep one" in problem
+
+
+def test_one_added_plus_one_modified_fragment_passes():
+    assert ccf.extra_fragments([("A", FRAG), ("M", FRAG_B)]) is None
+
+
+def test_one_added_fragment_and_zero_fragments_pass():
+    assert ccf.extra_fragments([("A", FRAG)]) is None
+    assert ccf.extra_fragments([("M", "worker/src/a.py")]) is None
+    assert ccf.extra_fragments([]) is None
+
+
+def test_added_readme_is_not_a_fragment():
+    assert ccf.extra_fragments([("A", FRAG), ("A", "docs/changelog.d/README.md")]) is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_base_mode_fails_on_two_added_fragments_end_to_end(tmp_path):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "T")
+    (tmp_path / "README.txt").write_text("x\n", encoding="utf-8", newline="\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    (tmp_path / "docs" / "changelog.d").mkdir(parents=True)
+    for name in ("fix-1-x.md", "fix-1-x-r2.md"):
+        (tmp_path / "docs" / "changelog.d" / name).write_text("- changed x\n", encoding="utf-8", newline="\n")
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "check_changelog_fragments.py"), "--root", str(tmp_path), "--base", "main"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "fix-1-x.md" in proc.stderr
+    assert "fix-1-x-r2.md" in proc.stderr
