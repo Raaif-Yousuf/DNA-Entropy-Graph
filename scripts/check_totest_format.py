@@ -20,7 +20,7 @@ The row format has no date column -- the sha in column 2 already IS a date,
 by way of the commit it names. A row's age is the age of the commit that
 closed it: how long the behaviour has gone unproven since the issue closed,
 not since someone happened to type the row. This also means age falls
-naturally out of validating the sha in the first place (one `git show` gets
+naturally out of validating the sha in the first place (one batched `git cat-file --batch` call for the whole queue, #1092, gets
 both the "is this a real commit" answer and its date), rather than needing
 a second, hand-maintained timestamp that could drift from the sha next to
 it.
@@ -49,7 +49,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 TOTEST_RELATIVE = "docs/ToTest.md"
@@ -213,6 +213,11 @@ def commit_date(root: Path, sha: str) -> datetime | None:
         return None
 
 
+class GitBatchError(RuntimeError):
+    """The batched `git cat-file` call itself failed (non-zero exit or a truncated stream), as opposed to a sha that is
+    simply not a commit."""
+
+
 def resolve_commit_dates(root: Path, shas: list[str]) -> dict[str, datetime | None]:
     """#1092: ONE `git cat-file --batch` process for every distinct sha (the per-row `cat-file -e` + `show` pair was
     ~390 spawns on the real queue, 220 s under load). Feeds `<sha>^{commit}` on stdin and reads each commit's author
@@ -224,26 +229,34 @@ def resolve_commit_dates(root: Path, shas: list[str]) -> dict[str, datetime | No
     if not unique:
         return out
     payload = "".join(f"{sha}^{{commit}}\n" for sha in unique).encode("ascii")
-    timeout = max(15.0, 15.0 + 0.5 * len(unique))  # the old 15 s bound was per call; scale it with the batch
+    timeout = 15.0 + 0.5 * len(unique)  # the old 15 s bound was per call; scale it with the batch
     proc = subprocess.run(["git", "cat-file", "--batch"], cwd=root, input=payload, capture_output=True, timeout=timeout)
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise GitBatchError(f"git cat-file failed: {detail[0][:200] if detail else f'exit {proc.returncode}'}")
     data = proc.stdout
     pos = 0
-    for sha in unique:
+    for done, sha in enumerate(unique):
         nl = data.find(b"\n", pos)
         if nl < 0:
-            break
+            raise GitBatchError(f"git cat-file failed: output truncated after {done} of {len(unique)} records")
         header = data[pos:nl].decode("utf-8", errors="replace").split()
         pos = nl + 1
         if len(header) != 3 or header[1] != "commit" or not header[2].isdigit():
             continue  # "<input> missing" / "ambiguous": no body follows
         size = int(header[2])
+        if pos + size > len(data):
+            raise GitBatchError(f"git cat-file failed: output truncated inside record {done + 1} of {len(unique)}")
         body = data[pos : pos + size].decode("utf-8", errors="replace")
         pos += size + 1  # the object body is followed by one LF
         out[sha] = None
-        m = re.search(r"^author .*> (\d+) ([+-])(\d{2})(\d{2})$", body, re.MULTILINE)
+        m = re.search(r"^author .*> (\d+) [+-]\d{4}$", body, re.MULTILINE)
         if m:
-            offset = (int(m.group(3)) * 60 + int(m.group(4))) * 60 * (1 if m.group(2) == "+" else -1)
-            out[sha] = datetime.fromtimestamp(int(m.group(1)), tz=timezone(timedelta(seconds=offset)))
+            # The tz offset is irrelevant to a whole-days age, so read the instant as UTC (a hostile +9900 cannot raise).
+            try:
+                out[sha] = datetime.fromtimestamp(int(m.group(1)), UTC)
+            except (ValueError, OverflowError, OSError):
+                out[sha] = None
     return out
 
 
@@ -305,7 +318,11 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
             row_sha = extract_sha(row.cells[1])
             if row_sha is not None:
                 wanted.append(row_sha)
-    dates = resolve_commit_dates(root, wanted)
+    git_error: str | None = None
+    try:
+        dates = resolve_commit_dates(root, wanted)
+    except GitBatchError as exc:
+        dates, git_error = {}, str(exc)
     for row in rows:
         shape_problems = validate_row_shape(row)
         problems.extend(shape_problems)
@@ -314,8 +331,8 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
 
         sha_cell = row.cells[1]
         sha = extract_sha(sha_cell)
-        if sha is None:
-            continue  # already reported by validate_row_shape
+        if sha is None or git_error is not None:
+            continue  # no sha: already reported by validate_row_shape; git failed: reported once below
 
         if sha not in dates:
             problems.append(f"L{row.line_no}: sha '{sha}' is not a commit this repo has (git cat-file -e failed)")
@@ -333,6 +350,8 @@ def check(root: Path, max_age_days: int, now: datetime | None = None) -> list[st
                 "-- drain it (verify and delete, or reopen the issue)"
             )
 
+    if git_error is not None:
+        problems.append(git_error)
     return problems
 
 
@@ -471,6 +490,13 @@ def self_test() -> bool:
             ok = False
         else:
             print("ok    commit_date reads a real commit's author date")
+
+        batch = resolve_commit_dates(root, [sha, "0000000deadbeef0000000deadbeef00000000"])
+        if batch.get(sha) != dt or "0000000deadbeef0000000deadbeef00000000" in batch:
+            print(f"FAIL resolve_commit_dates: expected the real commit dated and the bogus sha absent, got {batch}")
+            ok = False
+        else:
+            print("ok    resolve_commit_dates batches a real and a bogus sha in one call")
 
         (root / "docs").mkdir()
         (root / "docs" / "ToTest.md").write_text(_GOOD_TABLE.format(sha=sha), encoding="utf-8")

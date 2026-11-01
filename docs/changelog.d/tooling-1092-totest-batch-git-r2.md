@@ -1,0 +1,1 @@
+- `check_totest_format`: a failed or truncated batched git call is now one clear problem instead of "not a commit" per row; a hostile author timestamp or timezone yields "could not read a date" instead of a traceback (#1092, review round 2).
