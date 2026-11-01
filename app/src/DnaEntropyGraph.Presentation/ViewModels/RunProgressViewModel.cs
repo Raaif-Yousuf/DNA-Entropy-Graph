@@ -419,6 +419,22 @@ public sealed partial class RunProgressViewModel : ObservableObject
     // Hard Rule 13: the page text for a worker stage comes from Resources.resw; an unknown stage gets the neutral line, never the raw id, and never an input or file name.
     private string ProgressText(ProgressEvent progress) => progress.Stage switch
     {
+        // Issue #177: the worker's own cache field, never the run history. A miss means the model is about to be downloaded (the long wait), so it is said BEFORE the wait;
+        // a run with no cache field (This PC, the mock predictor) never claims a cloud cache.
+        WorkerStages.Installing => _strings.GetString("ProgressInstalling"),
+        // "unavailable" (the restore threw; the loader downloads from Hugging Face, the same long wait as a miss) has its own line at both stages, so the earlier "looking in your cloud storage" never goes stale.
+        WorkerStages.RestoringCache => progress.Cache switch
+        {
+            "miss" => _strings.GetString("ProgressCacheFirstRun"),
+            "hit" => _strings.GetString("ProgressCacheWarm"),
+            "unavailable" => _strings.GetString("ProgressCacheUnavailable"),
+            _ => _strings.GetString("ProgressRestoringCache"),
+        },
+        // "hit" at model-loading: the saved copy was restored and the loader is reading it from the computer's own disk, so the warm line is still true. "saving": the download is over and a copy is being saved to the bucket.
+        WorkerStages.ModelLoading when progress.Cache == "hit" => _strings.GetString("ProgressCacheWarm"),
+        WorkerStages.ModelLoading when progress.Cache == "saving" => _strings.GetString("ProgressCacheSaving"),
+        WorkerStages.ModelLoading when progress.Cache == "miss" => _strings.GetString("ProgressCacheFirstRun"),
+        WorkerStages.ModelLoading when progress.Cache == "unavailable" => _strings.GetString("ProgressCacheUnavailable"),
         WorkerStages.ModelLoading => _strings.GetString("ProgressModelLoading"),
         WorkerStages.Booting => _strings.GetString("ProgressBooting"),
         WorkerStages.Running when progress.Window is { } window && progress.Windows is { } windows

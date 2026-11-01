@@ -227,13 +227,29 @@ class _SharedPredictor:
         status.update(stage="restoring-cache")
         try:
             if not is_cached(store, model_id):
+                # Issue #177: the structured twin of the notice below. It stays in status.json through
+                # model-loading (the long download), until the next stage that sets its own detail.
+                # Only when this computer holds no weights either: a warm local HF dir (a kept-alive
+                # VM) downloads nothing, so "miss" would say a download is happening that is not.
+                # A scan that fails reports nothing rather than guess.
+                try:
+                    local_empty = not snapshot_tree(hf_dir)
+                except OSError:
+                    local_empty = False
+                if local_empty:
+                    status.update(detail={"cache": "miss"})
                 status.notice(
                     f"model weights for {model_id} are not in the bucket cache; "
                     "the model loader will download them from Hugging Face"
                 )
                 return False
+            # Issue #177: "hit" is written BEFORE the restore (it can copy gigabytes), so the page
+            # says the saved copy is being reused for as long as that takes; a restore that then
+            # fails overwrites it below.
+            status.update(detail={"cache": "hit"})
             count = restore_from_cache(store, model_id, hf_dir)
         except Exception as exc:  # never fail the job over the cache
+            status.update(detail={"cache": "unavailable"})
             status.notice(
                 f"model weights for {model_id} could not be restored from the cache ({exc}); "
                 "downloading from Hugging Face instead"
@@ -262,11 +278,15 @@ class _SharedPredictor:
                 return
             if not snapshot_tree(hf_dir):
                 return  # nothing was downloaded
+            # Issue #177: the download is over and the copy is being saved; "miss" would now be untrue.
+            status.update(detail={"cache": "saving"})
             status.notice(f"mirroring model weights for {model_id} to the bucket cache")
             count = save_to_cache(
                 store, model_id, hf_dir, should_stop=self._cancel.poll if self._cancel else None
             )
         except Exception as exc:
+            # The save is over (it failed): "saving" would stay on screen until the next stage.
+            status.update(detail={})
             status.notice(
                 f"model weights for {model_id} could not be mirrored to the bucket cache ({exc}); "
                 "the next job will download them again"

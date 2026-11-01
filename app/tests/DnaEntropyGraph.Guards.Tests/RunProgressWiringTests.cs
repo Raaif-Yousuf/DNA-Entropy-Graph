@@ -116,6 +116,57 @@ public sealed class RunProgressWiringTests : IDisposable
         seenFraction.ShouldBe(0.4, 1e-9);
     }
 
+    [Theory]
+    [InlineData("miss", "ProgressCacheFirstRun")]
+    [InlineData("unavailable", "ProgressCacheUnavailable")]
+    [InlineData("hit", "ProgressCacheWarm")]
+    [InlineData("saving", "ProgressCacheSaving")]
+    public async Task A_status_json_with_detail_cache_at_model_loading_reaches_the_run_page_as_that_caches_resw_line_through_the_real_container(string cache, string expectedKey)
+    {
+        // Issue #177, wired-to-nothing: the worker's detail.cache is read by WorkerStatusReader, carried by WorkerProgressTracker and picked by RunProgressViewModel; each hop is
+        // unit-tested alone. Observable: with the Cache plumbing dropped the page shows the plain model-loading line on every row.
+        var worker = new FakeWorkerProcess();
+        var services = new ServiceCollection();
+        services.AddDnaEntropyGraph(appDataRoot: _root, cloud: CloudBackend.Fake);
+        services.AddSingleton<IProcessLauncher>(new ScriptedLauncher(worker, jobDir =>
+            File.WriteAllText(
+                Path.Combine(jobDir, "status.json"),
+                "{\"stage\":\"model-loading\",\"percent\":0,\"detail\":{\"cache\":\"" + cache + "\"},\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}")));
+        await using var provider = services.BuildServiceProvider();
+
+        var staged = Path.Combine(_root, "staged", "locus.fasta");
+        Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+        await File.WriteAllTextAsync(staged, ">locus\nACGTACGTACGT\n", TestContext.Current.CancellationToken);
+        await provider.GetRequiredService<IRunRepository>().UpsertAsync(new RunRecord(JobId, JobPhase.Draft, DateTimeOffset.UtcNow, Target: RunTargets.LocalRecord), CancellationToken.None);
+        var page = provider.GetRequiredService<RunProgressViewModel>();
+        page.JobId = JobId;
+        var strings = provider.GetRequiredService<IStringResourceProvider>();
+        var expected = strings.GetString(expectedKey);
+        (expected == expectedKey).ShouldBeFalse("the resw key must exist and resolve, or this test proves nothing");
+        (expected == strings.GetString("ProgressModelLoading")).ShouldBeFalse("the lines under test must differ from the plain one");
+
+        var run = provider.GetRequiredService<LocalJobRunner>().RunAsync(
+            new LocalJobRequest(
+                JobId,
+                new RunOptions { ModelId = "mock", RunTarget = "This PC", Predictor = PredictorSelection.MockTestPredictor },
+                new StagedInput(staged, "locus.fasta"),
+                "install-1",
+                "0.0.1",
+                Path.Combine(_root, "out")),
+            CancellationToken.None);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (page.StatusDetailText != expected && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        var seen = page.StatusDetailText;
+        worker.End(1);
+        await run;
+
+        seen.ShouldBe(expected);
+    }
+
     [Fact]
     public async Task A_cloud_run_whose_worker_status_stage_advances_moves_the_run_pages_detail_line_through_the_real_container()
     {
