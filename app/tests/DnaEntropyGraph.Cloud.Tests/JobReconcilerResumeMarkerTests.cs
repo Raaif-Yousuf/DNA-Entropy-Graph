@@ -71,4 +71,26 @@ public sealed class JobReconcilerResumeMarkerTests
         env.Row("job-1043-c").OutputDir.ShouldBe(victim, "a folder this run made is the one it resumes into");
         Directory.EnumerateFiles(victim, "*.bedgraph", SearchOption.AllDirectories).ShouldNotBeEmpty();
     }
+
+    [Fact]
+    public async Task A_resume_into_a_fresh_folder_drops_the_kept_aside_count_of_the_folder_it_left()
+    {
+        // Issue #1059 review: attempt 1 set a file aside in the old folder (row mark 1); attempt 2 cannot reuse that folder, so the new one holds no aside file.
+        var env = new JobReconcilerTests.Env();
+        var old = Path.Combine(Path.GetTempPath(), "deg-1059r2-" + Guid.NewGuid().ToString("N"), "old-folder");
+        Directory.CreateDirectory(old);
+        await env.SeedAsync("job-1059-r2", JobPhase.Running, vm: true, tweak: row =>
+        {
+            var options = RunOptionsJson.TryDeserialize(row.OptionsJson)!;
+            return row with { OptionsJson = RunOptionsJson.Serialize(options with { OutputFolder = null }), OutputDir = old, ErrorDetail = KeptAsideDetail.Append(null, 1) };
+        });
+
+        var outcome = (await env.Reconciler().ReattachAsync(CancellationToken.None)).Single(o => o.JobId == "job-1059-r2");
+
+        outcome.FinalPhase.ShouldBe(JobPhase.Completed, outcome.ErrorCode);
+        var row = env.Row("job-1059-r2");
+        row.OutputDir.ShouldNotBe(old, "vacuity: the run moved to a fresh folder");
+        KeptAsideDetail.TryRead(row.ErrorDetail).ShouldBe(0, "the fresh folder holds no renamed file");
+        row.ErrorCode.ShouldNotBe(RunErrorCodes.ChangedFilesKeptAside);
+    }
 }
