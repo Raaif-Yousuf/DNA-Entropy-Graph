@@ -3687,4 +3687,19 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="ProgressCacheWarm" xml:space="preserve">
     <value>Reusing the analysis model that was saved by an earlier run.</value>
   </data>
+  <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
+    <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
+  </data>
+  <data name="PaletteChoices.Header" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
+  </data>
+  <data name="PaletteDefaultRadio.Content" xml:space="preserve">
+    <value>Default (easy to tell apart with color blindness)</value>
+  </data>
+  <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
+    <value>High contrast (stronger colors on the background)</value>
+  </data>
+  <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
+  </data>
 </root>

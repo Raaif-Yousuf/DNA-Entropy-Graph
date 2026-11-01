@@ -1,4 +1,6 @@
 using System.Windows.Input;
+using DnaEntropyGraph.App.Services;
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Viewer;
 using Microsoft.UI.Xaml;
@@ -79,7 +81,7 @@ public sealed class EntropyOverviewChart : UserControl
         if (_span is null)
         {
             _span = _plot.Plot.Add.HorizontalSpan(start, now);
-            _span.FillColor = ScottPlot.Colors.Orange.WithAlpha(0.25);
+            _span.FillColor = ScottPlot.Color.FromHex(AppPalette.Current.Hex(TrackRole.Marker, ActualTheme == ElementTheme.Dark)).WithAlpha(0.25);
         }
 
         _span.X1 = Math.Min(start, now);
@@ -132,7 +134,8 @@ public sealed class EntropyOverviewChart : UserControl
             return;
         }
 
-        _plot.Reset(EntropyPlotBuilder.Build(contig, dark: ActualTheme == ElementTheme.Dark));
+        var dark = ActualTheme == ElementTheme.Dark;
+        _plot.Reset(EntropyPlotBuilder.Build(contig, dark, AppPalette.Current.For(dark)));
         _plot.Refresh();
     }
 }

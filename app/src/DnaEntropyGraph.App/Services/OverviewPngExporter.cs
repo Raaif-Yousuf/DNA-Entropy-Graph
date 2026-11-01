@@ -1,4 +1,5 @@
 using DnaEntropyGraph.App.Controls;
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Presentation.Services;
 
@@ -11,14 +12,25 @@ public sealed class OverviewPngExporter : IOverviewImageExporter
     private const int Height = 480;
 
     private readonly Action<ScottPlot.Plot, string, int, int> _save;
+    private readonly ITrackPaletteProvider _palettes;
 
-    public OverviewPngExporter()
-        : this((plot, path, width, height) => plot.SavePng(path, width, height))
+    /// <summary>Issue #195: the palette is read from <paramref name="palettes"/> at each export; without one, the default.</summary>
+    public OverviewPngExporter(ITrackPaletteProvider? palettes = null)
+        : this((plot, path, width, height) => plot.SavePng(path, width, height), palettes)
     {
     }
 
     /// <summary>Takes the save step as a seam so a test can make it fail half way.</summary>
-    public OverviewPngExporter(Action<ScottPlot.Plot, string, int, int> save) => _save = save;
+    public OverviewPngExporter(Action<ScottPlot.Plot, string, int, int> save, ITrackPaletteProvider? palettes = null)
+    {
+        _save = save;
+        _palettes = palettes ?? new FixedPalette();
+    }
+
+    private sealed class FixedPalette : ITrackPaletteProvider
+    {
+        public TrackPalette Current => TrackPalettes.Default;
+    }
 
     public bool Export(EntropyContig contig, OverviewImageLabels labels, string path)
     {
@@ -26,7 +38,7 @@ public sealed class OverviewPngExporter : IOverviewImageExporter
         var existed = Path.Exists(path);
         try
         {
-            var plot = EntropyPlotBuilder.Build(contig, dark: false);
+            var plot = EntropyPlotBuilder.Build(contig, dark: false, _palettes.Current.For(dark: false));
             plot.FigureBackground.Color = ScottPlot.Colors.White;
             plot.DataBackground.Color = ScottPlot.Colors.White;
             plot.Title(labels.Title);

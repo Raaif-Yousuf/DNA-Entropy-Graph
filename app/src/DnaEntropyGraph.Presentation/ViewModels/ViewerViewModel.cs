@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Tracks;
 using DnaEntropyGraph.Core.Viewers;
 using DnaEntropyGraph.Presentation.Services;
@@ -57,6 +58,9 @@ public sealed partial class ViewerViewModel : ObservableObject
     private string? _loadJson;
     private bool _pageReady;
     private bool _dark;
+
+    // Issue #195: read from the provider each time a colour is needed, never cached.
+    private readonly ITrackPaletteProvider? _palettes;
     private ViewerLocus? _locus;
     private bool _keysOn;
 
@@ -129,8 +133,10 @@ public sealed partial class ViewerViewModel : ObservableObject
         IEntropyOverviewSource overviewSource,
         long maxFastaBytes = ViewerLimits.MaxFastaBytes,
         IFastaIndexStore? indexStore = null,
-        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes)
+        long maxIndexedBytes = ViewerLimits.MaxIndexedFastaBytes,
+        ITrackPaletteProvider? palettes = null)
     {
+        _palettes = palettes;
         _indexStore = indexStore;
         _maxIndexedBytes = maxIndexedBytes;
         _probe = probe;
@@ -257,6 +263,11 @@ public sealed partial class ViewerViewModel : ObservableObject
         }
     }
 
+    // The palette is the one setting read at use time: a change in Settings shows the next time a run is opened.
+    // The viewer always gets the palette's light-theme colours, in the dark theme too: dark.css turns the page dark with an invert and
+    // hue-rotate filter, which keeps hue and flips lightness (TrackPalettes.ForViewer, validated through that filter).
+    private PaletteColors CurrentColors() => (_palettes?.Current ?? TrackPalettes.Default).ForViewer();
+
     private void OnOptionalTrackChanged(ViewerOptionalTrack track)
     {
         if (_settingTracks || !AreSmoothedTracksEnabled)
@@ -273,7 +284,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             {
                 cmd = "track",
                 op = "add",
-                config = new { type = "wig", format = track.Format, name = track.Name, url = track.Url, min = 0, max = 2, autoscale = false },
+                config = new { type = "wig", format = track.Format, name = track.Name, url = track.Url, min = 0, max = 2, autoscale = false, color = CurrentColors().Smoothed },
             });
         }
         else
@@ -387,7 +398,7 @@ public sealed partial class ViewerViewModel : ObservableObject
             return;
         }
 
-        var plan = IgvLoadPlanner.Plan(runFolder, _maxFastaBytes);
+        var plan = IgvLoadPlanner.Plan(runFolder, _maxFastaBytes, colors: CurrentColors());
         if (plan.Failure == IgvPlanFailure.SequenceTooLarge && _indexStore is not null && IsIndexable(plan.FastaPath))
         {
             // Issue #497: a long FASTA gets a .fai in the app's own folder; building it can take seconds, so not on this thread.
@@ -408,7 +419,8 @@ public sealed partial class ViewerViewModel : ObservableObject
         IgvLoadPlan plan;
         try
         {
-            plan = await Task.Run(() => IgvLoadPlanner.PlanCancellable(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes, cancellationToken), CancellationToken.None);
+            var colors = CurrentColors();
+            plan = await Task.Run(() => IgvLoadPlanner.PlanCancellable(runFolder, _maxFastaBytes, _indexStore, _maxIndexedBytes, cancellationToken, colors), CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -547,7 +559,7 @@ public sealed partial class ViewerViewModel : ObservableObject
         var seams = Contigs.Where(c => c.Seam is not null).Select(c => new { chr = c.Name, pos = c.Seam!.Value }).ToArray();
         if (seams.Length > 0)
         {
-            Send(new { cmd = "seams", label = _strings.GetString("ViewerSeamLabel"), seams });
+            Send(new { cmd = "seams", label = _strings.GetString("ViewerSeamLabel"), color = CurrentColors().MarkerRgba(0.6), seams });
         }
     }
 

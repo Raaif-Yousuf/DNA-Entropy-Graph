@@ -3,6 +3,7 @@ using DnaEntropyGraph.Core.Cloud;
 using DnaEntropyGraph.Core.Cost;
 using DnaEntropyGraph.Core.LocalEngine;
 using DnaEntropyGraph.Core.Net;
+using DnaEntropyGraph.Core.Palettes;
 using DnaEntropyGraph.Core.Presets;
 using DnaEntropyGraph.Core.Viewers;
 
@@ -36,6 +37,7 @@ public static class SettingsCatalog
     public static IReadOnlyList<ExportedSetting> Exported { get; } =
     [
         new("Theme", "SettingsKeyLabel_Theme", v => v is "Light" or "Dark" or "System"),
+        new(TrackPalettes.SettingKey, "SettingsKeyLabel_TrackPalette", v => TrackPalettes.All.Any(p => p.Id == v)),
         new("notify_when_done", "SettingsKeyLabel_NotifyWhenDone", Bool),
         new("open_folder_when_done", "SettingsKeyLabel_OpenFolderWhenDone", Bool),
         new("open_results_when_done", "SettingsKeyLabel_OpenResultsWhenDone", Bool),

@@ -193,6 +193,12 @@ internal sealed class GoogleComputeGateway : IComputeGateway
             throw new CloudOperationException(new CloudError("VM_NOT_STOPPED", null, $"The VM '{existingVmName}' is '{instance.Status}', not stopped."), CloudErrorKind.Other);
         }
 
+        // Issue #476: the app has marked this VM for ending (an expired Keep-alive window). A mark written after this read moves the label fingerprint, so the claim below fails with a 412.
+        if (VmEnding.IsEnding(instance.Labels is null ? null : new Dictionary<string, string>(instance.Labels), _options.TimeProvider.GetUtcNow()))
+        {
+            throw new CloudOperationException(new CloudError("VM_ENDING", null, $"The VM '{existingVmName}' is being ended for an expired keep-alive window, so it was not reused."), CloudErrorKind.Other);
+        }
+
         // A reuse that cannot name the boot disk must not start: skipping would leave the old job's labels on a billed disk (Hard Rules 9-10).
         var bootDisk = ParseBootDisk(instance)
             ?? throw new CloudOperationException(new CloudError("VM_NO_BOOT_DISK", null, $"The VM '{existingVmName}' lists no boot disk this app can relabel, so it was not reused."), CloudErrorKind.Other);
@@ -583,6 +589,74 @@ internal sealed class GoogleComputeGateway : IComputeGateway
     {
         using var _account = CallAccount.Use(scope);
         return GetAsync(scope.ProjectId, vmName, zone, cancellationToken);
+    }
+
+    /// <summary>
+    /// Issue #476: reads the instance in <paramref name="scope"/>, and when it still carries <paramref name="jobId"/> writes <see cref="VmEnding.LabelKey"/> with the label fingerprint just
+    /// read (<c>instances.setLabels</c>), so a run that relabelled the VM since fails this write (412) and a run that relabels it after fails its own claim. Null when the VM
+    /// is gone, another job's, or the write lost the race. A mark still inside <see cref="VmEnding.Window"/> is kept as it is (no second write). THEORY (unverified, ToTest #476): Compute accepts an extra label on a stopped or running instance.
+    /// </summary>
+    public async Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(vmName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+        var project = scope.ProjectId;
+        using var _account = CallAccount.Use(scope);
+        ComputeData.Instance instance;
+        try
+        {
+            instance = await CallAsync("compute.instances.get", token => _service.Instances.Get(project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+        }
+        catch (CloudOperationException ex) when (IsGoneOrMoved(ex))
+        {
+            return null;
+        }
+
+        if (!OwnedBy(instance.Labels, jobId))
+        {
+            return null;
+        }
+
+        if (!VmEnding.IsEnding(new Dictionary<string, string>(instance.Labels), _options.TimeProvider.GetUtcNow()))
+        {
+            var target = new Dictionary<string, string>(instance.Labels) { [VmEnding.LabelKey] = VmEnding.Stamp(_options.TimeProvider.GetUtcNow()) };
+            var body = new ComputeData.InstancesSetLabelsRequest { Labels = target, LabelFingerprint = instance.LabelFingerprint };
+            try
+            {
+                var write = await CallAsync("compute.instances.setLabels", token => _service.Instances.SetLabels(body, project, zone, vmName).ExecuteAsync(token), cancellationToken).ConfigureAwait(false);
+                await AwaitOperationAsync(project, zone, write, goneIsDone: false, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CloudOperationException ex) when (IsGoneOrMoved(ex))
+            {
+                return null; // the labels moved (another run claimed the VM) or the VM is gone: not ours to end
+            }
+        }
+
+        return await GetAsync(project, vmName, zone, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The VM is gone (404) or its labels moved under the write (412). Read off the HTTP status of a direct call AND off the code of a failed polled operation, which carries the same facts under its own spelling.</summary>
+    /// <remarks>
+    /// Round 4 of #476: a 412 is "the labels moved" only when it positively reads as a failed precondition (the shared <see cref="CloudErrorClassifier.IsPreconditionConflict"/> rule); an org-policy
+    /// denial is a 412 / CONDITION_NOT_MET too, and treating it as a lost race hid a refused fence write for ever. Anything that names an organization policy is rethrown (it classifies as org_policy).
+    /// </remarks>
+    private static bool IsGoneOrMoved(CloudOperationException ex)
+    {
+        if (ex.Error.HttpStatus == 404 || ex.Error.Code == "RESOURCE_NOT_FOUND")
+        {
+            return true;
+        }
+
+        var message = ex.Error.Message ?? string.Empty;
+        if (message.Contains("constraints/", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("org policy", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("organization policy", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Round 5 finding 2: the classifier is the single source. A bare CONDITION_NOT_MET with no HTTP 412 classifies as org_policy there, so it is NOT a lost race here (it rethrows as org_policy).
+        return ex.Kind != CloudErrorKind.OrgPolicy && CloudErrorClassifier.IsPreconditionConflict(ex.Error.HttpStatus, ex.Error.Code, message);
     }
 
     /// <summary>
