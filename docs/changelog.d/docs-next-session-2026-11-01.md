@@ -1,0 +1,1 @@
+- NEXT_SESSION.md: handoff after the 2026-10-30/11-01 three-layer wave (repair list, held stacked branches, owner asks).
