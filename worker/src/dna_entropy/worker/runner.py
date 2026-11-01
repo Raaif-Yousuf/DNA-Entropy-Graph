@@ -227,13 +227,29 @@ class _SharedPredictor:
         status.update(stage="restoring-cache")
         try:
             if not is_cached(store, model_id):
+                # Issue #177: the structured twin of the notice below. It stays in status.json through
+                # model-loading (the long download), until the next stage that sets its own detail.
+                # Only when this computer holds no weights either: a warm local HF dir (a kept-alive
+                # VM) downloads nothing, so "miss" would say a download is happening that is not.
+                # A scan that fails reports nothing rather than guess.
+                try:
+                    local_empty = not snapshot_tree(hf_dir)
+                except OSError:
+                    local_empty = False
+                if local_empty:
+                    status.update(detail={"cache": "miss"})
                 status.notice(
                     f"model weights for {model_id} are not in the bucket cache; "
                     "the model loader will download them from Hugging Face"
                 )
                 return False
+            # Issue #177: "hit" is written BEFORE the restore (it can copy gigabytes), so the page
+            # says the saved copy is being reused for as long as that takes; a restore that then
+            # fails overwrites it below.
+            status.update(detail={"cache": "hit"})
             count = restore_from_cache(store, model_id, hf_dir)
         except Exception as exc:  # never fail the job over the cache
+            status.update(detail={"cache": "unavailable"})
             status.notice(
                 f"model weights for {model_id} could not be restored from the cache ({exc}); "
                 "downloading from Hugging Face instead"
@@ -262,11 +278,15 @@ class _SharedPredictor:
                 return
             if not snapshot_tree(hf_dir):
                 return  # nothing was downloaded
+            # Issue #177: the download is over and the copy is being saved; "miss" would now be untrue.
+            status.update(detail={"cache": "saving"})
             status.notice(f"mirroring model weights for {model_id} to the bucket cache")
             count = save_to_cache(
                 store, model_id, hf_dir, should_stop=self._cancel.poll if self._cancel else None
             )
         except Exception as exc:
+            # The save is over (it failed): "saving" would stay on screen until the next stage.
+            status.update(detail={})
             status.notice(
                 f"model weights for {model_id} could not be mirrored to the bucket cache ({exc}); "
                 "the next job will download them again"
@@ -341,6 +361,15 @@ def _measure_batch_total_nt(store: Blobstore, manifest: JobManifest, tmp: Path) 
     return total
 
 
+@dataclasses.dataclass
+class _WindowCounts:
+    """Per-input window progress for status.json (issue #1086)."""
+
+    done: int = 0
+    total: int = 0
+    contig: str | None = None
+
+
 def _run_one_input(
     store: Blobstore,
     manifest: JobManifest,
@@ -350,6 +379,8 @@ def _run_one_input(
     cancel: CancelWatcher,
     shared_predictor: _SharedPredictor,
     deadline: _RunDeadline,
+    input_index: int = 0,
+    n_inputs: int = 1,
 ) -> InputResult:
     """Stage, run, and upload results for one manifest input. A cancellation or any other
     failure seen BEFORE this input even starts propagates out (job-level: stop the whole
@@ -363,15 +394,40 @@ def _run_one_input(
     cancel.check_or_raise()  # pre-start: nothing has run yet, nothing to upload if this fires
     deadline.check_or_raise()
 
+    # Issue #1086: overall percent = equal share per input, windows-weighted inside the input,
+    # never 100 before the job is done (the final 100.0 is written at the terminal state).
+    window_counts = _WindowCounts()
+
+    def _progress_detail() -> dict:
+        detail: dict = {"input": input_spec.id}
+        if window_counts.contig is not None:
+            detail["contig"] = window_counts.contig
+        if window_counts.total:
+            detail["window"] = window_counts.done
+            detail["windows"] = window_counts.total
+        return detail
+
+    def _percent() -> float:
+        frac = window_counts.done / window_counts.total if window_counts.total else 0.0
+        return min(99.0, 100.0 * (input_index + min(frac, 1.0)) / max(n_inputs, 1))
+
+    def _on_plan(total: int) -> None:
+        window_counts.total = total
+
     def _on_window() -> None:
-        status.mark_progress()  # #522: the compute thread is alive and moving, unlike the heartbeat thread
+        window_counts.done += 1
+        if window_counts.total:  # an out-of-memory retry can run more windows than planned
+            window_counts.done = min(window_counts.done, window_counts.total)
+        # #522: the compute thread is alive and moving, unlike the heartbeat thread
+        status.mark_progress(percent=_percent(), detail=_progress_detail())
         cancel.check_or_raise()
         deadline.check_or_raise()
 
     def _on_contig(contig) -> None:
         cancel.check_or_raise()
         deadline.check_or_raise()
-        status.update(detail={"input": input_spec.id, "contig": contig.name})
+        window_counts.contig = contig.name
+        status.update(percent=_percent(), detail=_progress_detail())
 
     # local_out is computed before the try block (just a path join, no I/O) so the except
     # branches below can always find it, even if staging the input itself is what failed.
@@ -392,11 +448,12 @@ def _run_one_input(
             local_annotation_path=str(staged.local_annotation) if staged.local_annotation else None,
         )
         predictor = shared_predictor.get(cfg, status)
-        status.update(stage="running", detail={"input": input_spec.id})
+        status.update(stage="running", percent=_percent(), detail={"input": input_spec.id})
         result = pipeline.run(
             cfg,
             on_window=_on_window,
             on_contig=_on_contig,
+            on_plan=_on_plan,
             provenance_extra={
                 "input_sha256": hashlib.sha256(local_input.read_bytes()).hexdigest(),
                 **staged.provenance_extra,
@@ -696,10 +753,19 @@ def run_job_outcome(
                 max_total_nt=manifest.limits.max_total_nt,
             )
 
-            for input_spec in manifest.inputs:
+            for input_index, input_spec in enumerate(manifest.inputs):
                 input_results.append(
                     _run_one_input(
-                        store, manifest, input_spec, tmp, status, cancel, shared_predictor, deadline
+                        store,
+                        manifest,
+                        input_spec,
+                        tmp,
+                        status,
+                        cancel,
+                        shared_predictor,
+                        deadline,
+                        input_index,
+                        len(manifest.inputs),
                     )
                 )
                 if cancel.is_cancelled:

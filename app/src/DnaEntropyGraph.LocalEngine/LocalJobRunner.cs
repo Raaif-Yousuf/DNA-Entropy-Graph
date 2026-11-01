@@ -45,6 +45,7 @@ public sealed class LocalJobRunner
     private readonly string _runsDirectory;
     private readonly Action<string, JobPhase>? _onPhaseChanged;
     private readonly IDiagnosticsLog _log;
+    private readonly Action<string, ProgressEvent>? _onProgress;
 
     public LocalJobRunner(
         IProcessLauncher launcher,
@@ -52,8 +53,10 @@ public sealed class LocalJobRunner
         LocalEngineLayout layout,
         string runsDirectory,
         Action<string, JobPhase>? onPhaseChanged = null,
-        IDiagnosticsLog? log = null)
+        IDiagnosticsLog? log = null,
+        Action<string, ProgressEvent>? onProgress = null)
     {
+        _onProgress = onProgress;
         _log = log ?? NullDiagnosticsLog.Instance;
         _launcher = launcher;
         _runs = runs;
@@ -320,13 +323,14 @@ public sealed class LocalJobRunner
         var lastChange = started;
         var sawHeartbeat = false;
         long lastSeq = -1;
+        var progress = new WorkerProgressTracker();
         var configured = request.Options.MaxRunDurationMinutes > 0 ? request.Options.MaxRunDurationMinutes : 240;
         var maxRun = TimeSpan.FromMinutes(configured) + MaxRunMargin;
         while (true)
         {
             var ended = await Task.WhenAny(process.Exited, Task.Delay(PollInterval, Clock, cancellationToken)).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var seq = await ReadHeartbeatAsync(request.JobId, jobDir, lastSeq).ConfigureAwait(false);
+            var seq = await ReadHeartbeatAsync(request.JobId, jobDir, lastSeq, progress).ConfigureAwait(false);
             if (seq != lastSeq)
             {
                 lastSeq = seq;
@@ -365,9 +369,10 @@ public sealed class LocalJobRunner
     }
 
     /// <summary>Reads the heartbeat into the row when it changed; returns the sequence last seen.</summary>
-    private async Task<long> ReadHeartbeatAsync(string jobId, string jobDir, long lastSeq)
+    private async Task<long> ReadHeartbeatAsync(string jobId, string jobDir, long lastSeq, WorkerProgressTracker progress)
     {
         var status = TryReadStatus(Path.Combine(jobDir, "status.json"));
+        PublishProgress(jobId, progress, status);
         if (status?.HeartbeatSeq is not { } seq || seq == lastSeq)
         {
             return lastSeq;
@@ -383,6 +388,25 @@ public sealed class LocalJobRunner
             }).ConfigureAwait(false);
         return seq;
     }
+
+    // Issue #1086: each NEW progress the worker reports goes to the run page; a UI that throws must never end a run.
+    private void PublishProgress(string jobId, WorkerProgressTracker tracker, WorkerStatusSnapshot? status)
+    {
+        if (_onProgress is null || tracker.Next(status) is not { } ev)
+        {
+            return;
+        }
+
+        try
+        {
+            _onProgress(jobId, ev);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warning("local-progress", jobId, ex.GetType().Name);
+        }
+    }
+
     private static WorkerStatusSnapshot? TryReadStatus(string path)
     {
         try

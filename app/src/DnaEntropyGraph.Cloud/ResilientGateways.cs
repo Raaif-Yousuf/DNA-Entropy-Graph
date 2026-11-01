@@ -54,6 +54,11 @@ public sealed class ResilientComputeGateway : IComputeGateway
     public Task<bool> WasPreemptedAsync(CloudScope scope, string vmName, string zone, VmIncarnation incarnation, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.WasPreempted", token => _inner.WasPreemptedAsync(scope, vmName, zone, incarnation, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 
+    // Issue #476: the fence before the app ends a kept VM. Cleanup that stops the meter and a sweep failure must not count against the live-run
+    // breaker, so it bypasses it like stop and delete; a replayed attempt that meets its own already-landed mark returns the VM without a second write.
+    public Task<VmDescriptor?> MarkEndingAsync(CloudScope scope, string vmName, string zone, string jobId, CancellationToken cancellationToken)
+        => _pipeline.ExecuteAsync("Compute.MarkEnding", token => _inner.MarkEndingAsync(scope, vmName, zone, jobId, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
+
     public Task StopVmAsync(CloudScope scope, string vmName, string zone, CancellationToken cancellationToken)
         => _pipeline.ExecuteAsync("Compute.StopVm", token => _inner.StopVmAsync(scope, vmName, zone, token), cancellationToken, bypassBreaker: true, accountSub: scope.AccountSub);
 

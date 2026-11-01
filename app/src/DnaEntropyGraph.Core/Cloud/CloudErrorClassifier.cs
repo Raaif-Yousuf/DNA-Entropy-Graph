@@ -58,7 +58,10 @@ public static partial class CloudErrorClassifier
             return false;
         }
 
+        // Round 6 of #476: a lost label-fingerprint race on Compute is a 412 whose polled-operation code stays the raw CONDITION_NOT_MET and whose message ("Labels fingerprint either
+        // invalid or resource labels have changed") has no "precondition" wording, so the fingerprint wording is a positive signal of its own. A bare CONDITION_NOT_MET without it stays org policy.
         return string.Equals(code, "conditionNotMet", StringComparison.OrdinalIgnoreCase)
+            || lower.Contains("fingerprint", StringComparison.Ordinal)
             || (reasons ?? []).Any(r => string.Equals(r, "conditionNotMet", StringComparison.OrdinalIgnoreCase))
             || lower.Contains("precondition", StringComparison.Ordinal)
             || lower.Contains("pre-condition", StringComparison.Ordinal);

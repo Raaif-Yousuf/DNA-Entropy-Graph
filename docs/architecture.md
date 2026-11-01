@@ -99,6 +99,27 @@ At launch, after the single-instance hand-off, `StartupDataRoot.CheckDatabase` r
 publishes `RunProgressChanged`/`RunPhaseChanged` over `WeakReferenceMessenger` so any page
 can subscribe without the runner needing a reference back to the UI.
 
+**Progress flow (issue #1086)**: `RunProgressChangedMessage` has one sender per runner, both in
+`ServiceRegistration`: `CloudJobRunner.OnProgress` (called by `ResultWaiter` for each poll of the
+worker's `status.json`) and the `onProgress` argument of `LocalJobRunner` (called from its 500 ms
+status poll). Both feed the snapshot through `WorkerProgressTracker` (Core/Contract), which gives an
+event only when the stage, percent or window counts changed, so an unchanged file is not re-sent every
+poll. The event is data (stage id, fraction, window and windows); `RunProgressViewModel` maps it to a
+`Resources.resw` line, with a neutral line for an unknown stage, and ignores an event that arrives after
+the run's terminal phase. The input and contig name are never carried. A run
+reattached after a restart goes through the same `CloudJobRunner`, so it publishes too.
+Progress is published on change only and the run page is a transient ViewModel, so a page created or shown
+again mid-run would miss every earlier event. `RunProgressStore` (Presentation/Services, a singleton that
+the two runner factories build before the first event) keeps the last progress per run, drops it at the
+run's terminal phase and remembers (bounded, 1024 ids) which runs finished so a progress event that
+arrives after the terminal phase (the two come from different threads) is dropped, and
+`RunProgressViewModel` seeds itself from it when its `JobId` is set (on the UI thread: it is set in
+`RunProgressPage.OnNavigatedTo`). `DiResolutionTests` asserts the real container hands the page the store
+and that every `RunProgressChangedMessage` sender sits in a factory that also builds the store.
+`Guards.Tests/MessageHasSenderGuardTests` fails when a messenger message type has a `Register<...>` call or
+an `IRecipient<...>` implementation (comments are stripped first, so a commented-out call does not count)
+and no `Send(new ...)` sender anywhere in `app/src`.
+
 **Implemented (issue #428)**: `JobEngine` delegates a cloud run to `CloudJobRunner`, which
 `ServiceRegistration` registers as a singleton whose phase callback sends
 `RunPhaseChangedMessage` (after the runner has written the phase to `IRunRepository`).

@@ -494,3 +494,17 @@ def test_mark_progress_is_safe_from_many_threads(tmp_path: Path) -> None:
         t.join()
     w._write_status()
     assert _status(w._store)["windowsDone"] == 800
+
+
+def test_mark_progress_writes_first_call_then_throttles_and_carries_percent(tmp_path: Path) -> None:
+    store = LocalBlobstore(tmp_path)
+    w = StatusWriter(store, "job-1", interval_seconds=3600)
+    w.mark_progress(percent=10.0, detail={"window": 1, "windows": 9})
+    assert _status(store)["percent"] == 10.0  # first call: written at once
+    w.mark_progress(percent=20.0, detail={"window": 2, "windows": 9})
+    snap = _status(store)
+    assert snap["percent"] == 10.0  # throttled: in memory only
+    assert snap["windowsDone"] == 1
+    w.update(stage="running")  # any later write carries the in-memory percent
+    assert _status(store)["percent"] == 20.0
+    assert _status(store)["detail"] == {"window": 2, "windows": 9}

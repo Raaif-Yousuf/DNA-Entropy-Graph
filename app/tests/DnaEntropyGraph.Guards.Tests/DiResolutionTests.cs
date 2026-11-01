@@ -90,6 +90,52 @@ public class DiResolutionTests
         }
     }
 
+    [Theory]
+    [InlineData(typeof(DnaEntropyGraph.Core.Cloud.CloudJobRunner))]
+    [InlineData(typeof(DnaEntropyGraph.LocalEngine.LocalJobRunner))]
+    public void A_run_page_made_after_a_runner_published_progress_sees_it_because_the_runner_start_creates_the_store(Type runnerType)
+    {
+        // Issue #1086 review, wired-to-nothing: the store listens from construction. If nothing builds it before the first progress event, a page opened mid-run is blank.
+        // Observable: resolve ONLY the runner (as the app does at launch), publish through the real messenger, and only then ask for the store.
+        using var provider = BuildRealServiceProvider();
+        provider.GetRequiredService(runnerType).ShouldNotBeNull();
+
+        provider.GetRequiredService<IMessenger>().Send(new DnaEntropyGraph.Presentation.Messaging.RunProgressChangedMessage("job-1", new DnaEntropyGraph.Core.Contract.ProgressEvent("running", 0.5, 5, 10)));
+
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.RunProgressStore>().Latest("job-1")!.FractionComplete.ShouldBe(0.5);
+    }
+
+    [Fact]
+    public void The_real_container_gives_the_run_page_the_progress_store_so_a_page_opened_mid_run_is_seeded()
+    {
+        // Issue #1086 review, wired-to-nothing: the store is an optional constructor argument of RunProgressViewModel, so a dropped registration or a
+        // changed parameter would not fail resolution; the page would just stay blank mid-run. Observable: progress sent first, page resolved after.
+        using var provider = BuildRealServiceProvider();
+        provider.GetRequiredService<DnaEntropyGraph.Presentation.Services.RunProgressStore>();
+        provider.GetRequiredService<IMessenger>().Send(new DnaEntropyGraph.Presentation.Messaging.RunProgressChangedMessage("job-1", new DnaEntropyGraph.Core.Contract.ProgressEvent("running", 0.5, 5, 10)));
+
+        var page = provider.GetRequiredService<DnaEntropyGraph.Presentation.ViewModels.RunProgressViewModel>();
+        page.JobId = "job-1";
+
+        page.FractionComplete.ShouldBe(0.5);
+        page.StatusDetailText.ShouldNotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public void Every_RunProgressChangedMessage_sender_sits_in_a_runner_factory_that_also_builds_the_store()
+    {
+        // Issue #1086 review: the store must be listening before the first event. Both senders live in ServiceRegistration (the two runner factories);
+        // each must be matched by one store resolution, and no other file may send the message without joining this guard.
+        var senders = DnaEntropyGraph.Guards.Tests.RepoPaths.AllCSharpFiles
+            .Select(f => (File: f, Text: MessageHasSenderGuardTests.StripComments(File.ReadAllText(f))))
+            .Select(x => (x.File, Sends: System.Text.RegularExpressions.Regex.Matches(x.Text, @"\.Send\(\s*new\s+(?:[\w.]+\.)?RunProgressChangedMessage\b").Count, Builds: System.Text.RegularExpressions.Regex.Matches(x.Text, @"GetRequiredService<RunProgressStore>\(\)").Count))
+            .Where(x => x.Sends > 0)
+            .ToList();
+
+        senders.Select(s => Path.GetFileName(s.File)).ShouldBe(["ServiceRegistration.cs"], "a new sender file must resolve RunProgressStore before it sends, and be added here");
+        senders[0].Sends.ShouldBe(2);
+        senders[0].Builds.ShouldBe(senders[0].Sends);
+    }
     [Fact]
     public void New_run_resolves_with_its_option_preset_picker_not_without_one()
     {

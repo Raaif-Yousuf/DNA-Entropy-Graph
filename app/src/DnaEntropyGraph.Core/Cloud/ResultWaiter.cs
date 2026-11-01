@@ -306,6 +306,27 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
         }
     }
 
+    // Issue #1086: each NEW progress in the status.json this look read goes to the run page. A UI that throws must never end a run.
+    private void PublishProgress(string jobId, WorkerProgressTracker tracker, string? statusText)
+    {
+        if (settings.OnProgress is not { } handler || statusText is null)
+        {
+            return;
+        }
+
+        if (tracker.Next(WorkerStatusReader.TryParseStatus(statusText)) is { } progress)
+        {
+            try
+            {
+                handler(jobId, progress);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The page is not the run.
+            }
+        }
+    }
+
     private async Task<string> AwaitResultCoreAsync(CloudJobRequest request, string bucket, string zone, CancellationToken cancellationToken, long? vmStartMark, StallState stall)
     {
         var key = WorkerManifestBuilder.JobPrefix(request.JobId) + "result.json";
@@ -342,6 +363,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
             settings.HeartbeatStaleTimeout ?? TimeSpan.FromSeconds(WorkerManifestBuilder.HeartbeatSeconds * HeartbeatStaleFactor),
             settings.StageDeadlines,
             settings.ProgressStallTimeout);
+        var progressTracker = new WorkerProgressTracker();
 
         while (true)
         {
@@ -387,6 +409,7 @@ internal sealed class ResultWaiter(IComputeGateway compute, GatewayCalls calls, 
                 var progressText = watch.NeedsProgress ? await calls.TryReadTextAsync(request.ResolvedScope, bucket, progressKey, cancellationToken).ConfigureAwait(false) : null;
                 var verdict = watch.Observe(statusText, progressText, settings.ElapsedSince(clockStart), settings.TimeProvider.GetUtcNow());
                 heartbeatMark = await RecordHeartbeatAsync(request.JobId, watch.NewHeartbeatAt, heartbeatMark, cancellationToken).ConfigureAwait(false);
+                PublishProgress(request.JobId, progressTracker, statusText);
                 if (watch.TakeSlowNotice() is { } slow)
                 {
                     Notify(stall, new RunNotice(request.JobId, RunNoticeKind.SlowStage, slow.Stage, slow.InStage, slow.Deadline));

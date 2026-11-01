@@ -45,6 +45,10 @@ from dna_entropy.worker.status import StatusDocument  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "docs" / "contract"
 FIXTURES_DIR = REPO_ROOT / "tests" / "contract-fixtures" / "manifest_samples"
+# Issue #476: the manifests the C# WorkerManifestBuilder emits (golden files owned by
+# WorkerManifestParityFixtureTests); --check validates them against the schema too.
+APP_FIXTURES_DIR = REPO_ROOT / "tests" / "contract-fixtures" / "app_manifests"
+SAMPLE_DIRS = (FIXTURES_DIR, APP_FIXTURES_DIR)
 _ID_BASE = "https://raw.githubusercontent.com/Raaif-Yousuf/DNA-Entropy-Graph/main/docs/contract"
 
 # filename -> (dataclass, title)
@@ -101,12 +105,13 @@ def _validate_sample_manifests(manifest_schema: dict) -> tuple[bool, list[str]]:
         print("note: jsonschema not installed; skipping sample-manifest validation.")
         return False, []
 
-    if not FIXTURES_DIR.is_dir():
+    sample_paths = sorted(p for d in SAMPLE_DIRS if d.is_dir() for p in d.glob("*.json"))
+    if not sample_paths:
         return False, []
 
     failures: list[str] = []
     validator = jsonschema.Draft202012Validator(manifest_schema)
-    for sample_path in sorted(FIXTURES_DIR.glob("*.json")):
+    for sample_path in sample_paths:
         try:
             sample = json.loads(sample_path.read_text(encoding="utf-8"))
             validator.validate(sample)
@@ -149,8 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("OK: docs/contract/*.json match the worker's dataclasses/error-code registry.")
         if samples_ran:
-            n = len(list(FIXTURES_DIR.glob("*.json")))
-            print(f"OK: {n} sample manifest(s) under {FIXTURES_DIR.relative_to(REPO_ROOT)} validate.")
+            n = sum(len(list(d.glob("*.json"))) for d in SAMPLE_DIRS if d.is_dir())
+            print(f"OK: {n} sample manifest(s) under tests/contract-fixtures validate.")
         else:
             print(
                 "NOT CHECKED: the sample manifests were not validated, for the reason "

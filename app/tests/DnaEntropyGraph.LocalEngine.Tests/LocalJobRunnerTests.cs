@@ -321,6 +321,85 @@ public sealed class LocalJobRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task Each_new_progress_in_status_json_is_published_once_and_an_unchanged_one_is_not_repeated()
+    {
+        // Issue #1086: RunProgressChangedMessage had a receiver and no sender, so the bar never moved on a This PC run.
+        var published = new List<(string JobId, ProgressEvent Event)>();
+        var worker = new FakeProcess();
+        var launcher = new FakeProcessLauncher(spec =>
+        {
+            File.WriteAllText(Path.Combine(RootOf(spec), "status.json"), "{\"stage\":\"running\",\"percent\":25,\"detail\":{\"window\":2,\"windows\":8},\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}");
+            return worker;
+        });
+        // Virtual time (no real delay): a Tick moves the clock one poll and returns only after the runner has handled that poll and armed the next one, so "five unchanged polls" really happened.
+        var clock = new VirtualTimeProvider();
+        var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), onProgress: (jobId, ev) => { lock (published) { published.Add((jobId, ev)); } })
+        {
+            Clock = clock,
+            PollInterval = TimeSpan.FromSeconds(1),
+        };
+        async Task TickAsync()
+        {
+            var created = clock.TimersCreated;
+            clock.Advance(TimeSpan.FromSeconds(1));
+            await clock.WhenTimerCreatedAsync(created).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+
+        var run = runner.RunAsync(Request(), CancellationToken.None);
+        await clock.WhenTimerCreatedAsync(0).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await TickAsync();
+        lock (published) { published.Count.ShouldBe(1); }
+        for (var i = 0; i < 5; i++)
+        {
+            // The same progress with a newer heartbeat: the poll must really READ the file (the heartbeat reaches the run row) yet not republish the unchanged progress.
+            var seq = 10 + i;
+            File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":25,\"detail\":{\"window\":2,\"windows\":8},\"heartbeatSeq\":" + seq + ",\"worker\":{\"version\":\"0.0.1\"}}");
+            await TickAsync();
+            await WaitUntilAsync(() => _runs.Latest(JobId).LastProgressSeq == seq);
+        }
+
+        lock (published) { published.Count.ShouldBe(1); }
+        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":50,\"detail\":{\"window\":4,\"windows\":8},\"heartbeatSeq\":20,\"worker\":{\"version\":\"0.0.1\"}}");
+        await TickAsync();
+        worker.End(1);
+        await run;
+
+        lock (published)
+        {
+            published.Select(p => p.JobId).ShouldAllBe(id => id == JobId);
+            published.Select(p => (p.Event.Window, p.Event.Windows)).ShouldBe([(2, 8), (4, 8)]);
+            published.Select(p => p.Event.FractionComplete).ShouldBe([0.25, 0.5]);
+        }
+    }
+
+    [Fact]
+    public async Task A_progress_handler_that_throws_never_breaks_the_run()
+    {
+        var worker = new FakeProcess();
+        var launcher = new FakeProcessLauncher(spec =>
+        {
+            File.WriteAllText(Path.Combine(RootOf(spec), "status.json"), "{\"stage\":\"running\",\"percent\":25,\"heartbeatSeq\":1,\"worker\":{\"version\":\"0.0.1\"}}");
+            return worker;
+        });
+        var called = 0;
+        var runner = new LocalJobRunner(launcher, _runs, Layout, RunsDirectory, (_, phase) => _phases.Add(phase), onProgress: (_, _) => { Interlocked.Increment(ref called); throw new InvalidOperationException("a broken UI"); })
+        {
+            PollInterval = TimeSpan.FromMilliseconds(20),
+        };
+
+        var run = runner.RunAsync(Request(), CancellationToken.None);
+        await WaitUntilAsync(() => Volatile.Read(ref called) >= 1);
+        // The handler threw on that first event; a later, different progress must STILL reach it. That holds only if the throw was swallowed (an escaped one ends the poll loop).
+        File.WriteAllText(Path.Combine(RunsDirectory, JobId, "status.json"), "{\"stage\":\"running\",\"percent\":60,\"heartbeatSeq\":2,\"worker\":{\"version\":\"0.0.1\"}}");
+        await WaitUntilAsync(() => Volatile.Read(ref called) >= 2);
+        worker.End(1);
+        var result = await run;
+
+        result.FinalPhase.ShouldBe(JobPhase.Failed);
+        result.ErrorCode.ShouldBe(RunErrorCodes.LocalWorkerCrashed, "the run ended as a crash of the fake worker, not as an app-side exception");
+    }
+
+    [Fact]
     public async Task A_cancel_writes_control_cancel_and_waits_for_the_worker_to_stop_by_itself()
     {
         var worker = new FakeProcess();
