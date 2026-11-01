@@ -41,8 +41,11 @@ public sealed partial class SettingsPage : Page
 
     public PrototypeImportViewModel PrototypeImport { get; }
 
+    public PaletteSettingsViewModel Palette { get; }
+
     public SettingsPage()
     {
+        Palette = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<PaletteSettingsViewModel>();
         Budget = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<BudgetSettingsViewModel>();
         CloudActivity = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudActivityLogSettingsViewModel>();
         CloudResults = ((App)Microsoft.UI.Xaml.Application.Current).Services.GetRequiredService<CloudResultsSettingsViewModel>();

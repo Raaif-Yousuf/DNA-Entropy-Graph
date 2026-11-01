@@ -264,6 +264,14 @@ public static class ServiceRegistration
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IClipboardTextReader, Services.ClipboardTextReader>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IEntropyOverviewSource, DnaEntropyGraph.Core.Tracks.EntropyOverviewSource>();
         services.AddSingleton<DnaEntropyGraph.Core.Tracks.IGeneTableSource, DnaEntropyGraph.Core.Tracks.GeneTableSource>();
+        // Issue #195: the one place a palette choice is read (from settings, cached); the chart, sparkline, PNG export and viewer all ask it.
+        // A save in Settings invalidates it (PaletteSettingsViewModel); Reset all settings and a settings import do through the messenger.
+        services.AddSingleton<DnaEntropyGraph.Core.Palettes.ITrackPaletteProvider>(sp =>
+        {
+            var provider = new DnaEntropyGraph.Core.Palettes.SettingsTrackPaletteProvider(sp.GetRequiredService<ISettingsStore>());
+            DnaEntropyGraph.Presentation.Messaging.PaletteCacheInvalidator.Attach(sp.GetRequiredService<IMessenger>(), provider);
+            return provider;
+        });
         services.AddSingleton<DnaEntropyGraph.Presentation.Services.IOverviewImageExporter, Services.OverviewPngExporter>();
         // Issue #1006: follows the saved "Save results to" folder at each save. The other default-parent lambdas (LocalRunFiles, RunCloudResults, LocalJobRunner)
         // deliberately stay on the default parent: they name the root a run with NO recorded folder was made under, which is a delete and re-download safety root, not a choice.
@@ -478,6 +486,7 @@ public static class ServiceRegistration
         services.AddTransient<HistoryViewModel>();
         services.AddTransient<CloudResourcesViewModel>();
         services.AddTransient<SettingsViewModel>();
+        services.AddTransient<PaletteSettingsViewModel>();
         services.AddTransient<RunDefaultsSettingsViewModel>();
         services.AddTransient<FilesSettingsViewModel>();
         services.AddTransient<CloudActivityLogSettingsViewModel>();

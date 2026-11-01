@@ -160,6 +160,10 @@ worker\.venv\Scripts\python.exe scripts\premerge.py --self-test   # proves it re
   (tool missing, timeout). `SKIP` is only for an optional tool that is not installed (`lychee`),
   and is always printed. `FAIL` and `ERROR` both make the exit code 1; selecting zero gates, or
   naming an unknown gate, is exit 2, never a green run.
+- **xdist `node down` hint (#1044).** When a pytest gate's output holds xdist's `node down: Not properly terminated`, the
+  failure header says why and names every test from the `worker 'gwN' crashed while running <test>` lines (`node_down_hint`).
+  For a gate whose argv arms `--timeout` (only `scripts-tests`) it says this is most likely a per-test timeout kill; for any
+  other pytest gate it says a worker process died (OOM or a native crash). premerge's own gate timeout never carries this hint.
 - **Timeouts (#925).** A gate's timeout is `DEFAULT_TIMEOUT` (900 s) unless set; the three big suites use `LONG_TIMEOUT`
   (1800 s). MEASURED 2026-10-29: `scripts/tests` took `1843 passed, 15 skipped in 1086.03s` under about 3-lane load, which the
   old 900 s default reported as ERROR on a green suite, so `scripts-tests` now has `LONG_TIMEOUT` (kept at 1800 s after #959: the parallel run measured 549 s, 3.3x headroom). A timed-out pytest gate is
