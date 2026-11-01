@@ -85,6 +85,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     [NotifyPropertyChangedFor(nameof(HasEstimateDisk))]
     private string _estimateDiskText = string.Empty;
 
+    /// <summary>
+    /// The line under the estimate (issue #814): where the prices came from and as of when, in plain words, with the one thing to do when today's read of
+    /// Google's price list failed. Empty whenever <see cref="EstimateText"/> is not an estimate, or the page has no pricing status.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPriceSource))]
+    private string _priceSourceText = string.Empty;
+
     /// <summary>A line of help for the user (a path that does not exist, a folder with nothing to run); empty when there is none.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
@@ -92,6 +100,9 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
     /// <summary>The Cloud / This PC / Auto choice (issues #120 and #173); null in a host that has none, which means Cloud.</summary>
     public RunTargetPickerViewModel? RunTarget { get; }
+
+    /// <summary>Whether the page has a Where to run box to show (issue #735).</summary>
+    public bool HasRunTarget => RunTarget is not null;
 
     /// <summary>The Save to folder (issue #1037), shared with Settings; null in a host that has none, which means the default folder.</summary>
     public OutputFolderViewModel? OutputFolder { get; }
@@ -120,9 +131,11 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         RunTargetPickerViewModel? runTarget = null,
         IDispatcher? dispatcher = null,
         TimeProvider? clock = null,
-        OutputFolderViewModel? outputFolder = null)
+        OutputFolderViewModel? outputFolder = null,
+        IPricingStatus? pricing = null)
     {
         _clock = clock ?? TimeProvider.System;
+        _pricing = pricing;
         OutputFolder = outputFolder;
         // Required, no fallback: the pickers come from DI, so a missing registration fails resolution instead of quietly showing default pickers (#87).
         Gpu = gpu ?? throw new ArgumentNullException(nameof(gpu));
@@ -379,6 +392,10 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     }
 
     public bool HasEstimate => EstimateText.Length > 0;
+
+    public bool HasPriceSource => PriceSourceText.Length > 0;
+
+    private readonly IPricingStatus? _pricing;
 
     public bool HasEstimateDisk => EstimateDiskText.Length > 0;
 
@@ -752,6 +769,18 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         }
     }
 
+    private static async Task LookAtThisPcAsync(RunTargetPickerViewModel picker)
+    {
+        try
+        {
+            await picker.RefreshAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Nothing passes a token here; if one ever does, a cancelled look simply leaves the last answer.
+        }
+    }
+
     /// <summary>
     /// What the page forwards from its navigation parameter (issue #108): files handed over by "Open with" in Explorer arrive as
     /// <see cref="DroppedItems"/> and are added like a drop; any other parameter (none, the usual case) is ignored.
@@ -763,6 +792,14 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         _intake?.Attach(this);
         // The page is showing (again): a cap changed in Settings, or spend booked since, must show now (issue #109).
         _ = RefreshEstimateAsync();
+
+        // Issue #735: look at this PC again each time the page shows, so the Where to run box greys out This PC (with its reason) where it cannot run the model.
+        // A failed check is shown as a reason, not thrown; only cancellation can surface, and it is ignored here so no faulted task is left unobserved.
+        // It resumes on this (UI) context because the picker's properties are bound.
+        if (RunTarget is not null)
+        {
+            _ = LookAtThisPcAsync(RunTarget);
+        }
 
         // Issue #527: Back re-delivers the parameter the page was first opened with; only a new navigation's parameter is acted on.
         if (parameter is NavigationArrival arrival)
@@ -1254,6 +1291,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
         {
             EstimateText = string.Empty;
             EstimateDiskText = string.Empty;
+            PriceSourceText = string.Empty;
             // No file yet: a cap this month's spend has already reached still shows (the estimate of a run that is not chosen is zero).
             SpendCapStatus? noFileCap = null;
             try
@@ -1275,6 +1313,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
 
         string text;
         string diskText;
+        string priceText;
         SpendCapStatus? cap = null;
         try
         {
@@ -1286,18 +1325,22 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
             diskText = result.Estimate is { } estimate
                 ? Format("NewRunEstimateStoppedDisk", Format("NewRunEstimateMoney", Money(estimate.StoppedDiskUsdPerDay)))
                 : string.Empty;
+            // Read after the estimate: asking for it is what lets the day's catalog read finish (or fail), so this is the answer the numbers came from.
+            priceText = result.Estimate is not null && _pricing is not null ? PriceSourceLine(_pricing.Current) : string.Empty;
             cap = status;
         }
         catch (Exception)
         {
             text = string.Empty;
             diskText = string.Empty;
+            priceText = string.Empty;
         }
 
         if (version == Volatile.Read(ref _estimateVersion))
         {
             EstimateText = text;
             EstimateDiskText = diskText;
+            PriceSourceText = priceText;
             SetSpendCap(cap);
         }
     }
@@ -1360,6 +1403,7 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private void ClearEstimate()
     {
         Interlocked.Increment(ref _estimateVersion);
+        PriceSourceText = string.Empty;
         EstimateText = string.Empty;
         EstimateDiskText = string.Empty;
         // The cap card is about the month, not the file: re-ask it with no file chosen.
@@ -1404,6 +1448,48 @@ public sealed partial class NewRunViewModel : ObservableObject, INewRunScreen
     private static int WholeMinutes(double minutes) => Math.Max(1, (int)Math.Round(minutes, MidpointRounding.AwayFromZero));
 
     private string MinutesPhrase(int minutes) => minutes == 1 ? _strings.GetString("NewRunEstimateMinutesOne") : Format("NewRunEstimateMinutesMany", minutes);
+
+    /// <summary>
+    /// "Prices from Google's price list, as of D", or "... older prices" when the source says its read is not from today (<see cref="PricingOrigin.CacheStale"/>;
+    /// the real source ages a catalog read at midnight itself, so this does not date-check again), or "the list that came with this app" with the reason
+    /// today's read failed and one action. With no reason it can also mean the read has not finished yet or was not tried: the line then corrects itself
+    /// when the service reports the read's outcome. The date is the list's own, never today's by default.
+    /// </summary>
+    private string PriceSourceLine(PricingSnapshot snapshot)
+    {
+        var reason = ReasonText(snapshot.Reason);
+        var hasDate = snapshot.AsOf != default;
+        var today = DateOnly.FromDateTime(_clock.GetUtcNow().UtcDateTime);
+        // A catalog date a day ahead of this clock is accepted by the source (a time zone, a fast clock); it must never read as a date in the future.
+        var shown = snapshot.Origin != PricingOrigin.Shipped && snapshot.AsOf > today ? today : snapshot.AsOf;
+        var date = hasDate ? shown.ToString("d MMM yyyy", CultureInfo.InvariantCulture) : string.Empty;
+        string line;
+        if (snapshot.Origin == PricingOrigin.Shipped)
+        {
+            line = hasDate ? Format("PriceSource_Shipped", date) : _strings.GetString("PriceSource_ShippedNoDate");
+        }
+        else if (snapshot.Origin == PricingOrigin.CacheStale)
+        {
+            line = hasDate ? Format("PriceSource_Older", date) : _strings.GetString("PriceSource_OlderNoDate");
+        }
+        else
+        {
+            line = Format("PriceSource_Catalog", date);
+        }
+
+        return reason.Length == 0 ? line : line + " " + reason;
+    }
+
+    private string ReasonText(PricingFallbackReason reason) => reason switch
+    {
+        PricingFallbackReason.SignedOut => _strings.GetString("PriceSourceReason_SignedOut"),
+        PricingFallbackReason.PermissionDenied => _strings.GetString("PriceSourceReason_PermissionDenied"),
+        PricingFallbackReason.ApiDisabled => _strings.GetString("PriceSourceReason_ApiDisabled"),
+        PricingFallbackReason.Network => _strings.GetString("PriceSourceReason_Network"),
+        PricingFallbackReason.NoMatch => _strings.GetString("PriceSourceReason_NoMatch"),
+        PricingFallbackReason.Other => _strings.GetString("PriceSourceReason_Other"),
+        _ => string.Empty,
+    };
 
     private string Format(string key, params object[] args)
         => string.Format(CultureInfo.CurrentCulture, _strings.GetString(key), args);

@@ -253,7 +253,10 @@ left as unnecessary caution.
 
 ## 9. The New run page (issue #63)
 
-`Views/NewRunPage.xaml` binds `NewRunViewModel` only; its code-behind forwards the two drag events to
+`Views/NewRunPage.xaml` binds `NewRunViewModel` only (plus the shared `RunTargetPickerControl`, issue #735: one `UserControl` over the
+`RunTargetPickerViewModel` singleton, used by Settings and New run so the Where to run box cannot differ between them; it is shown when
+`HasRunTarget`). `ReceiveNavigationParameterCommand`, the "page is showing" call, also runs `RunTarget.RefreshAsync()` so This PC is greyed out with its
+reason where it cannot run the model, without Settings having been opened first. Its code-behind forwards the two drag events to
 `Services/DropPaths` (the "is this drag files?" branch and the storage-item read live there, not in a
 `*.xaml.cs`) and the drop to `AddDroppedCommand`.
 
@@ -299,6 +302,14 @@ memory effect itself was not measured, only that the release is explicit.
   `RunNamePreview`. The preview, `RunTransfer` (cloud) and `LocalJobRunner` (This PC) all name the folder with the one
   function `RunOutputFolders.RunFolderName` (over `RunNamer`), so the page cannot promise a name the runner will not
   use; `RunOutputFolders.CreateUnique` adds `_2` against the real disk. The template is not remembered between launches.
+- **Price source line (issue #814).** `NewRunViewModel.PriceSourceText` sits under the estimate and is read from `IPricingStatus.Current` after each estimate.
+  The estimate waits only a few seconds for the day's catalog read, so a slower read can finish (or fail) later: `CostEstimateService` then raises `PricesChanged`
+  when the prices OR the status (origin, reason, as-of date) changed, and the page estimates again, so the line corrects itself without the user doing anything.
+  Catalog/Cache from today: "Prices from Google's price list, as of <date>". `CacheStale` (the real `CatalogPricingSource` ages a catalog read at midnight itself; the page does
+  no date check of its own): "older prices", or "from an earlier day" when it has no date. A catalog date up to a day ahead of the clock (accepted by the source) is shown as today.
+  `Shipped`: "the list that came with this app", then the `PricingFallbackReason` in plain words with its one action (there is no button for it on this page); with no
+  reason it means the read is not finished or was not tried. Empty when there is no estimate.
+  `NewRunPriceSourceTests` pins one line per origin and per reason against the real `Resources.resw` text.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
 - **Model and graphics card pickers (issue #87).** The "Model and graphics card (GPU)" expander is `GpuPlanViewModel`
@@ -389,6 +400,42 @@ A run that finishes (done, partly done) or fails while the app window is not in 
   multi-contig run (the first contig is shown).
 - Licences (Rule 21): ScottPlot.WinUI 5.1.59, ScottPlot, SkiaSharp, SkiaSharp.Views.WinUI and HarfBuzzSharp are all MIT
   (`THIRD-PARTY-NOTICES.md` regenerated).
+
+### Track colours: one palette, one definition (issue #195)
+
+- The only place a track colour is spelled is `Core/Palettes/TrackPalette.cs` (`TrackPalettes`). Roles: Entropy, Forward, Reverse,
+  Smoothed, Marker (seam lines and the drag selection: neutral black or white, so they differ from every track by lightness).
+  Palettes: **Default** is Okabe and Ito (2008) (light: blue 0072B2, vermillion D55E00, bluish green 009E73, reddish purple CC79A7;
+  dark swaps in sky blue 56B4E9 and orange E69F00); **High contrast** keeps each colour at 7:1 or more against its background.
+- Consumers: `EntropyPlotBuilder` (overview chart and PNG; `OverviewPngExporter` gets `ITrackPaletteProvider` through DI),
+  `EntropySparkline` and the chart span (through `AppPalette.Current`), and the viewer (`ViewerViewModel` hands colours to
+  `IgvLoadPlanner`, to the added smoothed track and to the `seams` bridge command; `bridge.js` spells no colour).
+  `Guards.Tests/TrackPaletteSingleSourceGuardTests` scans every `.cs`, `.xaml`, `.js` and `.css` under `DnaEntropyGraph.App` and
+  `DnaEntropyGraph.Presentation` (comments stripped first) and fails on a hex colour, `rgb()`, a literal `FromHex`/`FromRGB`/`FromArgb`,
+  `new Color(`, or a named `Colors.X` (fully qualified or not) other than White, Black and Transparent. Allowlisted, each with a
+  reason in the test: `CaptionButtonPalette.cs` (system caption buttons), `viewer.css` and `dark.css` (page background and text, pinned
+  to `PaletteBackgrounds`), and the vendored `igv.min.js`. MEASURED 2026-10-31: the glob flagged those three and nothing else.
+- The choice (Settings > Appearance, `PaletteSettingsViewModel`, key `TrackPalette`) is read through
+  `SettingsTrackPaletteProvider`, which reads the file once and caches the answer (the settings store takes a lock and reads its file
+  on each call, and the Runs list asks once per row; tested: 200 reads, 1 file read). The cache is dropped by `Invalidate()`: on a
+  save (`PaletteSettingsViewModel`), and on Reset all settings and a settings import (`PaletteCacheInvalidator`, attached to the
+  singleton at startup, listens for `SettingsResetMessage`). A locked file gives the default and is not cached. A hand edit of
+  settings.json while the app runs shows after a restart. Nothing is pushed: the Results page and the Runs list pick the choice up
+  the next time they are shown; the viewer picks it up when a run is opened.
+- Validation (`Core.Tests/Palettes/PaletteValidatorTests`, `PaletteValidator`): each colour against the light background
+  (#FFFFFF) and the dark one (#1F1F1F) for WCAG contrast (3:1 default, 7:1 high contrast), and every pair of roles under normal
+  vision, deuteranopia, protanopia and tritanopia (Machado, Oliveira and Fernandes 2009, severity 1.0, linear sRGB), by CIEDE2000
+  (Sharma, Wu and Dalal 2005) with a minimum of 10 (default) or 8 (high contrast). The backgrounds are pinned to `viewer.css` and `dark.css`.
+- **The viewer's dark mode inverts track colours.** `dark.css` darkens the page with `filter: invert(0.9) hue-rotate(180deg)` over
+  all of `#igv`, which keeps hue and flips lightness, and it applies to colours set on a track too. So the viewer is always given
+  `TrackPalette.ForViewer()` (the light colours), and the validator checks them twice: as given on white, and through
+  `ViewerDarkFilter` (the same filter, simulated), at a minimum of 8. The filter sits on `#igv`, whose canvases are white, so the
+  tracks are drawn on the filtered white (`ViewerDarkFilter.Apply("#FFFFFF")`, about #191919), not on the body's #1F1F1F; contrast
+  is checked against that. MEASURED 2026-10-31: both palettes pass that bar (3:1 default, 7:1 high contrast) with no colour or
+  threshold change, so #1F1F1F stays the background only for the app's own dark surfaces (the overview chart). A colour that has to be bright and saturated in
+  the dark theme (the dark default's orange) cannot be reached through this filter (MEASURED 2026-10-31: pre-image search, out of
+  gamut), which is why the viewer does not use the dark variants. THEORY (unverified): igv.js applies `color` to a wig track as written;
+  it needs a look in a real build (`docs/ToTest.md`, row #195).
 
 ## 14. The Cloud page (issue #105)
 

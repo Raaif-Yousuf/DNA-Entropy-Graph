@@ -105,8 +105,7 @@ reasonable for most sequences.
   [04-view.md](04-view.md) for what each file is for.
 - **Option presets**: above the file list, the **Option presets** section has a picker that sets several options at once. **Quick look** reads the forward strand only and returns a few files, the fastest and cheapest run. **Publication** reads both strands combined and returns every default file, including the smoothed tracks, region calls and gene summary. **Plasmid QC** reads the sequence as a circle on both strands, so the start and end of the plasmid get real context and there is no seam, and it calls the low and high entropy regions. Under the picker, a line lists the strands, the shape, the context length and the files the next run will use. Changing a file tick box by hand drops the preset, because the options are then yours. To keep your own set, choose your files, type a name and choose **Save as preset**; **Delete preset** removes one of yours (the three built in cannot be deleted). **Copy my presets** puts your presets on the clipboard as text you can send to a colleague, and **Add presets from the clipboard** adds presets someone sent you. A run started from a preset shows "Preset: <name>" on its card on the Runs page.
 - **Save to**: where results land on your computer, shown on **New run** under the file list and also in **Settings**, under **Save results to**. It starts as your Downloads folder. **Change folder** opens a folder chooser; your choice is remembered and used for every later run, and **Use Downloads** goes back to the start. It must be a folder, not a whole drive: `D:\Results` is fine, `D:\` is not, and the app says so beside the button and keeps the folder you had, because results saved straight to a drive cannot be deleted or downloaded again from the Runs page. Pick a folder on this computer (a folder that Windows does not keep on this computer, such as an online-only folder, cannot be chosen). Each run gets its own folder inside it, holding a small file named `.dna-entropy-run`, which is how the app knows later that the folder is one it made.
-- **Where to run**: in the cloud (the normal choice) or on this computer, if you installed
-  the local engine in [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8.
+- **Where to run**: shown on **New run** below the file list and the run name box, and also in **Settings**, as the same box. Pick **Cloud** (a rented computer with a graphics card, the normal choice), **This PC**, or **Auto** (this computer when it can run the model, the cloud when it cannot). A choice made on one page is the choice on the other, and it is remembered. **This PC** needs the local engine from [02-connect-google-cloud.md](02-connect-google-cloud.md)'s Step 8 and a suitable NVIDIA graphics card; on a computer that cannot run the model it is greyed out and the line under the box says why. The app looks at this computer again each time you open **New run**.
 
 Under the file list, once the selected file has passed its check, the app shows one
 **Estimate** line before you commit to anything, for example "Estimate: about $0.13,
@@ -115,7 +114,18 @@ range instead ("about $0.08 to $0.18, about 5 to 12 minutes"), because a compute
 already warm is much quicker than one that has to start from nothing. It is a guess, not
 a bill, and it never shows a number the app does not have: while a file is still being
 checked, or has a problem, there is no estimate line. If the line says the price list
-could not be read, reinstall the app; you can still press Run. See
+could not be read, reinstall the app; you can still press Run. A small line under the
+estimate says where the prices came from and as of when. Usually it reads "Prices from
+Google's price list, as of" a date. If it says "older prices", the app is using a list it
+kept from an earlier day; when it also says why (for example that your connection failed),
+today's read of Google's list did not work. If it says the prices are from the list that
+came with this app and gives no reason, the app has not got today's list yet (this is
+normal on the first run after you install the app, and while the read is still going); the
+line changes by itself when the read finishes or fails. If it does give a reason, today's
+read failed, and the line says why in plain words and one thing to do: sign in again from
+the Cloud page, ask the project owner to allow it or to switch on the price list service,
+check your internet connection, or try again later. The estimate is still usable in every
+case; only how fresh the prices are changes. See
 [06-costs-and-cleanup.md](06-costs-and-cleanup.md) for what those numbers actually mean
 and some worked examples.
 

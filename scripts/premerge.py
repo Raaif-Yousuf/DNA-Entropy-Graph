@@ -446,7 +446,41 @@ _PYTEST_FAILURE_LINE = re.compile(r"^(FAILED|ERROR) \S", re.MULTILINE)
 _PYTEST_PROGRESS_DONE = re.compile(r"\[100%\]")
 
 
-def classify_pytest(returncode: int, output: str) -> tuple[str, str]:
+_NODE_DOWN = "node down: Not properly terminated"
+_WORKER_CRASHED = re.compile(r"""worker 'gw\d+' crashed while running (?P<q>['"])(?P<test>.+?)(?P=q)""")
+
+
+def gate_has_test_timeout(gate: Gate) -> bool:
+    """True when the gate's own argv arms pytest-timeout (`--timeout=N`); only then can a worker die from it."""
+    return any(arg == "--timeout" or arg.startswith("--timeout=") for arg in gate.argv)
+
+
+def node_down_hint(output: str, timeout_armed: bool = False) -> str:
+    """#1044: xdist on Windows reports a dead worker as `node down: Not properly terminated`. With pytest-timeout
+    armed that is most likely a per-test timeout kill; without it the worker died for another reason. Names every
+    test from the `worker 'gwN' crashed while running <test>` lines."""
+    if _NODE_DOWN not in output:
+        return ""
+    if timeout_armed:
+        hint = f"'{_NODE_DOWN}' is most likely a per-test timeout kill (the --timeout limit)"
+    else:
+        hint = f"'{_NODE_DOWN}' means a pytest worker process died (OOM or a native crash; also what a pytest-timeout kill looks like)"
+    tests = list(dict.fromkeys(m.group("test") for m in _WORKER_CRASHED.finditer(output)))
+    if tests:
+        hint += "; crashed while running " + ", ".join(tests)
+    return hint
+
+
+def classify_pytest(returncode: int, output: str, timeout_armed: bool = False) -> tuple[str, str]:
+    """(status, detail) for a finished pytest process, with the #1044 node-down hint appended."""
+    status, detail = _classify_pytest(returncode, output)
+    hint = node_down_hint(output, timeout_armed) if status != PASS else ""
+    if hint:
+        detail = f"{detail}; {hint}" if detail else hint
+    return status, detail
+
+
+def _classify_pytest(returncode: int, output: str) -> tuple[str, str]:
     """(status, detail) for a finished pytest process. The verdict follows the test outcome, so a
     crash after green tests is never reported as a failing test, and never as a pass."""
     counts = _PYTEST_COUNTS.search(output)
@@ -697,7 +731,7 @@ def run_gate(gate: Gate, env: dict[str, str] | None = None, basetemp_root: Path 
     if returncode is None:
         return Result(gate, ERROR, seconds, text, _timeout_detail(gate, text, captured))
     if gate.pytest:
-        status, detail = classify_pytest(returncode, text)
+        status, detail = classify_pytest(returncode, text, gate_has_test_timeout(gate))
         return Result(gate, status, seconds, text, detail)
     if returncode == 0:
         return Result(gate, PASS, seconds, text)

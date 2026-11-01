@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -200,3 +201,207 @@ def test_a_lone_carriage_return_inside_a_cell_is_reported():
     # MEASURED 2026-10-03 (#106): the split was a bare CR (a PowerShell backtick-r), not an LF.
     row = _ROW.format(sha="abc1234").replace("Install and", "Install\rand")
     assert len(ctf.find_stray_lines(_queue(row))) == 2
+
+
+# --- #1092: one batched git call for every sha, never two processes per row ---
+
+
+def _git_env():
+    return {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
+
+
+def _git_out(tmp_path, *args):
+    return subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True, env=_git_env()).stdout.strip()
+
+
+def _make_repo(tmp_path):
+    def run(*args):
+        return _git_out(tmp_path, *args)
+
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "T")
+    (tmp_path / "f.txt").write_text("x\n", encoding="utf-8", newline="\n")
+    run("add", "f.txt")
+    run("commit", "-q", "-m", "one")
+    commit = run("rev-parse", "HEAD")
+    tree = run("rev-parse", "HEAD^{tree}")
+    return commit, tree
+
+
+def _table(shas):
+    rows = "\n".join(f"| #{i + 1} | {sha} | installer | Do thing {i} | Works | Does not |" for i, sha in enumerate(shas))
+    return (
+        "## Queue\n\n| # | Closed by (commit sha) | Needs | Do this | Passing looks like | False pass looks like |\n"
+        "| --- | --- | --- | --- | --- | --- |\n" + rows + "\n"
+    )
+
+
+def _count_git_calls(monkeypatch):
+    calls = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        if cmd and cmd[0] == "git":
+            calls.append(cmd)
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(ctf.subprocess, "run", spy)
+    return calls
+
+
+def _extra_commits(tmp_path, n):
+    shas = []
+    for k in range(n):
+        (tmp_path / "f.txt").write_text(f"v{k}\n", encoding="utf-8", newline="\n")
+        _git_out(tmp_path, "commit", "-q", "-am", f"c{k}")
+        shas.append(_git_out(tmp_path, "rev-parse", "HEAD"))
+    return shas
+
+
+def test_check_spawns_exactly_one_git_process_for_many_distinct_commits(tmp_path, monkeypatch):
+    first, _tree = _make_repo(tmp_path)
+    shas = [first, *_extra_commits(tmp_path, 4)]
+    assert len(set(shas)) == 5
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table(shas * 3), encoding="utf-8", newline="\n")
+    calls = _count_git_calls(monkeypatch)
+    assert ctf.check(tmp_path, 36500) == []
+    assert len(calls) == 1, calls
+
+
+def test_batch_parity_missing_short_nonmerge_and_stale_shas(tmp_path):
+    commit, tree = _make_repo(tmp_path)
+    bogus = "0000000deadbeef0000000deadbeef00000000"
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table([commit, bogus, commit[:7], tree]), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 36500)
+    assert problems == [
+        f"L6: sha '{bogus}' is not a commit this repo has (git cat-file -e failed)",
+        f"L8: sha '{tree}' is not a commit this repo has (git cat-file -e failed)",
+    ]
+    stale = ctf.check(tmp_path, -1)
+    assert [p.split(":")[0] for p in stale if "day(s) old" in p] == ["L5", "L7"]
+
+
+def test_batch_outside_a_repo_reports_one_clear_git_failure(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table(["abc1234", "def5678"]), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 45)
+    assert len(problems) == 1 and problems[0].startswith("git cat-file failed:"), problems
+
+
+def test_resolve_commit_dates_matches_the_single_sha_helpers(tmp_path):
+    commit, _tree = _make_repo(tmp_path)
+    got = ctf.resolve_commit_dates(tmp_path, [commit, "0000000deadbeef0000000deadbeef00000000"])
+    assert "0000000deadbeef0000000deadbeef00000000" not in got
+    assert got[commit] is not None
+    assert got[commit] == ctf.commit_date(tmp_path, commit)
+
+
+def _hash_commit(tmp_path, data):
+    return (
+        subprocess.run(
+            ["git", "hash-object", "-t", "commit", "-w", "--literally", "--stdin"],
+            cwd=tmp_path,
+            input=data,
+            check=True,
+            capture_output=True,
+            env=_git_env(),
+        )
+        .stdout.decode()
+        .strip()
+    )
+
+
+def _raw_commit(tree, author_line, message=b"m", extra_header=b""):
+    head = b"tree " + tree.encode() + b"\n"
+    if author_line is not None:
+        head += author_line + b"\n"
+    return head + b"committer T <t@e> 1700000000 +0000\n" + extra_header + b"\n" + message + b"\n"
+
+
+def _single_row_check(tmp_path, sha, max_age=36500):
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    (tmp_path / "docs" / "ToTest.md").write_text(_table([sha]), encoding="utf-8", newline="\n")
+    return ctf.check(tmp_path, max_age)
+
+
+def test_huge_author_timestamp_is_a_could_not_read_a_date_problem_not_a_traceback(tmp_path):
+    _commit, tree = _make_repo(tmp_path)
+    sha = _hash_commit(tmp_path, _raw_commit(tree, b"author T <t@e> 99999999999999999999 +0000"))
+    assert _single_row_check(tmp_path, sha) == [f"L5: could not read a date for commit '{sha}'"]
+
+
+def test_an_out_of_range_tz_offset_does_not_crash_and_still_dates_the_commit(tmp_path):
+    _commit, tree = _make_repo(tmp_path)
+    sha = _hash_commit(tmp_path, _raw_commit(tree, b"author T <t@e> 1700000000 +9900"))
+    assert ctf.resolve_commit_dates(tmp_path, [sha])[sha] == datetime.fromtimestamp(1700000000, UTC)
+    assert _single_row_check(tmp_path, sha, max_age=-1)[0].startswith("L5: row closed by")
+
+
+def test_a_commit_with_no_author_header_is_a_could_not_read_a_date_problem(tmp_path):
+    _commit, tree = _make_repo(tmp_path)
+    sha = _hash_commit(tmp_path, _raw_commit(tree, None))
+    assert ctf.resolve_commit_dates(tmp_path, [sha]) == {sha: None}
+    assert _single_row_check(tmp_path, sha) == [f"L5: could not read a date for commit '{sha}'"]
+
+
+def test_an_annotated_tag_sha_resolves_to_its_peeled_commit_date(tmp_path):
+    commit, _tree = _make_repo(tmp_path)
+    _git_out(tmp_path, "tag", "-a", "v1", "-m", "x")
+    tag = _git_out(tmp_path, "rev-parse", "v1")
+    assert tag != commit
+    assert ctf.resolve_commit_dates(tmp_path, [tag])[tag] == ctf.commit_date(tmp_path, commit)
+    assert _single_row_check(tmp_path, tag) == []
+
+
+def test_a_latin1_commit_body_does_not_desync_the_framing_for_the_next_sha(tmp_path):
+    commit, tree = _make_repo(tmp_path)
+    body = _raw_commit(
+        tree,
+        b"author T <t@e> 1700000000 +0000",
+        message="caf\xe9 \xe9\xe9\xe9".encode("latin-1"),
+        extra_header=b"encoding ISO-8859-1\n",
+    )
+    latin = _hash_commit(tmp_path, body)
+    got = ctf.resolve_commit_dates(tmp_path, [latin, commit])
+    assert got[latin] == datetime.fromtimestamp(1700000000, UTC)
+    assert got[commit] == ctf.commit_date(tmp_path, commit)
+
+
+def _fake_run(stdout, returncode=0, stderr=b""):
+    def fake(cmd, *a, **kw):
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+    return fake
+
+
+def _fake_record(sha):
+    body = b"tree " + b"0" * 40 + b"\nauthor T <t@e> 1700000000 +0000\n\nm\n"
+    return sha.encode() + b" commit " + str(len(body)).encode() + b"\n" + body + b"\n"
+
+
+def test_an_ambiguous_sha_record_is_not_a_commit_and_framing_continues(tmp_path, monkeypatch):
+    a, b = "a" * 7, "b" * 40
+    monkeypatch.setattr(ctf.subprocess, "run", _fake_run(f"{a}^{{commit}} ambiguous\n".encode() + _fake_record(b)))
+    got = ctf.resolve_commit_dates(tmp_path, [a, b])
+    assert a not in got
+    assert got[b] == datetime.fromtimestamp(1700000000, UTC)
+
+
+def test_a_truncated_batch_stream_is_one_clear_problem(tmp_path, monkeypatch):
+    shas = ["a" * 40, "b" * 40, "c" * 40]
+    monkeypatch.setattr(ctf.subprocess, "run", _fake_run(_fake_record(shas[0]) + _fake_record(shas[1])))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table(shas), encoding="utf-8", newline="\n")
+    problems = ctf.check(tmp_path, 36500)
+    assert len(problems) == 1, problems
+    assert problems[0].startswith("git cat-file failed:") and "truncated" in problems[0]
+
+
+def test_a_nonzero_git_exit_reports_its_stderr_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(ctf.subprocess, "run", _fake_run(b"", returncode=128, stderr=b"fatal: boom\n"))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ToTest.md").write_text(_table(["a" * 40, "b" * 40]), encoding="utf-8", newline="\n")
+    assert ctf.check(tmp_path, 36500) == ["git cat-file failed: fatal: boom"]
