@@ -2,9 +2,9 @@
 
 I am building a Windows app for lab biologists who want a per-base Shannon entropy track
 without opening a terminal. Researchers in a lab at Vanderbilt University Medical Center
-already use the command-line prototypes this succeeds; their PI greenlit this app to
-replace them. You drop in a GenBank or FASTA file, press Run, and get a number
-from 0 to 2 bits at every position showing how predictable that base looks to the Evo 2
+already use the command-line prototypes this succeeds; their PI approved this app and
+is now funding its development to replace them. You drop in a GenBank or FASTA file,
+press Run, and get a number from 0 to 2 bits at every position showing how predictable that base looks to the Evo 2
 genomic language model, ready to open in IGV, Geneious, SnapGene or Benchling.
 
 ## How it works
