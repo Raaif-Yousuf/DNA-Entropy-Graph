@@ -29,9 +29,10 @@ public static class CatalogPriceResolver
     /// Bump this whenever the matching rules or the machine shapes change: it is part of the cache fingerprint, so an app update that
     /// changes what the resolver makes of the same SKUs does not keep serving today's cache. History: 1 first version, 2 real SKU wording
     /// (GPU matched by name, Spot kept from the shipped list), 3 the kept-Spot list is recorded,
-    /// 4 a2-ultragpu-1g is no longer priced from the catalog (theory) and a disk price the catalog cannot give keeps the shipped one.
+    /// 4 a2-ultragpu-1g is no longer priced from the catalog (theory) and a disk price the catalog cannot give keeps the shipped one,
+    /// 5 the kept-Spot list also names machines copied whole from the shipped list and leaves out a kept Spot price that was dropped (#1074).
     /// </summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     private const string OnDemand = "OnDemand";
     private const string Spot = "Preemptible";
@@ -71,6 +72,7 @@ public static class CatalogPriceResolver
                 {
                     machines.Add(fromShipped);
                     kept.Add(shape.MachineType);
+                    NoteSpotKept(fromShipped, spotKept);
                 }
 
                 continue;
@@ -78,13 +80,21 @@ public static class CatalogPriceResolver
 
             // A Spot price the catalog did not give is not "no Spot price": the previous list's one is kept (and named), unless it is now above on demand.
             var spot = Price(inRegion, shape, Spot);
+            var spotFromShipped = false;
             if (spot is null && fromShipped?.SpotUsdPerHour is { } previous)
             {
                 spot = previous;
+                spotFromShipped = true;
+            }
+
+            var shownSpot = spot is { } s && s <= onDemand.Value ? s : (double?)null;
+            if (spotFromShipped && shownSpot is not null)
+            {
+                // Only a shipped Spot price that survived is on screen, so only that one is named (#1074); a discarded one is not.
                 spotKept.Add(shape.MachineType);
             }
 
-            machines.Add(new MachinePrice(shape.MachineType, shape.Accelerator, onDemand.Value, spot is { } s && s <= onDemand.Value ? s : null));
+            machines.Add(new MachinePrice(shape.MachineType, shape.Accelerator, onDemand.Value, shownSpot));
         }
 
         // Machines the shipped list prices that this code has no shape for stay as they were.
@@ -92,6 +102,7 @@ public static class CatalogPriceResolver
         {
             machines.Add(other);
             kept.Add(other.MachineType);
+            NoteSpotKept(other, spotKept);
         }
 
         if (machines.Count == kept.Count)
@@ -104,6 +115,15 @@ public static class CatalogPriceResolver
             + (diskFromShipped ? " The disk price is kept from the list that ships with the app (the catalog gave no single price for it)." : string.Empty)
             + (spotKept.Count > 0 ? " Spot price kept from the list that ships with the app (the catalog gave none): " + string.Join(", ", spotKept) + "." : string.Empty);
         return new CatalogResolveResult(PricingTable.Create(asOf, region, source, diskPrice, machines), null, spotKept.Count > 0 ? spotKept : null);
+    }
+
+    /// <summary>A row copied whole from the shipped list carries its Spot price onto the page too, so it counts as a kept Spot price when it has one (#1074).</summary>
+    private static void NoteSpotKept(MachinePrice copied, List<string> spotKept)
+    {
+        if (copied.SpotUsdPerHour is not null)
+        {
+            spotKept.Add(copied.MachineType);
+        }
     }
 
     private static double? Price(List<CatalogSku> skus, MachineShape shape, string usage)

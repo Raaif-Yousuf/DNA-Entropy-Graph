@@ -298,21 +298,6 @@
   <data name="PhaseRunning_Title" xml:space="preserve">
     <value>Analysing</value>
   </data>
-  <data name="ProgressModelLoading" xml:space="preserve">
-    <value>Loading the analysis model onto the computer...</value>
-  </data>
-  <data name="ProgressBooting" xml:space="preserve">
-    <value>The rented computer is starting up...</value>
-  </data>
-  <data name="ProgressAnalysing" xml:space="preserve">
-    <value>Analysing your sequence...</value>
-  </data>
-  <data name="ProgressAnalysingWindowCount" xml:space="preserve">
-    <value>Analysing your sequence: part {0} of {1}</value>
-  </data>
-  <data name="ProgressGeneric" xml:space="preserve">
-    <value>Working on your run...</value>
-  </data>
   <data name="PhaseFinalizing_Title" xml:space="preserve">
     <value>Saving results</value>
   </data>
@@ -1590,6 +1575,18 @@
   </data>
   <data name="ThemeSystemRadio.Content" xml:space="preserve">
     <value>Use system</value>
+  </data>
+  <data name="PaletteChoices.Header" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
+  </data>
+  <data name="PaletteDefaultRadio.Content" xml:space="preserve">
+    <value>Default (easy to tell apart with color blindness)</value>
+  </data>
+  <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
+    <value>High contrast (stronger colors on the background)</value>
+  </data>
+  <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
+    <value>Colors of the entropy lines</value>
   </data>
   <data name="SettingsDiagnosticsHeader.Text" xml:space="preserve">
     <value>Diagnostics</value>
@@ -3639,6 +3636,9 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="PriceSource_ShippedNoDate" xml:space="preserve">
     <value>Prices from the list that came with this app.</value>
   </data>
+  <data name="PriceSource_SpotFromShipped" xml:space="preserve">
+    <value>The discounted (Spot) price is from the list that came with this app, not from Google&apos;s price list.</value>
+  </data>
   <data name="PriceSourceReason_SignedOut" xml:space="preserve">
     <value>You are signed out of Google, so today&apos;s price list could not be read. Sign in again from the Cloud page.</value>
   </data>
@@ -3669,6 +3669,21 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   <data name="Runs_KeptAside_Many" xml:space="preserve">
     <value>{0} files you had changed were kept next to the new results under new names that end with the word changed and the date. Open the output folder to compare them.</value>
   </data>
+  <data name="ProgressModelLoading" xml:space="preserve">
+    <value>Loading the analysis model onto the computer...</value>
+  </data>
+  <data name="ProgressBooting" xml:space="preserve">
+    <value>The rented computer is starting up...</value>
+  </data>
+  <data name="ProgressAnalysing" xml:space="preserve">
+    <value>Analysing your sequence...</value>
+  </data>
+  <data name="ProgressAnalysingWindowCount" xml:space="preserve">
+    <value>Analysing your sequence: part {0} of {1}</value>
+  </data>
+  <data name="ProgressGeneric" xml:space="preserve">
+    <value>Working on your run...</value>
+  </data>
   <data name="ProgressInstalling" xml:space="preserve">
     <value>The rented computer (a virtual machine, or VM) is getting the analysis software ready for your sequence.</value>
   </data>
@@ -3689,17 +3704,5 @@ A computer that keeps running ends itself at its time limit, but you pay until t
   </data>
   <data name="RunError_keepalive_ended_by_app" xml:space="preserve">
     <value>Your results were saved. The rented computer was still running after the time you chose to keep it, so the app shut it down. Open the Cloud page to check that it is no longer running.</value>
-  </data>
-  <data name="PaletteChoices.Header" xml:space="preserve">
-    <value>Colors of the entropy lines</value>
-  </data>
-  <data name="PaletteDefaultRadio.Content" xml:space="preserve">
-    <value>Default (easy to tell apart with color blindness)</value>
-  </data>
-  <data name="PaletteHighContrastRadio.Content" xml:space="preserve">
-    <value>High contrast (stronger colors on the background)</value>
-  </data>
-  <data name="SettingsKeyLabel_TrackPalette" xml:space="preserve">
-    <value>Colors of the entropy lines</value>
   </data>
 </root>

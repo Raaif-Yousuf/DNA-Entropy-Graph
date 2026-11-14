@@ -309,6 +309,10 @@ memory effect itself was not measured, only that the release is explicit.
   no date check of its own): "older prices", or "from an earlier day" when it has no date. A catalog date up to a day ahead of the clock (accepted by the source) is shown as today.
   `Shipped`: "the list that came with this app", then the `PricingFallbackReason` in plain words with its one action (there is no button for it on this page); with no
   reason it means the read is not finished or was not tried. Empty when there is no estimate.
+  Issue #1074: for a Spot estimate whose machine type is in `PricingSnapshot.SpotKeptFromShipped` (Google's list gave no Spot price, so the shipped one was kept),
+  `PriceSource_SpotFromShipped` is added after the base sentence and before any failure reason. Not for on-demand, not for a machine not in the list, not on the
+  `Shipped` origin (the line already says it). MEASURED 2026-10-31: the shipped `GpuCatalog` offers no Spot-only tier (H100 is `Offered: false`), so the New run page
+  never prices Spot today and this sentence is not reachable in the shipped app until one is offered.
   `NewRunPriceSourceTests` pins one line per origin and per reason against the real `Resources.resw` text.
 - `RunOptions.InputPath` is a single file (#515), so **Run** runs the selected pill; the page says so in a line
   next to Run once there is more than one pill.
